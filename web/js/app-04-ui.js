@@ -485,7 +485,7 @@ function createConversation(categoryId) {
     };
     state.conversations.unshift(conv);
     state.currentConversationId = conv.id;
-    localStorage.setItem('elaina_open_current_conv', conv.id);
+    Store.setItem('elaina_open_current_conv', conv.id);
     saveConversations();
     renderFolderList();
     updateCurrentConversationTitle();
@@ -525,7 +525,7 @@ async function deleteConversation(convId) {
     updateNotesBadge();
     if (state.currentConversationId === convId) {
         state.currentConversationId = null;
-        localStorage.removeItem('elaina_open_current_conv');
+        Store.removeItem('elaina_open_current_conv');
         elements.conversationHistory.classList.add('hidden');
         elements.inputBar.classList.add('hidden');
         elements.initialState.classList.remove('hidden');
@@ -689,7 +689,7 @@ function moveConversationToCategory(convId, categoryId) {
 
 function switchConversation(convId) {
     state.currentConversationId = convId;
-    localStorage.setItem('elaina_open_current_conv', convId);
+    Store.setItem('elaina_open_current_conv', convId);
     const conv = state.conversations.find(c => c.id === convId);
     if (!conv) return;
     loadConversation(convId);
@@ -1183,7 +1183,7 @@ async function catDeleteSelected() {
     updateNotesBadge();
     if (catSelected.has(state.currentConversationId)) {
         state.currentConversationId = null;
-        localStorage.removeItem('elaina_open_current_conv');
+        Store.removeItem('elaina_open_current_conv');
         elements.conversationHistory.classList.add('hidden');
         elements.inputBar.classList.add('hidden');
         elements.initialState.classList.remove('hidden');

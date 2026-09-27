@@ -107,7 +107,7 @@
     /** 读取用户自定义主题设置 */
     function customTheme() {
         try {
-            const raw = localStorage.getItem(CUSTOM_KEY);
+            const raw = Store.getItem(CUSTOM_KEY);
             if (!raw) return { ...DEFAULT_CUSTOM };
             const o = JSON.parse(raw);
             const pick = (v, d) => (hexToRgb(v) ? v : d);
@@ -215,7 +215,7 @@
     /** 保存 DIY 主题设置并立即生效 */
     function setCustomTheme(partial) {
         const next = { ...customTheme(), ...partial };
-        try { localStorage.setItem(CUSTOM_KEY, JSON.stringify(next)); } catch (e) { /* 忽略 */ }
+        try { Store.setItem(CUSTOM_KEY, JSON.stringify(next)); } catch (e) { /* 忽略 */ }
         if (currentTemplate() !== 'custom') setTemplate('custom');
         else applyCustomTheme();
         // ★ 必须同步编辑区：否则改了颜色后，对比度提示还是旧的 ——
@@ -241,7 +241,7 @@
     function currentTemplate() {
         try {
             const v = document.documentElement.getAttribute('data-theme-template')
-                || localStorage.getItem(TPL_KEY) || 'elaina';
+                || Store.getItem(TPL_KEY) || 'elaina';
             return TEMPLATES.some((t) => t.id === v) ? v : 'elaina';
         } catch (e) { return 'elaina'; }
     }
@@ -253,7 +253,7 @@
             // 走的是同一条路径，不会因为属性存在与否产生细微差异
             if (tpl === 'elaina') document.documentElement.removeAttribute('data-theme-template');
             else document.documentElement.setAttribute('data-theme-template', tpl);
-            localStorage.setItem(TPL_KEY, tpl);
+            Store.setItem(TPL_KEY, tpl);
         } catch (e) { /* 忽略 */ }
         // DIY 主题的变量是运行时算的，切走时要清掉注入的样式、切回来要重新注入
         applyCustomTheme();
@@ -278,7 +278,7 @@
      */
     function darkMode() {
         try {
-            const v = localStorage.getItem(DARK_KEY);
+            const v = Store.getItem(DARK_KEY);
             if (DARK_MODES.includes(v)) return v;
             return 'light';
         } catch (e) { return 'light'; }
@@ -317,7 +317,7 @@
         const mode = typeof on === 'string'
             ? (DARK_MODES.includes(on) ? on : 'light')
             : (on ? 'dark' : 'light');
-        try { localStorage.setItem(DARK_KEY, mode); } catch (e) { /* 忽略 */ }
+        try { Store.setItem(DARK_KEY, mode); } catch (e) { /* 忽略 */ }
         return applyDarkMode(mode);
     }
 
@@ -336,7 +336,7 @@
         try {
             // 深色：走统一入口（含"跟随系统"的判定）
             applyDarkMode(darkMode());
-            const tpl = localStorage.getItem(TPL_KEY);
+            const tpl = Store.getItem(TPL_KEY);
             if (tpl && tpl !== 'elaina' && TEMPLATES.some((t) => t.id === tpl)) {
                 document.documentElement.setAttribute('data-theme-template', tpl);
             }

@@ -488,22 +488,28 @@ function toggleQuoteFavorite() {
 
 
 // ==================== 数据持久化====================
+//
+// ★ 统一走 window.Store（见 web/js/store.js）—— data/ 是唯一权威存储。
+//   曾经这里直接写 localStorage，而 data-sync.js 再把 localStorage 双向同步到
+//   服务端，结果"删掉 data/ 后数据又自己回来了"（localStorage 才是真身）。
+//   现在 Store 的读写接口与 localStorage 形似，替换是机械的，但语义完全不同：
+//   内存缓存只是 data/ 的投影，不再有第二份持久数据。
 
 function saveConversations() {
-    localStorage.setItem('elaina_open_conversations', JSON.stringify(state.conversations));
+    Store.setItem('elaina_open_conversations', JSON.stringify(state.conversations));
 }
 function saveCategories() {
-    localStorage.setItem('elaina_open_categories', JSON.stringify(state.categories));
+    Store.setItem('elaina_open_categories', JSON.stringify(state.categories));
 }
 function saveFavorites() {
-    localStorage.setItem('elaina_open_favorites', JSON.stringify(state.favorites));
+    Store.setItem('elaina_open_favorites', JSON.stringify(state.favorites));
 }
 function saveLikedQuotes() {
-    localStorage.setItem('elaina_open_liked_quotes', JSON.stringify(state.likedQuotes));
+    Store.setItem('elaina_open_liked_quotes', JSON.stringify(state.likedQuotes));
 }
 function persistSettings() {
     const { apiKey, minimaxApiKey, dashscopeApiKey, doubaoApiKey, doubaoToken, ...safeSettings } = state.settings;
-    localStorage.setItem('elaina_open_settings', JSON.stringify(safeSettings));
+    Store.setItem('elaina_open_settings', JSON.stringify(safeSettings));
 }
 function getNativeSecretsPlugin() {
     if (!window.Capacitor?.isNativePlatform?.()) return null;
@@ -519,10 +525,10 @@ async function loadApiSecrets() {
         Object.assign(state.settings, Object.fromEntries(values));
         return;
     }
-    // Web 版 sessionStorage（会话级）；APK 无 Keystore 插件时用 localStorage（持久），并双通道读取
+    // Web 版：API Key 按用户选择存进 data/（store.js 持久化到 data/store.json）。
+    // APK 无 Keystore 插件时也走 Store（应用私有目录），与 Web 语义一致。
     const raw = (() => {
-        try { return sessionStorage.getItem('elainachat_open_api_secrets') || localStorage.getItem('elainachat_open_api_secrets') || ''; }
-        catch { return ''; }
+        try { return Store.getItem('elainachat_open_api_secrets') || ''; } catch { return ''; }
     })();
     try {
         const parsed = JSON.parse(raw || '{}');
@@ -538,21 +544,21 @@ async function saveApiSecrets(secrets) {
         await Promise.all(API_SECRET_NAMES.map(name => nativePlugin.setSecret({ name, value: normalized[name] })));
     } else {
         const raw = JSON.stringify(normalized);
-        // APK（无 Keystore 插件）用 localStorage 持久保存；Web 用 sessionStorage；双写兜底
-        try { localStorage.setItem('elainachat_open_api_secrets', raw); } catch (e) { console.warn('[BYOK] localStorage 写入失败', e); }
-        try { sessionStorage.setItem('elainachat_open_api_secrets', raw); } catch (e) { console.warn('[BYOK] sessionStorage 写入失败', e); }
+        // 按用户选择：API Key 随其它数据一起进 data/（方便优先）。
+        // 代价是密钥落在磁盘上 —— data/ 已在 .gitignore 里，但拷走 data/ 就等于拷走密钥。
+        try { Store.setItem('elainachat_open_api_secrets', raw); }
+        catch (e) { console.warn('[BYOK] API Key 保存失败', e); }
     }
     Object.assign(state.settings, normalized);
 }
 async function clearStoredApiSecrets() {
     const nativePlugin = getNativeSecretsPlugin();
     if (nativePlugin?.clearSecrets) await nativePlugin.clearSecrets();
-    try { sessionStorage.removeItem('elainachat_open_api_secrets'); } catch (e) {}
-    try { localStorage.removeItem('elainachat_open_api_secrets'); } catch (e) {}
+    try { Store.removeItem('elainachat_open_api_secrets'); } catch (e) {}
     API_SECRET_NAMES.forEach(name => { state.settings[name] = ''; });
 }
 function saveCharacterCard() {
-    localStorage.setItem('elaina_open_character_card', JSON.stringify(state.characterCard));
+    Store.setItem('elaina_open_character_card', JSON.stringify(state.characterCard));
 }
 
 function normalizeGreeting(greeting) {
@@ -654,36 +660,36 @@ function normalizeCharacterCard(card) {
 }
 
 function loadConversations() {
-    const convs = localStorage.getItem('elaina_open_conversations');
-    const cats = localStorage.getItem('elaina_open_categories');
+    const convs = Store.getItem('elaina_open_conversations');
+    const cats = Store.getItem('elaina_open_categories');
     if (convs) {
         try { state.conversations = JSON.parse(convs); } catch (e) { console.error(e); }
     }
     if (cats) {
         try { state.categories = JSON.parse(cats); } catch (e) { console.error(e); }
     }
-    const savedCurrent = localStorage.getItem('elaina_open_current_conv');
+    const savedCurrent = Store.getItem('elaina_open_current_conv');
     if (savedCurrent && state.conversations.some(c => c.id === savedCurrent)) {
         state.currentConversationId = savedCurrent;
     }
 }
 
 function loadFavorites() {
-    const raw = localStorage.getItem('elaina_open_favorites');
+    const raw = Store.getItem('elaina_open_favorites');
     if (raw) {
         try { state.favorites = JSON.parse(raw); } catch (e) { state.favorites = []; }
     }
 }
 
 function loadLikedQuotes() {
-    const raw = localStorage.getItem('elaina_open_liked_quotes');
+    const raw = Store.getItem('elaina_open_liked_quotes');
     if (raw) {
         try { state.likedQuotes = JSON.parse(raw) || {}; } catch (e) { state.likedQuotes = {}; }
     }
 }
 
 function loadSettings() {
-    const saved = localStorage.getItem('elaina_open_settings');
+    const saved = Store.getItem('elaina_open_settings');
     if (saved) {
         try {
             const parsed = JSON.parse(saved);
@@ -822,7 +828,7 @@ function normalizeCardList(list) {
 
 function loadCharacterCards() {
     let list = null;
-    try { list = JSON.parse(localStorage.getItem(CARDS_KEY) || 'null'); } catch (e) { list = null; }
+    try { list = JSON.parse(Store.getItem(CARDS_KEY) || 'null'); } catch (e) { list = null; }
 
     if (!Array.isArray(list) || !list.length) {
         // 兼容老数据：以前只有一张卡（elaina_open_character_card），
@@ -843,7 +849,7 @@ function loadCharacterCards() {
     state.characterCards = normalizeCardList(list);
 
     let currentId = '';
-    try { currentId = localStorage.getItem(CURRENT_CARD_KEY) || ''; } catch (e) { /* ignore */ }
+    try { currentId = Store.getItem(CURRENT_CARD_KEY) || ''; } catch (e) { /* ignore */ }
     if (!state.characterCards.some((c) => c.id === currentId)) {
         currentId = state.characterCards[0].id;
     }
@@ -854,9 +860,9 @@ function loadCharacterCards() {
 
 function persistCharacterCards() {
     try {
-        localStorage.setItem(CARDS_KEY, JSON.stringify(state.characterCards));
-        localStorage.setItem(CURRENT_CARD_KEY, state.currentCardId);
-    } catch (e) { /* 配额满等，忽略 */ }
+        Store.setItem(CARDS_KEY, JSON.stringify(state.characterCards));
+        Store.setItem(CURRENT_CARD_KEY, state.currentCardId);
+    } catch (e) { /* 写入失败等，忽略 */ }
 }
 
 // 把表单上正在编辑的内容写回「当前那套」。切换、保存前都要调，
@@ -973,7 +979,7 @@ async function deleteCard() {
 }
 
 function loadCharacterCard() {
-    const saved = localStorage.getItem('elaina_open_character_card');
+    const saved = Store.getItem('elaina_open_character_card');
     if (saved) {
         try {
             state.characterCard = normalizeCharacterCard(JSON.parse(saved));
@@ -1022,7 +1028,7 @@ function emptyMemoryCore() {
 }
 
 function loadMemoryCore() {
-    const raw = localStorage.getItem('elaina_open_memory_core');
+    const raw = Store.getItem('elaina_open_memory_core');
     if (raw) {
         try {
             const parsed = JSON.parse(raw);
@@ -1041,7 +1047,7 @@ function loadMemoryCore() {
 
 function saveMemoryCore() {
     if (state.memoryCore) {
-        localStorage.setItem('elaina_open_memory_core', JSON.stringify(state.memoryCore));
+        Store.setItem('elaina_open_memory_core', JSON.stringify(state.memoryCore));
     }
 }
 

@@ -18,9 +18,19 @@
          并在 callChatAPI 里调 window.ChatProviders.forFormat()。
          注意：它只在"被调用时"才读 ChatDeps，所以真正的顺序要求是
          「本文件先加载」——先加载只定义、不执行，最稳。 -->
+    <!-- ==================== 统一数据存储层 ====================
+         **必须排在最前面**（所有业务脚本之前）：它提供 window.Store，
+         业务代码用它读写数据。data/ 是唯一权威存储 ——
+         Web 走 /api/store（落 data/store.json + 分类文件），
+         APK 走 Capacitor Filesystem（应用私有目录，即 APK 的 "data/"）。
+
+         同一套业务代码两条后端，业务层一行平台判断都不写。
+         历史坑：以前 localStorage 是主存储、data/ 只是副本，删掉 data/ 后
+         数据会被 localStorage 反向推回去（"删了还在"）。详见 store.js。 -->
+    <script src="/js/store.js"></script>
     <script src="/js/chat-providers.js"></script>
     <!-- 数据备份（APK 侧）：安卓版没有本地服务，/api/data/* 不存在，
-         所以由这个模块直接在 localStorage 上生成/还原备份。
+         所以由这个模块生成/还原备份（数据源是 Store，与 Web 版同构）。
          格式与 Web 版同构（同一套 zip 结构），两边可以互相导入。 -->
     <script src="/js/chat-backup.js"></script>
     <script>

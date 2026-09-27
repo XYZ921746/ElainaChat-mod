@@ -1705,13 +1705,13 @@ const TASK_STORE_KEY = 'elaina_open_tasks';
 
 function loadScheduledTasks() {
     try {
-        const arr = JSON.parse(localStorage.getItem(TASK_STORE_KEY) || '[]');
+        const arr = JSON.parse(Store.getItem(TASK_STORE_KEY) || '[]');
         return Array.isArray(arr) ? arr : [];
     } catch { return []; }
 }
 
 function saveScheduledTasks(tasks) {
-    try { localStorage.setItem(TASK_STORE_KEY, JSON.stringify(tasks)); } catch { /* ignore */ }
+    try { Store.setItem(TASK_STORE_KEY, JSON.stringify(tasks)); } catch { /* ignore */ }
 }
 
 // 解析单个 [任务:...] 标签 → { content, intervalMs, nextAt }

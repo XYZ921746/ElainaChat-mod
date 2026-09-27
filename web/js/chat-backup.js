@@ -4,41 +4,41 @@
 //
 //  为什么单独一个文件：APK 里没有 Node 后端（serve.mjs 不进 APK），
 //  所以 /api/data/* 那几个接口在 APK 里根本不存在 —— 「我的数据」整块原本是隐藏的。
-//  但**用户数据在 APK 里反而更危险**：它存在应用私有目录（WebView 的 localStorage），
-//  卸载即丢失，用户连手动拷出来都做不到。所以 APK 侧比 Web 侧更需要备份。
+//  但**用户数据在 APK 里反而更危险**：它存在应用私有目录，卸载即丢失，
+//  用户连手动拷出来都做不到。所以 APK 侧比 Web 侧更需要备份。
 //
-//  做法：直接用 localStorage 生成/还原备份，格式与 Web 版**完全一致**（同一套 zip 结构），
+//  做法：用 Store 生成/还原备份，格式与 Web 版**完全一致**（同一套 zip 结构），
 //  这样两边可以互相导入：
 //      APK 导出 → 传到电脑 → Web 版导入   ✅
 //      Web 版导出 → 传进手机 → APK 导入   ✅
 //
+//  ★ 2026-09：数据源从 localStorage 改为 Store（data/ 是唯一权威存储）。
+//    备份清单也**直接复用 Store.DATA_KEYS**，不再自己抄一份 ——
+//    以前这里和 data-sync.js 各有一份清单，靠"有个断言会检查一致性"来防漏，
+//    但那本身就是个会腐烂的设计：加一个键要记得改两处。
+//    现在只有一处清单（store.js），备份天然不会漏。
+//
 //  zip 用一份零依赖的最小实现（store 模式，不压缩）——
 //  浏览器里没有 node:zlib，而引第三方库会破坏"零依赖"。备份体积本来就不大，
 //  不压缩完全可以接受（几 MB 的对话记录压完也就小一半，不值得为它引依赖）。
-//
-//  依赖注入：需要主脚本提供 SYNC_KEYS / 读 localStorage 的能力。
-//  这里只用标准 API（localStorage + Blob），不需要注入。
 
 (function () {
     'use strict';
 
-    // 与 web/js/data-sync.js 的 SYNC_KEYS 保持一致（那边是权威清单）。
-    // 两处不一致会导致"导出漏了某项" —— 所以下面有个断言会检查这一点。
-    const BACKUP_KEYS = [
-        'elaina_open_settings',
-        'elainachat_open_api_secrets',
-        'elaina_open_conversations',
-        'elaina_open_categories',
-        'elaina_open_favorites',
-        'elaina_open_liked_quotes',
-        'elaina_open_character_card',
-        'elaina_open_character_cards',
-        'elaina_open_current_card',
-        'elaina_open_memory_core',
-        'live2d.bg',
-        'live2d.mouseFollow',
-        'live2d.mouseFollowScale',
-    ];
+    // 备份哪些键：直接取 Store 的权威清单（含动态的插件开关键）。
+    // 排除 UI 临时状态由 store.js 的 DATA_KEYS 决定，这里不再重复判断。
+    function backupKeys() {
+        const keys = (window.Store && window.Store.DATA_KEYS) ? window.Store.DATA_KEYS.slice() : [];
+        // 插件开关是动态键（elaina_plugin_<id>）：枚举出来一起备份，
+        // 否则换机后插件的启停状态全丢。Store 不提供枚举，这里从缓存快照取。
+        try {
+            const snap = window.Store ? window.Store.snapshot() : {};
+            for (const k of Object.keys(snap)) {
+                if (/^elaina_plugin_\S+$/.test(k) && !keys.includes(k)) keys.push(k);
+            }
+        } catch (e) { /* 拿不到就只备份固定键 */ }
+        return keys;
+    }
 
     const FORMAT = 'elainachat-backup';
     const VERSION = 2;   // 与后端一致：v2 = zip
@@ -208,14 +208,14 @@
     }
 
     // ------------------------------------------------------------------ 导出
-    /** 收集当前 localStorage 里属于备份范围的键 */
+    /** 收集当前属于备份范围的键 */
     function collectLocalData() {
         const data = {};
-        for (const k of BACKUP_KEYS) {
+        for (const k of backupKeys()) {
             try {
-                const v = localStorage.getItem(k);
+                const v = Store.getItem(k);
                 if (typeof v === 'string') data[k] = v;
-            } catch { /* 隐私模式等：跳过 */ }
+            } catch { /* 读不到：跳过 */ }
         }
         return data;
     }
@@ -228,7 +228,7 @@
         const data = collectLocalData();
         const entries = [];
 
-        // 人设卡 / 对话 / 记忆从 localStorage 里拆出来（与后端 store.mjs 的目录结构对齐）
+        // 人设卡 / 对话 / 记忆拆出来（与后端 store.mjs 的目录结构对齐）
         let cards = [];
         let convs = [];
         try { cards = JSON.parse(data['elaina_open_character_cards'] || '[]'); } catch { /* 忽略 */ }
@@ -402,30 +402,32 @@
     }
 
     /**
-     * 导入：把备份写回 localStorage（合并模式）。
+     * 导入：把备份写回 Store（合并模式）→ 落进 data/（Web 落 data/store.json，APK 落应用私有目录）
      * @returns { keys, source }
      */
     async function applyBackup(file) {
         const { source, data } = await parseBackup(file);
         const keys = Object.keys(data);
         if (!keys.length) throw new Error('备份里没有可导入的数据');
-        // 只认备份范围内的键，避免把奇怪的键写进 localStorage
-        const allowed = new Set(BACKUP_KEYS);
+        // 只认备份范围内的键，避免把奇怪的键写进去
+        const allowed = new Set(backupKeys());
         let written = 0;
         for (const [k, v] of Object.entries(data)) {
             if (!allowed.has(k)) continue;
-            try { localStorage.setItem(k, v); written++; } catch { /* 配额满等：跳过 */ }
+            try { Store.setItem(k, v); written++; } catch { /* 写入失败：跳过 */ }
         }
         if (!written) throw new Error('备份里的数据都不在可导入范围内');
         return { keys: written, source };
     }
 
     window.ChatBackup = {
-        BACKUP_KEYS,
+        // 清单是**动态**的（含插件开关），用函数而不是数组属性，
+        // 避免调用方在启动早期把清单快照下来后永远看不到新增的键。
+        keys: backupKeys,
         buildBackupBlob,
         parseBackup,
         applyBackup,
-        /** 供测试：断言与 data-sync.js 的 SYNC_KEYS 一致 */
-        _keys: BACKUP_KEYS,
+        /** 供测试：取当前备份范围的键 */
+        _keys: backupKeys,
     };
 })();

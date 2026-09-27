@@ -35,6 +35,9 @@ const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
 // （见 index.html），mods.js 的输出格式依赖它。这里照实模拟，
 // 否则测的是"没有诊断模块时的回落路径"，与线上不一致。
 const DIAG_JS = readFileSync(path.join(WEB, 'js', 'diagnostics.js'), 'utf8');
+// 存储层：mods.js 通过 window.Store 读写插件开关（data/ 是唯一存储）。
+// 注入真实实现，保证测的是线上真实路径。
+const STORE_JS = readFileSync(path.join(WEB, 'js', 'store.js'), 'utf8');
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -62,6 +65,10 @@ async function load(store) {
             return { ok: true, status: 200, json: async () => JSON.parse(t), text: async () => t };
         },
     };
+    // ★ 存储层：mods.js 现在通过 window.Store 读插件开关（数据统一走 data/）。
+    //   这里注入**真实的 store.js**（同 check-mod-identity 的做法），
+    //   并把它接到一个假后端上 —— 用假后端而不是真 localStorage，
+    //   因为"插件开关存哪儿"本身就是本次重构要盯的事。
     const m = new Map(Object.entries(store));
     sandbox.localStorage = {
         getItem: (k) => (m.has(k) ? m.get(k) : null),
@@ -119,10 +126,24 @@ async function load(store) {
     sandbox.location = { href: 'http://127.0.0.1:4173/', hostname: '127.0.0.1' };
     sandbox.window = sandbox;
     sandbox.globalThis = sandbox;
+    sandbox.XMLHttpRequest = function () {
+        // store.js 的 Web 后端用同步 XHR 拉 /api/store。
+        // 这里是纯逻辑沙箱（没有服务端），返回 200 + 空数据，
+        // 让 store.js 认为"data/ 里还没有数据" —— 与首次启动一致。
+        this.open = () => {};
+        this.send = () => {};
+        Object.defineProperty(this, 'status', { get: () => 200 });
+        Object.defineProperty(this, 'responseText', { get: () => '{"ok":true,"data":{}}' });
+    };
     const ctx = vm.createContext(sandbox);
 
-    // 与真实页面一致：先 diagnostics.js（提供 window.ElainaDiag），再 mods.js
+    // 与真实页面一致的加载顺序（见 index.html）：
+    //   store.js（提供 window.Store）→ diagnostics.js → mods.js
+    // store.js 必须最先：mods.js 的插件开关读写依赖它。
+    vm.runInContext(STORE_JS, ctx, { filename: 'store.js' });
     vm.runInContext(DIAG_JS, ctx, { filename: 'diagnostics.js' });
+    // 把测试给定的初值灌进 Store（模拟 data/ 里已有的键）
+    for (const [k, v] of m) sandbox.window.Store.setItem(k, v);
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
     const results = await Mods.loadAll();

@@ -33,24 +33,19 @@ function ok(cond, label, detail) {
 }
 
 const src = readFileSync(path.join(ROOT, 'web', 'js', 'chat-backup.js'), 'utf8');
+// 真实存储层：chat-backup 的数据源是 Store（data/ 是唯一存储），
+// 且键清单的权威在 store.js 的 DATA_KEYS —— 这里都取真实源码。
+const storeSrc = readFileSync(path.join(ROOT, 'web', 'js', 'store.js'), 'utf8');
 
 // ============================================================ 0. 在假环境里加载
 console.log('=== 0. 模块加载 ===');
 
-/** 造一个最小的浏览器环境（localStorage + Blob + TextEncoder…） */
+/** 造一个最小的浏览器环境（Store + Blob + TextEncoder…） */
 function makeSandbox(initial = {}) {
     const store = new Map(Object.entries(initial));
-    const localStorage = {
-        getItem: (k) => (store.has(k) ? store.get(k) : null),
-        setItem: (k, v) => { store.set(k, String(v)); },
-        removeItem: (k) => { store.delete(k); },
-        get length() { return store.size; },
-        key: (i) => [...store.keys()][i] ?? null,
-    };
     // Blob 用 Node 自带的
     const sandbox = {
         window: {},
-        localStorage,
         Blob,
         Response,
         TextEncoder,
@@ -69,40 +64,73 @@ function makeSandbox(initial = {}) {
         Error,
         Date,
         console,
+        // store.js 的写队列用 setTimeout 做防抖；沙箱里补上（用真实的）
+        setTimeout,
+        clearTimeout,
         DecompressionStream: globalThis.DecompressionStream,
     };
+    // store.js 的 Web 后端用同步 XHR 拉 /api/store；纯逻辑沙箱里返回空数据，
+    // 让 Store 以"data/ 还没有数据"启动（与首次运行一致），随后用 initial 灌入。
+    sandbox.XMLHttpRequest = function () {
+        this.open = () => {};
+        this.send = () => {};
+        Object.defineProperty(this, 'status', { get: () => 200 });
+        Object.defineProperty(this, 'responseText', { get: () => '{"ok":true,"data":{}}' });
+    };
     sandbox.window = sandbox;   // window 指向自己，够用
-    sandbox.window.localStorage = localStorage;
-    vm.createContext(sandbox);
-    vm.runInContext(src, sandbox);
-    return { sandbox, store };
+    const ctx = vm.createContext(sandbox);
+    // ★ 先加载真实存储层（chat-backup 的数据源是 Store，不再是 localStorage）
+    vm.runInContext(storeSrc, ctx, { filename: 'store.js' });
+    for (const [k, v] of store) sandbox.Store.setItem(k, v);
+    vm.runInContext(src, ctx, { filename: 'chat-backup.js' });
+
+    // 让测试里的 `store` 成为 **Store 的视图** —— 断言写的是"数据到底存下来没有"，
+    // 那就该问真正的存储层，而不是问测试自己造的那个 Map。
+    // 这样每条既有断言都测在真实路径上，也不会因为存储层换实现而失效。
+    const view = {
+        get: (k) => sandbox.Store.getItem(k),
+        has: (k) => sandbox.Store.getItem(k) !== null,
+        set: (k, v) => sandbox.Store.setItem(k, v),
+        delete: (k) => sandbox.Store.removeItem(k),
+        get size() { return Object.keys(sandbox.Store.snapshot()).length; },
+        keys: () => Object.keys(sandbox.Store.snapshot()),
+        [Symbol.iterator]: function* () { yield* Object.entries(sandbox.Store.snapshot()); },
+    };
+    return { sandbox, store: view };
 }
 
 const s0 = makeSandbox();
 ok(Boolean(s0.sandbox.ChatBackup), '模块加载并挂上 window.ChatBackup');
 
 // ============================================================ 1. 键清单一致
-console.log('\n=== 1. 键清单与 data-sync.js 一致 ===');
+console.log('\n=== 1. 键清单以 store.js 为唯一权威 ===');
 {
-    const syncSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data-sync.js'), 'utf8');
-    const m = syncSrc.match(/var SYNC_KEYS = \[([\s\S]*?)\];/);
-    ok(Boolean(m), '能读到 data-sync.js 的 SYNC_KEYS');
-    const syncKeys = [];
+    // ★ 2026-09 重构后，键清单**只有一处**：store.js 的 DATA_KEYS。
+    //   以前是 data-sync.js 的 SYNC_KEYS 与 chat-backup.js 的 BACKUP_KEYS 各一份，
+    //   靠"断言两处一致"来防漏 —— 那本身就是会腐烂的设计（加一个键要记得改两处）。
+    const m = storeSrc.match(/var DATA_KEYS = \[([\s\S]*?)\];/);
+    ok(Boolean(m), '能读到 store.js 的 DATA_KEYS');
+    const dataKeys = [];
     if (m) {
         // 逐行提取，先剥掉行尾注释再找引号 —— 不能按逗号切分：
-        // 注释文字里就有逗号（"设置（含 ASR/TTS provider、各类参数）"），会截断。
+        // 注释文字里就有逗号（"设置（模型/地址/开关等）"），会切坏。
         for (const line of m[1].split('\n')) {
             const t = line.replace(/\/\/.*$/, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
             const km = t.match(/'([^']+)'/);
-            if (km) syncKeys.push(km[1]);
+            if (km) dataKeys.push(km[1]);
         }
     }
-    const backupKeys = s0.sandbox.ChatBackup.BACKUP_KEYS;
-    console.log('  data-sync 有 ' + syncKeys.length + ' 个键，chat-backup 有 ' + backupKeys.length + ' 个');
-    const missing = syncKeys.filter((k) => !backupKeys.includes(k));
-    const extra = backupKeys.filter((k) => !syncKeys.includes(k));
-    ok(missing.length === 0, '备份覆盖了所有同步键（不会漏导数据）', missing.length ? '缺: ' + missing.join(', ') : '');
+    const backupKeys = s0.sandbox.ChatBackup.keys();
+    console.log('  store.js 有 ' + dataKeys.length + ' 个键，chat-backup 覆盖 ' + backupKeys.length + ' 个');
+    const missing = dataKeys.filter((k) => !backupKeys.includes(k));
+    ok(missing.length === 0, '★ 备份覆盖了所有数据键（不会漏导数据）',
+        missing.length ? '缺: ' + missing.join(', ') : '');
+    // chat-backup 不该有超出 DATA_KEYS 的键（插件动态键除外）
+    const extra = backupKeys.filter((k) => !dataKeys.includes(k) && !/^elaina_plugin_/.test(k));
     ok(extra.length === 0, '备份没有多余的键', extra.length ? '多: ' + extra.join(', ') : '');
+    // 反向：备份清单必须是**动态读取**的，不能是启动时的快照
+    ok(typeof s0.sandbox.ChatBackup.keys === 'function',
+        '★ 备份清单是函数（动态读 Store，新增键自动覆盖）');
 }
 
 // ============================================================ 2. 导出

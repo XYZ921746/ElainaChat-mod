@@ -17,6 +17,15 @@
 
 async function init() {
     syncViewportHeight();
+    // ★ 先把 data/ 里的数据读进内存缓存 —— **必须在任何读取之前**。
+    //
+    //   Web：内部是同步 XHR，这一步实际上立即完成（零闪烁，与旧行为一致）。
+    //   APK：Capacitor Filesystem 是异步的，这里 await 一次读完。
+    //   两条路都不让业务代码写平台判断 —— 差异全在 store.js 里。
+    await Store.bootstrap();
+    // 主题在脚本求值阶段就应用过一次（那时缓存还可能是空的），
+    // 这里读完真实数据后重刷一次 —— APK 上尤其必要，否则会停在默认主题。
+    try { if (window.ElainaTheme) window.ElainaTheme.applyStored(); } catch (e) { /* 忽略 */ }
     loadSettings();
     await loadApiSecrets();
     loadCharacterCard();

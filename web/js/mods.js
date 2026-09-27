@@ -82,14 +82,14 @@
     // ========================================================================
 
     function modsGloballyEnabled() {
-        try { return localStorage.getItem(MODS_ENABLED_KEY) !== '0'; } catch (e) { return true; }
+        try { return Store.getItem(MODS_ENABLED_KEY) !== '0'; } catch (e) { return true; }
     }
     function setModsGloballyEnabled(on) {
-        try { localStorage.setItem(MODS_ENABLED_KEY, on ? '1' : '0'); } catch (e) { /* 忽略 */ }
+        try { Store.setItem(MODS_ENABLED_KEY, on ? '1' : '0'); } catch (e) { /* 忽略 */ }
     }
     function isModEnabled(id, manifest) {
         try {
-            const v = localStorage.getItem(MOD_ENABLED_KEY_PREFIX + id);
+            const v = Store.getItem(MOD_ENABLED_KEY_PREFIX + id);
             if (v === null) return manifest && manifest.defaultEnabled !== false;
             return v === '1';
         } catch (e) {
@@ -97,7 +97,7 @@
         }
     }
     function setModEnabled(id, on) {
-        try { localStorage.setItem(MOD_ENABLED_KEY_PREFIX + id, on ? '1' : '0'); } catch (e) { /* 忽略 */ }
+        try { Store.setItem(MOD_ENABLED_KEY_PREFIX + id, on ? '1' : '0'); } catch (e) { /* 忽略 */ }
     }
 
     /**
@@ -110,7 +110,7 @@
      */
     function forgetMod(id) {
         try {
-            localStorage.removeItem(MOD_ENABLED_KEY_PREFIX + id);
+            Store.removeItem(MOD_ENABLED_KEY_PREFIX + id);
             const entry = registry.get(id);
             registry.delete(id);
             // 清掉"已注入脚本"的记录时要同时认 id 与**实际目录名** ——

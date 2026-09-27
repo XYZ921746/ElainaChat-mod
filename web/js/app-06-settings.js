@@ -455,9 +455,9 @@ async function refreshDataSettings() {
             let cards = 0;
             let convs = 0;
             let mem = 0;
-            try { cards = JSON.parse(localStorage.getItem('elaina_open_character_cards') || '[]').length; } catch { /* 忽略 */ }
-            try { convs = JSON.parse(localStorage.getItem('elaina_open_conversations') || '[]').length; } catch { /* 忽略 */ }
-            try { mem = (JSON.parse(localStorage.getItem('elaina_open_memory_core') || '{}').diary || []).length; } catch { /* 忽略 */ }
+            try { cards = JSON.parse(Store.getItem('elaina_open_character_cards') || '[]').length; } catch { /* 忽略 */ }
+            try { convs = JSON.parse(Store.getItem('elaina_open_conversations') || '[]').length; } catch { /* 忽略 */ }
+            try { mem = (JSON.parse(Store.getItem('elaina_open_memory_core') || '{}').diary || []).length; } catch { /* 忽略 */ }
             box.innerHTML = '数据位置：<code class="text-indigo-500">应用私有目录</code>'
                 + '<span class="text-indigo-300">（安卓应用数据，卸载会一并删除）</span><br>'
                 + '人设卡 <b>' + escapeHtml(String(cards)) + '</b> 张'
