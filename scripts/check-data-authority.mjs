@@ -139,6 +139,61 @@ try {
     ok(!/model-should-persist/.test(recreated), '★ 旧设置没有被反向推回 data/（原 bug 的根因）');
     await ctx2.close();
 
+    console.log('\n=== 服务运行中删除 data/（用户最可能的操作）===');
+    {
+        // ★ 这是用户实际的做法：服务开着，直接删文件夹。
+        //   之前这里有个**真正的元凶**：server/store.mjs 的内存缓存永不失效
+        //   （`if (cache) return cache`），删掉 data/ 后缓存照旧返回旧数据，
+        //   浏览器读到了、又写回磁盘 —— 表现就是"删了还在"。
+        //   修法是让缓存与 data/ 目录 mtime 绑定（见 store.mjs 的 loadStore）。
+        const ctx5 = await browser.newContext();
+        const page5 = await ctx5.newPage();
+        await page5.goto(BASE, { waitUntil: 'domcontentloaded' });
+        await page5.waitForTimeout(1500);
+
+        // 先通过 API 写一条能被识别的数据
+        await page5.evaluate(() => Store.setItem('elaina_open_settings',
+            JSON.stringify({ model: 'SENTINEL-BEFORE-DELETE' })));
+        await wait(1500);
+        const s1 = await (await fetch(BASE + '/api/store')).json();
+        ok(/SENTINEL-BEFORE-DELETE/.test(JSON.stringify(s1.data || {})),
+            '（前置）写入的数据能被服务端读到');
+
+        // 服务**不重启**，直接删掉整个 data/ 目录
+        rmSync(DATA_DIR, { recursive: true, force: true });
+        ok(!existsSync(path.join(DATA_DIR, 'store.json')), '（前置）data/ 已删除');
+
+        // 立刻问 API：必须是空的（缓存要感知磁盘被删）
+        const s2 = await (await fetch(BASE + '/api/store')).json();
+        ok(!/SENTINEL-BEFORE-DELETE/.test(JSON.stringify(s2.data || {})),
+            '★★ 服务不重启时删 data/，API 立刻读不到旧数据（缓存已失效）',
+            JSON.stringify(s2.data || {}).slice(0, 120));
+
+        // 刷新页面：界面也必须是空的
+        await page5.reload({ waitUntil: 'domcontentloaded' });
+        await page5.waitForTimeout(2500);
+        const afterWipeLive = await page5.evaluate(() => ({
+            model: state.settings.model,
+            convs: state.conversations.length,
+        }));
+        ok(afterWipeLive.model !== 'SENTINEL-BEFORE-DELETE',
+            '★★ 刷新后界面也是空的（不会读到残留）', afterWipeLive.model);
+        ok(afterWipeLive.convs === 0, '★★ 聊天记录为空', String(afterWipeLive.convs));
+
+        // 说明：data/ 目录会被**重建**（应用启动时写内置角色卡等正常数据），
+        // 但里面不该有删除前的旧数据。这一点要显式断言，
+        // 否则用户看到目录又出现会以为"没删掉"。
+        await wait(1200);
+        if (existsSync(path.join(DATA_DIR, 'store.json'))) {
+            const rebuilt = readFileSync(path.join(DATA_DIR, 'store.json'), 'utf8');
+            ok(!/SENTINEL-BEFORE-DELETE/.test(rebuilt),
+                '★ 重建出来的文件里没有旧数据（目录会重建，但数据不会回来）');
+        } else {
+            ok(true, '★ 重建出来的文件里没有旧数据（目录未重建）');
+        }
+        await ctx5.close();
+    }
+
     console.log('\n页面错误:', errs.length ? errs.slice(0, 3).join(' | ') : '(无)');
 
     // ── ④ 老用户升级：localStorage 里的旧数据必须被搬进 data/（只搬一次） ──

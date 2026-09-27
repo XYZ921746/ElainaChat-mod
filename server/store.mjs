@@ -27,7 +27,7 @@
 //  人设卡与聊天记录在前端都是**完整数组**，这一层把它们拆成一条一文件；
 //  读的时候再拼回数组。对前端而言完全透明。
 
-import { mkdir, readFile, writeFile, rename, readdir, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { createZip, readZip } from './zip.mjs';
 
@@ -71,6 +71,9 @@ export function createStore({ dataDir, log = () => {} }) {
     const memoryDir = path.join(dataDir, MEMORY_DIR);
 
     let cache = null;
+    // 缓存对应的 data/ 目录 mtime（见 loadStore 的说明）。
+    // undefined = 还没建立过缓存；-1 = 那时目录不存在（空状态）
+    let cacheStamp;
     let writeQueue = Promise.resolve();
 
     // ---------------------------------------------------------------- 工具
@@ -227,9 +230,23 @@ export function createStore({ dataDir, log = () => {} }) {
      * 把 data/ 下的分类文件拼成一个键值对象。
      * 顺序很重要：先读分类文件，再读 store.json —— 这样迁移期两者都有时，
      * store.json 里的旧值不会覆盖已经分出去的新值（迁移逻辑会清掉旧键）。
+     *
+     * ★ 缓存必须能感知"磁盘上的数据被删了"（2026-09 修，用户实测）。
+     *
+     *   用户报"删除 data/ 后数据还在"。根因就在这里：`if (cache) return cache`
+     *   让缓存**永不失效** —— 删掉整个 data/ 目录后，内存里那份数据照旧返回，
+     *   浏览器一刷新读到旧数据，随后又把它写回磁盘，看起来就是"删了还在"。
+     *
+     *   现在缓存**与磁盘状态绑定**：比较 data/ 目录的 mtime 与缓存记录的时间戳。
+     *   目录被删/重建、或文件被外部改动（用户手工编辑、从备份恢复）都会让
+     *   mtime 变化 → 缓存自动失效 → 重新从磁盘读。
+     *
+     *   为什么用 mtime 而不是"每次都读盘"：invalidate() 已经覆盖了应用自身的
+     *   写入路径，剩下要防的就是**外部改动**（用户删目录 / 手工改文件）。
+     *   这类改动必然touch目录 mtime，一次 stat 就够，比每次重新读全部文件便宜得多。
      */
     async function loadStore() {
-        if (cache) return cache;
+        if (cache && await isCacheFresh()) return cache;
         const out = {};
 
         // ① 记忆（按类目拆成一类一文件）
@@ -256,7 +273,31 @@ export function createStore({ dataDir, log = () => {} }) {
         }
 
         cache = out;
+        // 记下"这份缓存对应哪个磁盘状态" —— 目录不存在时记 -1（空目录状态）
+        cacheStamp = await dataDirStamp();
         return cache;
+    }
+
+    /** data/ 目录的 mtime（毫秒）；目录不存在返回 -1（表示"没有数据"） */
+    async function dataDirStamp() {
+        try {
+            const st = await stat(dataDir);
+            return st.mtimeMs;
+        } catch {
+            return -1;   // 目录被删掉了
+        }
+    }
+
+    /**
+     * 缓存是否仍然对应磁盘的当前状态。
+     *
+     * 目录 mtime 变了 → 有人动过数据（删除 / 重建 / 手工编辑）→ 缓存不可信。
+     * 注意必须**每次都在 cacheStamp 之外重新 stat**：只比旧值的话，
+     * 删除目录这种"什么都没写"的操作就检测不到。
+     */
+    async function isCacheFresh() {
+        if (cacheStamp === undefined) return false;
+        return (await dataDirStamp()) === cacheStamp;
     }
 
     // ------------------------------------------------------------ 写：拆成文件
@@ -295,6 +336,9 @@ export function createStore({ dataDir, log = () => {} }) {
                 misc[k] = v;
             }
             await writeJsonAtomic(STORE_FILE, misc);
+            // 应用自己写完盘后，把缓存对应的磁盘状态**更新为刚写出来的样子** ——
+            // 否则下一次 loadStore 会因为 mtime 变了而白白重读一遍全部文件。
+            cacheStamp = await dataDirStamp();
         }).catch((err) => {
             log('error', '[store] 写入失败: ' + (err && err.message ? err.message : err));
         });
@@ -617,8 +661,14 @@ export function createStore({ dataDir, log = () => {} }) {
         return { source: 'json', data: normalize(raw) };
     }
 
-    /** 让调用方丢弃缓存（导入 / 外部改动后强制重读） */
-    function invalidate() { cache = null; }
+    /**
+     * 让调用方丢弃缓存（导入 / 外部改动后强制重读）。
+     *
+     * cacheStamp 也要一起清掉 —— 只清 cache 而留着旧 stamp 的话，
+     * isCacheFresh() 仍可能认为缓存有效（旧 mtime 恰好相同），
+     * 于是重读没发生、拿到的是空缓存。两件事必须成对。
+     */
+    function invalidate() { cache = null; cacheStamp = undefined; }
 
     return {
         loadStore, saveStore, migrateIfNeeded,
