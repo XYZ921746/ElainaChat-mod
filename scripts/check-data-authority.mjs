@@ -100,14 +100,10 @@ try {
     ok(afterReload.lsSettings === null, '★ localStorage 里没有设置');
     ok(afterReload.lsTheme === null, '★ localStorage 里没有主题');
     const lsKeys = Object.keys(afterReload.lsAll);
-    // ★ 允许且**只允许**一个键：迁移标记。
-    //   它必须留在 localStorage —— 放进 data/ 的话，用户删掉 data/ 时标记一起没了，
-    //   下次启动又会把 localStorage 里的残留搬回来（那正是"删了还在"的复现路径）。
-    const unexpected = lsKeys.filter((k) => k !== 'elaina_store_migrated_v1');
-    ok(unexpected.length === 0, '★ localStorage 里没有任何业务数据（只剩迁移标记）',
-        JSON.stringify(unexpected));
-    ok(lsKeys.includes('elaina_store_migrated_v1'),
-        '★ 迁移标记存在（保证旧数据只搬一次，不会被反复搬回）');
+    // ★ 现在 localStorage 里**什么业务键都不该有** —— 连迁移标记也不该有
+    //   （自动迁移已按用户要求移除：删 data/ 就是真清空，靠备份功能兜底）。
+    ok(lsKeys.length === 0, '★ localStorage 里没有任何业务数据（也没有迁移标记）',
+        JSON.stringify(lsKeys));
 
     await ctx.close();
 
@@ -196,66 +192,56 @@ try {
 
     console.log('\n页面错误:', errs.length ? errs.slice(0, 3).join(' | ') : '(无)');
 
-    // ── ④ 老用户升级：localStorage 里的旧数据必须被搬进 data/（只搬一次） ──
+    // ── ④ 删了就该真的空：localStorage 里的旧数据**不许**被搬回来 ──
+    //
+    // 曾经有一版"把老版本 localStorage 的数据自动迁进 data/"（为了保住老用户数据），
+    // 但它制造了用户实测的那个困惑：
+    //     关服务 → 删 data/ → 重启 → data/ 又被填满了
+    // 现在定稿的原则是：**data/ 就是全部，删掉它就没了**。
+    // 老用户的数据靠"我的数据 → 导入备份"恢复（项目本来就有备份功能）。
     await ctx2.close();
-    console.log('\n=== 老用户升级：localStorage 旧数据搬迁 ===');
+    console.log('\n=== 删 data/ 后不许从 localStorage 搬回旧数据 ===');
     {
         const ctx3 = await browser.newContext();
         const page3 = await ctx3.newPage();
-        // 先灌入"老版本留下的" localStorage 数据，再打开页面
+        // 灌入"老版本留在浏览器里"的数据，模拟老用户
         await page3.goto(BASE, { waitUntil: 'domcontentloaded' });
         await page3.evaluate(() => {
-            localStorage.clear();
-            localStorage.setItem('elaina_open_settings', JSON.stringify({ model: 'legacy-model' }));
+            localStorage.setItem('elaina_open_settings', JSON.stringify({ model: 'LEGACY-BROWSER-DATA' }));
             localStorage.setItem('elaina_open_conversations', JSON.stringify([
-                { id: 'legacy-conv', title: '老数据', messages: [{ id: 'lm1', role: 'user', text: '升级前的消息' }] },
+                { id: 'legacy-conv', title: '浏览器里的老对话', messages: [{ id: 'lm1', role: 'user', text: '升级前的消息' }] },
             ]));
+            localStorage.setItem('elaina_open_character_cards', JSON.stringify([{ id: 'legacy-card', name: '老角色' }]));
         });
         await page3.reload({ waitUntil: 'domcontentloaded' });
         await page3.waitForTimeout(2500);
-        const migrated = await page3.evaluate(() => ({
+        const after = await page3.evaluate(() => ({
             model: state.settings.model,
             convs: state.conversations.length,
-            convTitle: state.conversations[0]?.title || '',
+            cards: state.characterCards ? state.characterCards.length : -1,
         }));
-        console.log('升级后读到:', JSON.stringify(migrated));
-        ok(migrated.model === 'legacy-model', '★ 老数据被迁入：设置读到了 legacy-model', migrated.model);
-        ok(migrated.convs === 1 && migrated.convTitle === '老数据', '★ 老数据被迁入：聊天记录还在',
-            JSON.stringify(migrated));
-        await wait(1500);   // 等落盘
-        const storeAfterMigrate = existsSync(path.join(DATA_DIR, 'store.json'))
-            ? readFileSync(path.join(DATA_DIR, 'store.json'), 'utf8') : '';
-        ok(/legacy-model/.test(storeAfterMigrate), '★ 老数据确实落进了 data/store.json');
+        console.log('打开后:', JSON.stringify(after));
+        ok(after.model !== 'LEGACY-BROWSER-DATA',
+            '★★ localStorage 里的旧设置**没有**被搬进应用', after.model);
+        ok(after.convs === 0,
+            '★★ localStorage 里的旧对话**没有**出现在界面上', String(after.convs));
+        // 落盘确认：data/ 里不该有任何旧数据痕迹
+        await wait(1500);
+        let dumped = '';
+        try {
+            const walk = (d) => {
+                for (const e of readdirSync(d, { withFileTypes: true })) {
+                    const p = path.join(d, e.name);
+                    if (e.isDirectory()) walk(p);
+                    else dumped += readFileSync(p, 'utf8');
+                }
+            };
+            if (existsSync(DATA_DIR)) walk(DATA_DIR);
+        } catch { /* ignore */ }
+        ok(!/LEGACY-BROWSER-DATA/.test(dumped),
+            '★★ data/ 落盘内容里没有旧设置（不会自己长回来）');
+        ok(!/升级前的消息/.test(dumped), '★★ data/ 落盘内容里没有旧对话');
         await ctx3.close();
-
-        // ★ 关键：再删一次 data/，旧数据**不能**被再次搬回来（这就是原来的 bug）
-        child.kill();
-        await wait(600);
-        rmSync(DATA_DIR, { recursive: true, force: true });
-        child = startServer();
-        ok(await waitUp(), '服务再次重启');
-        const ctx4 = await browser.newContext();
-        const page4 = await ctx4.newPage();
-        // 复现用户的操作：localStorage 里还留着旧数据，删掉 data/ 后重开
-        await page4.goto(BASE, { waitUntil: 'domcontentloaded' });
-        await page4.evaluate(() => {
-            localStorage.setItem('elaina_open_settings', JSON.stringify({ model: 'legacy-model' }));
-            localStorage.setItem('elaina_open_conversations', JSON.stringify([
-                { id: 'legacy-conv', title: '老数据', messages: [] },
-            ]));
-        });
-        await page4.reload({ waitUntil: 'domcontentloaded' });
-        await page4.waitForTimeout(2500);
-        const afterSecondWipe = await page4.evaluate(() => ({
-            model: state.settings.model,
-            convs: state.conversations.length,
-        }));
-        console.log('二次删 data/ 后:', JSON.stringify(afterSecondWipe));
-        ok(afterSecondWipe.convs === 0,
-            '★★ 删掉 data/ 后旧数据不会被搬回来（迁移只跑一次）', String(afterSecondWipe.convs));
-        ok(afterSecondWipe.model !== 'legacy-model',
-            '★★ 设置也没有被搬回来', afterSecondWipe.model);
-        await ctx4.close();
     }
 } finally {
     await browser.close();

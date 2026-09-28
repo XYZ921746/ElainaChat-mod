@@ -15,6 +15,71 @@
 
 // ==================== 初始化====================
 
+/**
+ * 多设备实时同步：订阅服务端的 store 变更广播（SSE）。
+ *
+ * 场景：一个服务连电脑 + 手机 + 平板。手机改了设置或发了消息，
+ * 电脑这边应当**自动**看到，而不是手动刷新。
+ *
+ * 收到远端改动后按类型重新渲染：
+ *   · 聊天记录 → 重载会话列表；当前正在看的会话保持滚动位置
+ *   · 人设卡 / 记忆 / 收藏 / 定时任务 → 重载对应 state
+ *   · 设置 → 只更新内存值，**不重渲染设置面板**
+ *     （对方正在他的设备上输入，我们这边不该被他的中间状态打断）
+ *   · 主题 → 立即应用（最直观的"同步生效"反馈）
+ *   · 插件开关 → 重新加载插件列表
+ *
+ * 任何一步出错都只记日志：最坏情况是"对面改的还没显示"，刷新即可 ——
+ * 绝不能让同步逻辑影响本地使用。
+ */
+function startMultiDeviceSync() {
+    if (!window.Store || typeof window.Store.subscribeRemote !== 'function') return;
+    try {
+        window.Store.subscribeRemote((keys) => {
+            const has = (k) => keys.indexOf(k) >= 0;
+            try {
+                if (has('elaina_open_conversations') || has('elaina_open_categories')) {
+                    const keepId = state.currentConversationId;
+                    loadConversations();
+                    // 保持当前选中的会话：不能因为别人改了别的会话就把用户
+                    // 从正在看的对话里踢走（那是很突兀的体验）
+                    state.currentConversationId = keepId;
+                    if (typeof renderFolderList === 'function') renderFolderList();
+                    const conv = state.conversations.find((c) => c.id === state.currentConversationId);
+                    if (conv && typeof loadConversation === 'function') {
+                        const scroller = elements.conversationHistory;
+                        const keepTop = scroller ? scroller.scrollTop : 0;
+                        loadConversation(conv.id);
+                        if (scroller) scroller.scrollTop = keepTop;
+                    }
+                }
+                if (has('elaina_open_character_cards') || has('elaina_open_current_card') || has('elaina_open_character_card')) {
+                    if (typeof loadCharacterCards === 'function') loadCharacterCards();
+                    if (typeof loadCharacterCard === 'function') loadCharacterCard();
+                    if (typeof renderCardSelect === 'function') renderCardSelect();
+                }
+                if (has('elaina_open_memory_core') && typeof loadMemoryCore === 'function') loadMemoryCore();
+                if (has('elaina_open_favorites') && typeof loadFavorites === 'function') loadFavorites();
+                if (has('elaina_open_liked_quotes') && typeof loadLikedQuotes === 'function') loadLikedQuotes();
+                if (has('elaina_open_tasks') && typeof renderScheduledTaskList === 'function') renderScheduledTaskList();
+                if (has('elaina_open_settings')) loadSettings();
+                if ((has('elaina_theme_template') || has('elaina_theme') || has('elaina_theme_custom'))
+                    && window.ElainaTheme && typeof window.ElainaTheme.applyStored === 'function') {
+                    window.ElainaTheme.applyStored();
+                }
+                if (keys.some((k) => k.indexOf('elaina_plugin') === 0 || k === 'elaina_plugins_enabled')
+                    && window.ElainaMods && typeof window.ElainaMods.loadAll === 'function') {
+                    window.ElainaMods.loadAll().catch(() => { /* 插件失败不影响其它同步 */ });
+                }
+            } catch (e) {
+                console.warn('[Store] 应用远端改动时出错（不影响本地）', e);
+            }
+        });
+    } catch (e) {
+        console.warn('[Store] 多设备同步启动失败（不影响使用）', e);
+    }
+}
+
 async function init() {
     syncViewportHeight();
     // ★ 先把 data/ 里的数据读进内存缓存 —— **必须在任何读取之前**。
@@ -33,6 +98,12 @@ async function init() {
     loadFavorites();
     loadLikedQuotes();
     loadMemoryCore();
+    // ★ 多设备实时同步：订阅服务端的 store 变更广播（SSE）。
+    //
+    //   场景：一个服务连电脑 + 手机 + 平板。手机改了设置或发了消息，
+    //   电脑这边应当**自动**看到，而不是要手动刷新。
+    //   只在 Web 生效（APK 没有服务端，单设备不存在"别的设备改了"）。
+    startMultiDeviceSync();
     elements.textInput.value = '';
     document.getElementById('initialTextInput').value = '';
     elements.sidebarSearchInput.value = '';

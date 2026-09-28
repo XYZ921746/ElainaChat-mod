@@ -40,6 +40,31 @@ function stripComments(text) {
         .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 }
 
+/**
+ * 取出一个顶层函数的**函数体**（按大括号配对）。
+ *
+ * 为什么要它：检查"init 里先 bootstrap 再 load"时，整文件 indexOf 会被
+ * 别的函数体里的同名调用干扰 —— 那些函数定义在 init 之前，于是得出假失败。
+ * 只看函数体内部才是真正想断言的事。
+ */
+function extractFunctionBody(text, name) {
+    // 兼容 `function foo()` 与 `async function foo()`
+    const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
+    const m = re.exec(text);
+    if (!m) return '';
+    const start = text.indexOf('{', m.index);
+    if (start < 0) return '';
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}') {
+            depth--;
+            if (depth === 0) return text.slice(start, i + 1);
+        }
+    }
+    return '';
+}
+
 // ============================================================
 // 1. 业务代码不许直接读写 localStorage
 // ============================================================
@@ -175,18 +200,28 @@ console.log('\n=== 5. 启动顺序：先 bootstrap 再读 ===');
 {
     const init = src['app-07-init.js'] || '';
     const code = stripComments(init);
-    const bootAt = code.indexOf('Store.bootstrap()');
+
+    // ★ 只在 **init() 函数体内**找，不能整文件 indexOf。
+    //   原因：别的函数（如 startMultiDeviceSync）体内也会调 loadSettings() /
+    //   loadConversations()，而它们的定义位置在 init() **之前** ——
+    //   整文件搜索会命中那些位置，得出"load 早于 bootstrap"的**假失败**
+    //   （这个假失败真的出现过）。
+    const body = extractFunctionBody(code, 'init');
+    ok(body, '能取到 init() 函数体');
+
+    const bootAt = body.indexOf('Store.bootstrap()');
     ok(bootAt >= 0, '★ init() 里调用了 Store.bootstrap()');
+
     // bootstrap 必须早于所有 load*
     const loadCalls = ['loadSettings()', 'loadConversations()', 'loadMemoryCore()']
-        .map((c) => ({ c, at: code.indexOf(c) }))
+        .map((c) => ({ c, at: body.indexOf(c) }))
         .filter((x) => x.at >= 0);
     ok(loadCalls.length >= 2, 'init() 里有读取数据的调用');
     const tooEarly = loadCalls.filter((x) => x.at < bootAt).map((x) => x.c);
-    ok(tooEarly.length === 0, '★ 所有 load* 都在 bootstrap 之后（不会读到空缓存）',
+    ok(tooEarly.length === 0, '★ init() 内所有 load* 都在 bootstrap 之后（不会读到空缓存）',
         tooEarly.join(', '));
     // APK 是异步读，读完要重刷主题
-    ok(/ElainaTheme.*applyStored|applyStored\(\)/.test(init),
+    ok(/ElainaTheme.*applyStored|applyStored\(\)/.test(body),
         '★ bootstrap 后重刷主题（APK 异步读完后不会停在默认主题）');
 }
 

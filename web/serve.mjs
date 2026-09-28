@@ -1594,6 +1594,70 @@ function normalizeStorePatch(raw) {
     return out;
 }
 
+// ===== 多设备实时同步（store 变更广播） =====
+//
+// 一个服务连多台设备（电脑 + 手机 + 平板）是常见用法。没有推送时
+// "手机改了设置、电脑要手动刷新才看到"，体验上像两个应用。
+//
+// 实现：每个打开的页面用 EventSource 订阅 /api/store/stream，
+// POST /api/store 成功后把**这次改动的键**推给所有订阅者。
+//
+// ★ 为什么只推"键名 + 值"而不是让所有设备重新拉全量：
+//   聊天记录可能几 MB，每改一个字就全量广播会浪费带宽。
+//   推送增量由客户端按键合并，和 POST 的语义完全一致。
+//
+// ★ 为什么要带 origin 标记（谁改的）：
+//   改动的发起方自己不需要重新应用（它已经改过了），否则会出现
+//   "输入框里的字被自己推回来的旧值覆盖"这类回环问题。
+//   每个客户端带一个随机 id，广播时排除发起者。
+const storeSubscribers = new Set();   // { res, clientId }
+
+function broadcastStoreChange(patch, request) {
+    if (!storeSubscribers.size) return;
+    const keys = Object.keys(patch);
+    if (!keys.length) return;
+    // 发起方的 clientId（前端提交时放在头里），用于跳过它自己
+    const from = String(request.headers['x-store-client'] || '');
+    const payload = JSON.stringify({ type: 'store-change', keys, data: patch, from });
+    for (const sub of storeSubscribers) {
+        if (from && sub.clientId === from) continue;   // 不回推给发起方
+        try {
+            sub.res.write(`data: ${payload}\n\n`);
+        } catch (e) {
+            storeSubscribers.delete(sub);   // 写失败说明连接已断，摘掉
+        }
+    }
+}
+
+/** SSE 长连接：把 store 的变更实时推给这个页面 */
+function handleStoreStream(request, response) {
+    const clientId = String(new URL(request.url || '/', 'http://x').searchParams.get('client') || '');
+    response.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Connection': 'keep-alive',
+        'X-Content-Type-Options': 'nosniff',
+    });
+    // 立刻发一条注释行：让浏览器认为连接已建立（有些实现要收到数据才触发 open）
+    response.write(': connected\n\n');
+    const sub = { res: response, clientId };
+    storeSubscribers.add(sub);
+    // 心跳：中间有反向代理时，长时间无数据会被掐断。
+    // 25 秒一次注释行，成本可忽略。
+    const beat = setInterval(() => {
+        try { response.write(': ping\n\n'); } catch { /* 断开由下面的 close 处理 */ }
+    }, 25000);
+    beat.unref?.();
+    const cleanup = () => {
+        clearInterval(beat);
+        storeSubscribers.delete(sub);
+    };
+    response.on('close', cleanup);
+    response.on('error', cleanup);
+    request.on('close', cleanup);
+    // 注意：**不要** end()，这是个长连接，保持打开直到客户端断开
+}
+
 // ===== 访问鉴权（局域网访问控制） =====
 // 背景：服务默认监听 0.0.0.0（手机/平板可访问），而 Agent 文件接口没有鉴权、权限模式又由请求方
 // 自己传参决定。如果不设访问控制，同一局域网内任何设备都能打开应用、甚至读写本机文件。
@@ -2639,7 +2703,22 @@ const requestHandler = async (request, response) => {
             const current = await loadStore();
             Object.assign(current, patch);   // 按键合并：只覆盖本次提交的键，不动其它设备的其它键
             await saveStore();
+            // ★ 广播给所有其它设备（多设备实时同步，见 /api/store/stream）
+            broadcastStoreChange(patch, request);
             return jsonResponse(response, 200, { ok: true, keys: Object.keys(patch).length });
+        }
+
+        // 多设备实时同步：SSE 长连接，服务端把 store 的变更推给所有打开的页面。
+        //
+        // 为什么需要它：一个服务连多台设备（电脑 + 手机 + 平板）是常见用法，
+        // 没有推送时"手机改了设置，电脑要手动刷新才看到" —— 体验上像两个应用。
+        //
+        // 为什么用 SSE 而不是 WebSocket：服务端是零依赖的静态服务，SSE 只需
+        // 一个普通 HTTP 长连接（`text/event-stream`），浏览器端用 EventSource
+        // 原生支持、自动重连。WebSocket 要多一层握手与帧协议实现，为这个场景
+        // 不值得。
+        if (pathname === '/api/store/stream' && request.method === 'GET') {
+            return handleStoreStream(request, response);
         }
 
         // 数据导出：把 data/ 下的全部分类数据打包成一个 JSON 文件下载。

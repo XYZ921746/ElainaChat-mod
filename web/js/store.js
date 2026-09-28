@@ -74,6 +74,21 @@
     var backend = null;
     var bootstrapped = false;
 
+    // 本客户端的随机标识：用于让服务端在广播时**跳过发起方自己**。
+    // 每个标签页一份（模块级变量），关掉标签页就没了，不需要持久化。
+    var clientId = 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+    // 变更订阅者：别的设备改了数据时通知业务层重新渲染（见 subscribeRemote）
+    var changeListeners = new Set();
+    // SSE 长连接（多设备实时同步）。只建一次，见 subscribeRemote。
+    var eventSource = null;
+
+    function notifyLocal(keys, patch) {
+        for (var fn of changeListeners) {
+            try { fn(keys, patch); } catch (e) { console.warn('[Store] 变更回调出错', e); }
+        }
+    }
+
     // ── 后端接口 ────────────────────────────────────────────────────────
     //
     // loadAll() → Promise<{key: stringValue}>    启动时读全量
@@ -101,7 +116,12 @@
             },
             save: function (patch) {
                 var body = JSON.stringify({ data: patch });
-                // sendBeacon：刚改完设置就关页面/切后台时也能发出去
+                var headers = { 'Content-Type': 'application/json', 'X-Store-Client': clientId };
+                // sendBeacon：刚改完设置就关页面/切后台时也能发出去。
+                // ⚠️ sendBeacon **不能设自定义请求头** —— 所以这条路上不带 clientId，
+                //    服务端就会把它广播回来（包括发给自己）。这是刻意的取舍：
+                //    宁可多发一次（客户端按键比对后无变化就不动 UI），
+                //    也不要因为丢最后一次修改而损坏数据。
                 try {
                     if (navigator.sendBeacon) {
                         var blob = new Blob([body], { type: 'application/json' });
@@ -110,7 +130,7 @@
                 } catch (e) { /* 退回 fetch */ }
                 return fetch('/api/store', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: headers,
                     body: body,
                     keepalive: true,
                 }).catch(function () { /* 服务端没开就只留内存，下次写入再试 */ });
@@ -196,67 +216,61 @@
     }
 
     /**
-     * 把老版本留在 localStorage 里的数据搬进 data/（**只跑一次**）。
+     * 订阅**其它设备**的改动（多设备实时同步）。
      *
-     * ── 为什么必须有这一步 ──────────────────────────────────────────────
+     * 做两件事：
+     *   ① 开一条 SSE 长连接 /api/store/stream，收到服务端广播时把数据合进缓存；
+     *   ② 合并后调用回调，让业务层重新渲染（否则数据变了、界面还是旧的）。
      *
-     * 旧版本把业务数据存在 localStorage（data/ 只是副本）。直接切到"只认 data/"
-     * 之后，老用户的浏览器里明明还有聊天记录，应用却读不到 —— 在他们看来就是
-     * **升级一次，数据全没了**。这比原来的 bug 严重得多。
+     * ⚠️ 只在 Web 上有意义：APK 没有服务端，单设备不存在"别的设备改了"。
+     *    APK 上这个函数直接返回，不建立连接。
      *
-     * 所以启动时做一次单向搬迁：localStorage 有、data/ 没有的键 → 搬过去。
-     * 搬完在 localStorage 里留一个标记，之后不再重复搬（也避免用户手删 data/
-     * 之后旧数据又被搬回来 —— 那正是这次要修掉的"删了还在"）。
-     *
-     * ★ 关键：标记写在 localStorage，**不在 data/** —— 否则连同 data/ 一起被删掉时
-     *   标记也丢了，下次启动又会把 localStorage 的残留搬回来。
-     *
-     * @returns {number} 搬迁的键数（0 表示没有需要搬的）
+     * @param {(keys: string[]) => void} onChange 远端改动到达时调用
      */
-    function migrateFromLocalStorage() {
-        var FLAG = 'elaina_store_migrated_v1';
-        try {
-            // 已经搬过 → 什么都不做。
-            // 这一条同时保证了"删掉 data/ 后不会把旧数据搬回来"：
-            // 标记还在 localStorage 里（用户删的是 data/，不是浏览器数据）。
-            if (window.localStorage.getItem(FLAG) === '1') return 0;
-        } catch (e) {
-            return 0;   // 拿不到 localStorage（隐私模式等）→ 没有旧数据可搬
+    function subscribeRemote(onChange) {
+        if (typeof onChange === 'function') changeListeners.add(onChange);
+        // APK / 无 EventSource 环境：什么都不做
+        if (backend === createNativeBackend() || typeof window.EventSource !== 'function') {
+            return function () { changeListeners.delete(onChange); };
         }
+        if (eventSource) return function () { changeListeners.delete(onChange); };
 
-        var moved = 0;
         try {
-            for (var i = 0; i < DATA_KEYS.length; i++) {
-                var k = DATA_KEYS[i];
-                if (Object.prototype.hasOwnProperty.call(cache, k)) continue;   // data/ 已有 → 以它为准
-                var v = window.localStorage.getItem(k);
-                if (typeof v === 'string' && v) {
-                    cache[k] = v;
-                    queue(k, v);
-                    moved++;
-                }
-            }
-            // 插件开关（动态键）
-            try {
-                for (var j = 0; j < window.localStorage.length; j++) {
-                    var lk = window.localStorage.key(j);
-                    if (!lk || !/^elaina_plugin_\S+$/.test(lk)) continue;
-                    if (Object.prototype.hasOwnProperty.call(cache, lk)) continue;
-                    var lv = window.localStorage.getItem(lk);
-                    if (typeof lv === 'string' && lv) { cache[lk] = lv; queue(lk, lv); moved++; }
-                }
-            } catch (e) { /* 枚举失败不影响已搬的部分 */ }
+            eventSource = new window.EventSource('/api/store/stream?client=' + encodeURIComponent(clientId));
+            eventSource.onmessage = function (ev) {
+                var msg;
+                try { msg = JSON.parse(ev.data || '{}'); } catch (e) { return; }
+                if (!msg || msg.type !== 'store-change' || !msg.data) return;
+                // 服务端已按 clientId 跳过发起方，这里再挡一道：
+                // sendBeacon 那条路无法带 clientId，所以自己的改动也可能被推回来。
+                if (msg.from && msg.from === clientId) return;
 
-            if (moved) {
-                console.log('[Store] 已把 ' + moved + ' 项旧数据从 localStorage 迁入 data/');
-                flush();   // 立刻落盘，别等防抖 —— 迁移只发生一次，越早写稳越好
-            }
-            // 无论有没有搬到东西都打标记：没数据可搬也是"迁移已完成"的状态
-            window.localStorage.setItem(FLAG, '1');
+                var keys = Object.keys(msg.data);
+                var changed = [];
+                for (var i = 0; i < keys.length; i++) {
+                    var k = keys[i];
+                    var v = msg.data[k];
+                    if (v === null) {
+                        if (Object.prototype.hasOwnProperty.call(cache, k)) { delete cache[k]; changed.push(k); }
+                    } else if (cache[k] !== v) {
+                        cache[k] = v;
+                        changed.push(k);
+                    }
+                }
+                // 值没变就不惊动界面（避免自己刚改完又被自己触发的广播重渲染）
+                if (changed.length) {
+                    console.log('[Store] 收到其它设备的改动：' + changed.length + ' 项');
+                    notifyLocal(changed, msg.data);
+                }
+            };
+            eventSource.onerror = function () {
+                // EventSource 会自己重连，这里只记一行 —— 服务端重启期间刷屏没意义。
+                // （不关掉连接：浏览器原生重连比我们自己写的退避更可靠）
+            };
         } catch (e) {
-            console.warn('[Store] 旧数据迁移失败（不影响新数据）', e);
+            console.warn('[Store] 实时同步连接失败（不影响本地读写）', e);
         }
-        return moved;
+        return function () { changeListeners.delete(onChange); };
     }
 
     /**
@@ -264,6 +278,21 @@
      *
      * Web 后端是同步填充的，所以这个 Promise 在 Web 上其实立即就已就绪；
      * 写成 Promise 是为了兼容 APK（Filesystem 是异步的）。
+     *
+     * ★ 这里**不做** localStorage 自动迁移（2026-09 定稿）。
+     *
+     *   曾经有过一版"把老版本留在 localStorage 的数据自动搬进 data/"，
+     *   出发点是好的（免得老用户升级后看起来数据没了），但它制造了一个
+     *   更让人困惑的现象：
+     *
+     *     用户关掉服务 → 删掉 data/ → 重启 → **data/ 又被填满了**
+     *
+     *   因为那台浏览器里 localStorage 还留着旧数据，而迁移标记是这回才引入的
+     *   —— 对用户来说就是"我明明删了，数据又回来了"。
+     *
+     *   现在的原则简单到不需要解释：**data/ 就是全部。删掉它，数据就没了。**
+     *   代价是老版本用户升级后需要手动导入一次（设置 → 我的数据 → 导入备份），
+     *   这个代价换来的是"删了就是删了"这个不需要任何心智模型的保证。
      */
     function bootstrap() {
         if (bootstrapped) return Promise.resolve();
@@ -280,9 +309,6 @@
                     if (typeof data[k] === 'string') cache[k] = data[k];
                 }
             }
-            // 搬老数据（只在 Web 有意义：APK 的 localStorage 是同一个 WebView，
-            // 但老 APK 用的也是 localStorage，所以同样需要搬 —— 判断放在函数内部）
-            migrateFromLocalStorage();
             return Promise.resolve();
         }
 
@@ -293,7 +319,6 @@
                     if (typeof data[k] === 'string') cache[k] = data[k];
                 }
             }
-            migrateFromLocalStorage();
         }).catch(function () { /* 读不到就按空数据启动 */ });
     }
 
@@ -307,6 +332,10 @@
         getItem: getItem,
         setItem: setItem,
         removeItem: removeItem,
+        /** 订阅其它设备的改动（多设备实时同步），返回取消订阅函数 */
+        subscribeRemote: subscribeRemote,
+        /** 本客户端的标识（服务端用它跳过发起方） */
+        clientId: function () { return clientId; },
         snapshot: snapshot,
         isDataKey: isDataKey,
         DATA_KEYS: DATA_KEYS,
