@@ -1528,17 +1528,55 @@ function bindGroupDragSort(box, onDone, hooks) {
         const head = zone ? zone.querySelector('.mod-group-head') : null;
         try {
             const map = JSON.parse(Store.getItem(GROUP_OF_KEY) || '{}');
-            if (head) {
-                map[modId] = head.getAttribute('data-group-id');
-            } else {
-                delete map[modId];
-            }
+            const curGroup = map[modId] || null;
+            const newGroup = head ? head.getAttribute('data-group-id') : null;
+            // 归属没变（还在原分栏松手 / 还在顶层松手）→ 不动，让内核走自己的栏内排序
+            if ((newGroup || null) === curGroup) { clearHover(); return; }
+            if (newGroup) map[modId] = newGroup;
+            else delete map[modId];
             Store.setItem(GROUP_OF_KEY, JSON.stringify(map));
             if (Store && typeof Store._flush === 'function') Store._flush();
             clearHover();
-            // 让内核把卡片还原，然后按新归属重渲染
+
+            // ★ 就地搬家 + FLIP（不整页重渲染）：重渲染会打断内核的飞行动画 ——
+            //   卡片瞬移进/出分栏，观感"没有动画"（实测踩到）。
+            //   做法：记卡片当前屏幕位置 → 移到目标容器（分栏体开头 / 顶层占位处）→
+            //   从旧位置演到新位置。
+            const oldRect = card.getBoundingClientRect();
+            // 先让内核把卡片从"拖拽态"还原（它会把卡片放回拖前的容器）——
+            // 通过触发它的 pointercancel 路径，我们随后再把卡片挪到正确的新家
             document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-            if (typeof onDone === 'function') onDone();
+            // Escape 还原是同步的：现在卡片已回到拖拽前的位置
+            const body2 = newGroup
+                ? document.querySelector('.mod-group[data-group-id="' + newGroup + '"] .mod-group-body')
+                : document.getElementById('modsList');
+            if (!body2) { if (typeof onDone === 'function') onDone(); return; }
+            // 新家开头插入
+            const anchor = body2.querySelector('.mod-card');
+            if (anchor && anchor !== card) body2.insertBefore(card, anchor);
+            else body2.appendChild(card);
+            // 顶层归属时保持 top_order 一致（插到当前指针位置附近 —— 简化为开头）
+            // FLIP：从旧屏幕位置演到新位置
+            const nowRect = card.getBoundingClientRect();
+            const dy = oldRect.top - nowRect.top;
+            const dx = oldRect.left - nowRect.left;
+            if (dy || dx) {
+                card.style.transition = 'none';
+                card.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+                requestAnimationFrame(() => {
+                    card.style.transition = 'transform .25s cubic-bezier(.2,.8,.3,1)';
+                    card.style.transform = '';
+                });
+            }
+            // 更新计数徽标（就地改，避免重渲染打断上面的动画）
+            const groupEl2 = body2.closest('.mod-group');
+            if (groupEl2) {
+                const cnt = groupEl2.querySelector('.mod-group-head > span:nth-last-child(2)')
+                    || groupEl2.querySelector('.mod-group-head span.text-\\[10px\\]');
+                if (cnt) cnt.textContent = String(body2.querySelectorAll('.mod-card').length);
+            }
+            // ★ 故意**不调 onDone**：它会 refreshModsList 整页重建，把刚播的
+            //   FLIP 动画打断（"放进去没动画"的成因）。归属/顺序已各自入 Store。
         } catch (err) { /* 忽略 */ }
     }, true);
 

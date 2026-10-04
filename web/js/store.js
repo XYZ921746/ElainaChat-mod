@@ -65,6 +65,11 @@
         // 插件分栏（分组）：分栏清单 + 插件归属（见 app-06-settings.js 的 refreshModsList）
         'elaina_mods_groups',
         'elaina_mods_group_of',
+        // ★ 顶层混排顺序（平铺插件与分栏的次序）。第三次踩同一个坑了 ——
+        //   新增 Store 键必须同步进这份白名单，否则写入只进内存缓存，
+        //   刷新即丢（"拖完看着生效了，刷新就回去了"）。以后新增键时
+        //   检查脚本应盯着这个清单……见 scripts/check-store-keys.mjs（新增）。
+        'elaina_mods_top_order',
         // Live2D 模型列表的拖拽顺序（同上，纯 UI 偏好）。
         'elaina_live2d_model_order'
     ];
