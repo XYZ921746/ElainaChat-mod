@@ -1555,6 +1555,11 @@ function bindGroupDragSort(box, onDone, hooks) {
             idAttr: 'data-group-id',
             placeholderClass: 'mod-placeholder',
             draggingClass: 'mod-dragging',
+            // ★ 顶层混排：分栏与平铺卡片同等级，插入点候选包含两类项 ——
+            //   分栏因此可以拖到任何卡片之间（用户要求；之前候选只有分栏，
+            //   分栏永远拖不到卡片上面）。
+            topLevelMixed: true,
+            outerItemSelector: '.mod-card, .mod-group',
             canStart(ev) {
                 return !ev.target.closest('.mod-act') && !ev.target.closest('.mod-group-toggle');
             },

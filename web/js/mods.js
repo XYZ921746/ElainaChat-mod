@@ -794,6 +794,13 @@
         const ID_ATTR = opts.idAttr || null;              // null = 自动（先 data-model-name 后 data-mod-id）
         const PLACEHOLDER_CLASS = opts.placeholderClass || 'mod-placeholder';
         const DRAGGING_CLASS = opts.draggingClass || 'mod-dragging';
+        // ★ 外层容器的项选择器（可选）：拖出父容器后，插入点候选按这个选。
+        //   插件分栏场景：拖分栏到顶层时，候选要**包含平铺卡片**——否则分栏只能
+        //   插到其它分栏前面，永远到不了卡片之间（"分栏拖不到卡片上面"的根因）。
+        const OUTER_ITEM_SEL = opts.outerItemSelector || ITEM_SEL;
+        // ★ 顶层混排模式：项本身就在 container 顶层（分栏与卡片混排），
+        //   插入点候选**始终**用 OUTER_ITEM_SEL（含两类项）—— 不需要"逃逸"判定。
+        const TOP_MIXED = Boolean(opts.topLevelMixed);
         // 拖拽时挂在"项"上的类由 CSS 定义（.mod-card.mod-dragging / .mod-group.mod-dragging）
         const handlers = [];
         let drag = null;
@@ -912,31 +919,32 @@
                     const dy = e.clientY - rect.top - drag.grabDY;
                     setTf(dx, dy, true);
 
-                    // ★ "拖出分栏"支持：指针纵向移出**真实父容器**的范围时，
-                    //   占位块提升到**外层容器**（outerContainer 选项，如 #modsList），
-                    //   并按外层项（分栏/平铺卡片）的位置找插入点 —— 卡片就此"逃出"栏内。
-                    //   指针回到父容器范围时再降级回栏内。没有这个机制，
-                    //   放进分栏的插件永远拿不出来（占位块被锁死在栏内，实测踩到）。
+                    // ★ 插入点判定分两种（都排除拖动中的项自身）：
+                    //   a) TOP_MIXED 模式（项在 container 顶层混排，如分栏拖动）：
+                    //      候选**始终**用 OUTER_ITEM_SEL —— 卡片与分栏同等级，
+                    //      分栏可以插到任何卡片之间（用户要求）。
+                    //   b) 有外层容器且指针纵向移出父容器范围：占位块提升到外层，
+                    //      候选按 OUTER_ITEM_SEL —— 卡片"逃出"分栏（放进去的拿得出来）。
+                    //   c) 其余：候选限定在真实父容器内（普通栏内排序）。
                     const pr = parent.getBoundingClientRect();
-                    const outside = e.clientY < pr.top || e.clientY > pr.bottom;
-                    const activeParent = (outside && outer) ? outer : parent;
+                    const useOuter = !TOP_MIXED && outer
+                        && (e.clientY < pr.top || e.clientY > pr.bottom);
+                    const activeParent = (useOuter || TOP_MIXED) ? (outer || parent) : parent;
+                    const sel = (useOuter || TOP_MIXED) ? (OUTER_ITEM_SEL || ITEM_SEL) : ITEM_SEL;
 
-                    // 占位块按指针纵向位置落位（用卡片中心判定更稳）
-                    const phNext = targetBefore(
-                        activeParent, e.clientY + (rect.height / 2 - drag.grabDY)) || null;
+                    // 占位块按指针纵向位置落位
+                    let phNext = null;
+                    for (const c of activeParent.querySelectorAll(sel)) {
+                        if (c === card || c.contains(card)) continue;   // 跳过拖动中的项自身
+                        const r = c.getBoundingClientRect();
+                        if (e.clientY < r.top + r.height / 2) { phNext = c; break; }
+                    }
                     if (phNext === drag.lastBefore && activeParent === drag.lastParent) return;
                     drag.lastBefore = phNext;
                     drag.lastParent = activeParent;
                     flip(activeParent, () => {
-                        if (activeParent !== parent) {
-                            // 换容器：占位块插到外层的对应位置（含外层里的分栏体？不 ——
-                            // 外层插入点只考虑外层的**直接子项**，避免误入别的分栏）
-                            if (phNext) activeParent.insertBefore(drag.ph, phNext);
-                            else activeParent.appendChild(drag.ph);
-                        } else {
-                            if (phNext) activeParent.insertBefore(drag.ph, phNext);
-                            else activeParent.appendChild(drag.ph);
-                        }
+                        if (phNext) activeParent.insertBefore(drag.ph, phNext);
+                        else activeParent.appendChild(drag.ph);
                     });
                 };
 

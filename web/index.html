@@ -2902,13 +2902,20 @@
         border-radius:16px;
         background:rgba(255,255,255,.32);
         overflow:hidden;
+        /* ★ 折叠后的"收缩"（用户反馈：折叠起来还占大面积）：
+           分栏外框的上下 padding 也随折叠收到 0，只留一条头部 ——
+           加上过渡让收缩本身也是平滑的。 */
+        transition:padding .25s ease;
+        padding:4px;
     }
+    .mod-group-collapsed{padding:0}
     .mod-group-head{
         display:flex;align-items:center;gap:8px;
         padding:8px 10px;
-        cursor:grab;
+        cursor:pointer;          /* 头部默认是折叠开关（拖拽只从把手发起） */
         user-select:none;
         touch-action:none;
+        border-radius:12px;
     }
     .mod-group-head.mod-group-hover{
         background:rgba(139,92,246,.16);
@@ -2933,14 +2940,17 @@
          不要写成父级选择器 —— 类挂错元素动画永远不生效（第一版踩到）。 */
     .mod-group-body{
         display:grid;
-        grid-template-rows:1fr;
+        /* ★ 必须用 minmax(0, 1fr) 而不是裸 1fr —— 裸 fr 的隐式下限是
+           内容的 min-content（0fr 也收不死，实测剩 26px 的提示行）。
+           minmax(0,…) 把下限钳到 0，行才能真的收到 0。 */
+        grid-template-rows:minmax(0, 1fr);
         transition:grid-template-rows .25s ease, opacity .2s ease, padding .25s ease;
         opacity:1;
         overflow:hidden;
     }
-    .mod-group-body > *{min-height:0}
+    .mod-group-body > *{min-height:0;overflow:hidden}
     .mod-group-body.is-collapsed{
-        grid-template-rows:0fr;
+        grid-template-rows:minmax(0, 0fr);
         opacity:0;
         padding-top:0;
         padding-bottom:0;
