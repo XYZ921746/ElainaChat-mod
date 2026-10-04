@@ -2831,7 +2831,161 @@
             #settingsPanel { animation-duration: 0.01ms !important; }
         }
     
-    .settings-tab-btn{padding:6px 14px;border-radius:10px;font-size:13px;color:#64748b;background:transparent;border:none;cursor:pointer;white-space:nowrap;transition:all .15s}.settings-tab-btn:hover{background:rgba(99,102,241,.08);color:#4f46e5}.settings-tab-btn.active{background:rgba(99,102,241,.14);color:#4f46e5;font-weight:600}
+    /* 顶部横向导航（LingChat 式）：居中、无边框按钮、选中态用主题色底 */
+    #settingsTabNav {
+        justify-content: center;
+        gap: 4px !important;
+        padding: 10px 16px 12px !important;
+        border-bottom: 1px solid var(--pixso-line) !important;
+        background: var(--pixso-panel);
+    }
+    .settings-tab-btn {
+        padding: 7px 15px;
+        border-radius: 10px;
+        font-size: 13px;
+        color: var(--pixso-brown-soft);
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background .15s ease, color .15s ease;
+    }
+    .settings-tab-btn:hover {
+        background: rgba(99,102,241,.10);
+        color: var(--pixso-brown-dark);
+    }
+    .settings-tab-btn.active {
+        background: var(--pixso-green);
+        color: #fff;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(99,102,241,.22);
+    }
+    /* 关闭按钮也走主题色（深色下原来写死的 indigo 看不清） */
+    #closeSettings:hover { background: rgba(99,102,241,.12); }
+    #closeSettings svg { color: var(--pixso-brown-soft) !important; }
+    /* 设置面板背景：用主题面板色而不是写死的米色（深色下那会是亮的） */
+    #settingsOverlay { background-color: var(--pixso-panel) !important; }
+    #settingsPanel > div:first-child {
+        background: var(--pixso-panel-soft) !important;
+        border-color: var(--pixso-line) !important;
+    }
+    #settingsPanel > div:last-child {
+        background: var(--pixso-panel-soft) !important;
+        border-top-color: var(--pixso-line) !important;
+    }
+    
+    
+    /* ==================== 设置界面（2026-10 大改版）====================
+       目标：**塞下更多功能**。参照 LingChat 的做法 ——
+         · 顶部横向图标导航（已有的分栏导航保留，只换视觉）
+         · 每个分组是一张大卡片，卡片自带标题栏与内边距，内容在卡片里分块
+         · 两列自适应：窄项并排、宽项独占，一屏能看到更多设置
+       
+       ★ 纯 CSS 改造：不动那 285 行 HTML —— 现有结构已经是
+         「.settings-tab-panel > section（含 .modal-label 标题 + 内容）」，
+         正是卡片所需的结构，用样式把它呈现成卡片即可。
+         动 HTML 的风险（漏改某个 tab、破坏 JS 依赖的 id）远大于收益。 */
+    
+    /* 卡片：每个分组一张。
+       ★ 覆盖两种结构：多数 tab 用 `<section>`，而「外观」页用
+         `<div class="mb-4" id="...">`（历史写法）—— 两种都当卡片处理，
+         否则外观页会是"没有卡片的裸内容"，与其它页不一致（实测踩到）。 */
+    #settingsContent .settings-tab-panel > section,
+    #settingsContent .settings-tab-panel > div.mb-4 {
+        position: relative;
+        background: var(--pixso-panel-soft);
+        border: 1px solid var(--pixso-line);
+        border-radius: 16px;
+        padding: 16px 18px;
+        margin-bottom: 14px;
+        transition: border-color .15s ease;
+    }
+    #settingsContent .settings-tab-panel > section:hover,
+    #settingsContent .settings-tab-panel > div.mb-4:hover {
+        border-color: var(--pixso-green);
+    }
+    /* ★ 原来用 border-t 分隔的"第二段"（如对话页的思考模式）——
+       它现在也是独立卡片，那条分隔线要收掉，否则卡片里多一条横线。 */
+    #settingsContent .settings-tab-panel > section.mt-4,
+    #settingsContent .settings-tab-panel > section.border-t {
+        margin-top: 0 !important;
+        padding-top: 16px !important;
+        border-top: 1px solid var(--pixso-line) !important;
+    }
+    /* 卡片标题：左侧主题色图标 + 文字，下方一条细分隔线（LingChat 的观感）。
+       ★ 两种标题写法都覆盖：`section > .modal-label`（多数）
+         与 `div.mb-4 > .text-xs.font-semibold`（外观页）。 */
+    #settingsContent .settings-tab-panel > section > .modal-label,
+    #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--pixso-brown-dark);
+        letter-spacing: 0;
+        margin: -2px 0 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--pixso-line);
+    }
+    #settingsContent .settings-tab-panel > section > .modal-label > span:first-child,
+    #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child > span:first-child {
+        font-size: 15px;
+        line-height: 1;
+    }
+    
+    /* 两列自适应：卡片内的 .grid-cols-2 保持两列（宽屏），窄屏自动落成一列。
+       ★ 用 auto-fit + minmax 而不是固定两列 —— 一列太窄时自动折行，
+         不会把输入框挤成一条缝。 */
+    #settingsContent .settings-tab-panel > section .settings-cols-2,
+    #settingsContent .settings-tab-panel > section > .grid-cols-2 {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+    }
+    
+    /* 设置面板整体：加宽以容纳更多内容（原来是 max-w-2xl = 672px）。
+       ★ 必须限定在**大屏**里 —— 移动端那条 `#settingsPanel{max-width:none}`
+         写在更靠前的 @media (max-width:860px) 里，同优先级下后面这条会赢，
+         于是手机上也会被压成 96vw（失去全屏铺满）。 */
+    @media (min-width: 861px) {
+        #settingsPanel { max-width: min(1040px, 96vw); }
+    }
+    /* 大屏下两列排布：把「设置项」这种窄块并排，宽块独占 */
+    @media (min-width: 900px) {
+        /* ★★ 必须写 `.active-panel` —— 不能只写 `#settingsContent .settings-tab-panel`！
+           基础规则是 `.settings-tab-panel{display:none}`（特异性 0,1,0），
+           而 `#settingsContent .settings-tab-panel`（1,1,0）特异性更高，
+           会把 display:none 覆盖掉 → **所有分栏内容同时显示**（实测踩到：
+           外观 tab 亮着，角色页的人设/角色卡也一起冒出来）。 */
+        #settingsContent .settings-tab-panel.active-panel {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            align-content: start;
+        }
+        /* 每张卡片自己是一格；卡片之间用 gap 而不是 margin */
+        #settingsContent .settings-tab-panel > section,
+        #settingsContent .settings-tab-panel > div.mb-4 {
+            margin-bottom: 0;
+        }
+        /* 需要整行的大块（插件列表、日志、记忆等）跨两列 */
+        #settingsContent .settings-tab-panel > section.settings-span-2,
+        #settingsContent .settings-tab-panel > div.mb-4.settings-span-2,
+        #settingsContent .settings-tab-panel > section:has(.mod-card),
+        #settingsContent .settings-tab-panel > section:has(#modsList),
+        #settingsContent .settings-tab-panel > section:has(textarea),
+        /* 外观页的主题选择器是网格，需要整行宽度才排得下 */
+        #settingsContent .settings-tab-panel > div.mb-4:has(#themePickerBox) {
+            grid-column: 1 / -1;
+        }
+    }
+    /* 插件 tab 的卡片本来就是整块内容，用 block 而不是 grid。
+       ★ 同样必须带 .active-panel —— 否则 !important 会让插件页**永远显示**
+         （与上面 grid 那条是同一类错误）。 */
+    #tab-mods.settings-tab-panel.active-panel { display: block !important; }
+    #tab-mods .settings-card { margin-bottom: 0; }
+    
     
     .settings-tab-panel{display:none}.settings-tab-panel.active-panel{display:block}
 
