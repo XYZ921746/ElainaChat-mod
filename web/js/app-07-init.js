@@ -124,11 +124,15 @@ async function init() {
 
     elements.railSettingsBtn.addEventListener('click', openSettings);
     elements.closeSettings.addEventListener('click', closeSettingsPanel);
-    elements.cancelSettings.addEventListener('click', closeSettingsPanel);
     elements.settingsOverlay.addEventListener('click', (e) => {
         if (e.target === elements.settingsOverlay) closeSettingsPanel();
     });
-    elements.saveSettings.addEventListener('click', saveSettings);
+    // ★ 2026-10：底部「取消 / 保存设置」按钮已删除 —— 设置改成**改完即生效**：
+    //   任何控件一变就自动落盘（bindSettingsAutoSave），关闭直接点 ✕。
+    //   原来的两条绑定（cancelSettings / saveSettings）随之删除；
+    //   saveSettings() 函数保留（自动保存与"恢复默认"仍在用），
+    //   只是不再由按钮触发、且以 silent 模式调用。
+    bindSettingsAutoSave();
     document.getElementById('resetSettingsBtn')?.addEventListener('click', restoreDefaultSettings);
     // 插件：重新扫描（把刚丢进 web/mods/ 的 zip 装上）+ 全局开关
     document.getElementById('modsRefreshBtn')?.addEventListener('click', () => {

@@ -1828,7 +1828,9 @@
             border-bottom: 1px solid var(--pixso-line);
         }
         #settingsContent > section:last-child { padding-bottom: 0; border-bottom: 0; }
-        #settingsPanel > div:last-child { background: var(--pixso-panel-soft); }
+        /* ★ 底部按钮栏已删除（2026-10 改成改完即生效）——
+           原来这条 `#settingsPanel > div:last-child` 现在会指向**内容区**，
+           必须去掉：内容区不需要底色（卡片自己就是主体）。 */
         #settingsOverlay,
         #settingsOverlay *,
         #settingsOverlay *::before,
@@ -2807,16 +2809,10 @@
             }
             #settingsPanel .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
             #settingsPanel .flex.gap-4 { flex-wrap: wrap; row-gap: 10px; }
-            #settingsPanel > div:last-child {
-                padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
-                background: rgba(255,255,255,.78);
-                border-top: 1px solid rgba(217,199,192,.82) !important;
-                box-shadow: 0 -8px 24px rgba(76,49,35,.07);
-                backdrop-filter: blur(18px);
-                -webkit-backdrop-filter: blur(18px);
-            }
-            #settingsPanel > div:last-child .btn-secondary,
-            #settingsPanel > div:last-child .btn-primary { min-height: 44px; padding: 0 18px; }
+            /* ★ 底部按钮栏已删除（2026-10 改成改完即生效）——
+               原来这几条 `#settingsPanel > div:last-child` 现在会指向内容区，
+               会把内容区画成一条带顶边框的底栏。已移除。
+               内容区在移动端就是最后一块，靠自己的 padding 收尾即可。 */
         }
 
         @media (max-width: 860px) and (max-height: 620px) {
@@ -2913,7 +2909,11 @@
             top: 0;
             z-index: 2;
         }
-        /* ✕：独立圆形按钮（有自己的底色与描边，不再"浮"在背景上）。
+        /* ✕：**无框**（与导航同一风格 —— 用户明确不要"框死"的观感）。
+              ★ 必须显式清掉背景/边框：文件前面有一条
+                `#closeSettings { background: var(--pixso-cream); border-radius: 50% }`
+                （给别的弹窗关闭按钮用的），不清的话 ✕ 会是一个**实底圆片**，
+                正是用户说的"拿个框框死"。
               ★ 绝对定位到右端 —— 这样导航用 margin:auto 时能在**整条顶栏**
                 里真正居中，不会被 ✕ 的宽度挤偏。 */
         #settingsTopBar > #closeSettings {
@@ -2929,14 +2929,15 @@
             align-items: center;
             justify-content: center;
             border-radius: 9999px;
-            background: var(--pixso-panel);
-            border: 1px solid var(--pixso-line);
-            box-shadow: 0 1px 3px rgba(30,27,75,.06);
-            transition: background .15s ease, border-color .15s ease;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            opacity: .7;
+            transition: background .15s ease, opacity .15s ease;
         }
         #settingsTopBar > #closeSettings:hover {
-            background: var(--pixso-panel-soft);
-            border-color: var(--pixso-green);
+            background: rgba(99,102,241,.12) !important;
+            opacity: 1;
         }
         /* ④ 内容区：居中列（太宽时眼睛要横着扫，阅读体验差），
               卡片在这个列里两列排布 */
@@ -2947,38 +2948,30 @@
             margin: 0 auto;
             box-sizing: border-box;
         }
-        /* ⑤ 底栏：通栏、贴底；按钮同样与内容列对齐 */
-        #settingsPanel > div:last-child {
-            padding: 14px max(28px, calc((100% - 1180px) / 2)) !important;
-            border-top: 1px solid var(--pixso-line) !important;
-            background: var(--pixso-panel-soft) !important;
-            box-shadow: none !important;
-        }
+        /* ★ 底部按钮栏已删除（2026-10 改成改完即生效）——
+           原来这里给 `#settingsPanel > div:last-child` 画的底栏样式
+           现在会落到**内容区**上（面板只剩顶栏 + 内容区两个子元素），
+           会在内容底部多出一条分隔线和一块底色。已移除。 */
     }
     
-    /* ==================== 导航：一枚圆角胶囊（LingChat 式）====================
-       用户要求（两轮反馈合起来）：
-         ① 导航项之间**无间隙**、不各自成块 —— 整排读起来是一条连贯的栏；
-         ② 但整排**必须有自己明确的区域**（不能与背景融成一块）。
-
-       做法：把 #settingsTabNav 本身做成**圆角胶囊**（圆角 + 底色 + 描边），
-       内部按钮零间隙、透明背景，选中项在胶囊里填一枚实底小圆角块。
-       这样既有"一整条"的连贯感，又有清晰的分区边界。
-
-       ★ 居中：胶囊用 `margin: auto` 在顶栏里居中，✕ 绝对定位在右端 ——
-         这样 ✕ 的宽度不会把胶囊挤偏（用 flex-1 + margin-left:auto 会偏）。 */
+    /* ==================== 导航：纯文字、透明背景（无框）====================
+       用户要求（第三轮，最终形态）：
+         "导航栏应该像一张透明背景只显示导航的文字的那种感觉，
+          而不是拿个框给框死"
+       所以：**没有胶囊、没有边框、没有底色** —— 只有文字与图标，
+       选中项用文字变色 + 加粗表示，悬停只轻微变亮。
+       整条导航浮在设置背景之上（背景是半透明毛玻璃），靠文字自身可读。 */
     #settingsTabNav {
         display: flex;
         align-items: center;
         justify-content: center;
-        gap: 2px !important;
-        padding: 4px !important;
-        border-bottom: 0 !important;    /* 下边框交给 #settingsTopBar，避免两条线 */
-        /* ★ 胶囊本体：明确的区域边界 */
-        background: var(--pixso-panel);
-        border: 1px solid var(--pixso-line);
-        border-radius: 9999px;
-        box-shadow: 0 1px 3px rgba(30,27,75,.06);
+        gap: 4px !important;
+        padding: 0 !important;
+        border: 0 !important;
+        border-bottom: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
         width: max-content;
         max-width: calc(100% - 120px);  /* 两侧给 ✕ 留位置 */
         margin: 0 auto;
@@ -2992,16 +2985,16 @@
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        /* ★ 胶囊内部的小圆角块：比外圈小一圈（外圈 padding 4px） */
-        padding: 7px 13px;
-        border-radius: 9999px;
+        padding: 8px 12px;
+        border-radius: 8px;             /* 悬停时的一点圆角，平时看不见 */
         font-size: 13px;
         color: var(--pixso-brown-soft);
         background: transparent;
         border: none;
         cursor: pointer;
         white-space: nowrap;
-        transition: background .15s ease, color .15s ease;
+        transition: color .15s ease, opacity .15s ease;
+        opacity: .78;                   /* 未选中稍淡，选中更亮 —— 形成层次 */
     }
     /* ★ 分栏图标（参照图里每项都有图标）：用 ::before 挂 unicode 符号，
          不动 HTML 的按钮文字（那些文字被 JS 与检查脚本依赖，不能改）。
@@ -3026,16 +3019,18 @@
     .settings-tab-btn[data-settings-tab="tab-advanced"]::before { content: '⚙'; }
     .settings-tab-btn[data-settings-tab="tab-mods"]::before { content: '▣'; }
     .settings-tab-btn:hover {
-        background: rgba(99,102,241,.10);   /* 胶囊内的悬停块 */
+        background: transparent;        /* 无底色块 —— 只提亮文字 */
         color: var(--pixso-brown-dark);
+        opacity: 1;
     }
-    /* 选中态：在胶囊里填一枚**实底小圆角块**（不是下划线 ——
-       胶囊里再画下划线会和胶囊边贴在一起，很脏）。 */
+    /* 选中态：只有文字与图标变色加粗（没有底色块、没有下划线）——
+       这就是"透明背景只显示导航文字"的观感。 */
     .settings-tab-btn.active {
-        background: var(--pixso-green);
-        color: #fff;
+        background: transparent;
+        color: var(--pixso-green);
         font-weight: 600;
-        box-shadow: 0 1px 4px rgba(99,102,241,.28);
+        opacity: 1;
+        box-shadow: none;
     }
     .settings-tab-btn.active::after { content: none; }   /* 清掉旧的下划线伪元素 */
     /* 关闭按钮也走主题色（深色下原来写死的 indigo 看不清） */
@@ -3053,7 +3048,8 @@
         -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
     }
     #settingsTopBar { border-color: var(--pixso-line) !important; }
-    #settingsPanel > div:last-child { border-top-color: var(--pixso-line) !important; }
+    /* ★ 底部按钮栏已删除 → 原来这条 `div:last-child` 的边框色规则也去掉
+       （它会落到内容区上，给内容区加一条多余的顶边框）。 */
     
     /* ==================== 卡片分组 ====================
        每个分组一张卡片（标题栏 + 分隔线 + 内容），宽项自动跨两列。
@@ -4466,6 +4462,20 @@
                         </div>
                     </div>
                 </section>
+
+                <!-- 恢复默认设置：从底部按钮栏搬到这里（2026-10 用户要求删掉
+                     底部「恢复默认/取消/保存」三个按钮 —— 设置改成改完即生效，
+                     不需要保存）。但这个"逃生口"本身有用，丢掉的话用户改乱了
+                     就没法一键回退，所以保留在「高级」这个兜底分栏里。 -->
+                <section>
+                    <div class="modal-label flex items-center gap-2"><span class="text-red-500">✦</span> 恢复默认</div>
+                    <p class="text-[11px] text-indigo-400 leading-relaxed mb-3">
+                        把对话 / 语音 / 视觉等配置恢复为默认值。<b>已保存的 API Key 会保留</b>，角色卡不变。
+                        设置现在是<b>改完即生效</b>（没有保存按钮），改乱了可以来这里一键回退。
+                    </p>
+                    <button id="resetSettingsBtn" class="btn-secondary text-xs text-red-500" type="button"
+                        title="恢复默认设置：对话/语音/视觉等恢复默认，API Key 保留，角色卡不变">↺ 恢复默认设置</button>
+                </section>
                 </div><!-- /tab-advanced -->
 
                 <!-- ==================== 插件（mod） ====================
@@ -4502,13 +4512,11 @@
                 </div><!-- /tab-mods -->
             </div>
 
-
-
-            <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-white/60 flex-shrink-0">
-                <button id="resetSettingsBtn" class="btn-secondary text-xs text-red-500 mr-auto" type="button" title="恢复默认设置：对话/语音/视觉等恢复默认，API Key 保留，角色卡不变">↺ 恢复默认设置</button>
-                <button id="cancelSettings" class="btn-secondary text-sm">取消</button>
-                <button id="saveSettings" class="btn-primary text-sm">保存设置</button>
-            </div>
+            <!-- ★ 2026-10 用户要求：底部的「恢复默认设置 / 取消 / 保存设置」
+                 三个按钮**已删除** —— 改成"改什么就是什么"：任何控件一变
+                 就立刻落盘（见 app-07-init.js 的自动保存），关闭设置直接点 ✕。
+                 ★ 「恢复默认设置」没有一起丢掉 —— 它是个有用的兜底逃生口，
+                   已移进「高级」分栏（见 tab-advanced 里的 resetSettingsBtn）。 -->
         </div>
     </div>
 

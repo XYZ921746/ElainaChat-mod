@@ -670,18 +670,14 @@ html[data-theme="dark"] #settingsContent .settings-card {
  * 用 !important 覆盖（宿主那几条也带 !important，且选择器同权重，
  * 靠后加载 + 提高权重才能压住）。
  *
- * ★★ 2026-10 结构变更：设置顶部的「设置」标题行已删除（✕ 移进导航行），
- *    子元素索引整体前移 —— 下面这些 `div:first-child` / `div:nth-child(2)`
- *    选择器全部失效/错位：
- *      · div:first-child  原来是标题栏，现在指向**导航行**（于是给导航加了底色）
- *      · div:nth-child(2) 原来是内容区，现在指向**内容区**（这条其实还对上）
- *    已全部改为按 id 定位，不再依赖子元素序号。
- *    另外：顶栏与内容区现在**不该有底色**（顶栏透明让导航胶囊成为主体，
- *    内容区透明让卡片成为主体），所以这里只保留底栏与卡片的深色覆盖。 */
-html[data-theme="dark"] #settingsPanel > div:last-child {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border-color: rgba(255, 255, 255, 0.10) !important;
-}
+ * ★★ 2026-10 两次结构变更，这份注释与规则都跟着改过：
+ *    ① 顶部「设置」标题行删除（✕ 移进导航行）→ 子元素索引前移，
+ *       `div:first-child` 从"标题栏"错位成"导航行"。
+ *    ② 底部「恢复默认/取消/保存」按钮栏删除（设置改成改完即生效）→
+ *       `div:last-child` 从"底部按钮栏"错位成"内容区"。
+ *    两处都已改为**按 id / 按类定位**，不再依赖子元素序号。
+ *    顶栏与内容区都**不该有底色**（顶栏透明让导航成为纯文字浮层，
+ *    内容区透明让卡片成为主体），所以这里只保留卡片的深色覆盖。 */
 /* 卡片：深色下也要**半透明**（与浅色一致），不能换成不透明实色 ——
    否则深色模式下卡片把背景完全挡住，"半透明设置页"就只在浅色成立。
    ★ 用 color-mix 把主题面板色压到 90%（与 index.html 里那条同一口径），
@@ -692,21 +688,24 @@ html[data-theme="dark"] #settingsContent .settings-tab-panel > div.mb-4 {
     border-color: rgba(255, 255, 255, 0.10) !important;
     box-shadow: none !important;
 }
-/* 分栏导航（胶囊里的项）：深色下**不要**给普通项加底色 ——
-   胶囊本体已经有底色了，再给每项加一层会糊成一片。
-   ★ 选中项必须仍是**主题绿实底**（与浅色一致），不能改成白色半透明：
-     否则同一个界面在深浅色下"选中态长什么样"都不一样，很割裂。 */
+/* 分栏导航：**纯文字透明背景**（2026-10 用户最终要求）——
+   深浅色下都不给任何底色块，只靠文字颜色区分选中。
+   ★ 这条必须与 index.html 的浅色规则一致，否则同一个界面在深浅色下
+     "选中态长什么样"不一样（之前深色是绿实底、浅色是下划线，很割裂）。 */
 html[data-theme="dark"] #settingsPanel .settings-tab-btn {
     background: transparent !important;
     color: var(--pixso-brown-soft) !important;
+    opacity: .78;
 }
 html[data-theme="dark"] #settingsPanel .settings-tab-btn:hover {
-    background: rgba(255, 255, 255, 0.08) !important;
+    background: transparent !important;
     color: var(--pixso-brown) !important;
+    opacity: 1;
 }
 html[data-theme="dark"] #settingsPanel .settings-tab-btn.active {
-    background: var(--pixso-green) !important;
-    color: #fff !important;
+    background: transparent !important;
+    color: var(--pixso-green) !important;
+    opacity: 1;
 }
 /* 设置里其他写死的白色块 */
 html[data-theme="dark"] #settingsPanel .btn-secondary,

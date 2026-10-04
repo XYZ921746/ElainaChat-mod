@@ -753,8 +753,9 @@ const elements = {
     settingsOverlay: document.getElementById('settingsOverlay'),
     chatHeader: document.getElementById('chatHeader'),
     closeSettings: document.getElementById('closeSettings'),
-    cancelSettings: document.getElementById('cancelSettings'),
-    saveSettings: document.getElementById('saveSettings'),
+    // ★ cancelSettings / saveSettings 已随底部按钮栏一起删除
+    //   （2026-10 改成"改完即生效"，见 app-07-init.js 的自动保存）。
+    //   不再查这两个 id —— 它们现在恒为 null，留着会让人误以为还在用。
     sidebar: document.getElementById('sidebar'),
     mobileSidebarClose: document.getElementById('mobileSidebarClose'),
     sidebarOverlay: document.getElementById('sidebarOverlay'),

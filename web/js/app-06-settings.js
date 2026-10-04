@@ -1105,6 +1105,9 @@ async function refreshModsList() {
 }
 
 function closeSettingsPanel() {
+    // ★ 关闭前把待保存的改动冲掉 —— 用户改完最后一项马上点 ✕ 时，
+    //   那次改动还排在 300ms 防抖里，不冲就会丢（见 flushAutoSave 的说明）。
+    try { flushAutoSave(); } catch (e) { /* 忽略：关闭不该因为保存失败而卡住 */ }
     elements.settingsOverlay.classList.add('hidden');
     elements.settingsOverlay.classList.remove('flex');
     syncRailActive();
@@ -1274,13 +1277,25 @@ function updateSliderFill(slider) {
     slider.style.setProperty('--slider-progress', `${Math.max(0, Math.min(100, percent))}%`);
 }
 
-async function saveSettings() {
+/**
+ * 把设置表单的当前内容落盘。
+ *
+ * ★ 2026-10 起设置改成「改完即生效」——底部「保存设置」按钮已删除，
+ *   任何控件一变就自动调这个函数（见 app-07-init.js 的自动保存绑定）。
+ *   所以它**不能弹提示、不能关面板**，否则用户每改一项都被弹窗打断。
+ *
+ * @param {{silent?: boolean}} [opts]
+ *   silent=true 时：跳过「设置已保存！」提示与面板关闭（自动保存用）。
+ *   无论哪种模式，落盘行为完全一致 —— 不存在"自动保存少存了什么"。
+ */
+async function saveSettings(opts) {
+    const silent = Boolean(opts && opts.silent);
     const asrProvider = document.querySelector('input[name="asrProvider"]:checked')?.value || 'browser';
     const ttsLang = document.querySelector('input[name="ttsLang"]:checked')?.value || 'chinese';
     const replyDisplayMode = document.querySelector('input[name="replyDisplayMode"]:checked')?.value || DEFAULT_SETTINGS.replyDisplayMode;
     const providerSettings = readProviderSettingsForm();
     if (!providerSettings.baseUrl) {
-        showCustomAlert('自定义模式下必须填写 API Base URL。', '设置未保存');
+        if (!silent) showCustomAlert('自定义模式下必须填写 API Base URL。', '设置未保存');
         return;
     }
     // ★ 从「限制」切到「允许操作电脑」时，把后果在这里一次性讲清楚。
@@ -1293,6 +1308,11 @@ async function saveSettings() {
     // 只在"真的发生切换"时问 —— 已经是 computer 又点保存不该再打扰。
     const nextPermission = document.querySelector('input[name="agentPermission"]:checked')?.value || 'app';
     if (nextPermission === 'computer' && (state.settings.agentPermission || 'app') !== 'computer') {
+        // ★ 自动保存（silent）路径**也要问** —— 这是安全闸门，不能因为
+        //   "弹窗会打断用户"就跳过：改成改完即生效后，用户点一下单选钮
+        //   就会落盘，如果这里不问，"允许操作电脑"就被静默开启了。
+        //   拒绝时把单选钮拨回原来的档，让界面与实际状态一致
+        //   （否则界面显示"允许"、实际仍是"限制"，用户会以为已经开了）。
         const agreed = await showCustomConfirm(
             '「允许操作电脑」= 把 AI 的操作范围从应用文件夹扩到整台电脑。\n\n'
             + '开启后，AI 可以：\n'
@@ -1305,7 +1325,13 @@ async function saveSettings() {
             + '这些操作大多不可撤销，请只在你自己可控、且信任当前对话内容时开启。\n\n'
             + '确定开启吗？',
             '⚠️ 开启「允许操作电脑」');
-        if (!agreed) return;
+        if (!agreed) {
+            const prev = state.settings.agentPermission || 'app';
+            document.querySelectorAll('input[name="agentPermission"]').forEach((r) => {
+                r.checked = (r.value === prev);
+            });
+            return;
+        }
     }
     state.settings = {
         ...providerSettings,
@@ -1343,8 +1369,68 @@ async function saveSettings() {
     saveCharacterCard();
     renderCardSelect();
 
-    closeSettingsPanel();
-    showCustomAlert('设置已保存！', '保存成功');
+    // ★ 自动保存（silent）时**不关面板、不弹提示** ——
+    //   用户还在改，弹窗会打断；关面板更荒唐（改一项就被踢出去）。
+    if (!silent) {
+        closeSettingsPanel();
+        showCustomAlert('设置已保存！', '保存成功');
+    }
+}
+
+/**
+ * 自动保存：设置改成「改完即生效」后的唯一入口。
+ *
+ * 设计要点：
+ *  · **防抖 300ms** —— 文本输入框每敲一个字都会触发 input，
+ *    不防抖就会每字符跑一遍 saveApiSecrets（Android 上要过 Keystore，很贵）。
+ *  · 只监听 #settingsPanel 内的控件，且排除插件页（#tab-mods）——
+ *    插件自己的控件归插件管，宿主不该替它们落盘。
+ *  · change 事件覆盖 select / checkbox / radio；input 覆盖文本框与滑杆。
+ *    两者都挂，靠防抖合并重复触发。
+ */
+let autoSaveTimer = null;
+function scheduleAutoSave() {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+        autoSaveTimer = null;
+        Promise.resolve(saveSettings({ silent: true })).catch((e) => {
+            console.warn('[Settings] 自动保存失败', e);
+        });
+    }, 300);
+}
+
+/**
+ * 立刻把待保存的改动落盘（不等防抖）。
+ *
+ * ★ 为什么必须有：用户改完最后一项**马上点 ✕ 关闭**是很常见的操作 ——
+ *   那次 change 只是排了一个 300ms 的定时器，如果关闭时不冲一下，
+ *   定时器随后触发（或永远不触发）就会**丢掉最后一次修改**。
+ *   （第一版写了"面板已关就跳过保存"，那正好会丢改动 —— 实测想到的坑。）
+ */
+function flushAutoSave() {
+    if (!autoSaveTimer) return;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+    Promise.resolve(saveSettings({ silent: true })).catch((e) => {
+        console.warn('[Settings] 关闭前保存失败', e);
+    });
+}
+
+/** 把自动保存挂到设置面板上（app-07-init.js 调用一次） */
+function bindSettingsAutoSave() {
+    const panel = document.getElementById('settingsPanel');
+    if (!panel) return;
+    const onEdit = (ev) => {
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        // 插件页里的控件不归宿主管
+        if (t.closest('#tab-mods')) return;
+        // 纯展示控件不触发保存
+        if (t.matches('button, [type="button"], [type="submit"], [type="file"]')) return;
+        scheduleAutoSave();
+    };
+    panel.addEventListener('change', onEdit, true);
+    panel.addEventListener('input', onEdit, true);
 }
 
 // 恢复默认设置：对话/语音/视觉等回到默认值；API Key 保留（敏感信息，避免误操作丢失）；角色卡不变
