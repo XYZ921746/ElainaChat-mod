@@ -2766,15 +2766,20 @@
                 -webkit-backdrop-filter: none;
             }
             /* 顶栏（导航 + ✕）：标题行已删，这条改成作用于 #settingsTopBar。
-               ★ 用 id 而不是 div:first-child —— 结构一改（删标题行）索引就错位。 */
+               ★ 用 id 而不是 div:first-child —— 结构一改（删标题行）索引就错位。
+               ★ 与桌面端保持一致：**无框、无底色、无分隔线** ——
+                 原来这里是"圆角卡片 + 描边 + 阴影"，等于又把导航框起来了，
+                 正是用户否掉的观感（桌面改纯文字后这里也必须跟上，
+                 否则同一个界面在手机/电脑上长得不一样）。 */
             #settingsTopBar {
                 min-height: 56px;
                 margin: 8px 12px 0;
                 padding: 0 10px;
-                background: rgba(255,255,255,.92);
-                border: 1px solid rgba(217,199,192,.88) !important;
-                border-radius: 20px;
-                box-shadow: 0 8px 22px rgba(76,49,35,.10);
+                background: transparent;
+                border: 0 !important;
+                border-bottom: 0 !important;
+                border-radius: 0;
+                box-shadow: none;
             }
             #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
             #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
@@ -2904,7 +2909,13 @@
             margin: 0 !important;
             padding: 0 20px !important;
             border: 0 !important;
-            border-bottom: 1px solid var(--pixso-line) !important;
+            /* ★ 导航下面那条横线**已删除**（2026-10 用户要求"彻底没有分割"）——
+               原来这里是 `border-bottom: 1px solid var(--pixso-line)`，
+               导航是纯文字浮层、下面再来一条线就又把顶栏切成了一块。
+               元素上还带着 Tailwind 的 `border-b border-white/50`，
+               所以必须写 border: 0 才能真的清掉（只写 border-bottom 会被
+               那条类里的 border-bottom-width 与我的 0 打架）。 */
+            border-bottom: 0 !important;
             border-radius: 0 !important;
             background: transparent !important;
             box-shadow: none !important;
@@ -3050,7 +3061,9 @@
         backdrop-filter: blur(18px) saturate(1.2) !important;
         -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
     }
-    #settingsTopBar { border-color: var(--pixso-line) !important; }
+    /* ★ 导航下面的横线已删除（用户要求"彻底没有分割"）——
+       原来这条 `#settingsTopBar { border-color: ... }` 是给那条线配色的，
+       现在没有线了，规则一并去掉。 */
     /* ★ 底部按钮栏已删除 → 原来这条 `div:last-child` 的边框色规则也去掉
        （它会落到内容区上，给内容区加一条多余的顶边框）。 */
     
@@ -3819,7 +3832,12 @@
                  ★ id 是给插件系统用的：mod 通过 host.slot('settings.tabs', …) 注册的
                    分栏按钮由 mods.js 插进这个容器。点击**不在这里逐个绑定**，见
                    app-07-init.js 的事件委托说明。 -->
-            <div id="settingsTopBar" class="flex items-center gap-2 px-4 pt-3 pb-1 border-b border-white/50 flex-shrink-0">
+            <!-- ★ class 里原来有 `border-b border-white/50`（导航下面那条横线）——
+                 用户要求"彻底没有分割"，直接**从元素上删掉这两个类**，
+                 而不是靠 CSS 的 !important 去压：类还在的话，任何一处
+                 忘了写 !important 就会让线又冒出来（这类"幽灵边框"踩过）。
+                 另外 pt-3 pb-1 也去掉了 —— 高度交给 CSS 的 min-height 统一控制。 -->
+            <div id="settingsTopBar" class="flex items-center gap-2 px-4 flex-shrink-0">
                 <div id="settingsTabNav" class="flex gap-1 flex-1 min-w-0 overflow-x-auto">
                     <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance">外观</button>
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-character">角色</button>
