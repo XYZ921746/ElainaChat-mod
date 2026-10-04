@@ -2838,12 +2838,15 @@
        用户要求：**设置直接覆盖全屏**，而不是一个放大的弹窗。
 
        结构（沿用现有 DOM，不动那 285 行 HTML）：
-         #settingsOverlay        全屏遮罩（铺满视口、不透明、去掉毛玻璃）
+         #settingsOverlay        全屏遮罩（铺满视口、半透明 + 毛玻璃）
          └ #settingsPanel        全屏面板（无圆角/无阴影/无最大宽度）
-           ├ 第一个 div          顶栏（标题 + 关闭）
-           ├ #settingsTabNav     分栏导航（居中）
-           ├ #settingsContent    内容区（居中列，内部卡片两列）
-           └ 最后一个 div        底栏（恢复默认 / 取消 / 保存）
+           ├ #settingsTopBar     顶栏（纯文字导航 + 无框 ✕）
+           └ #settingsContent    内容区（居中列，内部卡片两列）
+
+       ★ 2026-10 起面板只有**两个**子元素：原来的「设置」标题行与底部按钮栏
+         都已删除。所以本文件里**不要**再用 `div:first-child` /
+         `div:last-child` 定位它们 —— 那些序号现在指向导航行与内容区，
+         会在错误的地方画出背景和边框（这两次都实测踩到）。一律按 id 定位。
 
        ★ 为什么用 @media (min-width:861px) 包起来：
          移动端那块（max-width:860px）**本来就是全屏**（width:100% +
@@ -4462,20 +4465,6 @@
                         </div>
                     </div>
                 </section>
-
-                <!-- 恢复默认设置：从底部按钮栏搬到这里（2026-10 用户要求删掉
-                     底部「恢复默认/取消/保存」三个按钮 —— 设置改成改完即生效，
-                     不需要保存）。但这个"逃生口"本身有用，丢掉的话用户改乱了
-                     就没法一键回退，所以保留在「高级」这个兜底分栏里。 -->
-                <section>
-                    <div class="modal-label flex items-center gap-2"><span class="text-red-500">✦</span> 恢复默认</div>
-                    <p class="text-[11px] text-indigo-400 leading-relaxed mb-3">
-                        把对话 / 语音 / 视觉等配置恢复为默认值。<b>已保存的 API Key 会保留</b>，角色卡不变。
-                        设置现在是<b>改完即生效</b>（没有保存按钮），改乱了可以来这里一键回退。
-                    </p>
-                    <button id="resetSettingsBtn" class="btn-secondary text-xs text-red-500" type="button"
-                        title="恢复默认设置：对话/语音/视觉等恢复默认，API Key 保留，角色卡不变">↺ 恢复默认设置</button>
-                </section>
                 </div><!-- /tab-advanced -->
 
                 <!-- ==================== 插件（mod） ====================
@@ -4515,8 +4504,8 @@
             <!-- ★ 2026-10 用户要求：底部的「恢复默认设置 / 取消 / 保存设置」
                  三个按钮**已删除** —— 改成"改什么就是什么"：任何控件一变
                  就立刻落盘（见 app-07-init.js 的自动保存），关闭设置直接点 ✕。
-                 ★ 「恢复默认设置」没有一起丢掉 —— 它是个有用的兜底逃生口，
-                   已移进「高级」分栏（见 tab-advanced 里的 resetSettingsBtn）。 -->
+                 「恢复默认设置」后来也按要求彻底删掉了（含函数与绑定），
+                 不再提供任何一键回退入口。 -->
         </div>
     </div>
 

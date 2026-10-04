@@ -1433,24 +1433,9 @@ function bindSettingsAutoSave() {
     panel.addEventListener('input', onEdit, true);
 }
 
-// 恢复默认设置：对话/语音/视觉等回到默认值；API Key 保留（敏感信息，避免误操作丢失）；角色卡不变
-async function restoreDefaultSettings() {
-    const confirmed = await showCustomConfirm('确定恢复默认设置？\n\n对话 / 语音 / 视觉等配置将恢复为默认值。\n已保存的 API Key 会保留，角色卡不变。');
-    if (!confirmed) return;
-    const secrets = {};
-    for (const k of API_SECRET_NAMES) {
-        if (state.settings[k] !== undefined) secrets[k] = state.settings[k];
-    }
-    state.settings = Object.assign({}, DEFAULT_SETTINGS, secrets);
-    try {
-        await saveApiSecrets(state.settings);
-    } catch (e) {
-        console.warn('[Settings] 恢复默认时密钥存储写入失败（Android Keystore）', e);
-    }
-    persistSettings();
-    fillSettingsForm();
-    showCustomAlert('已恢复默认设置（API Key 已保留，角色卡不变）。', '已恢复默认');
-}
+// ★ 2026-10 用户要求：restoreDefaultSettings()（恢复默认设置）已**彻底删除**，
+//   连同它的按钮与事件绑定。设置改成改完即生效后不再提供一键回退入口 ——
+//   需要回默认值就在界面上逐项改回去（或删掉 data/ 目录重来）。
 
 function previewPrompt() {
     const card = {
