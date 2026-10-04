@@ -1762,9 +1762,19 @@
         .modal-input:focus,
         .modal-textarea:focus {
             color: var(--pixso-brown);
-            background: #fff;
+            /* ★ 不能写死 #fff：深色模式下聚焦会突然变白（用户反馈插件页没适配
+               深色时的一部分）。用 panel-soft，深色下是 #222833、浅色下 #f1e8e5。 */
+            background: var(--pixso-panel-soft);
             border-color: var(--pixso-green);
             box-shadow: 0 0 0 3px rgba(167,187,108,.20);
+        }
+        /* 文件选择按钮（插件页/模型页的上传框）：Tailwind 的 file:bg-indigo-100
+           在深色下是一块亮色，换成主题面板色。 */
+        #tab-mods input[type=file]::file-selector-button,
+        #modSettingsBody input[type=file]::file-selector-button {
+            background: var(--pixso-panel) !important;
+            color: var(--pixso-brown-dark) !important;
+            border: 1px solid var(--pixso-line);
         }
         .modal-panel .btn-primary {
             color: #fff;
@@ -2829,16 +2839,58 @@
 
     /* ==================== 插件页（卡片式，2026-10 重做）====================
        参照 AstrBot 的插件页：卡片 + iOS 风格开关 + 卡片底部一排操作按钮。
-       全部用变量与柔和阴影，深浅色主题下都能看（宿主主题会改 :root 变量）。 */
+       全部用变量与柔和阴影，深浅色主题下都能看（宿主主题会改 :root 变量）。
+
+       ★★ 深色模式适配（2026-10 用户反馈"插件页没适配深色"）：
+         此前这里写死了 rgba(255,255,255,…) 与 Tailwind 的 text-indigo-800 之类 ——
+         浅色下正常，深色下卡片仍是白的、文字是深靛蓝，糊成一片。
+         现在统一走主题变量（--pixso-surface / --pixso-line / --pixso-brown 等），
+         它们在深色模板下会自动变暗；Tailwind 的写死色类用下面一组规则压掉。 */
+    #tab-mods .text-indigo-800, #tab-mods .text-indigo-700,
+    #modSettingsBody .text-indigo-800, #modSettingsBody .text-indigo-700 {
+        color: var(--pixso-brown-dark) !important;
+    }
+    #tab-mods .text-indigo-500, #tab-mods .text-indigo-400, #tab-mods .text-indigo-300,
+    #modSettingsBody .text-indigo-500, #modSettingsBody .text-indigo-400,
+    #modSettingsBody .text-indigo-300 {
+        color: var(--pixso-brown-soft) !important;
+    }
+    /* 卡片内的小块背景（如空状态、依赖说明）也要跟着主题走 */
+    #tab-mods .bg-white\/60, #tab-mods .bg-white\/50, #tab-mods .bg-white\/40,
+    #modSettingsBody .bg-white\/60, #modSettingsBody .bg-white\/50,
+    #modSettingsBody .bg-white\/40 {
+        background: var(--pixso-panel) !important;
+    }
+    #tab-mods .border-white\/60, #modSettingsBody .border-white\/60 {
+        border-color: var(--pixso-line) !important;
+    }
+    /* 选中态（模型卡片）：粉底在深色下太亮，换成主题的浅色面板 + 主题描边。
+       选中判据是 border-pink-500 / bg-pink-50/70 两个类，一起压掉。 */
+    #modSettingsBody .bg-pink-50\/70 {
+        background: var(--pixso-panel) !important;
+        box-shadow: inset 0 0 0 1px var(--pixso-green);
+    }
+    #modSettingsBody .border-pink-500 { border-color: var(--pixso-green) !important; }
+    #modSettingsBody .hover\:border-indigo-300:hover { border-color: var(--pixso-green) !important; }
+    /* 模型缩略图底板 */
+    #modSettingsBody .l2d-model-cell > span:first-child {
+        background: var(--pixso-panel) !important;
+    }
     .mod-card{
         position:relative;display:flex;gap:12px;align-items:flex-start;
         padding:14px 14px 10px;border-radius:16px;
-        background:rgba(255,255,255,.55);
-        border:1px solid rgba(255,255,255,.6);
+        /* ★ 用主题变量而不是写死的白色 —— 深色模式下这些变量会变暗，
+           插件页才能跟着适配（此前写死 rgba(255,255,255,…) 导致深色下
+           卡片是白的、文字看不清，用户反馈"没适配深色模式"）。
+           ★ 注意不能用 --pixso-surface：它在 index.html 的 :root 里被兜底
+             写死成 #ffffff，默认模板下深色时**没人改它**（实测仍是纯白）。
+             用 --pixso-panel-soft（深色 #222833 / 浅色 #f1e8e5），两边都合适。 */
+        background:var(--pixso-panel-soft);
+        border:1px solid var(--pixso-line);
         box-shadow:0 1px 3px rgba(30,27,75,.06);
         transition:box-shadow .15s,transform .15s,opacity .15s;
     }
-    .mod-card:hover{box-shadow:0 4px 14px rgba(30,27,75,.10)}
+    .mod-card:hover{box-shadow:0 4px 14px rgba(30,27,75,.10);border-color:var(--pixso-green)}
     /* 拖拽中的卡片：抬起来跟随指针，效果接近"拖动桌面图标"。
        ★ position:fixed —— 拖拽时它被挂到 body 上（设置面板是滚动容器，
          留在里面会被 overflow 裁掉）。transform 由 JS 每帧更新，所以这里不写过渡。
@@ -2859,7 +2911,7 @@
         transition:none;
         opacity:.95;
         box-shadow:0 18px 40px rgba(30,27,75,.30), 0 0 0 1px rgba(139,92,246,.35);
-        background:rgba(255,255,255,.96);
+        background:var(--pixso-cream);
         backdrop-filter:blur(6px);
         cursor:grabbing;
     }
@@ -2890,7 +2942,7 @@
     /* 拖拽手柄：三条竖线 */
     .mod-grip{
         flex:none;width:22px;height:26px;display:flex;align-items:center;justify-content:center;
-        border-radius:8px;color:#a5b4fc;cursor:grab;background:transparent;border:none;padding:0;
+        border-radius:8px;color:var(--pixso-brown-soft);opacity:.6;cursor:grab;background:transparent;border:none;padding:0;
         touch-action:none;   /* 触屏上不要被浏览器当成滚动手势抢走 */
     }
     /* ===== 插件分栏（分组） =====
@@ -2898,9 +2950,9 @@
          文件管理器、下拉菜单、树形视图通用的「可展开」符号。
          实现用 svg path 画实心小三角，展开时 rotate(90deg) 过渡成朝下。 */
     .mod-group{
-        border:1px solid rgba(255,255,255,.5);
+        border:1px solid var(--pixso-line);
         border-radius:16px;
-        background:rgba(255,255,255,.32);
+        background:var(--pixso-panel-soft);
         overflow:hidden;
         /* ★ 折叠后的"收缩"（用户反馈：折叠起来还占大面积）：
            分栏外框的上下 padding 也随折叠收到 0，只留一条头部 ——
@@ -2918,14 +2970,14 @@
         border-radius:12px;
     }
     .mod-group-head.mod-group-hover{
-        background:rgba(139,92,246,.16);
-        outline:2px dashed rgba(139,92,246,.55);
+        background:rgba(139,92,246,.18);
+        outline:2px dashed var(--pixso-green);
         outline-offset:-4px;
         border-radius:12px;
     }
     .mod-group-toggle{
         flex:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center;
-        border:none;background:transparent;color:#818cf8;cursor:pointer;padding:0;
+        border:none;background:transparent;color:var(--pixso-brown-soft);cursor:pointer;padding:0;
     }
     .mod-group-toggle svg{width:12px;height:12px;transition:transform .18s ease}
     .mod-group:not(.mod-group-collapsed) .mod-group-toggle svg{transform:rotate(90deg)}
@@ -2970,17 +3022,17 @@
         position:fixed;z-index:100050;margin:0;pointer-events:none;
         transition:none;opacity:.96;
         box-shadow:0 18px 40px rgba(30,27,75,.30);
-        background:rgba(255,255,255,.97);
+        background:var(--pixso-cream);
         cursor:grabbing;
     }
-    .mod-grip:hover{background:rgba(99,102,241,.10);color:#6366f1}
+    .mod-grip:hover{background:rgba(99,102,241,.14);color:var(--pixso-green);opacity:1}
     .mod-grip:active{cursor:grabbing}
     .mod-grip svg{width:14px;height:14px;display:block}
     /* iOS 风格开关：原生 checkbox 视觉隐藏，label 画轨道与滑块 */
     .mod-switch{position:relative;flex:none;width:44px;height:26px;display:inline-block;cursor:pointer}
     .mod-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
     .mod-switch .track{
-        position:absolute;inset:0;border-radius:9999px;background:rgba(148,163,184,.45);
+        position:absolute;inset:0;border-radius:9999px;background:var(--pixso-line);
         transition:background .2s;pointer-events:none;
     }
     .mod-switch .knob{
@@ -2989,7 +3041,7 @@
     }
     .mod-switch input:checked ~ .track{background:linear-gradient(90deg,#ec4899,#8b5cf6)}
     .mod-switch input:checked ~ .knob{transform:translateX(18px)}
-    .mod-switch input:focus-visible ~ .track{outline:2px solid #6366f1;outline-offset:2px}
+    .mod-switch input:focus-visible ~ .track{outline:2px solid var(--pixso-green);outline-offset:2px}
     /* 卡片底部那排图标按钮 */
     .mod-act{
         flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
