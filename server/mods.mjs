@@ -377,10 +377,20 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
                 version: m.version || '',
                 description: m.description || '',
                 entry: m.entry || 'index.js',
+                // scripts：额外的脚本文件（按顺序注入，entry 仍是第一个）。
+                // 让一个插件能拆成"注册装配 / 设置面板 / 实现主体"几个文件 ——
+                // 硬塞进一个文件只会越来越难维护（Live2D 插件就是这么拆的）。
+                scripts: Array.isArray(m.scripts) ? m.scripts.filter((s) => typeof s === 'string' && s) : [],
                 styles: Array.isArray(m.styles) ? m.styles : [],
                 defaultEnabled: m.defaultEnabled !== false,
                 after: Array.isArray(m.after) ? m.after : [],
                 hidden: m.hidden === true,
+                // 宿主半边（服务端路由 / 上传目录）的**声明**，原样带出去交给 serve.mjs 装配。
+                // 这里只搬运不解释：声明是否合法由 server/mod-server.mjs 判定并报错 ——
+                // 扫描器不该长着"路由前缀怎么写才合法"的知识。
+                // 没声明时**不写这个字段**：绝大多数插件没有服务端半边，给每个插件都加一行
+                // `"server": null` 只会让清单变长、让每次重新生成都产生无意义 diff。
+                ...(m.server && typeof m.server === 'object' && !Array.isArray(m.server) ? { server: m.server } : {}),
                 hasManifest: await exists(path.join(it.dir, 'manifest.json')),
             });
         }
@@ -416,6 +426,39 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
     }
 
     /**
+     * 读插件的 README（供插件页的「说明」按钮）。
+     *
+     * ★ 为什么用**白名单文件名**而不是"让前端传文件名"：
+     *   一旦接受任意文件名，就等于给了一个"读插件目录里任意文件"的口子 ——
+     *   而插件目录里可能有 manifest.json（含作者私密配置）甚至别的插件留下的东西。
+     *   这里只认几个约定俗成的说明文件名，其余一律不读。
+     *
+     * 大小上限 256KB：README 不该那么大，超了说明传错了文件（或有人拿它当传输通道）。
+     *
+     * @returns {{ok:true, name:string, text:string}|{ok:false, message:string}}
+     */
+    const README_NAMES = ['README.md', 'readme.md', 'README.txt', 'readme.txt', 'README', '说明.md'];
+    async function readReadme(id) {
+        if (!MOD_ID_RE.test(id)) return { ok: false, message: '插件名不合法' };
+        const dir = path.join(modsDir, id);
+        if (!dir.startsWith(modsDir + path.sep)) return { ok: false, message: '路径越界' };
+        for (const name of README_NAMES) {
+            const p = path.join(dir, name);
+            const info = await stat(p).catch(() => null);
+            if (!info || !info.isFile()) continue;
+            if (info.size > 256 * 1024) return { ok: false, message: '说明文件过大（超过 256KB），已拒绝读取' };
+            try {
+                const text = await readFile(p, 'utf8');
+                return { ok: true, name, text };
+            } catch (e) {
+                return { ok: false, message: '读取失败：' + String((e && e.message) || e) };
+            }
+        }
+        // 明确区分"没有 README"与"读取失败" —— 前端要给出不同的提示
+        return { ok: false, message: '该插件没有 README 文件' };
+    }
+
+    /**
      * 卸载：删除插件目录**以及对应的安装包**。
      *
      * 为什么必须连 zip 一起删：目录里那份 `xxx.zip` 是"待安装"的源。
@@ -437,5 +480,5 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         return true;
     }
 
-    return { scanAndSync, uninstall, extractPluginZip, installFromBuffer, MOD_ID_RE };
+    return { scanAndSync, uninstall, extractPluginZip, installFromBuffer, readReadme, MOD_ID_RE };
 }

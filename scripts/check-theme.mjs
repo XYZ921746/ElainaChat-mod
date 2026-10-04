@@ -183,7 +183,19 @@ console.log('\n=== 3.5 主题设置独立成「外观」分栏 ===');
         }
         const region = html.slice(overlayStart, overlayEnd > 0 ? overlayEnd : html.length);
         const ids = [...region.matchAll(/id="(tab-\w+)" class="settings-tab-panel/g)].map((m) => m[1]);
-        ok(ids.length >= 9, `设置里有 ${ids.length} 个分栏（应 ≥9）`);
+        // ★ 这里数的是**宿主自带**的分栏。2026-10 起 Live2D 那一栏由插件通过
+        //   settings.tabs 插槽渲染（见 web/mods/live2d/），所以宿主 HTML 里从 9 变 8。
+        //   插件分栏是**运行时**插进来的，静态 HTML 里本来就看不到 —— 用 8 当阈值，
+        //   并另外断言"插件确实提供了分栏"，否则这条会悄悄失去意义。
+        ok(ids.length >= 8, `宿主自带 ${ids.length} 个分栏（应 ≥8）`);
+        const l2dManifest = path.join(ROOT, 'web', 'mods', 'live2d', 'manifest.json');
+        if (existsSync(l2dManifest)) {
+            const l2dSrc = readFileSync(path.join(ROOT, 'web', 'mods', 'live2d', 'register.js'), 'utf8');
+            // ★ 2026-10 起改用 settings.modal（独立弹窗）而不是 settings.tabs（占分栏）：
+            //   插件设置全堆在主设置里会堆一排分栏，难看也难找。见 host-slots.js 的说明。
+            ok(/host\.slot\('settings\.modal'/.test(l2dSrc),
+                '★ Live2D 设置改由插件经 settings.modal 独立成窗（所以宿主少一个分栏是对的）');
+        }
 
         const ranges = [];
         for (const id of ids) {

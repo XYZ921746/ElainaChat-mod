@@ -41,7 +41,7 @@ function ok(cond, label, detail) {
 }
 
 const html = readFrontend();
-const video = readFileSync(path.join(ROOT, 'web', 'live2d-video.js'), 'utf8');
+const video = readFileSync(path.join(ROOT, 'web', 'mods', 'live2d', 'index.js'), 'utf8');
 
 // ============================================================ 1. 兜底函数
 console.log('=== 1. 兜底函数（直接读打包清单，不依赖原生插件）===');

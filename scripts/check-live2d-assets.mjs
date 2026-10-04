@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-const src = readFileSync(new URL('../web/live2d-video.js', import.meta.url), 'utf8');
+const src = readFileSync(new URL('../web/mods/live2d/index.js', import.meta.url), 'utf8');
 
 /**
  * 按函数名抠出完整函数声明（靠大括号配对找结尾）。
@@ -22,7 +22,7 @@ const src = readFileSync(new URL('../web/live2d-video.js', import.meta.url), 'ut
  */
 function extractFn(name) {
     let start = src.indexOf('function ' + name + '(');
-    if (start < 0) throw new Error('在 web/live2d-video.js 里找不到函数: ' + name + '（重命名了？请同步更新本检查）');
+    if (start < 0) throw new Error('在 web/mods/live2d/index.js 里找不到函数: ' + name + '（重命名了？请同步更新本检查）');
     const asyncMatch = src.slice(Math.max(0, start - 12), start).match(/async\s+$/);
     if (asyncMatch) start -= asyncMatch[0].length;
     // **先跳过参数表**：`opts = {}` 这类默认值里就有大括号，直接找第一个 `{` 会抠出半截函数

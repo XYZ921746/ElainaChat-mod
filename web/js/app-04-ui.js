@@ -1722,6 +1722,9 @@ function renderMessage(message) {
                                 </svg>
                                 <span class="text-xs font-medium">${isMessageFavorited(state.currentConversationId, message.id) ? '已收藏' : '收藏'}</span>
                             </button>
+                            <!-- 每消息插槽容器：mod 通过 host.slot('chat.message.actions', …) 注册的按钮
+                                 画在这里（由 host-slots.js 的 decorateMessageSlots 填充） -->
+                            <span class="message-slot-actions flex items-center gap-1" data-message-id="${safeAttrId(message.id)}"></span>
                         </div>
                         ${userImageUrl ? `<img class="message-image" src="${userImageUrl}" alt="${escapeHtml(message.imageName || '用户发送的图片')}">` : ''}
                         ${message.text ? `<p class="text-indigo-800 text-sm leading-relaxed whitespace-pre-wrap">${renderMessageText(message.text)}</p>` : ''}
@@ -1758,6 +1761,8 @@ function renderMessage(message) {
                                 </svg>
                                 <span class="text-xs font-medium">${faved ? '已收藏' : '收藏'}</span>
                             </button>
+                            <!-- 每消息插槽容器（同用户分支，见 chat.message.actions 说明） -->
+                            <span class="message-slot-actions flex items-center gap-1" data-message-id="${safeAttrId(message.id)}"></span>
                         </div>
                         <p class="text-indigo-950 text-sm leading-relaxed whitespace-pre-wrap">${renderMessageText(message.text)}</p>
                         ${voiceCard}
@@ -1766,6 +1771,12 @@ function renderMessage(message) {
             </div>
         `;
     }
+    // ★ 每消息插槽：把标题行里的容器交给注册过 chat.message.actions 的 mod。
+    //   在节点**进入文档之前**画好，否则会先闪一个空位再冒出按钮。
+    //   守卫是必要的：消息渲染是核心链路，插槽模块没加载（或插件抛错）都不该影响它 ——
+    //   decorateMessageSlots 内部已对每个 mod 做失败隔离。
+    if (typeof window.decorateMessageSlots === 'function') window.decorateMessageSlots(div);
+
     elements.conversationHistory.appendChild(div);
     elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
     return div;

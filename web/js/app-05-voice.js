@@ -1752,8 +1752,35 @@ function mergePcmChunks(chunks) {
 }
 
 // 真实语音音量 → Live2D 嘴型（VAD 简化）：播放 TTS 时分析音量驱动模型说话
+//
+// ★ 宿主只负责**报出音量**，谁需要谁订阅（`ElainaMods.on('voice-energy', …)`）。
+//
+//   旧写法是这里直接调 `window.Live2DCall.setVoiceEnergy()` —— 于是"音量"这条
+//   通道把宿主和 Live2D 拴死了：Live2D 一旦变成可装的 mod（默认关闭），
+//   宿主这句调用就会在它没装/没启用时变成空转，而"没装"与"装了但没声音"
+//   从代码上分不出来。
+//
+//   改成事件之后有两个实际好处：
+//     · 没人听就**不建分析器、不跑逐帧循环** —— 省掉未启用 Live2D 时
+//       每次 TTS 播放的 requestAnimationFrame 开销
+//     · 订阅者的生命周期由 mod 系统统一管：mod 被停用时订阅会被摘掉
+//       （见 mods.js「注册即副作用」），不会再出现"插件关了还在驱动口型"
+function voiceEnergyWanted() {
+    try {
+        return !!(window.ElainaMods
+            && typeof window.ElainaMods.hasListeners === 'function'
+            && window.ElainaMods.hasListeners('voice-energy'));
+    } catch (e) { return false; }
+}
+function emitVoiceEnergy(level) {
+    try {
+        if (window.ElainaMods && typeof window.ElainaMods.emit === 'function') {
+            window.ElainaMods.emit('voice-energy', level);
+        }
+    } catch (e) { /* 没有订阅者 / 订阅者抛错都不该影响播放 */ }
+}
 function attachVoiceEnergyAnalyser(source, context) {
-    if (!window.Live2DCall || typeof window.Live2DCall.setVoiceEnergy !== 'function' || typeof context.createAnalyser !== 'function') return null;
+    if (!voiceEnergyWanted() || typeof context.createAnalyser !== 'function') return null;
     try {
         const analyser = context.createAnalyser();
         analyser.fftSize = 256;
@@ -1763,14 +1790,14 @@ function attachVoiceEnergyAnalyser(source, context) {
         const tick = () => {
             // playbackState: 0=未调度 1=已调度 2=播放中 3=已结束
             if (source.playbackState === 3 || source.playbackState === undefined) {
-                window.Live2DCall.setVoiceEnergy(0);
+                emitVoiceEnergy(0);
                 return;
             }
             analyser.getByteFrequencyData(data);
             let sum = 0;
             for (let i = 0; i < data.length; i++) sum += data[i];
             const level = sum / data.length / 128;
-            window.Live2DCall.setVoiceEnergy(level);
+            emitVoiceEnergy(level);
             requestAnimationFrame(tick);
         };
         tick();

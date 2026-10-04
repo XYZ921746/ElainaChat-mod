@@ -1,12 +1,12 @@
 import {
-    createReadStream, appendFileSync, mkdirSync, renameSync, statSync,
+    createReadStream, appendFileSync, mkdirSync, renameSync, statSync, lstatSync,
     readdirSync, rmSync, existsSync, readFileSync, writeFileSync,
 } from 'node:fs';
 import { stat, lstat, mkdir, writeFile, readFile, readdir, rm, rename } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
 import { createServer as createNetServer } from 'node:net';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes, scrypt, createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -17,6 +17,10 @@ import dns from 'node:dns';
 import { createStore } from '../server/store.mjs';
 import { synthesizeEdge, probeEdge } from '../server/edge-tts.mjs';
 import { createModManager } from '../server/mods.mjs';
+// 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
+// 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
+// 而它放行的是"第三方 JS 在服务端进程里注册接口"，判定错了后面全是空的。
+import { createModServer } from '../server/mod-server.mjs';
 // "看电脑在干什么"（前台窗口 + 进程）—— 供桌宠让 AI 知道用户在做什么。
 // 单独成模块：纯函数式便于测试，且以后"AI 操作电脑"要判断当前窗口时能直接复用。
 import { activitySummaryCached } from '../server/activity.mjs';
@@ -55,17 +59,19 @@ const STORE_MAX_BYTES = 32 * 1024 * 1024; // 端侧数据（聊天记录等）�
 // 可用 HOST 环境变量覆盖（如 HOST=127.0.0.1 仅本机）。
 const host = process.env.HOST || '0.0.0.0';
 const port = Number(process.env.PORT || 4173);
-const MODELS_DIR = path.join(root, 'live2d', 'models');
 // 插件（mod）根目录。把 xxx.zip 丢进来就会被自动解压并写进 index.json，
 // 前端只读清单 —— 因为浏览器没法列目录（详见 server/mods.mjs 的说明）。
-const MODS_DIR = path.join(root, 'mods');
-// 模型目录名 = 显示名（真改文件夹）。URL 与文件名都走 encodeURIComponent / decodeURIComponent，
-// 所以中文、空格、emoji 都能用；下面 sanitizeModelDirName 只挡掉文件系统层面真正不合法的字符。
-// 之所以不做"目录名保持 id + 另存显示名"的映射表：多一层状态就多一处会不同步的地方，
-// 用户看到的文件夹名和界面里的名字不一致反而更难排查。
-const MODEL_NAME_MAX = 60;
-// Windows 保留设备名，做目录名会失败
-const WIN_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+//
+// ★ 可用环境变量 MODS_DIR 覆盖（2026-10 补）：
+//   自动化检查要往插件目录里放测试 zip，而**用户自己的服务可能正跑着** ——
+//   它每次被请求 /api/plugins 都会重新扫描目录，于是会把测试的 zip 抢走，
+//   表现为"检查时好时坏"（实测踩到：单独跑通过、跟别的检查并发跑就失败）。
+//   与 DATA_DIR / LOG_DIR 同理：测试该能完全隔离，不碰用户的真实数据。
+const MODS_DIR = process.env.MODS_DIR ? path.resolve(process.env.MODS_DIR) : path.join(root, 'mods');
+// Live2D 服务端的四个接口与模型目录读写已搬进 web/mods/live2d-models/（见它的 server.mjs）：
+//   GET  /api/live2d/models · POST /api/live2d/upload
+//   DELETE /api/live2d/models/<名> · POST /api/live2d/rename
+// 模型文件也从 web/live2d/models/ 搬到那个插件目录下，URL 不变（由 manifest.server.static 映射）。
 const MAX_UPLOAD = 200 * 1024 * 1024;      // 上传的压缩包大小上限 200MB
 const MAX_EXTRACTED = 512 * 1024 * 1024;   // 解压后总大小上限（防 zip bomb：200KB 的包可膨胀到数百 MB）
 const MAX_ENTRY_SIZE = 256 * 1024 * 1024;  // 解压后单文件上限
@@ -154,30 +160,22 @@ const LEVEL_INPUT_ALIASES = {
     CRIT: 'CRITICAL', CRITICAL: 'CRITICAL', FATAL: 'CRITICAL',
 };
 
-// ---- 落盘级别（运行时可改，设置界面 → 高级 → 日志）----
+// ---- 落盘级别 ----
 //
 // 与 AstrBot 的分工一致：**控制台 sink 恒为 DEBUG（终端永远看全量），文件 sink 按级别过滤**。
 // 这样"排查时终端不丢东西"和"日志文件不被 DEBUG 刷爆"可以同时成立。
 //
-// 为什么级别要可改而不是写死环境变量：这个应用是双击 `启动.bat` 跑的，用户改不了环境变量 ——
-// 环境变量只作为**首次启动的初始值**，之后由设置界面写进 data/log-settings.json。
-// 日志设置文件。跟着 LOG_DIR 走：自动化检查会用临时目录覆盖 LOG_DIR，
-// 若这里写死 DATA_DIR，跑一次检查就会把用户真实的日志级别改掉。
-const LOG_SETTINGS_FILE = path.join(LOG_DIR, 'log-settings.json');
+// ★ 2026-10 起：**级别不再是用户配置**（设置里的那块界面已按用户要求移除，见 index.html 说明）。
+//   它回到"环境变量 > 默认"两档，运行期仍可用 /api/logs/settings 临时改（调试与自动化检查要用）。
+//   为什么不再持久化到磁盘：那套 data/logs/log-settings.json 是给界面用的 ——
+//   界面没了还继续读它，会让"以前把级别调成 ERROR 的用户"永远卡在只记报错、
+//   而且**没有任何入口能改回来**。那比丢掉这个配置项糟得多。
 let fileLevel = 'INFO';        // 当前落盘级别（低于它的记录只进控制台）
-let traceEnabled = LOG_CHAT;   // 对话追踪日志开关（运行时可切）
+let traceEnabled = LOG_CHAT;   // 对话追踪日志开关（默认开；LOG_CHAT=0 可关）
 
 /** 把任意写法收敛成标准级别名；非法值返回 null（调用方决定回落到什么） */
 function normalizeLevelName(raw) {
     return LEVEL_INPUT_ALIASES[String(raw || '').trim().toUpperCase()] || null;
-}
-
-/** 读持久化的日志设置（缺失/损坏都返回空对象，由调用方回落默认值） */
-function readSavedLogSettings() {
-    try {
-        const saved = JSON.parse(readFileSync(LOG_SETTINGS_FILE, 'utf8'));
-        return (saved && typeof saved === 'object') ? saved : {};
-    } catch { return {}; }
 }
 
 // ── 控制台级别（2026-09 新增）──────────────────────────────────────────
@@ -192,21 +190,13 @@ function readSavedLogSettings() {
 // 内存缓冲不受任何级别约束 —— 软件内查看器随时能看全部历史。
 let consoleLevel = 'INFO';
 
-// 初始化：环境变量 > data/log-settings.json > 默认。
-// 环境变量优先是刻意的 —— 自动化检查要能强制指定级别，而不受本机已保存的值干扰。
+// 初始化：环境变量 > 默认（不再读 data/logs/log-settings.json，理由见上面 fileLevel 那段）。
+// 环境变量优先是刻意的 —— 自动化检查要能强制指定级别，而不受本机状态干扰。
 {
-    const saved = readSavedLogSettings();
-    fileLevel = normalizeLevelName(process.env.LOG_LEVEL)
-        || normalizeLevelName(saved.level)
-        || 'INFO';
-    // 控制台级别：环境变量 > 保存值 > 默认 INFO。
-    // 显式设过 DEBUG 就该被记住，重启动后仍然生效。
-    consoleLevel = normalizeLevelName(process.env.LOG_CONSOLE)
-        || normalizeLevelName(saved.consoleLevel)
-        || 'INFO';
-    if (process.env.LOG_CHAT === undefined && typeof saved.trace === 'boolean') {
-        traceEnabled = saved.trace;
-    }
+    fileLevel = normalizeLevelName(process.env.LOG_LEVEL) || 'INFO';
+    consoleLevel = normalizeLevelName(process.env.LOG_CONSOLE) || 'INFO';
+    // 追踪日志：默认开（LOG_CHAT 的默认值是 '1'），要关只能用 LOG_CHAT=0。
+    // 这里不再叠加 saved.trace —— 界面已经不能改它了，读旧值只会让用户无法恢复。
 }
 
 /** 当前级别是否该落盘 */
@@ -222,19 +212,7 @@ function setConsoleLevel(next) {
     const level = normalizeLevelName(next);
     if (!level || level === consoleLevel) return false;
     consoleLevel = level;
-    persistLogSettings();
     return true;
-}
-
-/** 落盘级别的持久化。改级别是低频操作，直接同步写，省掉一套异步队列 */
-function persistLogSettings() {
-    if (!LOG_TO_FILE) return;
-    try {
-        mkdirSync(LOG_DIR, { recursive: true });
-        writeFileSync(LOG_SETTINGS_FILE, JSON.stringify({
-            level: fileLevel, consoleLevel, trace: traceEnabled, updatedAt: new Date().toISOString(),
-        }, null, 2), 'utf8');
-    } catch { /* 写不进去不影响本次运行，只是下次启动回到旧值 */ }
 }
 
 /** 运行中改落盘级别。返回是否真的变了（没变就不用重挂 sink / 写盘） */
@@ -242,13 +220,12 @@ function setFileLogLevel(next) {
     const level = normalizeLevelName(next);
     if (!level || level === fileLevel) return false;
     fileLevel = level;
-    persistLogSettings();
     return true;
 }
 
 /**
- * 运行中开关对话追踪日志。
- * 打开时若文件还没建过就补建一个 —— 否则用户打开开关、去目录里找却什么都没有，
+ * 运行中开关对话追踪日志（现在只有 /api/logs/settings 会调它 —— 界面上没有这个开关了）。
+ * 打开时若文件还没建过就补建一个 —— 否则调用方打开开关、去目录里找却什么都没有，
  * 会以为开关没生效（启动时只建过一次，那时是关的）。
  */
 function setTraceEnabled(on) {
@@ -261,7 +238,6 @@ function setTraceEnabled(on) {
             appendFileSync(traceSink.file, '');
         } catch { /* 建不出来就只影响追踪日志 */ }
     }
-    persistLogSettings();
     return true;
 }
 // AstrBot 的级别色：DEBUG 亮蓝 / INFO 亮青 / WARN 亮黄 / ERROR 红 / CRIT 亮红
@@ -353,7 +329,9 @@ function adoptLegacyLogs() {
             let target = path.join(LOG_DIR, stamp + tag + '.log');
             for (let i = 2; existsSync(target); i++) target = path.join(LOG_DIR, `${stamp}${tag}_${i}.log`);
             renameSync(full, target);
-            consoleOriginal.log(`[${logTimeShort()}] [Core] [INFO] [serve.mjs:?]: 旧日志 ${legacy} 已改名为 ${path.basename(target)}`);
+            // 走 console.log（→ emitLog）而不是 consoleOriginal：见 appendToFile 里的同类说明。
+            // 只进面板、不进查看器的话，"我的日志文件怎么改名了"在应用内查不到。
+            console.log(`[Core] 旧日志 ${legacy} 已改名为 ${path.basename(target)}`);
         } catch { /* 改不动就留着，不影响启动 */ }
     }
 }
@@ -374,7 +352,10 @@ function pruneOldLogs() {
         for (const key of stale) {
             for (const name of sessions.get(key)) {
                 rmSync(path.join(LOG_DIR, name), { force: true });
-                consoleOriginal.log(`[${logTimeShort()}] [Core] [INFO] [serve.mjs:?]: 清理旧日志 ${name}（只保留最近 ${LOG_KEEP} 次启动）`);
+                // 走 console.log（→ emitLog）而不是 consoleOriginal：理由同 appendToFile。
+                // 注意这里不能加 [Core] 以外的标签 —— prune 是同步清理，日志文件已关，
+                // 走 emitLog 是安全的（logBuffer 早已就绪）。
+                console.log(`[Core] 清理旧日志 ${name}（只保留最近 ${LOG_KEEP} 次启动）`);
             }
         }
     } catch { /* 清理失败不影响启动 */ }
@@ -389,6 +370,12 @@ function pruneOldLogs() {
  *
  * 只在**写文件**这一层脱敏，控制台输出保持原样 —— 用户本来就靠终端里那行密码登录，
  * 而 `启动.bat` 并没有把控制台重定向到文件，所以不存在"换个地方又漏出去"的口子。
+ *
+ * ★ 内存缓冲用的**也是这一份规则**（见 emitLog 里 logBuffer.push 的调用）。
+ *   为什么缓冲要脱敏、控制台不脱敏：控制台只在本机那个 bat 窗口里，
+ *   而缓冲会经 `/api/logs/tail` 发给**任何已登录的局域网设备**（手机/平板）。
+ *   所以同一个密码在 bat 面板里是明文、在应用内查看器里是 `******` ——
+ *   这是**有意的不一致**，不是 bug（2026-10 用户问到过，特此写明）。
  */
 const SECRET_RULES = [
     // 启动横幅：只保留标签。
@@ -462,7 +449,13 @@ function appendToFile(sink, text) {
             sink.part += 1;
             sink.file = sinkPath(sink);
             sink.bytes = 0;
-            consoleOriginal.log(`[${logTimeShort()}] [Core] [INFO] [serve.mjs:?]: 日志超过 `
+            // ★ 走 console.log（→ emitLog）而不是 consoleOriginal.log。
+            //
+            //   原先这里用 consoleOriginal 直推终端，于是**这条只在 bat 面板里、查看器里没有** ——
+            //   而"日志被拆成第二个文件了"恰恰是用户打开查看器时要解释的现象
+            //   （新版日志在 <时刻>_2.log 里，看当前那个文件会以为日志断了）。
+            //   项目里"查得到"比"不刷屏"更重要：它是 Core/INFO，落盘级别默认就收。
+            console.log('[Core] 日志超过 '
                 + `${Math.round(LOG_MAX_BYTES / 1024 / 1024)}MB，换到 ${path.basename(sink.file)}`);
         }
         appendFileSync(sink.file, text);
@@ -705,204 +698,62 @@ const modManager = createModManager({
     log: (msg) => console.log('[Mod] ' + msg),
 });
 
-/** 处理上传的模型 zip：解压到 models/<name>/ 下 */
-async function handleUpload(req, res) {
-    const chunks = [];
-    let total = 0;
-    let overflow = false;
-    for await (const chunk of req) {
-        total += chunk.length;
-        if (total > MAX_UPLOAD) { overflow = true; chunks.length = 0; continue; } // 继续读掉剩余数据再回包
-        chunks.push(chunk);
-    }
-    if (overflow) {
-        return jsonResponse(res, 413, { ok: false, message: `压缩包超过 ${Math.round(MAX_UPLOAD / 1024 / 1024)}MB 上限` });
-    }
-    try {
-        const { files, blocked } = unzip(Buffer.concat(chunks));
-        // 展示名 = 顶层文件夹名 或 model3.json 所在文件夹
-        let displayName = '';
-        const modelFile = files.find(f => f.name.toLowerCase().endsWith('.model3.json'));
-        if (modelFile) {
-            const dir = path.posix.dirname(modelFile.name);
-            displayName = dir === '.' ? path.posix.basename(modelFile.name, '.model3.json') : dir.split('/').pop();
-        }
-        if (!displayName) displayName = (files[0].name.split('/')[0] || 'model');
-        // 目录名直接用 zip 里的模型名 —— 用户能在文件夹里和界面里对上号，不再是一串 model_xxx。
-        // 拿不到合法名字时退回随机 id；重名自动加 " (2)"。
-        const wanted = sanitizeModelDirName(displayName);
-        const modelName = wanted
-            ? await uniqueDirName(wanted, '')
-            : 'model_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
-        if (!modelName) throw new Error('无法为该模型生成合法目录名，请把 zip 里的文件夹改个名字再传');
-        const targetDir = path.join(MODELS_DIR, modelName);
-        await mkdir(targetDir, { recursive: true });
-        // 公共顶层目录（去掉它，把文件平铺到模型目录）
-        const topDir = modelFile ? path.posix.dirname(modelFile.name).split('/')[0] : null;
-        let written = 0;
-        for (const f of files) {
-            let rel = f.name;
-            if (topDir && rel.startsWith(topDir + '/')) rel = rel.slice(topDir.length + 1);
-            else if (topDir === '.') rel = rel.replace(/^\.\//, '');
-            if (!rel || isUnsafeEntryName(rel)) continue;
-            const outPath = path.join(targetDir, rel);
-            // 双保险：解析后的绝对路径必须仍在目标目录内
-            if (outPath !== targetDir && !outPath.startsWith(targetDir + path.sep)) continue;
-            await mkdir(path.dirname(outPath), { recursive: true });
-            await writeFile(outPath, f.data);
-            written++;
-        }
-        if (!written) {
-            await rm(targetDir, { recursive: true, force: true }).catch(() => {});
-            throw new Error('zip 内没有可用的模型文件（文件类型可能都被拦截了）');
-        }
-        // 目录名就是显示名，不需要额外记映射
-        jsonResponse(res, 200, { ok: true, modelName, displayName: modelName, files: written, blocked });
-    } catch (err) {
-        jsonResponse(res, 400, { ok: false, message: err.message || String(err) });
-    }
-}
+/**
+ * 宿主自己占用的 `/api` 前缀 —— 插件注册路由时撞名会被**拒绝装载**。
+ *
+ * ★ 为什么要显式列一份，而不是"反正宿主路由先分发、撞了也轮不到插件"：
+ *   那样插件会静默失效（注册成功、永远收不到请求），而"装了等于没装"
+ *   正是本项目反复踩过的那类问题。装载期报出来，用户才知道该换前缀。
+ * ★ 这份清单必须跟着新接口更新。漏了不会造成安全问题（宿主仍然优先），
+ *   只会让插件作者的困惑从"装载报错"退化成"接口没反应"。
+ */
+const HOST_API_PREFIXES = [
+    '/api/server-info', '/api/auth', '/api/relay', '/api/client-log',
+    '/api/logs', '/api/store', '/api/data', '/api/tts',
+    '/api/plugins', '/api/agent',
+    // ★ '/api/live2d' 已从这份清单里**移除**：它现在是插件
+    //   （live2d-models 的 server.routes）自己声明的地址，不再是宿主的。
+    //   留着的话，插件会因为"与宿主撞名"而被拒绝装载 —— 这正是这套撞名检查
+    //   该起的作用：宿主交出这块地址时，必须同时把清单里的那一行删掉。
+];
 
 /**
- * 递归收集模型目录下所有文件的相对路径（正斜杠分隔）。
- * 表情/动作并不保证放在固定子目录里：Cubism 只规定 *.exp3.json / *.motion3.json 的文件格式，
- * 放在哪由模型作者自己决定。仓库内置的 deepseek 就把 50 多个 *.exp3.json 直接堆在模型根目录、
- * 动作放在 motions/ 子目录 —— 早期"只扫 exp/ 子目录"的实现因此一个都看不到，
- * 表现为"打包进去的模型没有表情/动作"。
- * 限制递归深度，避免病态目录树把模型列表接口拖慢。
+ * 宿主自己占用的**静态资源**前缀 —— 插件声明 server.static 时撞名会被拒绝。
+ * 与 HOST_API_PREFIXES 同理，只是这一层管的是非 /api 的 URL。
+ *
+ * ★ '/live2d' 不在清单里：整个 web/live2d/ 目录（模型）已搬进
+ *   web/mods/live2d-models/，宿主不再拥有这块地址 —— 它现在是那个插件
+ *   用 server.static 声明的。留着的话插件会因为"与宿主撞名"被拒绝装载，
+ *   而这个检查恰恰是对的：**宿主交出目录时，必须同时把它从前缀清单里删掉**。
  */
-async function collectModelFiles(dir, prefix = '', depth = 0) {
-    if (depth > 3) return [];
-    let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return []; }
-    const out = [];
-    for (const entry of entries) {
-        const rel = prefix ? prefix + '/' + entry.name : entry.name;
-        if (entry.isDirectory()) out.push(...await collectModelFiles(path.join(dir, entry.name), rel, depth + 1));
-        else out.push(rel);
-    }
-    return out;
-}
+const HOST_STATIC_PREFIXES = [
+    '/vendor', '/js', '/css', '/mods', '/themes',
+];
 
-/**
- * 列出已上传模型（附 model3.json 路径、exps 表情/motions 动作列表、vtube.json 路径，
- * 供 AI 表情决策与探测使用）。
- * exps/motions 里是「相对模型根目录的路径」（如 `脸红.exp3.json`、`motions/idle.motion3.json`），
- * 不是裸文件名 —— 客户端要按这个路径去拼资源地址。
- */
-async function listModels(res) {
-    try {
-        const entries = await stat(MODELS_DIR).catch(() => null);
-        if (!entries) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true, models: [] })); return; }
-        const dirs = (await readdir(MODELS_DIR, { withFileTypes: true })).filter(d => d.isDirectory()).map(d => d.name);
-        const models = [];
-        for (const name of dirs) {
-            let modelJson = null;
-            let exps = [];
-            let motions = [];
-            let vtube = null;
-            try {
-                const files = await collectModelFiles(path.join(MODELS_DIR, name));
-                // model3.json / vtube.json 优先取根目录下的，避免纹理等子目录里的同名文件抢走
-                const pickRoot = (pred) => files.find(f => !f.includes('/') && pred(f)) || files.find(pred) || null;
-                modelJson = pickRoot(f => f.toLowerCase().endsWith('.model3.json'));
-                vtube = pickRoot(f => f.toLowerCase().endsWith('.vtube.json'));
-                exps = files.filter(f => f.toLowerCase().endsWith('.exp3.json')).sort();
-                motions = files.filter(f => f.toLowerCase().endsWith('.motion3.json')).sort();
-            } catch { /* ignore */ }
-            models.push({ name, modelJson, exps, motions, vtube });
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, models }));
-    } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, message: err.message }));
-    }
-}
+const modServer = createModServer({
+    modsDir: MODS_DIR,
+    hostRoutePrefixes: HOST_API_PREFIXES,
+    hostStaticPrefixes: HOST_STATIC_PREFIXES,
+    jsonResponse,
+    readJsonBody,
+    // 共享给插件的宿主工具。解压是安全敏感代码，**实现只有一份**
+    // （见 server/zip.mjs 的合并说明）—— 插件拿到的就是这套已加固的实现。
+    hostUtils: {
+        readZip: (buf, opts) => readZip(buf, { ...opts, returnBlocked: true }),
+        isUnsafeEntryName,
+        effectiveExt,
+        MAX_UPLOAD,
+    },
+    log: (msg) => console.log('[Mod] ' + msg),
+});
 
-/**
- * 把用户输入的名字洗成合法目录名。
- * 允许中文/空格/emoji；只挡文件系统层面真正不合法的东西：
- *   路径分隔符与 Windows 非法字符、控制字符、首尾点与空格、`.`/`..`、Windows 保留设备名、超长。
- * 返回空串表示不可用（调用方给 400）。
- */
-function sanitizeModelDirName(input) {
-    let s = String(input == null ? '' : input);
-    s = s.replace(/[\u0000-\u001f\u007f]/g, '');          // 控制字符
-    s = s.replace(/[\\/:*?"<>|]/g, '_');                  // Windows 非法字符 → 下划线
-    s = s.replace(/\s+/g, ' ').trim();                    // 压缩空白
-    s = s.replace(/^[.\s]+/, '').replace(/[.\s]+$/, '');  // 首尾的点/空格（Windows 不允许尾点/尾空格）
-    if (s.length > MODEL_NAME_MAX) s = s.slice(0, MODEL_NAME_MAX).trim();
-    if (!s || s === '.' || s === '..') return '';
-    if (WIN_RESERVED.test(s)) return '';                  // CON / NUL / COM1…
-    return s;
-}
 
-/** 目录名合法性（去路径分隔符 + 必须落在 MODELS_DIR 内），非法返回空串。用于已存在的目录名。 */
-function safeModelDirName(name) {
-    const safe = String(name || '').replace(/[\\/]/g, '');
-    if (!safe || safe === '.' || safe === '..') return '';
-    const target = path.join(MODELS_DIR, safe);
-    return target.startsWith(MODELS_DIR + path.sep) ? safe : '';
-}
 
-/** 目标名被占用时依次试 " (2)"、" (3)"…；exclude 是自己（原地改名不算冲突） */
-async function uniqueDirName(desired, exclude) {
-    const taken = async (n) => {
-        if (n === exclude) return false;
-        const st = await stat(path.join(MODELS_DIR, n)).catch(() => null);
-        return Boolean(st);
-    };
-    if (!(await taken(desired))) return desired;
-    for (let i = 2; i < 1000; i++) {
-        const cand = desired + ' (' + i + ')';
-        if (!(await taken(cand))) return cand;
-    }
-    return '';
-}
 
-/** 重命名模型：真改文件夹（目录名即显示名） */
-async function renameModel(body, res) {
-    const safe = safeModelDirName(body && body.name);
-    if (!safe) return jsonResponse(res, 400, { ok: false, message: '模型名无效' });
-    const oldPath = path.join(MODELS_DIR, safe);
-    const info = await stat(oldPath).catch(() => null);
-    if (!info || !info.isDirectory()) return jsonResponse(res, 404, { ok: false, message: '模型不存在' });
 
-    const desired = sanitizeModelDirName(body && body.displayName);
-    if (!desired) return jsonResponse(res, 400, { ok: false, message: '名字不能为空（也不能只含 . / \\ : * ? " < > | 这类字符）' });
-    if (desired === safe) return jsonResponse(res, 200, { ok: true, name: safe, newName: safe, unchanged: true });
 
-    const target = await uniqueDirName(desired, safe);
-    if (!target) return jsonResponse(res, 500, { ok: false, message: '重名太多，换个名字试试' });
-    const newPath = path.join(MODELS_DIR, target);
-    if (!newPath.startsWith(MODELS_DIR + path.sep)) return jsonResponse(res, 400, { ok: false, message: '名字无效' });
 
-    try {
-        await rename(oldPath, newPath);
-    } catch (err) {
-        // 目标被占用（Windows 上 rename 到已存在目录会失败）或文件被锁
-        return jsonResponse(res, 500, { ok: false, message: '重命名失败：' + (err.message || err) });
-    }
-    console.log(`[Live2D] 模型重命名: ${safe} → ${target}`);
-    return jsonResponse(res, 200, { ok: true, name: safe, newName: target, displayName: target });
-}
 
-/** 删除模型目录 */
-async function deleteModel(name, res) {
-    const safe = String(name || '').replace(/[\\/]/g, '');
-    if (!safe) { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, message: '模型名无效' })); return; }
-    const target = path.join(MODELS_DIR, safe);
-    if (!target.startsWith(MODELS_DIR + path.sep)) { res.writeHead(403, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: false, message: '禁止' })); return; }
-    try {
-        await rm(target, { recursive: true, force: true });
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, deleted: safe }));
-    } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ ok: false, message: err.message }));
-    }
-}
 
 // ===== AI Agent 文件操作 API =====
 // 权限模式：app = 仅应用文件夹（web/ 目录）；computer = 允许操作电脑任意路径（用户自行承担风险）
@@ -2478,7 +2329,22 @@ const requestHandler = async (request, response) => {
     attachRequestLog(request, response);
     try {
         const url = new URL(request.url || '/', `http://${host}`);
-        const pathname = decodeURIComponent(url.pathname);
+        // ★ 反斜杠先归一成斜杠（2026-10 修的真绕过）。
+        //
+        //   为什么必须做：`new URL()` 按 WHATWG 规范会规范化 `..`，但**不碰反斜杠** ——
+        //   而 Windows 上 path.resolve() 把 `\` 和 `/` 都当分隔符。于是
+        //       GET /live2d/models/..\..\serve.mjs
+        //   到达这里时 pathname 里仍是 `..\..\serve.mjs`，path.resolve 一解析就上跳两层，
+        //   落到 web/serve.mjs —— 在 root 之内，所以通过了边界检查。实测确认回 200。
+        //
+        //   严重性（别夸大）：它**穿不出 web/** —— 想读 data/（访问密码、聊天记录）
+        //   会被 `target.startsWith(root)` 挡住，实测 /..\..\data\auth.json 是 403。
+        //   而 web/ 下的文件本来就是公开的。所以这不是"新泄漏"，是**路径解析错误**：
+        //   不存在的路径该 404。但它必须修 —— 它让"谁负责这条 URL"变得含糊，
+        //   也绕过了插件静态映射的逐段校验。
+        //
+        //   在 decodeURIComponent **之后**归一：%5c（编码的反斜杠）也要一起处理。
+        const pathname = decodeURIComponent(url.pathname).replace(/\\/g, '/');
 
         // ① Host 白名单：防 DNS rebinding（详见 isAllowedHost 说明）。
         //    必须在其他所有处理之前，因为"是否本机"这个判断本身就依赖请求来源可信。
@@ -2625,7 +2491,7 @@ const requestHandler = async (request, response) => {
         // 日志查看器的数据源：从内存缓冲按条件取。
         //
         // 查询参数（都是可选）：level（最低级别）、tags（逗号分隔的模块名）、
-        // search（关键词）、limit（条数上限）、since（时间戳，增量拉取）。
+        // search（关键词）、limit（条数上限）、since + sinceSeq（增量游标，见下）。
         //
         // 为什么放内存缓冲而不是读文件：文件是"落盘级别"过滤后的产物，
         // 且读大文件再解析既慢又占内存；缓冲里是**全量**（不受落盘级别约束），
@@ -2637,7 +2503,12 @@ const requestHandler = async (request, response) => {
                 tags: u.searchParams.get('tags') ? u.searchParams.get('tags').split(',').map((s) => s.trim()).filter(Boolean) : undefined,
                 search: u.searchParams.get('search') || undefined,
                 limit: Number(u.searchParams.get('limit')) || undefined,
+                // ★ 增量游标是**两个值**：时间戳 + 写入序号。
+                //   只传 since（毫秒）会让同一毫秒里的后续记录被永久跳过 ——
+                //   详见 server/log-buffer.mjs 的 query()。两个都要带上。
                 since: Number(u.searchParams.get('since')) || undefined,
+                sinceSeq: u.searchParams.get('sinceSeq') !== null && u.searchParams.get('sinceSeq') !== ''
+                    ? Number(u.searchParams.get('sinceSeq')) : undefined,
             });
             return jsonResponse(response, 200, { ok: true, ...result, tags: logBuffer.tags() });
         }
@@ -2876,25 +2747,6 @@ const requestHandler = async (request, response) => {
             });
         }
 
-        // API：上传模型
-        if (pathname === '/api/live2d/upload' && request.method === 'POST') {
-            return await handleUpload(request, response);
-        }
-        // API：列出模型
-        if (pathname === '/api/live2d/models' && request.method === 'GET') {
-            return await listModels(response);
-        }
-        // API：删除模型
-        const delMatch = pathname.match(/^\/api\/live2d\/models\/([^/]+)$/);
-        if (delMatch && request.method === 'DELETE') {
-            return await deleteModel(delMatch[1], response);
-        }
-        // API：重命名模型（只改显示名，不动目录）
-        if (pathname === '/api/live2d/rename' && request.method === 'POST') {
-            let body;
-            try { body = await readJsonBody(request); } catch { return jsonResponse(response, 400, { ok: false, message: '请求无效' }); }
-            return await renameModel(body, response);
-        }
 
         // ===== 插件（mod）接口 =====
         //
@@ -2910,9 +2762,91 @@ const requestHandler = async (request, response) => {
                     // 回报安装结果：zip 解压失败时必须让用户看到原因，
                     // 否则"我把 zip 放进去了但没反应"会变成无从排查的问题
                     installResults: result.results,
+                    // 服务端半边（manifest.server）的装载状态：谁装载了、谁**要重启才生效**。
+                    // 服务端路由是启动时一次装载的常驻注册表，装完插件不重启就生效会让
+                    // "哪些接口存在"随运行状态漂移 —— 所以这里如实报出"需重启"，
+                    // 而不是让用户面对一个静默不工作的接口。
+                    serverRoutes: modServer.status(result.installed),
                 });
             } catch (err) {
                 return jsonResponse(response, 500, { ok: false, message: '扫描插件目录失败：' + String((err && err.message) || err) });
+            }
+        }
+        // 在文件管理器里打开插件目录（方便开发者改插件文件）。
+        //
+        // ★ 安全：这是"让服务进程去唤起本机程序"的特权操作，所以两道限制：
+        //   ① **只限本机**（isLocalRequest）—— 局域网设备调它等于远程指挥本机开窗口
+        //   ② **不接受任意路径**：只认 `?id=<插件id>`（开某个插件目录，且 id 过白名单）
+        //      或不带参数（开插件根目录）。绝不把请求里的路径直接交给 shell。
+        //
+        // 为什么值得做：开发者改插件要反复"找目录 → 编辑 → 回设置页点重新扫描"，
+        //   而插件目录藏在 web/mods/ 下，路径不直观。一个按钮省掉这段路。
+        if (pathname === '/api/plugins/open-folder' && request.method === 'POST') {
+            if (!isLocalRequest(request)) {
+                return jsonResponse(response, 403, { ok: false, message: '只有本机可以打开文件夹' });
+            }
+            let target = MODS_DIR;
+            const wantId = String(url.searchParams.get('id') || '').trim();
+            // sub：插件目录**内**的一层子路径（如模型名 models/deepseek）。
+            // ★ 同样不接受任意路径：逐段白名单 + 解析后必须仍在插件目录内。
+            //   它存在的理由与 id 一样 —— 模型住在 <插件>/models/<模型名>/，
+            //   而用户想"打开这个模型的文件夹"直接改文件。
+            const wantSub = String(url.searchParams.get('sub') || '').trim().replace(/\\/g, '/');
+            if (wantId) {
+                // 复用插件管理器那条白名单（挡 .. / 绝对路径 / 非法字符）
+                if (!modManager.MOD_ID_RE.test(wantId)) {
+                    return jsonResponse(response, 400, { ok: false, message: '插件名不合法' });
+                }
+                let dir = path.join(MODS_DIR, wantId);
+                if (!dir.startsWith(MODS_DIR + path.sep)) {
+                    return jsonResponse(response, 400, { ok: false, message: '路径越界' });
+                }
+                if (wantSub) {
+                    const segs = wantSub.split('/').filter(Boolean);
+                    // 逐段校验：挡 . / .. / 隐藏段 / Windows 非法字符
+                    for (const s of segs) {
+                        if (s === '.' || s === '..' || s.startsWith('.')) {
+                            return jsonResponse(response, 400, { ok: false, message: '子路径不合法' });
+                        }
+                        if (/[<>:"|?*\u0000-\u001f]/.test(s)) {
+                            return jsonResponse(response, 400, { ok: false, message: '子路径含非法字符' });
+                        }
+                    }
+                    dir = path.join(dir, ...segs);
+                    // 双保险：拼完必须仍在插件目录内
+                    if (dir !== path.join(MODS_DIR, wantId)
+                        && !dir.startsWith(path.join(MODS_DIR, wantId) + path.sep)) {
+                        return jsonResponse(response, 400, { ok: false, message: '路径越界' });
+                    }
+                }
+                const info = await stat(dir).catch(() => null);
+                if (!info || !info.isDirectory()) {
+                    return jsonResponse(response, 404, { ok: false, message: '目录不存在：' + wantId + (wantSub ? '/' + wantSub : '') });
+                }
+                target = dir;
+            } else {
+                // 根目录可能还不存在（全新安装、一个插件都没装）→ 先建出来，
+                // 否则"打开文件夹"会失败，而用户只是想往里放 zip
+                await mkdir(MODS_DIR, { recursive: true }).catch(() => {});
+            }
+            try {
+                // 用 spawn 而不是 exec：参数以数组传入，不经过 shell 解析，
+                // 路径里即使有空格/引号也不会变成命令注入。
+                if (process.platform === 'win32') {
+                    // explorer 打开目录是正常用法；它退出码可能非 0，不能据此判失败
+                    spawn('explorer', [target], { detached: true, stdio: 'ignore' }).unref();
+                } else if (process.platform === 'darwin') {
+                    spawn('open', [target], { detached: true, stdio: 'ignore' }).unref();
+                } else {
+                    spawn('xdg-open', [target], { detached: true, stdio: 'ignore' }).unref();
+                }
+                console.log('[Mod] 已请求打开插件目录：' + target);
+                return jsonResponse(response, 200, { ok: true, path: target });
+            } catch (err) {
+                return jsonResponse(response, 500, {
+                    ok: false,
+                    message: '打开失败：' + String((err && err.message) || err) + '（路径：' + target + '）',
+                });
             }
         }
         // 卸载插件（删除目录）。仅本机管理员 —— 它能删文件，不该让局域网访客调。
@@ -3027,6 +2961,40 @@ const requestHandler = async (request, response) => {
             return jsonResponse(response, 200, activitySummaryCached(force));
         }
 
+        // ===== 插件（mod）注册的服务端路由 =====
+        //
+        // 位置很关键：排在**宿主所有路由之后**、静态文件之前。
+        //   · 排最后 → 宿主永远优先（第二道保险；撞名其实在装载期就被拒了）
+        //   · 排静态之前 → 插件的 /api 前缀不会被静态处理器当成"找不到的文件"
+        //
+        // 能走到这里说明请求已过 isAuthenticated 闸门（见上面的访问控制），
+        // 所以插件接口**自动受同一套鉴权保护**，插件作者不需要自己写一遍。
+        if (await modServer.handle(request, response, { pathname, url })) return;
+
+        // 读插件的 README（插件页的「说明」按钮）。
+        //
+        // 为什么走接口而不是让前端 fetch `/mods/<id>/README.md`：
+        //   · 插件目录名与 id 可能不一致（用户改过名），前端拼路径会 404
+        //   · 静态服务对 mods/ 下的文件按扩展名给 MIME，而 .md 不在表里，
+        //     拿到 octet-stream 后浏览器会当下载而不是显示
+        //   · 更重要的：这里用**白名单文件名**读，前端传不了任意路径
+        //
+        // 放在 modServer.handle 之后：插件自己的路由优先（万一它也提供同名接口）。
+        const readmeMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/readme$/);
+        if (readmeMatch && request.method === 'GET') {
+            try {
+                const id = decodeURIComponent(readmeMatch[1]);
+                const r = await modManager.readReadme(id);
+                if (!r.ok) {
+                    // 404 表示"这个插件没有 README"，前端据此提示；不是服务器错误
+                    return jsonResponse(response, 404, { ok: false, message: r.message });
+                }
+                return jsonResponse(response, 200, { ok: true, name: r.name, text: r.text });
+            } catch (err) {
+                return jsonResponse(response, 500, { ok: false, message: String((err && err.message) || err) });
+            }
+        }
+
         // ★ 插件清单必须**每次请求都重新扫描**，不能当静态文件发。
         //
         // 为什么（2026-09 实测踩到的真 bug）：
@@ -3080,9 +3048,60 @@ const requestHandler = async (request, response) => {
             response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
             return;
         }
+
+        // ★ 路径穿越：`..` 段一律拒绝（2026-10 补）。
+        //
+        //   为什么需要单独一条：pathname 只做了 decodeURIComponent，**没有规范化**。
+        //   于是 `/live2d/models/../../serve.mjs` 会被 path.resolve(root, relative)
+        //   解析成 web/serve.mjs —— 它在 root 之内，所以能通过下面那道边界检查。
+        //   实测确认过：加这条之前它回 200 并吐出 serve.mjs 的源码。
+        //
+        //   严重性说明（别夸大）：它**逃不出 web/** —— 想穿到 data/（密码、聊天记录）
+        //   会被 `target.startsWith(root)` 挡住，而 web/ 下的文件本来就能直接访问
+        //   （/serve.mjs 就是公开的）。所以这不是"新泄漏"，而是
+        //     ① 语义错误：不存在的路径该 404，不该 200
+        //     ② 它绕过了插件静态映射，让"谁负责这条 URL"变得含糊
+        //   仍然必须修：将来若有人把敏感文件放进 web/，这条就变成真漏洞。
+        //
+        //   在**解码之后**判：%2e%2e 这类写法必须在这里已经被还原成 ..
+        if (relative.split(/[\\/]+/).some(seg => seg === '..')) {
+            response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
+            return;
+        }
+
+        // ★ 先问插件：这条 URL 是不是某个插件声明的静态资源？
+        //
+        //   Live2D 模型就是这样：URL 仍是 /live2d/models/<名>/…，而文件住在
+        //   web/mods/live2d-models/models/ 下（见那个插件的 manifest.server.static）。
+        //   排在宿主静态解析**之前**：宿主目录里已经不再有 live2d/ 了，
+        //   交给下面的 root 解析只会 404。
+        //
+        //   resolveStatic 内部负责：段边界匹配、解码后再解析、逐段白名单、
+        //   解析后必须仍在映射目录内（挡 `..` / 绝对路径 / `%2e%2e` 绕过）。
+        const modStatic = modServer.resolveStatic(pathname, (abs) => {
+            try { const st = lstatSync(abs); return st.isFile() && !st.isSymbolicLink(); } catch { return false; }
+        });
+        if (modStatic) {
+            // MIME 由插件**声明**决定（manifest.server.static 的 mime 字段）：
+            //
+            //   'binary'（默认）—— 用户上传的内容。一律 application/octet-stream：
+            //       模型 zip 里若混入 .html/.svg，同源渲染就是一个 XSS 执行点。
+            //   'auto' —— mod **自带**的代码/资源（如 Live2D 引擎的三个库）。
+            //       必须按真实 MIME 返回，否则浏览器因 nosniff + 错误 MIME 拒绝执行，
+            //       懒加载脚本直接失败。
+            //
+            // ★ 为什么 'auto' 不增加风险：mod 本来就能在页面里执行任意 JS
+            //   （加载器就是注入它的 <script>）。所以给它的**自带**目录放行真实 MIME，
+            //   并没有给出它本来没有的能力。关键是这个选择必须**声明出来**，
+            //   而不是靠"哪个目录"去猜 —— 声明写在 manifest 里，用户看清单就知道。
+            const mime = modStatic.mime === 'auto'
+                ? (contentTypes.get(path.extname(modStatic.abs).toLowerCase()) || 'application/octet-stream')
+                : 'application/octet-stream';
+            return serveFile(response, modStatic.abs, mime);
+        }
+
         const target = path.resolve(root, relative);
-        const allowRoots = [root, MODELS_DIR];
-        const allowed = allowRoots.some(r => target.startsWith(r + path.sep));
+        const allowed = target.startsWith(root + path.sep);
         if (!allowed && target !== path.join(root, 'index.html')) {
             response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
             return;
@@ -3091,12 +3110,13 @@ const requestHandler = async (request, response) => {
         const info = await lstat(target);
         if (info.isSymbolicLink() || !info.isFile()) throw new Error('Not a regular file');
 
-        // 模型目录里的文件一律按二进制流返回：
+        // 插件声明的"用户上传落地处"，一律按二进制流返回：
         // 用户上传的 zip 里若混入 .html/.svg，同源渲染就等于给了对方一个 XSS 执行点。
-        // 应用自身的页面（不在 models 目录下）类型保持不变。
-        const inModelsDir = target.startsWith(MODELS_DIR + path.sep);
+        // 应用自身的页面（不在这些目录下）类型保持不变。
+        const uploadRoots = modServer.uploadRoots();
+        const inUploadDir = uploadRoots.some((r) => target.startsWith(r + path.sep));
         const ext = path.extname(target).toLowerCase();
-        const ctype = inModelsDir ? 'application/octet-stream' : (contentTypes.get(ext) || 'application/octet-stream');
+        const ctype = inUploadDir ? 'application/octet-stream' : (contentTypes.get(ext) || 'application/octet-stream');
 
         response.writeHead(200, {
             'Content-Type': ctype,
@@ -3109,12 +3129,7 @@ const requestHandler = async (request, response) => {
                 'Referrer-Policy': 'no-referrer',
             } : {}),
         });
-        // 流式返回：pipe 不会转发错误，必须自己兜住，否则读取失败 / 客户端中途断开
-        // 会变成未处理异常；同时保证客户端断开时释放文件句柄。
-        const stream = createReadStream(target);
-        stream.on('error', () => { try { response.destroy(); } catch { /* ignore */ } });
-        response.on('close', () => { try { stream.destroy(); } catch { /* ignore */ } });
-        stream.pipe(response);
+        return streamFile(response, target);
     } catch {
         if (!response.headersSent) {
             response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', 'X-Content-Type-Options': 'nosniff' }).end('Not found');
@@ -3123,6 +3138,39 @@ const requestHandler = async (request, response) => {
         }
     }
 };
+
+/**
+ * 流式返回一个文件（宿主页面与插件静态资源共用这一段）。
+ *
+ * 为什么单独抽出来：插件静态资源的返回路径与宿主页面完全一样
+ * （错误兜底、客户端断开释放句柄），复制一份迟早会分叉 ——
+ * 而"某一条路径忘了兜错"表现为进程级的未处理异常。
+ */
+function streamFile(response, filePath) {
+    const stream = createReadStream(filePath);
+    // pipe 不会转发错误，必须自己兜住，否则读取失败 / 客户端中途断开
+    // 会变成未处理异常；同时保证客户端断开时释放文件句柄。
+    stream.on('error', () => { try { response.destroy(); } catch { /* ignore */ } });
+    response.on('close', () => { try { stream.destroy(); } catch { /* ignore */ } });
+    stream.pipe(response);
+}
+
+/**
+ * 返回插件静态目录里的一个文件。
+ *
+ * 类型**固定为 application/octet-stream**：这些目录装的是用户上传的内容
+ * （模型 zip 里若混入 .html/.svg，同源渲染就等于给了对方一个 XSS 执行点）。
+ * 与 uploadRoots 那条策略是同一个理由，只是这里连扩展名都不看 ——
+ * 插件静态目录里本来就只该有资源。
+ */
+function serveFile(response, filePath, ctype) {
+    response.writeHead(200, {
+        'Content-Type': ctype || 'application/octet-stream',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+    });
+    return streamFile(response, filePath);
+}
 
 // 启动监听失败：**英文、一行事件 + 结构化细节**（技术日志规范）。
 // 用 CRITICAL —— 服务根本没起来，最高级别的失败。
@@ -3242,6 +3290,13 @@ mainServer.listen(port, host, async () => {
                 if (res.ok) console.log(`[mod] installed from zip: ${res.id} (${res.files} files)`);
                 else console.error(`[mod] install failed: ${res.zip} - ${res.error}`);
             }
+        }
+        // 插件的**服务端半边**（manifest.server）：启动时装载一次。
+        // 装好之后不再重新装载 —— 路由是常驻注册表，随运行状态增减会让
+        // "哪些接口存在"无法复现；装了新插件请在 /api/plugins 里看 needsRestart。
+        const srv = await modServer.loadAll(r.installed);
+        if (srv.needsRestart.length) {
+            for (const n of srv.needsRestart) console.warn(`[mod] server side pending restart: ${n.id} - ${n.why}`);
         }
     } catch (err) {
         console.error(`[mod] scan failed: ${String((err && err.message) || err)}`);

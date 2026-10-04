@@ -33,6 +33,7 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
     let head = 0;          // 下一个写入位置
     let size = 0;          // 当前条数
     let dropped = 0;       // 因缓冲满被挤掉的条数（只作统计）
+    let seqCounter = 0;    // 单调递增的写入序号（增量游标用，见 push/query）
 
     /**
      * 存一条。字段在写入时解析好，读取端零解析成本。
@@ -42,6 +43,10 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
     function push(e) {
         ring[head] = {
             ts: e.ts instanceof Date ? e.ts.getTime() : (e.ts || Date.now()),
+            // seq：单调递增的写入序号，**只用于增量游标**。
+            // 时间戳会被同一毫秒内多条记录共享，光靠它无法区分先后（见 query 里的说明）；
+            // 序号不会重复，所以"上次带到哪一条"可以精确定位。
+            seq: seqCounter++,
             level: e.level || 'INFO',
             tag: e.tag || 'Core',
             loc: e.loc || '',
@@ -60,7 +65,8 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
      * @param {string[]} [q.tags]   只看这些模块（空/缺省 = 全部）
      * @param {string}   [q.search] 关键词（大小写不敏感，对 message 匹配）
      * @param {number}   [q.limit]  最多返回多少条（默认 500）
-     * @param {number}   [q.since]  只返回 ts > since 的（轮询增量拉取用）
+     * @param {number}   [q.since]  只返回 ts > since 的（轮询增量拉取用）。
+     *       同毫秒的记录靠 q.sinceSeq/q.seq 精确排除 —— 见下面 query 里的说明。
      */
     function query(q = {}) {
         const min = LEVEL_NUM[q.minLevel] ?? 0;
@@ -68,6 +74,12 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
         const search = q.search ? String(q.search).toLowerCase() : '';
         const limit = Math.min(Number(q.limit) || 500, capacity);
         const since = Number(q.since) || 0;
+        // 游标：上次已经带走的那条的序号。同毫秒内的新记录靠它区分。
+        // ★ 没传 seq 时**不启用精确模式**（保持旧的严格 ">" 语义）——
+        //   老调用方只传 since，精确模式会把"同毫秒、但已经给过它"的记录再返回一次，
+        //   在它那边表现为重复行。精度是**可选**的：要精确就给 sinceSeq。
+        const hasSeqCursor = Number.isInteger(Number(q.sinceSeq)) && q.sinceSeq !== null && q.sinceSeq !== undefined;
+        const sinceSeq = hasSeqCursor ? Number(q.sinceSeq) : -1;
 
         const out = [];
         // 从最新的往回扫（head 的前一个就是最新写入的）
@@ -75,7 +87,25 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
             const idx = (head - 1 - i + capacity * 2) % capacity;
             const e = ring[idx];
             if (!e) continue;
-            if (since && e.ts <= since) break;           // 再往前都更旧，可以停
+            // ★ 增量游标必须比到**序号**，不能只比时间戳（2026-10 修的真漏洞）。
+            //
+            //   时间戳只有毫秒精度，而一次启动会连打十几条日志 —— 同一个毫秒里
+            //   完全可能有 5 条。旧实现是 `if (since && e.ts <= since) break;`
+            //   （闭区间），于是查看器带着"这一毫秒最后一条"的 ts 回来时，
+            //   同一毫秒里**晚于它写入的那些**会被判定为"不比 since 新"而跳过；
+            //   更糟的是下一轮增量拿到的 lastTs 还是这个毫秒，它们**永远补不回来**。
+            //   表现就是"bat 面板刷过好几行，查看器里少几行"。
+            //
+            //   两种模式：
+            //     · 给了 sinceSeq（查看器用的）→ 同毫秒内按序号精确排除，不丢也不重
+            //     · 只给 since（老调用方）  → 保持严格 ">"，宁可重复也不改变旧语义
+            if (since) {
+                if (e.ts < since) break;                        // 再往前都更旧，可以停
+                if (e.ts === since) {
+                    if (!hasSeqCursor) continue;                // 旧语义：同毫秒一律算旧
+                    if (e.seq <= sinceSeq) continue;            // 精确语义：只排除已带走的
+                }
+            }
             if ((LEVEL_NUM[e.level] ?? 20) < min) continue;
             if (tags && !tags.has(e.tag)) continue;
             if (search && !e.message.toLowerCase().includes(search)) continue;

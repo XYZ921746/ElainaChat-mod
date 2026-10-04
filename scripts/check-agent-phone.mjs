@@ -28,7 +28,7 @@ import { readFrontend } from './frontend-sources.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const html = readFrontend();
-const live2d = readFileSync(path.join(root, 'web', 'live2d-video.js'), 'utf8');
+const live2d = readFileSync(path.join(root, 'web', 'mods', 'live2d', 'index.js'), 'utf8');
 // 标签分发已从 live2d-video.js 移到宿主自有模块（见 web/js/agent-tags.js 的说明）：
 // Live2D 是可卸的 mod，不能让它持有全部 [操作:] 的分发权 —— 否则卸掉它
 // 就等于 Agent 系统（文件/命令/手机）全体失效。

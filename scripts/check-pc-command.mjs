@@ -316,7 +316,7 @@ console.log('\n=== 4. 前端接线 ===');
 {
     const html = readFrontend();
     const agent = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'app-03-agent.js'), 'utf8'));
-    const live2d = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'live2d-video.js'), 'utf8'));
+    const live2d = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'mods', 'live2d', 'index.js'), 'utf8'));
     const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'app-02-data.js'), 'utf8'));
 
     ok(/agentCommandOperation\(raw\)/.test(agent), 'agentActions 有电脑命令入口');

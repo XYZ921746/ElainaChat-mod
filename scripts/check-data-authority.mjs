@@ -1,5 +1,5 @@
 // 验证「data/ 是唯一存储」：① 写入后 data/ 里有数据 ② 删掉 data/ 后数据真的为空。
-import { chromium } from 'file:///D:/222/android-app/node_modules/playwright-core/index.mjs';
+import { launchTestBrowser } from './test-browser.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -40,7 +40,11 @@ async function waitUp() {
     return false;
 }
 
-const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+// ★ 用共用的启动器：它负责两件**环境相关**的事（浏览器路径 + 屏蔽外网）。
+//   这里原先踩过一个"看起来像产品坏了"的假失败：页面 <head> 从 jsdelivr 拉字体
+//   CSS，检查机连不上外网时 Chromium 一直等，把 domcontentloaded 从 0.7 秒拖到
+//   68 秒 → `page.goto: Timeout 30000ms exceeded`。详见 scripts/test-browser.mjs。
+const browser = await launchTestBrowser();
 let lastOut = '';
 let child = startServer();
 try {

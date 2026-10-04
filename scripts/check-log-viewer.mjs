@@ -1,5 +1,5 @@
 // 真实浏览器验证：软件内日志查看器的渲染与过滤。
-import { chromium } from 'file:///D:/222/android-app/node_modules/playwright-core/index.mjs';
+import { launchTestBrowser } from './test-browser.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,10 +27,8 @@ const ok = (c, label, extra) => {
     else { fail++; console.log('  FAIL  ' + label + (extra ? '  -> ' + extra : '')); }
 };
 
-const browser = await chromium.launch({
-    executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
-    headless: true,
-});
+// ★ 用共用的启动器（浏览器路径 + 屏蔽外网，见 scripts/test-browser.mjs）
+const browser = await launchTestBrowser();
 try {
     let up = false;
     for (let i = 0; i < 80 && !up; i++) {
@@ -81,12 +79,34 @@ try {
 
     ok(st.visible, '查看器在高级 tab 里显示');
     ok(st.lineCount > 3, '★ 渲染出了日志行', String(st.lineCount));
-    ok(/^\d{2}:\d{2}:\d{2} \[\w+\] \[\w+\]/.test(st.firstLine),
-        '★ 行格式：时刻 + [级别] + [模块] + 消息', st.firstLine);
+    // ★ 行格式必须与 bat 面板/日志文件**同形**：`[时刻] [模块] [级别] [来源] 正文`
+    //
+    //   2026-10 用户报"查看器与 bat 面板对不上"，其中一半原因是这里写成了
+    //   `时刻 [级别] [模块] 正文` —— 级别与模块**位置是反的**，同一行日志
+    //   在两个窗口里看起来像两件事。这条断言就是钉住新契约的。
+    ok(/^\[\d{2}:\d{2}:\d{2}\] \[[^\]]+\] \[(DBUG|INFO|WARN|ERRO|CRIT)\] \[[^\]]+\]/.test(st.firstLine),
+        '★ 行格式与面板一致：时刻 + [模块] + [级别短码] + [来源] + 正文', st.firstLine);
     ok(st.hasLevelColors, '★ 级别有配色区分');
     ok(st.tagOptions.includes('Mod') || st.tagOptions.includes('Core'), '★ 模块下拉有真实模块名', JSON.stringify(st.tagOptions));
     ok(st.autoChecked === true, '自动刷新默认开启');
     ok(!/NaN/.test(st.metaText), '★ 状态栏不出现 NaN', st.metaText);
+
+    // ★ 顺序必须**与 bat 面板一致：旧在上、新在下**（用户报"对不上"的另一半原因）
+    //
+    //   判据不靠读 DOM 文案，而是直接比对：查看器第一行的时间戳 ≤ 最后一行。
+    //   原先查看器是新在上，这条会失败 —— 正是我们要防的回归。
+    const order = await page.evaluate(() => {
+        const box = document.getElementById('logViewerBox');
+        const lines = [...box.querySelectorAll('div')].map((d) => d.textContent || '');
+        const ts = (s) => {
+            const m = s.match(/\[(\d{2}):(\d{2}):(\d{2})\]/);
+            return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : null;
+        };
+        return { first: ts(lines[0] || ''), last: ts(lines[lines.length - 1] || ''), n: lines.length };
+    });
+    ok(order.first !== null && order.last !== null && order.first <= order.last,
+        '★ 顺序与 bat 面板一致（旧在上、新在下）',
+        `首行 ${order.first}s / 末行 ${order.last}s（共 ${order.n} 行）`);
 
     // 级别过滤交互：切到 WARN+ 后行数应减少（select 可能被 tab 隐藏，直接改值+派发事件）
     const before = st.lineCount;

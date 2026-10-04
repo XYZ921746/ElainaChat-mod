@@ -80,6 +80,65 @@ try {
     const inc = await (await fetch(BASE + `/api/logs/tail?since=${since}&limit=300`)).json();
     ok(inc.entries.every((e) => e.ts > since), '★ since 增量只返回更新的记录', `${inc.entries.length} 条`);
 
+    // ── 5.5 ★ 同一毫秒内的记录必须靠 sinceSeq 精确带回（2026-10 修的真漏洞）──
+    //
+    //   时间戳只有毫秒精度，而一次启动会连打十几条日志 —— 同一个毫秒里有 5 条很正常。
+    //   旧实现比的是 `e.ts <= since`（闭区间），于是查看器带着"这一毫秒最后一条"的 ts
+    //   回来时，同毫秒里**晚于它写入的**会被跳过，而且下一轮的 lastTs 还是这个毫秒，
+    //   它们**永远补不回来** —— 表现在用户眼前就是"bat 面板刷过好几行、查看器里少几行"。
+    //
+    //   ★ 这里直接用 log-buffer 单测，而不是靠"打一堆请求碰运气撞同一毫秒"：
+    //     后者会飘（并发请求未必落在同一毫秒，机器一快一慢结论就变）。
+    //     log-buffer 是纯逻辑，能精确构造"同一毫秒多条"这个条件。
+    {
+        const { createLogBuffer } = await import('../server/log-buffer.mjs');
+        const buf = createLogBuffer(100);
+        const T = 1700000000000;                 // 固定时刻，不受真实时钟影响
+        // 同一毫秒 5 条，后面再跟一条不同毫秒的
+        for (let i = 0; i < 5; i++) {
+            buf.push({ ts: T, level: 'DEBUG', tag: 'HTTP', message: 'same-ms-' + i });
+        }
+        buf.push({ ts: T + 1, level: 'INFO', tag: 'Core', message: 'next-ms' });
+
+        const all = buf.query({ limit: 100 });
+        ok(all.entries.length === 6, '单测：6 条都进了缓冲', String(all.entries.length));
+        ok(all.entries.every((e) => Number.isInteger(e.seq)),
+            '★ 单测：每条都带写入序号 seq');
+        const sameMs = all.entries.filter((e) => e.ts === T);
+        ok(sameMs.length === 5, '★ 单测：确实构造出同一毫秒 5 条', String(sameMs.length));
+
+        // 游标 = 该毫秒**最早**那条（列表新→旧，所以取末位）
+        const earliest = sameMs[sameMs.length - 1];
+        const after = buf.query({ since: T, sinceSeq: earliest.seq, limit: 100 });
+        const gotSeqs = new Set(after.entries.map((e) => e.seq));
+        const missed = sameMs.filter((e) => e.seq !== earliest.seq && !gotSeqs.has(e.seq));
+        ok(missed.length === 0,
+            '★★ 单测：带了 sinceSeq 时，同毫秒的后续记录一条都不丢',
+            missed.length ? `漏 ${missed.length} 条` : `带回 ${after.entries.length} 条`);
+        ok(after.entries.some((e) => e.message === 'next-ms'),
+            '★ 单测：更新的毫秒照常返回');
+
+        // 不给 sinceSeq 时保持旧的严格 ">" 语义（老调用方不该突然收到重复行）
+        const legacy = buf.query({ since: T, limit: 100 });
+        ok(legacy.entries.every((e) => e.ts > T),
+            '★ 单测：只传 since 的调用方仍是严格 ">"（不改变旧语义）',
+            `${legacy.entries.length} 条`);
+
+        // 老语义下的**丢条**必须能被这条断言复现出来 —— 否则说明测试没测到点上
+        const legacySeqs = new Set(legacy.entries.map((e) => e.seq));
+        const legacyMissed = sameMs.filter((e) => !legacySeqs.has(e.seq));
+        ok(legacyMissed.length === 5,
+            '★★ 单测：只比时间戳时同毫秒 5 条全丢（这就是原 bug 的实证）',
+            `丢 ${legacyMissed.length} 条`);
+    }
+
+    // 接口层：真实响应里也要带 seq（前端游标靠它）
+    {
+        const t = await (await fetch(BASE + '/api/logs/tail?limit=20')).json();
+        ok(t.entries.length > 0 && t.entries.every((e) => Number.isInteger(e.seq)),
+            '★ /api/logs/tail 的每条记录都带 seq', `${t.entries.length} 条`);
+    }
+
     // ── 6. 内存缓冲不受落盘级别影响（即使把落盘级别调高，缓冲仍全量）──
     const setRes = await fetch(BASE + '/api/logs/settings', {
         method: 'POST', headers: { 'content-type': 'application/json' },

@@ -56,7 +56,17 @@
         'elaina_plugins_enabled',        // 插件系统总开关
         'live2d.bg',                     // Live2D 背景
         'live2d.mouseFollow',            // 鼠标跟随开关
-        'live2d.mouseFollowScale'        // 鼠标跟随幅度
+        'live2d.mouseFollowScale',       // 鼠标跟随幅度
+        // 插件页的拖拽顺序（纯 UI 偏好）。
+        // ★ 不加进来会被**静默丢弃**：setItem 只对 isDataKey 为真的键入队推送，
+        //   其余只写内存缓存 —— 表现为"拖完看着生效了，刷新就回去了"（实测踩到）。
+        //   它不影响插件加载顺序（那个由 manifest.after 保证），只是列表怎么排。
+        'elaina_mods_order',
+        // 插件分栏（分组）：分栏清单 + 插件归属（见 app-06-settings.js 的 refreshModsList）
+        'elaina_mods_groups',
+        'elaina_mods_group_of',
+        // Live2D 模型列表的拖拽顺序（同上，纯 UI 偏好）。
+        'elaina_live2d_model_order'
     ];
     var DATA_SET = {};
     for (var i = 0; i < DATA_KEYS.length; i++) DATA_SET[DATA_KEYS[i]] = true;

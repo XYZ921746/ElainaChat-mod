@@ -61,16 +61,30 @@ export function listFrontendFiles() {
 
     // 4) 插件目录：每个插件一个子目录，内部的 js/css 都要收进来
     //    （检查脚本会断言"插件是否真的被注册""样式有没有带进去"）
-    const pluginsDir = path.join(WEB, 'plugins');
-    if (existsSync(pluginsDir)) {
-        const plugins = readdirSync(pluginsDir)
-            .filter((n) => statSync(path.join(pluginsDir, n)).isDirectory())
+    //
+    // ★ 目录名是 `mods` 而不是 `plugins`（2026-09 修）。
+    //   这里原先写的是 `plugins` —— 那是改名之前的旧路径，实际早就是 web/mods。
+    //   后果不是报错，而是**静默少读**：readFrontend() 里一个 mod 源码都没有，
+    //   于是所有"断言 mod 行为"的检查其实是在空字符串上做匹配。这类假检查
+    //   比没有检查更糟 —— 它会给出"已验证"的错觉。
+    const modsDir = path.join(WEB, 'mods');
+    if (existsSync(modsDir)) {
+        const plugins = readdirSync(modsDir)
+            .filter((n) => statSync(path.join(modsDir, n)).isDirectory())
             .sort();
         for (const name of plugins) {
-            const dir = path.join(pluginsDir, name);
+            const dir = path.join(modsDir, name);
             pushIfFile(path.join(dir, 'manifest.json'));
             pushDir(dir, (n) => n.endsWith('.js'));
             pushDir(dir, (n) => n.endsWith('.css'));
+            // ★ 插件自带的 HTML 片段也要收（2026-10 补）。
+            //
+            //   为什么：插件可以把界面结构放在自己的 .html 里，由插槽在渲染时取回来插入
+            //   （Live2D 插件的 panel.html 就是这么做的）。而 check-dom-refs 靠
+            //   readFrontend() 收集"哪些 id 真实存在" —— 不收这些 HTML 的话，
+            //   插件脚本里所有 getElementById 都会被误报成"HTML 里没有这个 id"。
+            //   实测踩到：一次报了 8 个假问题，全部指向 panel.html 里的控件。
+            pushDir(dir, (n) => n.endsWith('.html'));
             // 插件自己的 js/ 子目录（若按子目录组织）
             pushDir(path.join(dir, 'js'), (n) => n.endsWith('.js'));
         }

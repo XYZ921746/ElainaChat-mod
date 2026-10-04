@@ -17,8 +17,11 @@ import { fileURLToPath } from 'node:url';
 import { readFrontend } from './frontend-sources.mjs';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MODELS_ROOT = path.join(projectRoot, 'web', 'live2d', 'models');
-/** 与 serve.mjs 里 MODELS_DIR 指向同一个目录；Capacitor 桩里用相对路径 'live2d/models/...' 访问它 */
+// ★ 模型已搬进资源 mod（2026-10）：web/mods/live2d-models/models/。
+//   服务端实现也从 serve.mjs 搬到了那个插件的 server.mjs —— 这份对拍检查要跟着走，
+//   否则它会在旧位置找不到函数并报错（这恰恰是它该有的行为：搬家了就要同步更新检查）。
+const MODELS_ROOT = path.join(projectRoot, 'web', 'mods', 'live2d-models', 'models');
+/** 与 live2d-models/server.mjs 里 staticDir('/live2d/models') 指向同一个目录 */
 
 /**
  * 按函数名抠出完整函数声明（靠大括号配对找结尾；这些函数里没有出现在字符串字面量内的花括号）。
@@ -49,12 +52,25 @@ function extractFn(source, name, label) {
 }
 
 // ==================== 服务端实现 ====================
-const serveSrc = readFileSync(path.join(projectRoot, 'web', 'serve.mjs'), 'utf8');
-const server = new Function('readdir', 'stat', 'path', 'MODELS_DIR', `
-    ${extractFn(serveSrc, 'collectModelFiles', 'serve.mjs')}
-    ${extractFn(serveSrc, 'listModels', 'serve.mjs')}
+// ★ 2026-10：这两个函数已随 Live2D 拆分搬进 web/mods/live2d-models/server.mjs。
+//   它们现在住在 `export function register(ctx)` 里面，所以是**闭包内**的函数声明 ——
+//   extractFn 照样能按大括号配对抠出来，喂进 new Function 后行为与拆分前一致。
+//
+//   唯一的新依赖是 `ctx.json`：搬家前它们直接操作 res.writeHead/end，
+//   搬家后用宿主注入的 ctx.json（见 mod-server.mjs 的 ctx）。所以这里注入一个
+//   等价桩 —— 语义完全一样（写 JSON 回包），测的仍是真代码。
+const serveSrc = readFileSync(path.join(projectRoot, 'web', 'mods', 'live2d-models', 'server.mjs'), 'utf8');
+const ctxStub = {
+    json(res, status, obj) {
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(obj));
+    },
+};
+const server = new Function('readdir', 'stat', 'path', 'MODELS_DIR', 'ctx', `
+    ${extractFn(serveSrc, 'collectModelFiles', 'live2d-models/server.mjs')}
+    ${extractFn(serveSrc, 'listModels', 'live2d-models/server.mjs')}
     return { listModels };
-`)(readdir, stat, path, MODELS_ROOT);
+`)(readdir, stat, path, MODELS_ROOT, ctxStub);
 
 // ==================== Capacitor 原生实现 ====================
 const htmlSrc = readFrontend();

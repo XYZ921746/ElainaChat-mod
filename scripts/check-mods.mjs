@@ -179,13 +179,23 @@ console.log('=== 1. 关键实现存在且语义正确 ===');
     ok(/data-settings-tab="tab-mods"/.test(html), '设置里有「插件」Tab');
     ok(/id="tab-mods"/.test(html), '有 #tab-mods 面板');
     ok(/id="modsList"/.test(html), '有 mod 列表容器');
-    ok(/id="modsGlobalToggle"/.test(html), '有全局开关');
+    // ★ 全局开关已删除（2026-10 用户要求：默认开启，不再给"一键全关"的入口）。
+    //   改为断言**新结构**：上传/重扫在标题右上角 + 分栏机制存在。
+    ok(!/id="modsGlobalToggle"/.test(html), '★ 全局开关已删除（默认开启，不再有一键全关）');
+    ok(/id="modsInstallBtn"/.test(html) && /id="modsRefreshBtn"/.test(html), '有 上传安装 / 重新扫描 入口');
+    ok(/id="modsAddGroupBtn"/.test(html), '★ 有「添加分栏」按钮（插件分组）');
+    ok(/mod-group-toggle/.test(html), '★ 分栏折叠三角（disclosure triangle）');
     const settings = readFileSync(path.join(ROOT, 'web', 'js', 'app-06-settings.js'), 'utf8');
     ok(/async function refreshModsList/.test(settings), '有 refreshModsList');
     ok(/\/api\/plugins/.test(settings), '列表数据来自服务端 /api/plugins');
     ok(/ElainaMods\.list\(\)/.test(settings), '同时合并前端加载状态（服务端只知道磁盘上有什么）');
     ok(/加载失败/.test(settings), '★ 加载失败的 mod 有显眼标记（否则用户以为"开了没反应"）');
     ok(/公共依赖/.test(settings), '★ hidden 的 mod 显示为「公共依赖」而非开关');
+    ok(/elaina_mods_groups/.test(settings), '★ 分栏清单有持久化（与 store.js 的 DATA_KEYS 对应）');
+    // ★ 未分类不再是一个"栏"：没归属的插件直接平铺在顶层（与旧版一致，用户要求）。
+    //   分栏与插件**同等级混排**（elaina_mods_top_order）。
+    ok(/elaina_mods_top_order/.test(settings), '★ 顶层混排顺序（分栏与插件同等级）');
+    ok(/loose\.push/.test(settings), '★ 没归属的插件平铺在顶层（不再装进"未分类"栏）');
 }
 
 // ============================================================ 1.5 两个 mod 本体
@@ -247,32 +257,58 @@ console.log('\n=== 1.5 Galgame 与桌宠（本体与共用层） ===');
 // ============================================================ 2. 端到端
 console.log('\n=== 2. 端到端：扫描 / 解压 / 安全 / 卸载 ===');
 
-mkdirSync(MODS, { recursive: true });
+// ★ 这一段的安装/卸载**全部在临时目录里做**，不碰仓库的 web/mods/（2026-10 修）。
+//
+//   为什么必须隔离：用户自己的服务常常正跑着（占 4173），而它每次被请求
+//   /api/plugins 都会重新扫描插件目录 —— 于是会**抢走**测试刚放进去的 zip，
+//   表现为"这个检查时好时坏"（实测踩到：单独跑通过、与其它检查并发跑就失败）。
+//   用 MODS_DIR 环境变量（见 serve.mjs）把它指到临时目录，测试就完全隔离了。
+//
+//   注意：第 1 段（源码约定）与第 1.5 段（插件本体）读的仍是**真实**的
+//   web/mods/ —— 那些是静态断言，不写文件，不存在争用。
+//
+//   ⚠️ 这里**不要**再往仓库的 MODS 写任何东西：写一次就会在仓库里留下
+//   demo-mod/ evil-mod/，而且要等到下次运行才被清掉（这个坑踩过两次）。
+const TEST_MODS = mkdtempSync(path.join(tmpdir(), 'elaina-mod-mods-'));
+const PORT = await freePort();
+const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-mod-data-'));
+const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-mod-log-'));
 
 // 正常 mod
-writeFileSync(path.join(MODS, 'demo-mod.zip'), makeZip([
+writeFileSync(path.join(TEST_MODS, 'demo-mod.zip'), makeZip([
     ['demo-mod/manifest.json', JSON.stringify({ name: '演示插件', version: '1.0.0', entry: 'index.js', styles: ['style.css'] })],
     ['demo-mod/index.js', 'window.ElainaMods && window.ElainaMods.register("demo-mod", function(h){ return {}; });'],
     ['demo-mod/style.css', '.demo{color:red}'],
 ]));
 // 恶意 mod：路径穿越 + 本机可执行
-writeFileSync(path.join(MODS, 'evil-mod.zip'), makeZip([
+writeFileSync(path.join(TEST_MODS, 'evil-mod.zip'), makeZip([
     ['evil-mod/manifest.json', JSON.stringify({ name: '恶意' })],
     ['evil-mod/index.js', 'console.log("x")'],
     ['evil-mod/../../web/serve.mjs', 'HACKED'],
     ['evil-mod/../../web/index.html', 'HACKED'],
     ['evil-mod/bad.exe', 'MZ'],
 ]));
+// 一个"带资源的目录型插件"：验证「清单带 dir 字段」与「资源可经静态服务访问」。
+// ★ 以前这两条断言用的是**仓库里真实的 elaina-avatar**（它的立绘不入库，
+//   只有本地装过才有）。隔离后这里自造一份最小资源，
+//   于是这个检查不再依赖"你本地有没有装过那个插件"。
+mkdirSync(path.join(TEST_MODS, 'elaina-avatar', 'img'), { recursive: true });
+writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'manifest.json'), JSON.stringify({
+    id: 'elaina-avatar', name: '伊蕾娜立绘与情绪', version: '1.0.0',
+    entry: 'index.js', defaultEnabled: true, hidden: true,
+}));
+writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'index.js'), 'void 0;');
+// 一张 1x1 的合法 PNG（内容不重要，要的是它能被静态服务取到）
+writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'img', 'p_calm.png'),
+    Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001080600000'
+        + '01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex'));
 
-const PORT = await freePort();
-const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-mod-data-'));
-const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-mod-log-'));
 const serveBefore = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
 const htmlBefore = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
 
 const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR, LOG_DIR },
+    env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR, LOG_DIR, MODS_DIR: TEST_MODS },
     stdio: ['ignore', 'pipe', 'pipe'],
 });
 let out = '';
@@ -304,24 +340,32 @@ try {
         const evil = (body.installResults || []).find((r) => r.zip === 'evil-mod.zip');
         ok(Boolean(evil), '恶意 zip 有安装结果回报');
 
+        // 诊断：失败时把安装结果与服务端输出打出来 —— 否则只剩一句"没回报"，
+        // 排查时还得自己去复现（这个检查本身就是排查工具）。
+        if (!evil) {
+            console.log('      安装结果: ' + JSON.stringify(body.installResults || []));
+            console.log('      清单: ' + JSON.stringify((body.plugins || []).map((p) => p.id)));
+            console.log('      服务端输出尾部:\n' + out.split('\n').slice(-15).map((l) => '        ' + l).join('\n'));
+        }
+
         // ★ 路径穿越必须无效
         ok(readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8') === serveBefore, '★ serve.mjs 未被路径穿越覆盖');
         ok(readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8') === htmlBefore, '★ index.html 未被路径穿越覆盖');
-        ok(!existsSync(path.join(MODS, 'evil-mod', 'bad.exe')), '★ .exe 被拦下（不落盘）');
+        ok(!existsSync(path.join(TEST_MODS, 'evil-mod', 'bad.exe')), '★ .exe 被拦下（不落盘）');
         ok(evil && evil.ok && evil.files === 2, '恶意 zip 只装进 2 个合法文件（穿越/可执行被拦）',
             evil ? 'files=' + evil.files : '');
-        ok(existsSync(path.join(MODS, 'evil-mod', 'index.js')), '★ mod 的 index.js 允许落盘（mod 本质就是代码）');
+        ok(existsSync(path.join(TEST_MODS, 'evil-mod', 'index.js')), '★ mod 的 index.js 允许落盘（mod 本质就是代码）');
 
         // 清单
-        const idx = JSON.parse(readFileSync(path.join(MODS, 'index.json'), 'utf8'));
+        const idx = JSON.parse(readFileSync(path.join(TEST_MODS, 'index.json'), 'utf8'));
         ok(Array.isArray(idx.plugins), 'index.json 被重新生成');
         ok(idx.plugins.some((p) => p.id === 'demo-mod'), '清单里含新装的 mod');
 
         // 卸载
         const del = await fetch(`http://127.0.0.1:${PORT}/api/plugins/demo-mod`, { method: 'DELETE' });
         ok(del.status === 200, 'DELETE 卸载成功', 'HTTP ' + del.status);
-        ok(!existsSync(path.join(MODS, 'demo-mod')), '★ mod 目录已被删除');
-        ok(!existsSync(path.join(MODS, 'demo-mod.zip')), '★ 安装包也被删除（否则会被重新装回来）');
+        ok(!existsSync(path.join(TEST_MODS, 'demo-mod')), '★ mod 目录已被删除');
+        ok(!existsSync(path.join(TEST_MODS, 'demo-mod.zip')), '★ 安装包也被删除（否则会被重新装回来）');
 
         // 静态资源：★ 用清单里的**真实目录名**（dir）拼 URL，不写死 'elaina-avatar'
         //   —— 用户改了目录名时，写死的 URL 必然 404，那是检查的问题。
@@ -341,16 +385,10 @@ try {
 } finally {
     child.kill();
     await wait(300);
-    // 清理：测试不该在仓库里留痕
-    for (const f of ['demo-mod.zip', 'evil-mod.zip']) rmSync(path.join(MODS, f), { force: true });
-    for (const d of ['demo-mod', 'evil-mod']) rmSync(path.join(MODS, d), { recursive: true, force: true });
-    rmSync(DATA_DIR, { recursive: true, force: true });
-    rmSync(LOG_DIR, { recursive: true, force: true });
-    try {
-        const idx = JSON.parse(readFileSync(path.join(MODS, 'index.json'), 'utf8'));
-        idx.plugins = (idx.plugins || []).filter((p) => !/^(demo|evil)-mod$/.test(p.id));
-        writeFileSync(path.join(MODS, 'index.json'), JSON.stringify(idx, null, 2), 'utf8');
-    } catch { /* 忽略 */ }
+    // 清理：全部在临时目录里，仓库不留痕
+    for (const d of [DATA_DIR, LOG_DIR, TEST_MODS]) {
+        try { rmSync(d, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    }
 }
 
 console.log('\n' + '='.repeat(46));

@@ -33,7 +33,12 @@ const sourceRoot = path.join(projectRoot, 'web');
 // android-app 已移到项目**上一级**（D:\222\android-app）—— 构建产物与工具链
 // 不放在项目目录里，避免被误提交、也便于多个项目复用同一套。
 const androidWebRoot = path.join(projectRoot, '..', 'android-app', 'www');
-const modelsSourceRoot = path.join(sourceRoot, 'live2d', 'models');
+const modelsSourceRoot = path.join(sourceRoot, 'mods', 'live2d-models', 'models');
+// ★ APK 里的落地路径**不变**：仍是 www/live2d/models/。
+//   为什么不变：模型 URL（`/live2d/models/<名>/…`）是前端与 AI 提示词里都在用的约定，
+//   也是 app-01-core.js 的播种逻辑与 check-bundled-models 的判据。
+//   只有**仓库里的源位置**从 web/live2d/models/ 搬到了 mod 目录下（资源与代码分开），
+//   打包产物这一侧完全不需要跟着动 —— 改这一行就够，不必碰任何运行时代码。
 const modelsDestRoot = path.join(androidWebRoot, 'live2d', 'models');
 
 // 同步到安卓 www 的文件（覆盖整个定制版 Web 前端）
@@ -43,11 +48,12 @@ const filesToCopy = [
     ['index.html', 'index.html'],
     ['diag-live2d.html', 'diag-live2d.html'],
     ['diag-asr.html', 'diag-asr.html'],
-    ['live2d-video.js', 'live2d-video.js'],
+    // Live2D 视频通话已搬成插件（web/mods/live2d/）：整棵 mods/ 由下面那段自动收走，
+    // 不需要在这里逐条列出。
     ['vendor/tailwind.js', 'vendor/tailwind.js'],
-    ['vendor/live2dcubismcore.min.js', 'vendor/live2dcubismcore.min.js'],
-    ['vendor/pixi-6.min.js', 'vendor/pixi-6.min.js'],
-    ['vendor/pixi-live2d-display-cubism4.min.js', 'vendor/pixi-live2d-display-cubism4.min.js'],
+    // ★ Live2D 引擎（live2dcubismcore / pixi-6 / pixi-live2d-display）不再逐条列在这里：
+    //   它们已搬进 web/mods/live2d-models/vendor/，由**下面那段 mods 目录自动发现**一起收走
+    //   （整棵 mods/ 都会被复制，含子目录）。在这里再列一遍会去拷一个已不存在的路径。
     // Markdown + LaTeX 渲染（消息里的 **加粗**、列表、表格与 $公式$ 靠它们）
     ['vendor/marked/marked.min.js', 'vendor/marked/marked.min.js'],
     ['vendor/katex/katex.min.js', 'vendor/katex/katex.min.js'],
@@ -212,7 +218,7 @@ if (modFiles.length) console.log(`  mods: ${modFiles.length} files`);
 if (cssFiles.length) console.log(`  css: ${cssFiles.map((f) => 'css/' + f).join(', ')}`);
 
 // ==================== 内置 Live2D 模型 ====================
-// 仓库里 web/live2d/models/ 下的模型随 APK 分发：复制进安卓工程的 www/live2d/models/，
+// 仓库里 web/mods/live2d-models/models/ 下的模型随 APK 分发：复制进安卓工程的 www/live2d/models/，
 // 并生成 manifest.json。APK 里没有服务端，模型没法从接口取，只能打包进去：
 // App 首次启动时按这份清单把模型"种"进应用数据目录（见 index.html 的 seedBundledLive2dModels），
 // 之后列表与加载逻辑跟用户自己上传的模型走同一条路径，不需要额外适配。
@@ -258,7 +264,7 @@ if (skipModels) {
     await rm(modelsDestRoot, { recursive: true, force: true }).catch(() => {});
     console.log('  已清空 ' + path.relative(androidWebRoot, modelsDestRoot) + '/（避免上次残留被打进去）');
 } else if (!modelDirs.length) {
-    console.log('No Live2D model in web/live2d/models/ — nothing bundled.');
+    console.log('No Live2D model in web/mods/live2d-models/models/ — nothing bundled.');
 } else {
     // 先算出这次要写进去的完整文件集，再决定删什么。
     //

@@ -136,6 +136,47 @@ async function init() {
         if (hint) { hint.textContent = '扫描中…'; hint.className = 'text-[11px] text-indigo-400'; }
         void refreshModsList();
     });
+    // 插件：＋添加分栏。
+    //
+    // ★ 必须绑在这里（app-07-init 只执行一次）—— 之前绑在 refreshModsList 里，
+    //   而它每次刷新列表都会重跑一遍：点一次按钮触发 N 个 handler，
+    //   连续弹出 5-6 次输入框（实测踩到：刷新 N 次就弹 N 次）。
+    document.getElementById('modsAddGroupBtn')?.addEventListener('click', async () => {
+        const name = window.prompt('新分栏的名称：', '');
+        if (name === null) return;
+        const n = String(name).trim();
+        if (!n) return;
+        // readGroups/saveGroups 是 refreshModsList 闭包里的，这里拿不到 ——
+        // 直接读写同一对 Store 键（键名约定见 app-06-settings.js）。
+        const KEY = 'elaina_mods_groups';
+        let gs = [];
+        try {
+            const v = JSON.parse(Store.getItem(KEY) || '[]');
+            gs = Array.isArray(v) ? v.filter((g) => g && g.id) : [];
+        } catch (e) { /* 忽略 */ }
+        if (!gs.some((g) => g.id === '__ungrouped__')) {
+            gs.unshift({ id: '__ungrouped__', name: '未分类', collapsed: false, fixed: true });
+        }
+        if (gs.some((g) => g.name === n)) {
+            window.alert('已经有叫「' + n + '」的分栏了。');
+            return;
+        }
+        gs.push({ id: 'g' + Date.now().toString(36), name: n, collapsed: false });
+        Store.setItem(KEY, JSON.stringify(gs));
+        // ★ 新分栏插到**顶层混排的最前面**（用户要求：新建的应在最上面）。
+        //   top_order 是渲染时的项顺序（卡片与分栏混排），不写的话渲染兜底
+        //   会把新分栏追加到末尾。
+        try {
+            const TOP_KEY = 'elaina_mods_top_order';
+            let top = [];
+            try { top = JSON.parse(Store.getItem(TOP_KEY) || '[]'); } catch (e) { /* 忽略 */ }
+            if (!Array.isArray(top)) top = [];
+            top.unshift({ t: 'group', id: gs[gs.length - 1].id });
+            Store.setItem(TOP_KEY, JSON.stringify(top));
+        } catch (e) { /* 忽略 */ }
+        if (typeof Store._flush === 'function') Store._flush();
+        void refreshModsList();
+    });
     // 插件：上传安装。
     //
     // 为什么要有这条路：原先只能"把 zip 拷进 web/mods/ 目录"，电脑上可行，
@@ -189,9 +230,8 @@ async function init() {
     }
     document.getElementById('authChangeBtn')?.addEventListener('click', changeAccessPassword);
     document.getElementById('authLogoutBtn')?.addEventListener('click', logoutAccess);
-    // 日志设置：改完立即生效（服务端运行时热更新），不需要点「保存设置」
-    elements.settingLogLevel?.addEventListener('change', () => { renderLogLevelHint(); void applyLogSettings(); });
-    elements.settingLogTrace?.addEventListener('change', () => { void applyLogSettings(); });
+    // 日志级别 / 追踪开关的界面已移除（见 index.html 里的说明）：级别回默认、追踪固定开，
+    // 所以这里不再有"改完立即生效"的监听。运行期仍可用 /api/logs/settings 调。
     // 我的数据：导出直接下载备份，导入选文件后合并进 data/
     document.getElementById('dataExportBtn')?.addEventListener('click', exportDataBackup);
     // 操作悬浮窗：跳系统设置授权 / 重新检测
@@ -200,6 +240,18 @@ async function init() {
     // 副屏监视窗：入口在**运行状态条**上（AI 跑任务时才出现），
     // 不放在设置里 —— 那是"用的时候才需要"的东西，放设置里得先翻两层。
     document.getElementById('agentWatchBtn')?.addEventListener('click', () => { openScreenWatch(); });
+    // 插件 README 弹窗：关闭按钮 + 点遮罩关闭（点面板内部不关）
+    (function bindModReadmeModal() {
+        const overlay = document.getElementById('modReadmeOverlay');
+        if (!overlay) return;
+        const close = () => { overlay.classList.add('hidden'); overlay.classList.remove('flex'); };
+        document.getElementById('modReadmeClose')?.addEventListener('click', close);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        // Esc 关闭（与其它弹窗一致的习惯）
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !overlay.classList.contains('hidden')) close();
+        });
+    })();
     // 副屏监视窗
     document.getElementById('closeScreenWatch')?.addEventListener('click', closeScreenWatch);
     document.getElementById('screenWatchPanel')?.addEventListener('click', (e) => {
@@ -848,264 +900,40 @@ function closeSidebarDrawer() {
 function switchSettingsTab(name) {
     document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.settingsTab === name));
     document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.toggle('active-panel', p.id === name));
-}
-document.querySelectorAll('.settings-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => switchSettingsTab(btn.dataset.settingsTab));
-});
-
-
-// ===== Live2D 设置：模型列表 / 上传 / 测试 =====
-let live2dModelList = [];   // 最近一次拉到的模型列表，重命名时要用
-// 服务端返回的可能不是 JSON（例如服务还是旧版本时，/api/live2d/rename 落到静态处理器返回纯文本 "Not found"）。
-// 直接 res.json() 会抛 "Unexpected token 'N'..."，用户完全看不懂，所以这里统一兜一层。
-async function readJsonSafe(res) {
-    const text = await res.text();
-    try { return JSON.parse(text); } catch { /* 非 JSON */ }
-    return {
-        ok: false,
-        message: res.status === 404
-            ? '服务端没有这个接口（HTTP 404）。多半是 serve.mjs 改了但服务没重启 —— 到 cmd 窗口按 Ctrl+C，再重新双击「启动.bat」。'
-            : '服务端返回了非预期的内容（HTTP ' + res.status + '）：' + text.slice(0, 80),
-    };
-}
-async function refreshLive2DSettingList() {
-    const sel = document.getElementById('settingLive2DModel');
-    if (!sel) return;
+    // 通知插件：某个分栏被显示了。
+    // 为什么要广播：插件分栏的 render(container) 是**延迟调用**的 ——
+    // 挂载时只建空壳，真被点开才渲染，没打开过的分栏不白做初始化。
     try {
-        const res = await fetch('/api/live2d/models');
-        const json = await readJsonSafe(res);
-        live2dModelList = json.models || [];
-        const prev = sel.value;
-        sel.innerHTML = '';
-        if (!live2dModelList.length) sel.innerHTML = '<option value="">（未上传模型）</option>';
-        live2dModelList.forEach(m => {
-            const opt = document.createElement('option');
-            opt.value = m.name;       // 目录名即显示名
-            opt.textContent = m.name;
-            sel.appendChild(opt);
-        });
-        if (prev && live2dModelList.some(m => m.name === prev)) sel.value = prev;
-    } catch (e) { console.warn('[Live2D] 列表失败', e); }
+        document.dispatchEvent(new CustomEvent('elaina:settings-tab', { detail: { name } }));
+    } catch (e) { /* 环境不支持 CustomEvent 也不该影响切栏 */ }
 }
 
-// 重命名模型：真改文件夹（目录名即显示名）。改完要把客户端按模型名存的东西一起迁走。
-document.getElementById('settingLive2DRename')?.addEventListener('click', async () => {
-    const sel = document.getElementById('settingLive2DModel');
-    const oldName = sel?.value;
-    if (!oldName) { showCustomAlert('请先在上面的下拉里选一个模型。', '重命名模型'); return; }
-    const next = await showCustomModal({
-        title: '重命名模型',
-        message: '会把这个模型的文件夹一起改名。视频通话里的模型下拉、以及它的缩放/水印设置都会跟着迁移。',
-        input: true,
-        defaultValue: oldName,
-        placeholder: '例如：伊蕾娜 · 默认装',
-        confirmText: '保存',
+// ★ 点击走**事件委托**，而不是"查一遍现有按钮再逐个绑"。
+//
+//   为什么必须这样（这是插件分栏能不能用的关键）：插件分栏的按钮是页面加载
+//   **之后**才由 mods.js 插进来的（要等 /mods/index.json 拉回来再逐个注册）。
+//   逐按钮绑定的写法对它们完全无效 —— 表现是"插件分栏出现了，点了没反应"，
+//   而且刷新也未必复现（取决于清单回来的快慢），属于最难查的一类。
+//   委托给容器就没有这个问题：此后无论何时插入按钮，点击都有人管。
+(function bindSettingsTabNav() {
+    const nav = document.getElementById('settingsTabNav');
+    if (!nav) return;
+    nav.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest ? ev.target.closest('.settings-tab-btn') : null;
+        if (btn && nav.contains(btn)) switchSettingsTab(btn.dataset.settingsTab);
     });
-    if (next === null) return;   // 取消
-    const desired = String(next).trim();
-    if (!desired || desired === oldName) return;
-    try {
-        const res = await fetch('/api/live2d/rename', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: oldName, displayName: desired }),
-        });
-        const json = await readJsonSafe(res);
-        if (!json.ok) { showCustomAlert(json.message || '重命名失败', '重命名失败'); return; }
-        const newName = json.newName || desired;
-        if (newName !== desired) showCustomAlert('「' + desired + '」已被占用，已改为「' + newName + '」。', '重命名完成');
-        // 迁移每模型设置 + 刷新通话界面下拉，并把选中项指到新名字
-        if (window.Live2DCall?.applyRenamedModel) await window.Live2DCall.applyRenamedModel(oldName, newName);
-        await refreshLive2DSettingList();
-        if (sel) sel.value = newName;
-    } catch (e) {
-        showCustomAlert('重命名失败：' + (e.message || e), '重命名失败');
-    }
-});
-document.getElementById('settingLive2DUpload')?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    const status = document.getElementById('settingLive2DUploadStatus');
-    if (!file || !status) return;
-    status.textContent = '上传中…';
-    try {
-        const res = await fetch('/api/live2d/upload', { method: 'POST', body: file });
-        const json = await readJsonSafe(res);
-        if (json.ok) {
-            // 服务端会跳过 .html/.js/.svg 等可执行类型（防止上传后被同源执行），
-            // 这里必须告诉用户跳过了什么，否则模型"上传成功"却少了文件会很难排查
-            const skipped = Array.isArray(json.blocked) ? json.blocked : [];
-            status.textContent = '✅ 已上传: ' + json.modelName +
-                (skipped.length ? `　已跳过 ${skipped.length} 个不允许的文件：${skipped.join('、')}` : '');
-        } else {
-            status.textContent = '❌ ' + (json.message || '失败');
-        }
-        if (json.ok) await refreshLive2DSettingList();
-    } catch (err) { status.textContent = '❌ ' + (err.message || err); }
-    e.target.value = '';
-});
+})();
 
-// ===== Live2D 背景设置（通话界面，带操作反馈） =====
-let bgToastTimer = null;
-function bgToast(msg) {
-    let el = document.getElementById('live2d-bg-toast');
-    if (!el) {
-        el = document.createElement('div');
-        el.id = 'live2d-bg-toast';
-        el.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:100001;background:rgba(15,23,42,.92);color:#fff;padding:8px 16px;border-radius:999px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.35);transition:opacity .25s;pointer-events:none;white-space:nowrap';
-        document.body.appendChild(el);
-    }
-    el.textContent = msg;
-    el.style.opacity = '1';
-    clearTimeout(bgToastTimer);
-    bgToastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1600);
-}
-function syncBgSelected() {
-    const cur = window.Live2DCall?.getBackground ? window.Live2DCall.getBackground() : '';
-    document.querySelectorAll('.l2d-bg-opt').forEach(b => b.classList.toggle('selected', b.dataset.bg === cur));
-}
-document.querySelectorAll('.l2d-bg-opt').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const v = btn.dataset.bg;
-        if (window.Live2DCall?.setBackground) window.Live2DCall.setBackground(v);
-        syncBgSelected();
-        bgToast('✅ 背景已应用');
-    });
-});
-document.getElementById('settingLive2DBgColor')?.addEventListener('input', (e) => {
-    if (window.Live2DCall?.setBackground) window.Live2DCall.setBackground(e.target.value);
-    syncBgSelected();
-});
-document.getElementById('settingLive2DBgColor')?.addEventListener('change', (e) => {
-    bgToast('✅ 已应用自定义颜色');
-});
-document.getElementById('settingLive2DBgImage')?.addEventListener('change', (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-        if (window.Live2DCall?.setBackground) window.Live2DCall.setBackground('url(' + reader.result + ')');
-        syncBgSelected();
-        bgToast('✅ 背景图片已应用');
-    };
-    reader.readAsDataURL(file);
-    e.target.value = '';
-});
-document.getElementById('settingLive2DBgClear')?.addEventListener('click', () => {
-    if (window.Live2DCall?.setBackground) window.Live2DCall.setBackground('');
-    syncBgSelected();
-    bgToast('已恢复默认背景');
-});
-        document.getElementById('settingLive2DTest')?.addEventListener('click', () => {
-    if (window.Live2DCall) window.Live2DCall.open();
-});
-// 打开设置时刷新模型列表 + 同步背景选中状态
-const origOpenSettingsForLive2D = window.openSettings;
-window.openSettings = function (...args) {
-    if (origOpenSettingsForLive2D) origOpenSettingsForLive2D.apply(this, args);
-    setTimeout(refreshLive2DSettingList, 100);
-    setTimeout(syncBgSelected, 100);
-    setTimeout(syncMouseFollowControls, 100);
-};
-document.getElementById('settingLive2DDelete')?.addEventListener('click', async () => {
-    const sel = document.getElementById('settingLive2DModel');
-    const name = sel?.value;
-    if (!name) return;
-    if (!window.confirm('确定删除模型「' + name + '」？')) return;
-    if (window.Live2DCall?.deleteModel) {
-        const ok = await window.Live2DCall.deleteModel(name);
-        if (ok) await refreshLive2DSettingList();
-    } else {
-        const res = await fetch('/api/live2d/models/' + encodeURIComponent(name), { method: 'DELETE' });
-        const json = await readJsonSafe(res);
-        if (json.ok) await refreshLive2DSettingList();
-        else showCustomAlert('删除失败：' + (json.message || ''), '删除失败');
-    }
-});
-// 鼠标跟随开关：状态由 live2d 模块存在 localStorage，勾选即时生效
-function syncMouseFollowBox() {
-    const box = document.getElementById('settingMouseFollow');
-    if (box) box.checked = window.Live2DCall?.isMouseFollow ? window.Live2DCall.isMouseFollow() : true;
-}
+// ===== 宿主插槽已移到 web/js/host-slots.js =====
+// 全部插槽（settings.tabs / header.actions / sidebar.footer / composer.actions /
+// chat.message.actions）集中在那一个文件里 —— 那是插件作者唯一需要看的契约面。
+// 本文件只负责分栏**行为**（切换函数与事件委托），不负责挖插槽。
 
 
-// ===== 鼠标跟随幅度 =====
-// 滑块 0-10 是标准范围，10 = 原始幅度（×1.0）；右侧数字框可以填更大的数字解锁更高倍率。
-// 需要它的原因：同一个 ParamAngleX=20，不同模型的实际视觉幅度能差约 7 倍，
-// 敏感度低的模型要调高、敏感度高的要调低，否则"同样的设置"在不同模型上完全不是一个效果。
-const MOUSE_SCALE_FALLBACK_MAX = 100;
-const MOUSE_SCALE_BASE = 10;   // 滑块满格 / 数字框里的 10 = ×1.0
-function mouseScaleMax() {
-    const m = Number(window.Live2DCall?.getMouseFollowScaleMax?.());
-    return Number.isFinite(m) && m > 0 ? m : MOUSE_SCALE_FALLBACK_MAX;
-}
-function mouseScaleCurrent() {
-    const v = Number(window.Live2DCall?.getMouseFollowScale?.());
-    return Number.isFinite(v) && v >= 0 ? v : MOUSE_SCALE_BASE;
-}
-// keepNumValue：用户在数字框里打字时不要把正在输入的内容覆盖掉（否则「1」还没打完就被改成别的）
-function renderMouseFollowScale(keepNumValue) {
-    const level = mouseScaleCurrent();
-    const slider = document.getElementById('settingMouseFollowScale');
-    const num = document.getElementById('settingMouseFollowScaleNum');
-    const label = document.getElementById('mouseFollowScaleLabel');
-    const hint = document.getElementById('mouseFollowScaleHint');
-    const wrap = document.getElementById('settingMouseFollowScaleWrap');
-    const on = document.getElementById('settingMouseFollow')?.checked !== false;
-    if (slider) {
-        const max = Number(slider.max) || MOUSE_SCALE_BASE;
-        slider.value = String(Math.min(level, max));
-        updateSliderFill(slider);
-        slider.disabled = !on;
-    }
-    if (num) {
-        if (!keepNumValue) num.value = String(level);
-        num.max = String(mouseScaleMax());
-        num.disabled = !on;
-    }
-    if (label) label.textContent = '×' + (level / MOUSE_SCALE_BASE).toFixed(1);
-    if (hint) {
-        if (level === 0) hint.textContent = '已归零，模型不跟随';
-        else if (level > MOUSE_SCALE_BASE) {
-            // 头部幅度被模型自身参数量程锁死，超过上限后只有身体跟随还会继续变大。
-            // 这里把上限直接告诉用户，免得他以为"数字填了没用"是 bug。
-            const info = window.Live2DCall?.getFollowAmpInfo?.();
-            if (info && info.loaded && info.headSaturateAt) {
-                hint.textContent = `头部上限 ×${info.headSaturateAt}，更高倍率由身体跟随补足`;
-            } else if (info && info.loaded) {
-                hint.textContent = '已解锁更高幅度';
-            } else {
-                hint.textContent = '已解锁更高幅度（开始通话后生效）';
-            }
-        } else hint.textContent = '标准范围';
-    }
-    if (wrap) wrap.style.opacity = on ? '1' : '0.45';
-}
-function syncMouseFollowControls() {
-    syncMouseFollowBox();
-    renderMouseFollowScale();
-}
-document.getElementById('settingMouseFollow')?.addEventListener('change', (e) => {
-    if (window.Live2DCall?.setMouseFollow) window.Live2DCall.setMouseFollow(e.target.checked);
-    renderMouseFollowScale();
-});
-// 滑块：拖完立刻生效，数字框跟着同步
-document.getElementById('settingMouseFollowScale')?.addEventListener('input', (e) => {
-    if (window.Live2DCall?.setMouseFollowScale) window.Live2DCall.setMouseFollowScale(e.target.value);
-    renderMouseFollowScale();
-});
-// 数字框：可以填超出滑块范围的值（解锁更高倍率），超出上限时按上限处理
-const mouseScaleNum = document.getElementById('settingMouseFollowScaleNum');
-mouseScaleNum?.addEventListener('input', (e) => {
-    if (e.target.value === '') return;   // 清空时先不动，等用户输完
-    if (window.Live2DCall?.setMouseFollowScale) window.Live2DCall.setMouseFollowScale(e.target.value);
-    renderMouseFollowScale(true);
-});
-// 失焦 / 回车：把实际生效的值（已按上限截断）写回输入框
-mouseScaleNum?.addEventListener('blur', () => renderMouseFollowScale());
-mouseScaleNum?.addEventListener('keydown', (e) => { if (e.key === 'Enter') renderMouseFollowScale(); });
-syncMouseFollowControls();
+// ===== Live2D 设置逻辑已搬进 web/mods/live2d/settings-panel.js =====
+// 模型列表 / 上传 / 重命名 / 删除 / 背景 / 鼠标跟随都随插件走，
+// 由 settings.tabs 插槽在被点开时渲染（见那个插件的 register）。
 
-refreshLive2DSettingList();
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
 } else {

@@ -11,8 +11,13 @@
     <link rel="stylesheet" href="/vendor/katex/katex.min.css">
     <script src="/vendor/marked/marked.min.js"></script>
     <script src="/vendor/katex/katex.min.js"></script>
-    <script src="/vendor/live2dcubismcore.min.js"></script>
-    <script src="/vendor/pixi-6.min.js"></script>
+    <!-- ★ Live2D 引擎（live2dcubismcore + pixi-6 + pixi-live2d-display，合计 787KB）
+         已**移出宿主**，改由 web/mods/live2d-models/ 按需注入：
+           · 引擎与模型都住那个资源 mod 里（引擎是能力、模型是数据，都被视频通话复用）
+           · 只在真正打开视频通话时才加载 —— 不装 Live2D 的用户不再为这 787KB 付代价
+           · 注入顺序由插件保证（core → pixi → display），见它的 ensureEngine()
+         入口是 window.ElainaLive2DModels.ensureEngine()；调用方是 web/mods/live2d/index.js
+         （视频通话的实现也搬进了插件，宿主已没有 live2d-video.js）。 -->
     <!-- 对话 API 格式适配器（三种协议的实现 + 分发表）。
          必须放在主脚本**之前**：主脚本会挂 window.ChatDeps 供它取依赖，
          并在 callChatAPI 里调 window.ChatProviders.forFormat()。
@@ -33,22 +38,26 @@
          所以由这个模块生成/还原备份（数据源是 Store，与 Web 版同构）。
          格式与 Web 版同构（同一套 zip 结构），两边可以互相导入。 -->
     <script src="/js/chat-backup.js"></script>
-    <script>
-    // pixi-live2d-display 初始化时强制检查 Cubism2 (window.Live2D)；
-    // 我们的模型是 Cubism3/4，用 live2dcubismcore 加载，这里给个占位避免初始化中断。
-    if (!window.Live2D) {
-        window.Live2D = { version: 'placeholder-cubism4-only', createLive2DModel: null };
-    }
-</script>
     <script src="/js/data-sync.js"></script>
     <script src="/js/frontend-log.js"></script>
-<script src="/vendor/pixi-live2d-display-cubism4.min.js"></script>
+    <!-- pixi-live2d-display 已随引擎搬进 web/mods/live2d-models/vendor/，
+         它求值前需要 window.Live2D 占位 —— 这一点也由那个插件的 ensureEngine() 负责。 -->
+    <!-- Web 字体（Outfit + Noto Sans SC）：★ 必须**非阻塞**加载，否则整页打不开。
+         这里原先是 <style> 里的 5 条 @import。@import 会同时挡住**渲染**与
+         DOMContentLoaded，而字体源是 jsdelivr CDN —— 本机实测该 CDN 每次都返回
+         502（每次约 3 秒才失败），于是页面要等十几到几十秒才出来
+         （实测 domcontentloaded 12.5s / 46.9s，而同一页面的本地资源全部 ≤72ms）。
+         换成普通 <link rel=stylesheet> 一样会阻塞，所以用 media="print" + onload
+         切回 all 的写法：先当打印样式表放着（不阻塞绘制），下载完再转成常规样式表。
+         CDN 不通时唯一后果是**落回系统字体** —— font-family 里本来就有
+         PingFang SC / 微软雅黑 兜底，中文显示不受影响。
+         顺序仍与原 @import 等价：字体在前、应用自身的样式在其后，后者照常覆盖。 -->
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/outfit@5.2.8/index.css">
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-400.css">
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-500.css">
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-600.css">
+    <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-700.css">
     <style>
-        @import url('https://cdn.jsdelivr.net/npm/@fontsource-variable/outfit@5.2.8/index.css');
-        @import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-400.css');
-        @import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-500.css');
-        @import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-600.css');
-        @import url('https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-700.css');
 
         :root {
             --app-height: 100vh;
@@ -1682,6 +1691,18 @@
         #backendPanel { z-index: 100002 !important; }
         #customModal { z-index: 100003 !important; }
         #screenWatchPanel { z-index: 100002 !important; }
+        /* 插件弹窗：必须**高于主设置**（主设置本身也是 .modal-overlay，同层 100001）。
+           ★ 为什么需要显式抬一档：打开插件设置时，主设置应当**留在后面当背景**，
+             而不是被盖住或消失。同层时谁在上由 DOM 顺序决定 —— 显式抬一档最稳，
+             不受以后插入顺序影响。
+           ★ 为什么不能用内联 style="z-index:…"：.modal-overlay 上是
+             `z-index: 100001 !important`，!important 会压过内联样式
+             （实测踩到：写了内联值，computed 仍是 100001）。必须同样用 !important 的规则。
+           ★ 也必须在 DOM 上放在 #settingsOverlay **外面**：主面板有
+             animation（含 transform），会成为 position:fixed 后代的包含块 ——
+             嵌在里面时弹窗会被"关进"主面板里。 */
+        #modSettingsOverlay { z-index: 100010 !important; }
+        #modReadmeOverlay { z-index: 100010 !important; }
         .modal-overlay {
             background: rgba(50, 34, 26, 0.38);
             backdrop-filter: blur(4px);
@@ -2805,6 +2826,168 @@
     .settings-tab-panel{display:none}.settings-tab-panel.active-panel{display:block}
 
     .l2d-bg-opt.selected { outline: 2px solid #6366f1; outline-offset: 2px; box-shadow: 0 0 0 3px rgba(99,102,241,.35); }
+
+    /* ==================== 插件页（卡片式，2026-10 重做）====================
+       参照 AstrBot 的插件页：卡片 + iOS 风格开关 + 卡片底部一排操作按钮。
+       全部用变量与柔和阴影，深浅色主题下都能看（宿主主题会改 :root 变量）。 */
+    .mod-card{
+        position:relative;display:flex;gap:12px;align-items:flex-start;
+        padding:14px 14px 10px;border-radius:16px;
+        background:rgba(255,255,255,.55);
+        border:1px solid rgba(255,255,255,.6);
+        box-shadow:0 1px 3px rgba(30,27,75,.06);
+        transition:box-shadow .15s,transform .15s,opacity .15s;
+    }
+    .mod-card:hover{box-shadow:0 4px 14px rgba(30,27,75,.10)}
+    /* 拖拽中的卡片：抬起来跟随指针，效果接近"拖动桌面图标"。
+       ★ position:fixed —— 拖拽时它被挂到 body 上（设置面板是滚动容器，
+         留在里面会被 overflow 裁掉）。transform 由 JS 每帧更新，所以这里不写过渡。
+       ★ z-index 必须**高过所有弹窗**：卡片被移到 body 后，若层级低于
+         .modal-overlay（100001）/ 插件设置弹窗（100010），它就会被弹窗整个盖住 ——
+         用户只看到占位块在动，**看不到自己拖的是什么**（实测踩到：
+         卡片中心命中的是 .mod-placeholder，isCardOnTop=false）。
+         这里是 100050：在一切弹窗（≤100010）之上、提示/确认框（100003）之下仍够用，
+         因为拖拽期间不会同时弹对话框。
+       ★ **必须清掉 transition**（这条是"跟着鼠标走"而不是"被鼠标拎着走"的关键）。
+         .mod-card 基类上有 `transition: … transform .15s …`，是给悬停/换位用的。
+         拖动时 JS 每帧写 style.transform，而那条过渡会让浏览器把**每一帧**
+         都当成一段 150ms 的缓动去插值 —— 卡片于是永远落后指针一段距离、
+         匀速追着跑（而不是 1:1 贴在指针下）。这里设 transition:none 覆盖掉它。
+         （松手"放下去"的那一小段过渡由 JS 内联指定，不受影响。） */
+    .mod-card.mod-dragging{
+        position:fixed;z-index:100050;margin:0;pointer-events:none;
+        transition:none;
+        opacity:.95;
+        box-shadow:0 18px 40px rgba(30,27,75,.30), 0 0 0 1px rgba(139,92,246,.35);
+        background:rgba(255,255,255,.96);
+        backdrop-filter:blur(6px);
+        cursor:grabbing;
+    }
+    /* 占位块：卡片原来的位置被它顶住，随落点移动 —— 这就是"让出来的空白区域" */
+    .mod-placeholder{
+        border-radius:16px;
+        border:2px dashed rgba(139,92,246,.55);
+        background:rgba(139,92,246,.07);
+        transition:height .15s;
+    }
+    /* 拖拽期间禁止选中文字（否则拖动会变成划选） */
+    body.mod-dragging-active{user-select:none;-webkit-user-select:none;cursor:grabbing}
+    /* 落点提示线：插到这一张的上方 */
+    .mod-card.mod-drop-before::before{
+        content:'';position:absolute;left:8px;right:8px;top:-5px;height:3px;border-radius:2px;
+        background:linear-gradient(90deg,#ec4899,#8b5cf6);
+    }
+    /* 插件设置：每个插件一块**专属容器**，打开谁就只显示谁那块。
+       （原先所有插件共用 #modSettingsBody，互相 innerHTML 清空导致内容串台 ——
+        见 host-slots.js 的 settings.modal。这里负责"只显示一块"。）
+       ★ 用 display:none 而不是 Tailwind 的 .hidden：容器是运行期建的，
+         不该依赖类是否被 Tailwind 正确生成；自有一条规则最稳。
+       ★ 隐藏的那块必须 display:none（而不是 visibility/opacity）——
+         否则 #modSettingsBody 上的 space-y-5 仍会给它留出间距，
+         弹窗里会多出一段空白。 */
+    .mod-settings-pane { display: block; }
+    .mod-settings-pane.mod-settings-pane-off { display: none; }
+    /* 拖拽手柄：三条竖线 */
+    .mod-grip{
+        flex:none;width:22px;height:26px;display:flex;align-items:center;justify-content:center;
+        border-radius:8px;color:#a5b4fc;cursor:grab;background:transparent;border:none;padding:0;
+        touch-action:none;   /* 触屏上不要被浏览器当成滚动手势抢走 */
+    }
+    /* ===== 插件分栏（分组） =====
+       ★ 折叠标记是 CSS 空心三角（disclosure triangle）：▶ 收着 / ▼ 展开 ——
+         文件管理器、下拉菜单、树形视图通用的「可展开」符号。
+         实现用 svg path 画实心小三角，展开时 rotate(90deg) 过渡成朝下。 */
+    .mod-group{
+        border:1px solid rgba(255,255,255,.5);
+        border-radius:16px;
+        background:rgba(255,255,255,.32);
+        overflow:hidden;
+    }
+    .mod-group-head{
+        display:flex;align-items:center;gap:8px;
+        padding:8px 10px;
+        cursor:grab;
+        user-select:none;
+        touch-action:none;
+    }
+    .mod-group-head.mod-group-hover{
+        background:rgba(139,92,246,.16);
+        outline:2px dashed rgba(139,92,246,.55);
+        outline-offset:-4px;
+        border-radius:12px;
+    }
+    .mod-group-toggle{
+        flex:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center;
+        border:none;background:transparent;color:#818cf8;cursor:pointer;padding:0;
+    }
+    .mod-group-toggle svg{width:12px;height:12px;transition:transform .18s ease}
+    .mod-group:not(.mod-group-collapsed) .mod-group-toggle svg{transform:rotate(90deg)}
+    .mod-group-body{padding:6px 8px 10px}
+    /* ★ 折叠/展开动画（2026-10 用户要求）：
+       之前用 display:none 硬切，没有过渡，很生硬。
+       改用 grid-template-rows 0fr→1fr 过渡 —— 这是纯 CSS 做高度动画的最稳方案
+       （不需要 JS 测内容高度，内容多高都适用；max-height 方案要拍一个大数，
+        内容少时收起会有"等半天"的迟滞感）。
+       overflow:hidden + min-height:0 是让内容行真正收到 0 的必要条件。
+       ★ 折叠态标记 .is-collapsed 加在 **body 自己**身上（JS 切的就是它），
+         不要写成父级选择器 —— 类挂错元素动画永远不生效（第一版踩到）。 */
+    .mod-group-body{
+        display:grid;
+        grid-template-rows:1fr;
+        transition:grid-template-rows .25s ease, opacity .2s ease, padding .25s ease;
+        opacity:1;
+        overflow:hidden;
+    }
+    .mod-group-body > *{min-height:0}
+    .mod-group-body.is-collapsed{
+        grid-template-rows:0fr;
+        opacity:0;
+        padding-top:0;
+        padding-bottom:0;
+    }
+    /* 分栏的拖拽把手：与插件卡片的 .mod-grip 同款（三条竖线）。
+       ★ 单独给一个类是因为内核的 handleSelector 指到它 ——
+         分栏头其余区域是折叠开关，不能也变成把手。 */
+    .mod-group-grip{cursor:grab}
+    .mod-group-grip:active{cursor:grabbing}
+    /* 分栏头在拖拽中：与卡片拖拽同一套观感（见 .mod-card.mod-dragging 的说明） */
+    .mod-group.mod-dragging{
+        position:fixed;z-index:100050;margin:0;pointer-events:none;
+        transition:none;opacity:.96;
+        box-shadow:0 18px 40px rgba(30,27,75,.30);
+        background:rgba(255,255,255,.97);
+        cursor:grabbing;
+    }
+    .mod-grip:hover{background:rgba(99,102,241,.10);color:#6366f1}
+    .mod-grip:active{cursor:grabbing}
+    .mod-grip svg{width:14px;height:14px;display:block}
+    /* iOS 风格开关：原生 checkbox 视觉隐藏，label 画轨道与滑块 */
+    .mod-switch{position:relative;flex:none;width:44px;height:26px;display:inline-block;cursor:pointer}
+    .mod-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+    .mod-switch .track{
+        position:absolute;inset:0;border-radius:9999px;background:rgba(148,163,184,.45);
+        transition:background .2s;pointer-events:none;
+    }
+    .mod-switch .knob{
+        position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:9999px;background:#fff;
+        box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;pointer-events:none;
+    }
+    .mod-switch input:checked ~ .track{background:linear-gradient(90deg,#ec4899,#8b5cf6)}
+    .mod-switch input:checked ~ .knob{transform:translateX(18px)}
+    .mod-switch input:focus-visible ~ .track{outline:2px solid #6366f1;outline-offset:2px}
+    /* 卡片底部那排图标按钮 */
+    .mod-act{
+        flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+        border-radius:10px;border:none;background:rgba(255,255,255,.7);color:#6366f1;
+        cursor:pointer;transition:background .15s,color .15s;
+    }
+    .mod-act:hover{background:rgba(99,102,241,.14)}
+    .mod-act[disabled]{opacity:.4;cursor:not-allowed}
+    .mod-act svg{width:15px;height:15px}
+    .mod-act-danger{color:#e11d48}
+    .mod-act-danger:hover{background:rgba(225,29,72,.12)}
+    /* README 弹窗里的正文（用等宽字体保留 Markdown 的排版感） */
+    .mod-readme{font-size:12px;line-height:1.65;color:#312e81;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     </style>
 </head>
 <body>
@@ -2892,6 +3075,9 @@
                 <div id="folderList" class="scroll-soft h-full overflow-y-auto px-3 pb-2 space-y-1"></div>
             </div>
 
+            <!-- 侧栏底部插槽：mod 通过 host.slot('sidebar.footer', …) 注册的内容插在这里 -->
+            <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
+
             <div class="px-4 py-3 border-t border-white/50 flex-shrink-0">
                 <div class="text-center text-[10px] text-indigo-200 select-none">v2.1.0 · 魔女之旅</div>
             </div>
@@ -2929,10 +3115,11 @@
                     <span>整理记忆</span>
                     <span id="memoryStatusDot" class="hidden w-2 h-2 rounded-full bg-current animate-pulse"></span>
                 </button>
-                <button id="headerLive2DBtn" class="header-memory-btn" type="button" title="视频通话（Live2D）" onclick="window.Live2DCall && window.Live2DCall.open()">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                    <span>视频通话</span>
-                </button>
+                <!-- 视频通话按钮已改由 web/mods/live2d/ 通过 header.actions 插槽渲染 -->
+                <!-- 顶部按钮插槽挂载点：mod 通过 host.slot('header.actions', …) 注册的按钮
+                     插在这里。display:contents 让按钮直接参与 header 的 flex 布局
+                     （gap-3 照常生效），空着时不占任何空间。 -->
+                <span id="headerModSlot" style="display:contents"></span>
             </header>
 
             <!-- 初始状态-->
@@ -3129,6 +3316,9 @@
                     </div>
                     <div id="composerImagePreview" class="composer-image-preview hidden"></div>
                     <input id="textInput" autocomplete="off" type="text" readonly onfocus="this.removeAttribute('readonly')" placeholder="和伊蕾娜说点什么...（Enter 发送）" class="flex-1 text-sm" onkeydown="if(event.key==='Enter') handleTextSubmit()">
+                    <!-- 输入框插槽：mod 通过 host.slot('composer.actions', …) 注册的按钮插在这里
+                         （display:contents 让按钮直接参与这一行的 flex 布局，空着时不占位） -->
+                    <span id="composerModSlot" style="display:contents"></span>
                     <button onclick="handleMicClick()" class="conversation-mic-btn mic-btn rounded-full flex items-center justify-center" title="语音输入" aria-label="语音输入">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
                     </button>
@@ -3227,14 +3417,19 @@
                 </button>
             </div>
 
-            <!-- 设置分栏导航 -->
-            <div class="flex gap-1 px-4 pt-3 pb-1 border-b border-white/50 flex-shrink-0 overflow-x-auto">
+            <!-- 设置分栏导航
+                 ★ id 是给插件系统用的：mod 通过 host.slot('settings.tabs', …) 注册的
+                   分栏按钮由 mods.js 插进这个容器。点击**不在这里逐个绑定**，见
+                   app-07-init.js 的事件委托说明。 -->
+            <div id="settingsTabNav" class="flex gap-1 px-4 pt-3 pb-1 border-b border-white/50 flex-shrink-0 overflow-x-auto">
                 <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance">外观</button>
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-character">角色</button>
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-chat">对话</button>
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-voice">语音</button>
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-vision">视觉</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-live2d">Live2D</button>
+                <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 web/mods/live2d/）。
+                     这里不能留同名按钮 —— 插槽的撞名检查会因此拒绝插件注册，
+                     表现为"设置里能看到 Live2D，但点开是空的"。 -->
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability">能力</button>
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced">高级</button>
                 <button type="button" class="settings-tab-btn" data-settings-tab="tab-mods">插件</button>
@@ -3632,86 +3827,8 @@
                 </section>
                 </div><!-- /tab-vision -->
 
-                <div id="tab-live2d" class="settings-tab-panel">
-                <section>
-                    <div class="modal-label flex items-center gap-2"><span class="text-pink-500">✦</span> Live2D 视频通话</div>
-                    <p class="text-[11px] text-indigo-300 leading-relaxed mb-3">上传 Live2D 模型（Cubism 3，zip 压缩包），即可在顶部「视频通话」中使用。模型仅存本地，不会上传到仓库。</p>
-                    <div class="space-y-3">
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">已上传模型</label>
-                            <div class="flex items-center gap-2">
-<select id="settingLive2DModel" class="modal-input text-sm flex-1 min-w-0">
-                                <option value="">（未上传模型）</option>
-                            </select>
-<button id="settingLive2DRename" class="btn-secondary text-xs shrink-0 whitespace-nowrap" type="button" style="padding:8px 10px">✏️ 重命名</button>
-<button id="settingLive2DDelete" class="btn-secondary text-xs shrink-0 whitespace-nowrap" type="button" style="padding:8px 10px">🗑️ 删除</button>
-</div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">模型名就是它的文件夹名（上传时取 zip 里的文件夹名，拿不到才用 <code>model_xxx</code> 这类 id）。点「✏️ 重命名」可直接改，中文、空格都可以；视频通话里的下拉会跟着变，该模型的缩放/水印设置也会一起迁移。</p>
-                        </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">上传新模型（.zip）</label>
-                            <div class="flex items-center gap-2">
-                                <input id="settingLive2DUpload" type="file" accept=".zip,application/zip" class="modal-input text-sm file:mr-2 file:rounded-lg file:border-0 file:bg-indigo-100 file:px-3 file:py-1.5 file:text-indigo-600 file:cursor-pointer">
-                                <span id="settingLive2DUploadStatus" class="text-[11px] text-indigo-300"></span>
-                            </div>
-                        </div>
-                        
-                        <div class="mt-3 pt-3 border-t border-indigo-100">
-                            <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-pink-500">✦</span> 鼠标跟随</div>
-                            <div class="text-[11px] text-indigo-400 mb-2">视频通话时，角色的头部与视线会跟着鼠标轻轻转动。</div>
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input id="settingMouseFollow" type="checkbox" class="accent-pink-500"> 开启鼠标跟随
-                            </label>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">关闭后模型不会跟随鼠标（头部、眼睛都保持不动）。</p>
-
-                            <div id="settingMouseFollowScaleWrap" class="mt-3">
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="text-xs text-indigo-500">跟随幅度</label>
-                                    <span id="mouseFollowScaleLabel" class="text-xs font-medium text-pink-600">×1.0</span>
-                                </div>
-                                <input id="settingMouseFollowScale" type="range" min="0" max="10" step="1" value="10" class="custom-slider">
-                                <div class="flex items-center gap-2 mt-2">
-                                    <span class="text-[11px] text-indigo-400 whitespace-nowrap">手动输入倍率</span>
-                                    <input id="settingMouseFollowScaleNum" type="number" min="0" max="100" step="1" value="10"
-                                        class="modal-input text-sm" style="width:84px;padding:6px 8px">
-                                    <span id="mouseFollowScaleHint" class="text-[11px] text-indigo-300 flex-1 leading-snug"></span>
-                                </div>
-                                <p class="text-[11px] text-indigo-300 leading-relaxed mt-1.5">
-                                    滑块 0-10 是标准范围，10 = 原始幅度（×1.0）。不同模型的敏感度差别很大，同样的设置有的几乎不动、有的一下转到底，先在这个范围内找到合适的档位。<br>
-                                    右侧输入框可以填更大的数字（最大 100，约 10 倍）解锁更高幅度。
-                                    <b>头部转动幅度受模型自身参数上限限制</b>（多数模型是 ±30，约 ×1.5 就到顶），再往上由「身体跟随」补足：
-                                    ×1.0 时身体不动，×3.0 时身体转到该模型的上限。若模型没有绑定身体角度参数，超过上限后就不会再有变化。
-                                </p>
-                            </div>
-                        </div>
-
-                        <div class="mt-3 pt-3 border-t border-indigo-100">
-                            <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-pink-500">✦</span> 背景设置</div>
-                            <div class="text-[11px] text-indigo-400 mb-2">预设渐变 / 纯色 / 图片，点击即应用到视频通话</div>
-                            <div class="flex flex-wrap gap-2">
-                                <button type="button" class="l2d-bg-opt" data-bg="linear-gradient(135deg,#0f2027,#203a43,#2c5364)" style="background:linear-gradient(135deg,#0f2027,#203a43,#2c5364);width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="深蓝渐变"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="linear-gradient(135deg,#2b5876,#4e4376)" style="background:linear-gradient(135deg,#2b5876,#4e4376);width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="蓝紫渐变"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="linear-gradient(135deg,#0f0c29,#302b63,#24243e)" style="background:linear-gradient(135deg,#0f0c29,#302b63,#24243e);width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="星空渐变"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="linear-gradient(135deg,#8e2de2,#4a00e0)" style="background:linear-gradient(135deg,#8e2de2,#4a00e0);width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="紫罗兰渐变"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="linear-gradient(135deg,#fc466b,#3f5efb)" style="background:linear-gradient(135deg,#fc466b,#3f5efb);width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="红蓝渐变"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="#0b0e14" style="background:#0b0e14;width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="深黑"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="#1a1a2e" style="background:#1a1a2e;width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="墨蓝"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="#533483" style="background:#533483;width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="深紫"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="#e94560" style="background:#e94560;width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="玫红"></button>
-                                <button type="button" class="l2d-bg-opt" data-bg="#0e8388" style="background:#0e8388;width:34px;height:34px;border-radius:9px;border:2px solid rgba(255,255,255,.25);cursor:pointer" title="青绿"></button>
-                            </div>
-                            <div class="flex items-center gap-2 mt-2">
-                                <label class="text-xs text-indigo-500">自定义颜色</label>
-                                <input id="settingLive2DBgColor" type="color" value="#0b0e14" class="w-9 h-8 rounded cursor-pointer border-0">
-                                <label class="text-xs text-indigo-500 ml-2">图片</label>
-                                <input id="settingLive2DBgImage" type="file" accept="image/*" class="modal-input text-sm file:mr-2 file:rounded-lg file:border-0 file:bg-indigo-100 file:px-3 file:py-1 file:text-indigo-600 file:cursor-pointer">
-                                <button id="settingLive2DBgClear" class="btn-secondary text-xs" type="button">清除背景</button>
-                            </div>
-                        </div>
-                        <button id="settingLive2DTest" class="btn-secondary text-xs" type="button">打开视频通话测试</button>
-                    </div>
-                </section>
-                </div><!-- /tab-live2d -->
+                <!-- Live2D 设置面板已搬进 web/mods/live2d/（由 settings.tabs 插槽渲染）。
+                     见那个插件的 panel.html 与 settings-panel.js。 -->
 
                 <!-- ============ 能力：AI 能做什么 ============
                      这三组都是"给 AI 开多大权限"，放在一起比散在「高级」里好找。
@@ -3849,49 +3966,16 @@
                      日志 / 我的数据 / 访问密码都属于这一层。 -->
                 <div id="tab-advanced" class="settings-tab-panel">
                     <section>
-                    <div id="logSettingsSection">
-                        <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-fuchsia-500">✦</span> 日志</div>
-                        <div class="text-[11px] text-indigo-400 mb-2 leading-relaxed">
-                            控制<b>写入日志文件</b>的级别。启动窗口（终端）始终显示全部级别，不受这里影响 ——
-                            调高只是为了别让日志文件被无关记录刷满，排查时该看的东西终端里一样都不少。
-                        </div>
-                        <div class="flex flex-wrap items-center gap-2 mb-2">
-                            <label class="text-xs text-indigo-500">落盘级别</label>
-                            <select id="settingLogLevel" class="modal-input text-sm w-32 py-1.5">
-                                <option value="DEBUG">DEBUG · 全部</option>
-                                <option value="INFO">INFO · 默认</option>
-                                <option value="WARN">WARN · 警告以上</option>
-                                <option value="ERROR">ERROR · 仅报错</option>
-                                <option value="CRITICAL">CRITICAL · 仅致命</option>
-                            </select>
-                            <span id="settingLogLevelHint" class="text-[11px] text-indigo-300"></span>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-2 mb-2">
-                            <label class="text-xs text-indigo-500">控制台级别</label>
-                            <select id="settingLogConsoleLevel" class="modal-input text-sm w-32 py-1.5">
-                                <option value="DEBUG">DEBUG · 全部（排查用）</option>
-                                <option value="INFO">INFO · 默认</option>
-                                <option value="WARN">WARN · 警告以上</option>
-                                <option value="ERROR">ERROR · 仅报错</option>
-                            </select>
-                            <span class="text-[11px] text-indigo-300">启动窗口显示的最低级别。日常保持 INFO，排查时切 DEBUG 能看到每个请求。</span>
-                        </div>
-                        <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer mb-1">
-                            <input id="settingLogTrace" type="checkbox" class="accent-pink-500"> 记录完整对话内容（追踪日志）
-                        </label>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed mb-2">
-                            追踪日志会完整记下发给模型的提示词、模型的回复和上游报错原文，排查「AI 为什么这么答」时最有用。
-                            但它包含你的聊天内容 —— 对外分享前先看一眼。关闭后只记访问与错误摘要。
-                        </p>
-                        <div id="logStatusBox" class="text-[11px] text-indigo-400 leading-relaxed">读取中…</div>
-                    </div>
-
+                    <!-- 这里原本是「日志设置」块（落盘级别 / 控制台级别 / 追踪日志开关）。
+                         已按用户要求删除，界面上也不再留「日志」标题 —— 这一层只剩日志查看器。
+                         现在的行为：级别回默认（环境变量 LOG_LEVEL / LOG_CONSOLE 仍优先），
+                         追踪日志固定开启（LOG_CHAT=0 才能关）。来龙去脉见 开发文档.md 8.48。 -->
                     <!-- ==================== 日志查看器 ====================
                          目标（用户原话）：控制台输出全部日志；软件内可以对日志进行
                          分类，分离掉不想看的信息 —— 即 AstrBot 那种"终端全量、界面筛着看"。
                          数据来自 /api/logs/tail（服务端内存缓冲，全量、不受落盘级别约束）。
                          日志正文是英文（grep/检索友好）；界面控件与提示用中文。 -->
-                    <div id="logViewerSection" class="mt-4 pt-3 border-t border-indigo-100 hidden">
+                    <div id="logViewerSection" class="hidden">
                         <div class="flex items-center justify-between mb-1">
                             <div class="text-xs font-semibold text-indigo-700"><span class="text-fuchsia-500">✦</span> 日志查看器</div>
                             <div class="flex items-center gap-2">
@@ -3902,10 +3986,14 @@
                             </div>
                         </div>
                         <div class="flex flex-wrap items-center gap-2 mb-2">
+                            <!-- ★ 默认选「INFO+」而不是「全部级别」：bat 面板默认就是 INFO，
+                                 两者默认视图一致，用户才能逐行对照（2026-10 用户报"对不上"）。
+                                 DEBUG 并没有被丢掉 —— 这个下拉随时能切到「全部级别」看请求细节，
+                                 而内存缓冲本来就是全量收的（不受这里影响）。 -->
                             <select id="logViewerLevel" class="modal-input text-xs w-28 py-1">
-                                <option value="">全部级别</option>
+                                <option value="">全部级别（含 DEBUG 请求行）</option>
                                 <option value="DEBUG">DEBUG+</option>
-                                <option value="INFO">INFO+</option>
+                                <option value="INFO" selected>INFO+（同面板）</option>
                                 <option value="WARN">WARN+（警告以上）</option>
                                 <option value="ERROR">ERROR+（仅报错）</option>
                             </select>
@@ -3981,40 +4069,35 @@
                      每个 mod 一个开关，默认关闭（用户自己决定要不要用）。 -->
                 <div id="tab-mods" class="settings-tab-panel">
                     <section class="settings-card">
-                        <div class="modal-label flex items-center gap-2">
-                            <span class="text-pink-500">✦</span> 插件（Mod）
+                        <!-- 标题行：左边标题，右边 上传安装 / 重新扫描（2026-10 移到右上角） -->
+                        <div class="flex items-center gap-2 mb-1">
+                            <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
+                                <span class="text-pink-500">✦</span> 插件（Mod）
+                            </div>
+                            <button type="button" id="modsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个插件 zip 安装">⬆ 上传安装</button>
+                            <button type="button" id="modsRefreshBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新扫描 web/mods/ 目录">⟳ 重新扫描</button>
                         </div>
                         <p class="text-[11px] text-indigo-400 leading-relaxed mb-3">
                             可选功能的开关。插件放在 <code class="px-1 rounded bg-white/60">web/mods/</code> 下，
                             把 <code class="px-1 rounded bg-white/60">xxx.zip</code> 丢进去即会自动安装。
                             <b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
+                            拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。
                         </p>
 
-                        <!-- 全局开关：关掉后所有插件都不加载（需刷新页面） -->
-                        <label class="flex items-center gap-2 py-2 cursor-pointer select-none">
-                            <input type="checkbox" id="modsGlobalToggle" class="accent-pink-500">
-                            <span class="text-xs text-indigo-700 font-medium">启用插件系统</span>
-                            <span class="text-[11px] text-indigo-400 ml-1">关掉后所有插件都不加载（刷新页面生效）</span>
-                        </label>
-
-                        <!-- 插件列表（由 refreshModsList 填充） -->
-                        <div id="modsList" class="mt-2 space-y-2"></div>
-
-                        <div class="flex items-center gap-2 mt-3 flex-wrap">
-                            <button type="button" id="modsInstallBtn" class="btn-primary text-xs">上传安装</button>
-                            <button type="button" id="modsRefreshBtn" class="btn-secondary text-xs">重新扫描</button>
+                        <!-- 分栏管理：添加分栏 + 分栏/插件列表（由 refreshModsList 填充） -->
+                        <div class="flex items-center gap-2 mb-2">
+                            <button type="button" id="modsAddGroupBtn" class="btn-secondary text-xs" style="padding:4px 10px" title="新建一个分栏，把插件拖进去归类">＋ 添加分栏</button>
                             <span id="modsHint" class="text-[11px] text-indigo-400"></span>
                         </div>
+                        <div id="modsList" class="space-y-2"></div>
+
                         <!-- 隐藏的文件选择器：点「上传安装」时触发 -->
                         <input type="file" id="modsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
-                        <div class="text-[11px] text-indigo-400 mt-2 leading-relaxed">
-                            选一个插件 zip 上传即可安装（zip 里要有 <code class="px-1 rounded bg-white/60">manifest.json</code> 或
-                            <code class="px-1 rounded bg-white/60">index.js</code>）。
-                            也可以直接把 zip 放进 <code class="px-1 rounded bg-white/60">web/mods/</code> 目录后点「重新扫描」。
-                        </div>
                     </section>
                 </div><!-- /tab-mods -->
             </div>
+
+
 
             <div class="flex items-center justify-end gap-2 px-6 py-4 border-t border-white/60 flex-shrink-0">
                 <button id="resetSettingsBtn" class="btn-secondary text-xs text-red-500 mr-auto" type="button" title="恢复默认设置：对话/语音/视觉等恢复默认，API Key 保留，角色卡不变">↺ 恢复默认设置</button>
@@ -4220,9 +4303,53 @@
          「设置 → 插件」那一栏，加载器没就位的话那一栏会是空的。
          但它要排在 app-01..06 之后 —— 插件拿到的宿主 API 依赖这些模块已定义。 -->
     <script src="/js/mods.js"></script>
+    <!-- 宿主插槽清单（★ 插件作者看这一个文件就知道能挂在哪）。
+         必须排在 mods.js **之后**（要用 ElainaMods.defineSlot）、app-07-init.js **之前**。
+         为什么单独成文件：插槽是 mod 系统与宿主界面之间**唯一的契约面**，
+         散在各处会让"我能往哪儿挂"变成一个要通读全部前端才能回答的问题。 -->
+    <script src="/js/host-slots.js"></script>
     <!-- 日志查看器：软件内按级别/模块筛选查看服务端日志（AstrBot 式分级体验的前端）。 -->
     <script src="/js/log-viewer.js"></script>
     <script src="/js/app-07-init.js"></script>
-    <script src="/live2d-video.js"></script>
+    <!-- Live2D 视频通话已改由 web/mods/live2d/ 提供（插件脚本按需注入） -->
+
+    <!-- ==================== 插件弹窗（顶层） ====================
+         ★ 必须放在 #settingsOverlay **外面**（2026-10 修）。
+           原因：#settingsPanel 上有 animation: settings-page-enter（含 transform），
+           而带 transform 的元素会成为 position:fixed 后代的**包含块** —— 嵌在里面时
+           插件设置弹窗会被"关进"主设置面板（看起来像主设置没了、弹窗被裁掉）。
+           放顶层后：主设置留在后面当背景，插件弹窗叠在它上面。
+           .modal-overlay 的 z-index 是 100001，这里再抬一档，确保永远在最上面。 -->
+    <!-- 插件设置弹窗（点插件卡片上的齿轮按钮打开）
+         ★ 为什么插件设置不占主设置的分栏：插件一多，主设置里会堆一排分栏
+           （外观/角色/对话/语音/视觉/能力/高级/插件…），而插件设置大多偶尔才调一次。
+           独立成窗后主设置只留宿主自己的分栏。见 web/js/host-slots.js 的 settings.modal。 -->
+<div id="modSettingsOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
+        <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+            <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
+                <div class="text-sm font-bold text-indigo-950" id="modSettingsTitle">插件设置</div>
+                <button id="modSettingsClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
+                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div id="modSettingsBody" class="flex-1 overflow-y-auto scroll-soft px-5 py-4 space-y-5"></div>
+        </div>
+    </div>
+
+    <!-- 插件 README 弹窗（点卡片上的「说明」按钮时打开） -->
+    <div id="modReadmeOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
+            <div class="modal-panel w-full max-w-2xl max-h-[82vh] flex flex-col overflow-hidden">
+                <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
+                    <div class="text-sm font-bold text-indigo-950" id="modReadmeTitle">插件说明</div>
+                    <span class="text-[11px] text-indigo-400" id="modReadmeFile"></span>
+                    <button id="modReadmeClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
+                        <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    </button>
+                </div>
+                <div class="flex-1 overflow-y-auto scroll-soft px-5 py-4">
+                    <div id="modReadmeBody" class="mod-readme"></div>
+                </div>
+            </div>
+        </div>
 </body>
 </html>

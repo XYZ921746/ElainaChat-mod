@@ -1,6 +1,6 @@
 // 多设备实时同步验证：两个独立浏览器上下文（模拟两台设备）连同一个服务，
 // A 设备改动 → B 设备应当**在几秒内自动看到**，不需要刷新。
-import { chromium } from 'file:///D:/222/android-app/node_modules/playwright-core/index.mjs';
+import { launchTestBrowser } from './test-browser.mjs';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -31,7 +31,7 @@ const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
 let serverOut = '';
 child.stdout.on('data', (d) => { serverOut += d; });
 child.stderr.on('data', (d) => { serverOut += d; });
-const browser = await chromium.launch({ executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: true });
+const browser = await launchTestBrowser();
 try {
     let up = false;
     for (let i = 0; i < 80 && !up; i++) {

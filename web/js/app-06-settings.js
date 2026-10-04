@@ -154,12 +154,13 @@ function fillSettingsForm() {
     fillCharacterCardForm();
     settingsContent.scrollTop = 0;
     renderScheduledTaskList();
-    void refreshLogSettings();
     void refreshDataSettings();
     void refreshOverlayStatus();
-    // 日志查看器：日志设置块可用 = 有本地服务 → 显示并开始首次全量拉取。
-    // 它自己管理轮询（不可见时自动暂停），这里只负责"让它出现"。
-    try { if (window.LogViewer && !document.getElementById('logSettingsSection')?.classList.contains('hidden')) window.LogViewer.show(); }
+    // 日志查看器：设置页打开时让它出现并开始首次全量拉取。
+    // ★ 这一行不是死代码 —— 它是查看器的**显示入口**（删掉它查看器一行日志都
+    //   渲染不出来，实测踩到：check-log-viewer 6 项失败、渲染 0 行）。
+    //   之前引用的 logSettingsSection（日志设置块）已随那块 UI 删除，这里只留查看器本身。
+    try { if (window.LogViewer) window.LogViewer.show(); }
     catch (e) { /* 查看器出问题不能影响设置页其它部分 */ }
 }
 
@@ -350,87 +351,6 @@ function closeScreenWatch() {
 }
 
 
-// ==================== 日志设置（服务端） ====================
-// 与其它设置不同：日志级别存在**服务端**（data/logs/log-settings.json），因为它管的是
-// 服务进程往文件里写什么，跟浏览器无关。所以它不进 state.settings，也不等「保存设置」，
-// 改完立刻 POST 生效 —— 否则用户会以为改完没生效（要重启服务才生效的话更是如此）。
-const LOG_LEVEL_HINT = {
-    DEBUG: '最详细，含前端调试信息',
-    INFO: '默认，日常排查够用',
-    WARN: '只看警告与报错',
-    ERROR: '只看报错',
-    CRITICAL: '只看致命错误（如端口占用）',
-};
-
-function renderLogLevelHint() {
-    const sel = elements.settingLogLevel;
-    const hint = document.getElementById('settingLogLevelHint');
-    if (!sel || !hint) return;
-    hint.textContent = LOG_LEVEL_HINT[sel.value] || '';
-}
-
-async function refreshLogSettings() {
-    const box = document.getElementById('logStatusBox');
-    const sel = elements.settingLogLevel;
-    const consoleSel = document.getElementById('settingLogConsoleLevel');
-    const traceBox = elements.settingLogTrace;
-    const section = document.getElementById('logSettingsSection');
-    if (!box) return;
-    try {
-        const res = await fetch('/api/logs/settings');
-        if (!res.ok) { box.textContent = '无法读取日志设置（HTTP ' + res.status + '）'; return; }
-        const json = await res.json();
-        if (!json.ok) { box.textContent = '无法读取日志设置'; return; }
-        if (sel) sel.value = json.level || 'INFO';
-        if (consoleSel) consoleSel.value = json.consoleLevel || 'INFO';
-        if (traceBox) traceBox.checked = Boolean(json.trace);
-        renderLogLevelHint();
-        if (!json.fileEnabled) {
-            box.textContent = '当前以 LOG_TO_FILE=0 启动，日志不落盘，级别设置不生效（只打终端）。';
-            return;
-        }
-        const files = [];
-        if (json.mainFile) files.push('主日志 ' + json.mainFile);
-        if (json.trace && json.traceFile) files.push('追踪日志 ' + json.traceFile);
-        box.innerHTML = '当前落盘级别 <code class="text-indigo-500">' + escapeHtml(json.level || 'INFO')
-            + '</code>，每次启动一组文件、保留最近 ' + escapeHtml(String(json.keep || 10)) + ' 次，'
-            + '单文件上限 ' + escapeHtml(String(json.maxMb || 8)) + 'MB。<br>'
-            + '位置：<code class="text-indigo-500">' + escapeHtml(json.logDir || 'data/logs') + '</code>'
-            + (files.length ? '<br>' + files.map(f => escapeHtml(f)).join('<br>') : '');
-    } catch (e) {
-        // 安卓 App（Capacitor 本地文件）没有本地服务：日志落盘这件事在 APK 上根本不存在。
-        // 整块隐藏，而不是留一个能点、点了却弹"修改失败"的下拉框 —— 那比没有更糟。
-        // （与「电脑操作权限」按设备形态隐藏是同一种处理。）
-        if (section) section.classList.add('hidden');
-    }
-}
-
-async function applyLogSettings() {
-    const sel = elements.settingLogLevel;
-    const consoleSel = document.getElementById('settingLogConsoleLevel');
-    const traceBox = elements.settingLogTrace;
-    if (!sel) return;
-    // 整块已被隐藏（无本地服务）时不再发请求：否则会弹出"修改失败"，
-    // 而用户在 APK 上本来就没有这个功能，弹窗只会让人以为坏了。
-    const section = document.getElementById('logSettingsSection');
-    if (section && section.classList.contains('hidden')) return;
-    try {
-        const res = await fetch('/api/logs/settings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                level: sel.value,
-                consoleLevel: consoleSel ? consoleSel.value : undefined,
-                trace: traceBox ? traceBox.checked : undefined
-            })
-        });
-        const json = await res.json();
-        if (!json.ok) { showCustomAlert(json.message || '日志设置修改失败', '日志'); return; }
-        await refreshLogSettings();
-    } catch (e) {
-        showCustomAlert('日志设置修改失败：' + (e.message || e), '日志');
-    }
-}
 
 
 // ==================== 我的数据（导出 / 导入 / 位置） ====================
@@ -808,36 +728,65 @@ async function refreshModsList() {
         if (!merged.some((x) => x.id === m.id)) merged.push(Object.assign({}, m, { _fromServer: false }));
     }
 
-    const globalToggle = document.getElementById('modsGlobalToggle');
-    if (globalToggle && window.ElainaMods) {
-        globalToggle.checked = window.ElainaMods.isGloballyEnabled();
-        globalToggle.onchange = () => {
-            window.ElainaMods.setGloballyEnabled(globalToggle.checked);
-            if (hint) {
-                hint.textContent = '已' + (globalToggle.checked ? '启用' : '关闭') + '插件系统，刷新页面后生效';
-                hint.className = 'text-[11px] text-indigo-500';
-            }
-        };
-    }
+    // ==================== 分栏（分组）数据 ====================
+    //
+    // ★ 存储模型（跨设备同步；键都已在 store.js 的 DATA_KEYS 里）：
+    //     elaina_mods_groups    = [{ id, name, collapsed, fixed? }]  分栏清单（有序）
+    //     elaina_mods_group_of  = { <插件id>: <分栏id> }              插件 → 分栏 归属
+    //     elaina_mods_order     = [插件id...]                          插件顺序（栏内/平铺共用）
+    //     elaina_mods_top_order = [{t:'mod'|'group', id}...]           顶层混排顺序
+    //   未分类不是一个"栏"：没归属的插件直接平铺在顶层（与旧版一致，用户要求）。
+    const GROUPS_KEY = 'elaina_mods_groups';
+    const GROUP_OF_KEY = 'elaina_mods_group_of';
+    const UNGROUPED_ID = '__ungrouped__';
+    const readGroups = () => {
+        try {
+            const v = JSON.parse(Store.getItem(GROUPS_KEY) || '[]');
+            return Array.isArray(v) ? v.filter((g) => g && g.id && g.id !== UNGROUPED_ID) : [];
+        } catch (e) { return []; }
+    };
+    const saveGroups = (gs) => {
+        try {
+            Store.setItem(GROUPS_KEY, JSON.stringify(gs));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+        } catch (e) { /* 忽略 */ }
+    };
+    const groupOf = (() => {
+        try { const v = JSON.parse(Store.getItem(GROUP_OF_KEY) || '{}'); return (v && typeof v === 'object') ? v : {}; }
+        catch (e) { return {}; }
+    })();
 
-    if (!merged.length) {
-        box.innerHTML = '<div class="text-[11px] text-indigo-400 py-3 text-center">'
-            + '没有发现插件。把 mod 的 zip 放进 <code class="px-1 rounded bg-white/60">web/mods/</code> 后点「重新扫描」。</div>';
-        return;
-    }
+    // 旧版把顺序存进这些键；按用户存下的顺序排，没记过的保持清单原序
+    const ORDER_KEY = 'elaina_mods_order';
+    const readOrder = () => {
+        try { const v = JSON.parse(Store.getItem(ORDER_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+        catch (e) { return []; }
+    };
 
-    box.innerHTML = merged.map((m) => {
+    const ICON = {
+        grip: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
+        doc: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/></svg>',
+        // 齿轮：几何直齿画法（手写弧线命令极易写歪，实测一团毛刺）
+        gear: '<svg fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.41 5.39L10.53 2.72L13.47 2.72L13.59 5.39L15.55 6.20L17.53 4.40L19.60 6.47L17.80 8.45L18.61 10.41L21.28 10.53L21.28 13.47L18.61 13.59L17.80 15.55L19.60 17.53L17.53 19.60L15.55 17.80L13.59 18.61L13.47 21.28L10.53 21.28L10.41 18.61L8.45 17.80L6.47 19.60L4.40 17.53L6.20 15.55L5.39 13.59L2.72 13.47L2.72 10.53L5.39 10.41L6.20 8.45L4.40 6.47L6.47 4.40L8.45 6.20ZM12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z"/></svg>',
+        folder: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>',
+        refresh: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5"/><path stroke-linecap="round" stroke-linejoin="round" d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg>',
+        trash: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 13h8l1-13"/></svg>',
+    };
+
+    /** 单张插件卡片（AstrBot 式：把手 + 名称/状态/描述 + 底部操作排 + iOS 开关） */
+    function renderModCard(m) {
         const id = escapeHtml(m.id);
         const name = escapeHtml(m.name || m.id);
         const desc = escapeHtml(m.description || '');
-        const ver = m.version ? '<span class="text-[10px] text-indigo-400 ml-1">v' + escapeHtml(m.version) + '</span>' : '';
-        // 状态标记：加载失败必须显眼，否则用户只会觉得"开了没反应"
+        const ver = m.version
+            ? '<span class="text-[10px] text-indigo-400 ml-1">v' + escapeHtml(m.version) + '</span>' : '';
+
+        // 状态角标（加载失败/前置不可用必须显眼）
         let badge = '';
         if (m.state === 'error') {
             badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 ml-1" title="'
                 + escapeHtml(m.error || '') + '">加载失败</span>';
         } else if (m.state === 'blocked') {
-            // 前置插件不可用（未安装 / 未启用）→ **拒绝加载**（不是"半残地跑起来"）。
             badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 ml-1" title="'
                 + escapeHtml(m.error || '') + '">前置插件不可用</span>';
         } else if (m.state === 'ready') {
@@ -846,75 +795,163 @@ async function refreshModsList() {
             badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 ml-1">未启用</span>';
         }
 
-        // 不可用的前置插件：逐条给出**原因 + 该做什么**（而不仅是一个角标）。
-        //
-        // ★ missingDeps 现在是结构化对象 { id, reason, fixable }（2026-09 改）。
-        //   旧版是字符串数组，只会说"缺少依赖：xxx"—— 而"未安装"和"未启用"
-        //   需要用户做的事完全不同（去下载 vs 去打开开关），笼统说"缺少"
-        //   会让人白跑。这里按 reason 给不同的下一步。
+        // 缺依赖：逐条给出原因 + 该做什么
         const missing = Array.isArray(m.missingDeps) ? m.missingDeps : [];
         let blockReason = '';
         if (missing.length) {
-            const lines = missing.map((d) => {
+            const rows = missing.map((d) => {
                 const dep = typeof d === 'string' ? { id: d, reason: '不可用' } : d;
                 const what = '前置插件「' + escapeHtml(dep.id) + '」' + escapeHtml(dep.reason || '不可用');
-                if (dep.reason === '未启用') return what + ' —— 到下面把它的开关打开';
+                if (dep.reason === '未启用') return what + ' —— 把它的开关打开';
                 if (dep.reason === '未安装') return what + ' —— 需要先安装它';
-                if (dep.reason === '插件系统总开关已关闭') return what + ' —— 打开上面的「启用插件系统」并刷新页面';
+                if (dep.reason === '插件系统总开关已关闭') return what + ' —— 插件系统被关闭（旧版本设置残留），刷新页面即可恢复';
                 return what;
             });
-            blockReason = '<span class="block text-[11px] text-red-500 leading-relaxed mt-0.5">'
-                + lines.join('<br>') + '</span>';
+            blockReason = '<span class="block text-[11px] text-red-500 leading-relaxed mt-1">'
+                + rows.join('<br>') + '</span>';
         }
 
-        // hidden 的 mod（如公共依赖）不提供界面，但**仍然要有开关**。
-        //
-        // ★ 这里修的是一个真实故障（2026-09）：hidden 的插件以前只显示
-        //   一个「公共依赖」文字标签、**没有开关**。于是它一旦被禁用
-        //   （例如用户的旧 localStorage 里留着 '0'），就**无法从界面上恢复** ——
-        //   而依赖它的插件会连带失效，用户完全不知道去哪修。
-        //   实测日志：`elaina-avatar=disabled galgame=ready pet=ready`
-        //   （前置被禁用、依赖方却起来了，于是拿不到立绘）。
-        //   现在一律给开关，只是对 hidden 的插件额外标一句用途说明。
+        // hidden 的插件（公共依赖）仍给开关 —— 否则一旦被禁用就无法从界面恢复（实测踩过）
         const hiddenNote = m.hidden
-            ? '<span class="text-[10px] text-indigo-300 ml-1">（公共依赖，被其他插件共用）</span>'
-            : '';
-        const toggle = '<input type="checkbox" class="accent-pink-500 flex-none mod-toggle" data-mod-id="' + id + '"'
-            + (m.enabled ? ' checked' : '') + '>';
+            ? '<span class="text-[10px] text-indigo-300 ml-1">（公共依赖）</span>' : '';
 
-        // 删除按钮：调服务端的 DELETE /api/plugins/:id（会删目录 + 安装包）。
-        //
-        // 为什么必须连安装包一起删（服务端已处理）：zip 是"待安装"的源，
-        // 只删目录的话下次扫描又装回来 —— 用户会以为"删了还在"。
-        //
-        // 为什么 APK 端要隐藏：那边没有服务端进程，/api/plugins 根本不存在，
-        // 按钮点了只会报错。检测方式与 refreshModsList 一致（看服务端清单是否可用）。
-        const canDelete = m._fromServer === true;
-        const delBtn = canDelete
-            ? '<button type="button" class="mod-del-btn flex-none text-[10px] px-2 py-1 rounded-lg '
-                + 'bg-red-50 text-red-500 hover:bg-red-100 transition-colors" '
-                + 'data-mod-id="' + id + '" data-mod-name="' + name + '" title="删除这个插件（含安装包）">删除</button>'
+        // iOS 风格开关
+        const toggle = '<label class="mod-switch" title="' + (m.enabled ? '点击停用' : '点击启用') + '">'
+            + '<input type="checkbox" class="mod-toggle" data-mod-id="' + id + '"'
+            + (m.enabled ? ' checked' : '') + ' aria-label="启用 ' + name + '">'
+            + '<span class="track"></span><span class="knob"></span></label>';
+
+        // 底部那排按钮。只有本机（有服务端）才显示"打开文件夹"与"删除"。
+        const canManage = m._fromServer === true;
+        const openFolderBtn = canManage
+            ? '<button type="button" class="mod-act mod-openfolder" data-mod-id="' + id + '"'
+                + ' data-mod-name="' + name + '" title="在文件管理器里打开这个插件的目录">' + ICON.folder + '</button>'
+            : '';
+        const delBtn = canManage
+            ? '<button type="button" class="mod-act mod-act-danger mod-del-btn" data-mod-id="' + id + '"'
+                + ' data-mod-name="' + name + '" title="删除这个插件（含安装包）">' + ICON.trash + '</button>'
+            : '';
+        // 「设置」按钮：插件有独立设置窗（settings.modal）→ 打开；老插件占分栏 → 切分栏
+        const hasModal = Boolean(window.__modSettingsOpeners && window.__modSettingsOpeners[m.id]);
+        const hasTab = Boolean(document.querySelector('[data-settings-tab="tab-' + m.id + '"]'));
+        const settingsBtn = (hasModal || hasTab)
+            ? '<button type="button" class="mod-act mod-opensettings" data-mod-id="' + id + '"'
+                + ' title="打开这个插件的设置">' + ICON.gear + '</button>'
             : '';
 
-        return '<div class="flex items-start gap-2 py-2 px-3 rounded-xl bg-white/50">'
-            + '<label class="flex items-start gap-2 min-w-0 flex-1 cursor-pointer">'
-            + toggle
-            + '<span class="min-w-0">'
-              + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + ver + hiddenNote + badge
-              + (desc ? '<span class="block text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + desc + '</span>' : '')
-              + blockReason
-            + '</span></label>'
-            + delBtn
+        return '<div class="mod-card" data-mod-id="' + id + '">'
+            + '<button type="button" class="mod-grip" title="按住拖动可调整显示顺序" aria-label="拖动排序">' + ICON.grip + '</button>'
+            + '<div class="min-w-0 flex-1">'
+              + '<div class="flex items-start gap-2">'
+                + '<div class="min-w-0 flex-1">'
+                  + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + ver + hiddenNote + badge
+                  + (desc ? '<div class="text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + desc + '</div>' : '')
+                  + blockReason
+                + '</div>'
+                + '<div class="flex-none pt-0.5">' + toggle + '</div>'
+              + '</div>'
+              + '<div class="flex items-center gap-1.5 mt-2">'
+                + '<button type="button" class="mod-act mod-readme-btn" data-mod-id="' + id + '"'
+                  + ' data-mod-name="' + name + '" title="查看插件自带的说明（README）">' + ICON.doc + '</button>'
+                + settingsBtn
+                + openFolderBtn
+                + '<button type="button" class="mod-act mod-refresh-one" data-mod-id="' + id + '"'
+                  + ' title="重新加载插件列表">' + ICON.refresh + '</button>'
+                + delBtn
+              + '</div>'
+            + '</div>'
             + '</div>';
+    }
+
+    /** 一个分栏的 HTML（头部 + 可折叠体） */
+    function renderGroupHtml(g, items) {
+        const order = readOrder();
+        items.sort((a, b) => {
+            const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+            if (ia < 0 && ib < 0) return 0;
+            if (ia < 0) return 1;
+            if (ib < 0) return -1;
+            return ia - ib;
+        });
+        const collapsed = g.collapsed === true;
+        const gid = escAttr(g.id);
+        // 折叠标记：disclosure triangle（▶ 收着 / ▼ 展开），展开时 rotate(90deg)
+        // 左侧是专门的拖拽把手（三条竖线，与插件卡片同款）—— 拖拽与折叠不再抢手势
+        return '<div class="mod-group' + (collapsed ? ' mod-group-collapsed' : '') + '" data-group-id="' + gid + '">'
+            + '<div class="mod-group-head" data-group-id="' + gid + '" title="点击收纳/展开">'
+            + '<span class="mod-grip mod-group-grip" title="按住拖动可调整位置" aria-label="拖动排序">'
+            + '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>'
+            + '<button type="button" class="mod-group-toggle" data-group-id="' + gid + '"'
+            + ' title="' + (collapsed ? '展开' : '收纳') + '" aria-label="' + (collapsed ? '展开分栏' : '收纳分栏') + '">'
+            + '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6z"/></svg></button>'
+            + '<span class="mod-group-name text-xs font-semibold text-indigo-800" data-group-id="' + gid + '">'
+            + escAttr(g.name) + '</span>'
+            + '<span class="text-[10px] text-indigo-400">' + items.length + '</span>'
+            + '<span class="mod-group-actions ml-auto flex items-center gap-1">'
+            + '<button type="button" class="mod-act mod-group-rename" data-group-id="' + gid + '" title="重命名这个分栏">'
+            + '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5h6M4 20h16M13.5 4.5l4 4L8 18H5v-3l8.5-10.5z"/></svg></button>'
+            + '<button type="button" class="mod-act mod-act-danger mod-group-del" data-group-id="' + gid + '" title="删除这个分栏（里面的插件回到顶层）">'
+            + '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 13h8l1-13"/></svg></button>'
+            + '</span>'
+            + '</div>'
+            + '<div class="mod-group-body' + (collapsed ? ' is-collapsed' : '') + '" data-group-body="' + gid + '">'
+            + (items.length
+                ? items.map(renderModCard).join('')
+                : '<div class="text-[11px] text-indigo-300 py-3 text-center">把插件卡片拖到这里</div>')
+            + '</div>'
+            + '</div>';
+    }
+
+    // ★ groups 要在 renderGroupHtml **之前**声明 —— 它在函数体里被引用，
+    //   const 无提升，放后面就是 TDZ（Cannot access before initialization，实测踩到）。
+    const groups = readGroups();
+
+    // ── 组装：**单一有序列表** —— 平铺插件与分栏同等级，混排（用户要求） ──
+    const byGroup = new Map();
+    const loose = [];
+    for (const m of merged) {
+        const gid = groupOf[m.id];
+        if (gid && gid !== UNGROUPED_ID && groups.some((g) => g.id === gid)) {
+            if (!byGroup.has(gid)) byGroup.set(gid, []);
+            byGroup.get(gid).push(m);
+        } else {
+            loose.push(m);   // 没归属 / 归属的分栏已被删 → 顶层平铺
+        }
+    }
+    const looseById = new Map(loose.map((m) => [m.id, m]));
+
+    const escAttr = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    // 顶层混排顺序（没提到的项按 插件在前、分栏在后 兜底追加）
+    const TOP_KEY = 'elaina_mods_top_order';
+    let topOrder = [];
+    try {
+        const v = JSON.parse(Store.getItem(TOP_KEY) || '[]');
+        if (Array.isArray(v)) topOrder = v.filter((x) => x && x.t && x.id);
+    } catch (e) { /* 忽略 */ }
+    const seenTop = new Set(topOrder.map((x) => x.t + ':' + x.id));
+    for (const m of loose) {
+        if (!seenTop.has('mod:' + m.id)) topOrder.push({ t: 'mod', id: m.id });
+    }
+    for (const g of groups) {
+        if (!seenTop.has('group:' + g.id)) topOrder.push({ t: 'group', id: g.id });
+    }
+
+    box.innerHTML = topOrder.map((entry) => {
+        if (entry.t === 'group') {
+            const g = groups.find((x) => x.id === entry.id);
+            return g ? renderGroupHtml(g, byGroup.get(g.id) || []) : '';
+        }
+        const m = looseById.get(entry.id);
+        return m ? renderModCard(m) : '';
     }).join('');
 
-    // 开关事件：走 mod 系统的 setEnabled（会持久化 + 通知 mod 自己）
+    // ---- 开关：走 mod 系统的 setEnabled（会持久化 + 通知 mod 自己）----
     box.querySelectorAll('.mod-toggle').forEach((el) => {
         el.addEventListener('change', async () => {
             const id = el.getAttribute('data-mod-id');
-            // setEnabled 是 async 的：启用一个**尚未加载**的 mod 需要现场注入它的脚本
-            // （mod 默认关闭时脚本从未加载过）。必须 await 之后再刷新列表，
-            // 否则会读到旧的 state，把刚启用的 mod 显示成"未加载"。
+            // setEnabled 是 async 的：必须 await 之后再刷新，否则读到旧 state
             if (window.ElainaMods) await window.ElainaMods.setEnabled(id, el.checked);
             if (hint) {
                 hint.textContent = '已' + (el.checked ? '启用' : '停用') + ' ' + id + '（立即生效）';
@@ -924,10 +961,56 @@ async function refreshModsList() {
         });
     });
 
-    // 删除事件：调服务端 DELETE /api/plugins/:id（删目录 + 安装包），带二次确认
+    // ---- 说明（README）：点开弹窗 ----
+    box.querySelectorAll('.mod-readme-btn').forEach((el) => {
+        el.addEventListener('click', async () => {
+            const id = el.getAttribute('data-mod-id');
+            const name = el.getAttribute('data-mod-name') || id;
+            await openModReadme(id, name);
+        });
+    });
+
+    // ---- 启用/停用后：重渲染保持状态一致（setModEnabled 会改 state）----
+    box.querySelectorAll('.mod-opensettings').forEach((el) => {
+        el.addEventListener('click', () => {
+            const id = el.getAttribute('data-mod-id');
+            const openers = window.__modSettingsOpeners || {};
+            if (typeof openers[id] === 'function') {
+                openers[id]();
+                return;
+            }
+            if (typeof switchSettingsTab === 'function') switchSettingsTab('tab-' + id);
+        });
+    });
+
+    // ---- 打开插件目录（POST /api/plugins/open-folder?id=…）----
+    box.querySelectorAll('.mod-openfolder').forEach((el) => {
+        el.addEventListener('click', async () => {
+            const id = el.getAttribute('data-mod-id');
+            el.disabled = true;
+            try {
+                const res = await fetch('/api/plugins/open-folder?id=' + encodeURIComponent(id), { method: 'POST' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || data.ok === false) {
+                    if (hint) {
+                        hint.textContent = '打开失败：' + ((data && data.message) || ('HTTP ' + res.status));
+                        hint.className = 'text-[11px] text-red-500';
+                    }
+                }
+            } finally {
+                el.disabled = false;
+            }
+        });
+    });
+
+    // ---- 单个刷新 ----
+    box.querySelectorAll('.mod-refresh-one').forEach((el) => {
+        el.addEventListener('click', () => { void refreshModsList(); });
+    });
+
+    // ---- 删除：调 DELETE /api/plugins/:id（删目录 + 安装包），带二次确认 ----
     box.querySelectorAll('.mod-del-btn').forEach((el) => {
         el.addEventListener('click', async (ev) => {
-            // 阻止冒泡：整行外层是可点的（label），不阻止会顺带切换开关
             ev.preventDefault();
             ev.stopPropagation();
             const id = el.getAttribute('data-mod-id');
@@ -950,8 +1033,7 @@ async function refreshModsList() {
                         hint.className = 'text-[11px] text-red-500';
                     }
                 } else {
-                    // 同时清掉前端记录的启用状态 —— 插件都删了，那个键留着没意义；
-                    // 而且重装时若读到旧状态会"自动启用"，与"默认关闭"的约定不符。
+                    // 同时清掉前端记录的启用状态 —— 插件都删了，那个键留着没意义
                     if (window.ElainaMods && typeof window.ElainaMods.forget === 'function') {
                         window.ElainaMods.forget(id);
                     }
@@ -971,6 +1053,55 @@ async function refreshModsList() {
             }
         });
     });
+
+    // ---- 分栏交互：重命名 / 删除 ----
+    box.querySelectorAll('.mod-group-rename').forEach((el) => {
+        el.addEventListener('click', () => {
+            const gid = el.getAttribute('data-group-id');
+            const gs = readGroups();
+            const g = gs.find((x) => x.id === gid);
+            const cur = g ? g.name : '';
+            const next = window.prompt('分栏名称：', cur);
+            if (next === null) return;
+            const name2 = String(next).trim();
+            if (!name2 || name2 === cur) return;
+            if (g) { g.name = name2; saveGroups(gs); }
+            void refreshModsList();
+        });
+    });
+
+    box.querySelectorAll('.mod-group-del').forEach((el) => {
+        el.addEventListener('click', async () => {
+            const gid = el.getAttribute('data-group-id');
+            const gs = readGroups();
+            const g = gs.find((x) => x.id === gid);
+            if (!g) return;
+            const inside = merged.filter((m) => (groupOf[m.id] || UNGROUPED_ID) === gid);
+            if (inside.length) {
+                const names = inside.map((m) => m.name || m.id).join('、');
+                const msg = '这个分栏里还有 ' + inside.length + ' 个插件：' + names
+                    + '\n\n请先把它们拖出来（拖到列表任意位置），再删除分栏。';
+                try {
+                    if (typeof showCustomAlert === 'function') showCustomAlert(msg, '不能删除');
+                    else window.alert(msg);
+                } catch (e) { window.alert(msg); }
+                return;
+            }
+            const okToGo = await showCustomConfirm('删除分栏「' + g.name + '」？', '删除分栏');
+            if (!okToGo) return;
+            saveGroups(gs.filter((x) => x.id !== gid));
+            try {
+                const top = JSON.parse(Store.getItem('elaina_mods_top_order') || '[]');
+                Store.setItem('elaina_mods_top_order',
+                    JSON.stringify(top.filter((x) => !(x.t === 'group' && x.id === gid))));
+                if (typeof Store._flush === 'function') Store._flush();
+            } catch (e) { /* 忽略 */ }
+            void refreshModsList();
+        });
+    });
+
+    // ---- 拖拽：栏内排序 / 拖进分栏归类 / 拖出分栏 / 顶层混排 / 分栏折叠 ----
+    bindGroupDragSort(box, () => void refreshModsList(), { readGroups, saveGroups });
 }
 
 function closeSettingsPanel() {
@@ -1291,3 +1422,210 @@ function startGreetingTyping() {
     }, 45);
 }
 
+
+
+/**
+ * 绑定插件列表的拖拽排序。
+ *
+ * ★ 实现放在 mods.js 里（window.__elainaBindFlatDragSort），这里只是转发。
+ *   本文件在 mods.js 之前加载，所以只能在使用时取（那时 mods.js 早已执行完）。
+ */
+function bindModsDragSort(box, onDone) {
+    const impl = window.__elainaBindFlatDragSort;
+    if (typeof impl !== 'function') {
+        console.warn('[Mods] 拖拽实现未加载（mods.js 未就绪），插件列表拖动排序不可用');
+        return () => {};
+    }
+    return impl(box, onDone);
+}
+
+/**
+ * 分组版拖拽：统一列表模型 —— 平铺插件与分栏同等级，混排。
+ *
+ *   手势（全部复用内核，同一手感）：
+ *     ① 卡片把手拖动：松手时指针落在分栏上 → 归入；落在顶层 → 拿出来
+ *     ② 分栏把手拖动：调分栏在顶层混排里的位置
+ *     顺序按松手时 DOM 的真实次序重建（所见即所得）。
+ */
+function bindGroupDragSort(box, onDone, hooks) {
+    const { readGroups, saveGroups } = hooks || {};
+    if (typeof window.__elainaBindFlatDragSort !== 'function') {
+        console.warn('[Mods] 拖拽内核未加载，分栏拖拽不可用');
+        return;
+    }
+    const TOP_KEY = 'elaina_mods_top_order';
+    const GROUP_OF_KEY = 'elaina_mods_group_of';
+
+    /** 保存顶层混排顺序（DOM 里卡片与分栏的真实次序，所见即所得） */
+    function saveTopOrder() {
+        const seq = [...box.children].map((el) => {
+            if (el.classList.contains('mod-group')) {
+                return { t: 'group', id: el.getAttribute('data-group-id') };
+            }
+            if (el.classList.contains('mod-card')) {
+                return { t: 'mod', id: el.getAttribute('data-mod-id') };
+            }
+            return null;
+        }).filter(Boolean);
+        try {
+            Store.setItem(TOP_KEY, JSON.stringify(seq));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+        } catch (e) { /* 忽略 */ }
+    }
+
+    /** 保存栏内插件顺序 */
+    function saveModOrder() {
+        try {
+            Store.setItem('elaina_mods_order',
+                JSON.stringify([...box.querySelectorAll('.mod-card')].map((c) => c.getAttribute('data-mod-id'))));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+        } catch (e) { /* 忽略 */ }
+    }
+
+    // 拖拽高亮（拖着卡片悬在分栏上时提示"松手放进这里"）
+    let hoverTarget = null;
+    function clearHover() {
+        if (hoverTarget) { hoverTarget.classList.remove('mod-group-hover'); hoverTarget = null; }
+    }
+    document.addEventListener('pointermove', (e) => {
+        if (!document.body.classList.contains('mod-dragging-active')) { clearHover(); return; }
+        if (!document.querySelector('.mod-card.mod-dragging')) { clearHover(); return; }
+        const zone = (e.target && e.target.closest && e.target.closest('.mod-group'))
+            || document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.mod-group');
+        const head = zone ? zone.querySelector('.mod-group-head') : null;
+        if (!head) { clearHover(); return; }
+        if (hoverTarget === head) return;
+        clearHover();
+        hoverTarget = head;
+        head.classList.add('mod-group-hover');
+    }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') clearHover(); }, true);
+
+    // ① 卡片拖动（内核）：栏内排序 + 松手按落点归类/拿出来
+    window.__elainaBindFlatDragSort(
+        box,
+        () => {
+            saveModOrder();
+            saveTopOrder();
+            if (typeof onDone === 'function') onDone();
+        },
+        {
+            itemSelector: '.mod-card',
+            handleSelector: '.mod-grip',
+            placeholderClass: 'mod-placeholder',
+            draggingClass: 'mod-dragging',
+            // ★ 逃逸容器：卡片拖出分栏体后落到顶层列表 —— "放进去的拿不出来"的解法
+            outerContainer: box,
+        }
+    );
+
+    // ② 卡片松手在分栏上 → 归入；松手在顶层 → 拿出来（松手那一刻决定）
+    document.addEventListener('pointerup', (e) => {
+        const card = document.querySelector('.mod-card.mod-dragging');
+        if (!card) { clearHover(); return; }
+        const modId = card.getAttribute('data-mod-id');
+        const zone = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.mod-group');
+        const head = zone ? zone.querySelector('.mod-group-head') : null;
+        try {
+            const map = JSON.parse(Store.getItem(GROUP_OF_KEY) || '{}');
+            if (head) {
+                map[modId] = head.getAttribute('data-group-id');
+            } else {
+                delete map[modId];
+            }
+            Store.setItem(GROUP_OF_KEY, JSON.stringify(map));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+            clearHover();
+            // 让内核把卡片还原，然后按新归属重渲染
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            if (typeof onDone === 'function') onDone();
+        } catch (err) { /* 忽略 */ }
+    }, true);
+
+    // ③ 分栏拖动（内核）：与卡片同一套手感
+    window.__elainaBindFlatDragSort(
+        box,
+        () => {
+            saveTopOrder();
+            if (typeof onDone === 'function') onDone();
+        },
+        {
+            itemSelector: '.mod-group',
+            handleSelector: '.mod-group-grip',
+            idAttr: 'data-group-id',
+            placeholderClass: 'mod-placeholder',
+            draggingClass: 'mod-dragging',
+            canStart(ev) {
+                return !ev.target.closest('.mod-act') && !ev.target.closest('.mod-group-toggle');
+            },
+        }
+    );
+
+    // ── 折叠：就地切类，不整页重渲染（CSS grid-rows 过渡才能播完） ──
+    box.querySelectorAll('.mod-group-head').forEach((head) => {
+        head.addEventListener('click', (ev) => {
+            if (ev.target.closest('.mod-group-grip')) return;
+            if (ev.target.closest('.mod-act')) return;
+            if (ev.target.closest('.mod-group-toggle')) return;
+            toggleGroupCollapse(head.getAttribute('data-group-id'));
+        });
+    });
+    box.querySelectorAll('.mod-group-toggle').forEach((el) => {
+        el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            toggleGroupCollapse(el.getAttribute('data-group-id'));
+        });
+    });
+
+    function toggleGroupCollapse(gid) {
+        const gs = readGroups();
+        const g = gs.find((x) => x.id === gid);
+        if (!g) return;
+        g.collapsed = !(g.collapsed === true);
+        saveGroups(gs);
+        const groupEl = box.querySelector('.mod-group[data-group-id="' + gid + '"]');
+        if (!groupEl) { void refreshModsList(); return; }
+        groupEl.classList.toggle('mod-group-collapsed', g.collapsed);
+        groupEl.querySelector('.mod-group-body')?.classList.toggle('is-collapsed', g.collapsed);
+        groupEl.querySelector('.mod-group-toggle')?.setAttribute('title',
+            g.collapsed ? '展开' : '收纳');
+    }
+}
+
+/**
+ * 打开插件 README 弹窗。
+ *
+ * 走 /api/plugins/<id>/readme（服务端按白名单文件名读，见 server/mods.mjs）。
+ * 没有 README 时服务端回 404，这里明确提示"该插件没有 README 文件"。
+ */
+async function openModReadme(id, name) {
+    const overlay = document.getElementById('modReadmeOverlay');
+    const body = document.getElementById('modReadmeBody');
+    const title = document.getElementById('modReadmeTitle');
+    const fileEl = document.getElementById('modReadmeFile');
+    if (!overlay || !body) return;
+
+    if (title) title.textContent = name + ' · 说明';
+    if (fileEl) fileEl.textContent = '';
+    body.textContent = '正在读取…';
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+
+    try {
+        const res = await fetch('/api/plugins/' + encodeURIComponent(id) + '/readme', { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data && data.ok) {
+            body.textContent = String(data.text || '（空文件）');
+            if (fileEl) fileEl.textContent = data.name || 'README';
+        } else {
+            const msg = (data && data.message) || ('HTTP ' + res.status);
+            body.textContent = msg;
+            if (/没有 README/.test(msg)) {
+                body.textContent = '该插件没有 README 文件。\n\n'
+                    + '插件作者可以在插件目录里放一个 README.md 来提供说明。';
+            }
+        }
+    } catch (err) {
+        body.textContent = '读取失败：' + String((err && err.message) || err);
+    }
+}

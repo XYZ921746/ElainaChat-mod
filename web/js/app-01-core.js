@@ -861,8 +861,7 @@ const elements = {
     ttsVolumeLabel: document.getElementById('ttsVolumeLabel'),
     settingAutoMemory: document.getElementById('settingAutoMemory'),
     settingMemoryEvery: document.getElementById('settingMemoryEvery'),
-    settingLogLevel: document.getElementById('settingLogLevel'),
-    settingLogTrace: document.getElementById('settingLogTrace'),
+    // settingLogLevel / settingLogTrace 已随「日志设置」界面一起移除（见 index.html 的说明）
     memoryBtn: document.getElementById('headerMemoryBtn'),
     memoryStatusDot: document.getElementById('memoryStatusDot'),
     dashscopeAsrFields: document.getElementById('dashscopeAsrFields'),

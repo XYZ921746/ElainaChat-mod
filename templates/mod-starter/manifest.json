@@ -1,0 +1,13 @@
+{
+  "id": "my-first-mod",
+  "name": "我的第一个插件",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "styles": ["style.css"],
+  "defaultEnabled": false,
+  "server": {
+    "entry": "server.mjs",
+    "routes": ["/api/myfirstmod"],
+    "uploads": ["data"]
+  }
+}

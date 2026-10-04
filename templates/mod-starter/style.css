@@ -1,0 +1,67 @@
+/* ============================================================================
+ * 插件自己的样式表。
+ *
+ * ★ 用宿主已有的样式类与主题变量，界面才像"应用的一部分"而不是贴上去的补丁：
+ *
+ *   · 主色 / 强调色：var(--color-primary) var(--color-secondary) var(--text-body) …
+ *     （完整清单见 index.html 的 :root 段。用变量还有个好处：主题一换你自动跟着变，
+ *       写死颜色会在深色主题下变成看不清的文字。）
+ *   · 现成的组件类：btn-primary btn-secondary modal-input modal-label
+ *     settings-tab-btn header-memory-btn
+ *   · 深色主题下宿主会给 html 加 data-theme="dark"，需要单独调时用
+ *     [data-theme="dark"] .你的类 { … }
+ *
+ * ★ 类名请**加上自己的前缀**（下面用 my-mod-），别去覆盖宿主的类 ——
+ *   宿主改版时你的覆盖会变成难查的样式故障。
+ * ========================================================================== */
+
+.my-mod-box {
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.55);
+    color: var(--text-body);
+    font-size: 12px;
+}
+
+.my-mod-footer {
+    padding: 6px 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+    user-select: none;
+}
+
+/* 输入框那一行：宿主用 display:contents 把插槽摊平，所以这里自己控制尺寸 */
+.my-mod-quick {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    background: rgba(255, 255, 255, 0.55);
+    color: var(--color-secondary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+}
+
+.my-mod-quick:hover { background: rgba(255, 255, 255, 0.9); }
+
+/* 消息行上的按钮：跟随宿主消息操作按钮的观感 */
+.my-mod-msg-btn {
+    padding: 4px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+}
+
+.my-mod-msg-btn:hover {
+    background: rgba(255, 255, 255, 0.6);
+    color: var(--color-primary);
+}
