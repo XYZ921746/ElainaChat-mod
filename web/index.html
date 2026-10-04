@@ -1817,13 +1817,18 @@
             .guide-title { font-size: 18px; }
             .conversation-prompt-grid textarea { min-height: 96px; }
         }
-        #settingsPanel > div:nth-child(2) { background: #fbfaf8; }
-        #settingsPanel > div:nth-child(2) > section {
+        /* ★ 2026-10：顶栏标题行已删除（✕ 移进导航行），子元素索引整体前移 ——
+           这里改用 id 定位（#settingsContent / #settingsTopBar），
+           不再依赖 nth-child（那种写法在结构一改就会错位）。
+           ★ 背景也必须走主题变量：原来写死 #fbfaf8 / #fff，
+             深色模式下内容区会是一块刺眼的白板（实测踩到）。 */
+        #settingsContent { background: transparent; }
+        #settingsContent > section {
             padding-bottom: 26px;
             border-bottom: 1px solid var(--pixso-line);
         }
-        #settingsPanel > div:nth-child(2) > section:last-child { padding-bottom: 0; border-bottom: 0; }
-        #settingsPanel > div:last-child { background: #fff; }
+        #settingsContent > section:last-child { padding-bottom: 0; border-bottom: 0; }
+        #settingsPanel > div:last-child { background: var(--pixso-panel-soft); }
         #settingsOverlay,
         #settingsOverlay *,
         #settingsOverlay *::before,
@@ -2758,17 +2763,19 @@
                 backdrop-filter: none;
                 -webkit-backdrop-filter: none;
             }
-            #settingsPanel > div:first-child {
-                min-height: 68px;
-                margin: 10px 12px 0;
-                padding: 0 14px;
+            /* 顶栏（导航 + ✕）：标题行已删，这条改成作用于 #settingsTopBar。
+               ★ 用 id 而不是 div:first-child —— 结构一改（删标题行）索引就错位。 */
+            #settingsTopBar {
+                min-height: 56px;
+                margin: 8px 12px 0;
+                padding: 0 10px;
                 background: rgba(255,255,255,.92);
                 border: 1px solid rgba(217,199,192,.88) !important;
                 border-radius: 20px;
                 box-shadow: 0 8px 22px rgba(76,49,35,.10);
             }
-            #settingsPanel > div:first-child .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
-            #settingsPanel > div:first-child .text-xs { color: var(--pixso-brown-soft) !important; }
+            #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
+            #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
             #closeSettings {
                 width: 38px;
                 height: 38px;
@@ -2781,15 +2788,15 @@
             #closeSettings svg { width: 18px; height: 18px; color: var(--pixso-brown) !important; }
             .settings-close-desktop { display: none; }
             .settings-close-mobile { display: block; }
-            #settingsPanel > div:nth-child(2) {
+            #settingsContent {
                 min-height: 0;
                 overflow-y: auto;
                 overscroll-behavior: contain;
                 padding: 18px 14px 26px;
                 background: transparent;
             }
-            #settingsPanel > div:nth-child(2) > section,
-            #settingsPanel > div:nth-child(2) > section:last-child {
+            #settingsContent > section,
+            #settingsContent > section:last-child {
                 padding: 17px;
                 background: rgba(255,255,255,.56);
                 border: 1px solid rgba(255,255,255,.76) !important;
@@ -2879,24 +2886,39 @@
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
         }
-        /* ③ 顶栏：通栏、贴顶，标题左对齐（像一页设置，不像弹窗标题）。
+        /* ③ 顶栏（导航 + ✕）：通栏、贴顶。
+              ★ 标题行已删（2026-10 用户要求），这条改成作用于 #settingsTopBar。
               ★ 左右 padding 用 max() 与内容列对齐 —— 内容列是居中 1180px，
-                顶栏/底栏却是通栏；不这么算的话标题与按钮会贴在视口边缘，
+                顶栏/底栏却是通栏；不这么算的话导航与按钮会贴在视口边缘，
                 与中间的内容脱节（截图里一眼能看出来）。 */
-        #settingsPanel > div:first-child {
-            min-height: 62px !important;
+        #settingsTopBar {
+            min-height: 50px !important;
             margin: 0 !important;
-            padding: 0 max(28px, calc((100% - 1180px) / 2)) !important;
+            padding: 0 20px !important;
             border: 0 !important;
             border-bottom: 1px solid var(--pixso-line) !important;
             border-radius: 0 !important;
             background: var(--pixso-panel-soft) !important;
             box-shadow: none !important;
+            /* ★ sticky 保留（滚动内容时导航吸顶）；导航用绝对定位铺满它，
+               这样导航在**整个顶栏**里居中，而不是被右侧 ✕ 挤偏。 */
             position: sticky;
             top: 0;
             z-index: 2;
         }
-        #settingsPanel > div:first-child .text-base { font-size: 17px !important; }
+        #settingsTopBar > #settingsTabNav {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 56px !important;   /* 两侧给 ✕ 留出空间，避免压住按钮 */
+        }
+        #settingsTopBar > #closeSettings {
+            position: relative;
+            margin-left: auto;
+            z-index: 1;
+        }
         /* ④ 内容区：居中列（太宽时眼睛要横着扫，阅读体验差），
               卡片在这个列里两列排布 */
         #settingsContent {
@@ -2915,41 +2937,84 @@
         }
     }
     
-    /* 导航：居中、无边框按钮、选中态用主题色底 */
+    /* ==================== 导航：融合成一条（LingChat 式）====================
+       用户要求：导航栏"不是分开的而是融合在一起的"。
+       做法：按钮之间**无间隙**、无独立背景块，选中态用**底部指示条** +
+       文字加粗着色 —— 整排读起来是一条连续的导航栏，而不是一排独立按钮。
+       ★ 居中：导航容器用绝对定位铺满、按钮组用 auto margin 居中 ——
+         这样 ✕ 固定在右侧时，导航仍在**整个顶栏**的正中
+         （否则 flex-1 的导航会被 ✕ 挤偏，看着不居中）。 */
     #settingsTabNav {
         justify-content: center;
-        gap: 4px !important;
-        padding: 10px 16px 12px !important;
-        border-bottom: 1px solid var(--pixso-line) !important;
-        background: var(--pixso-panel);
+        gap: 0 !important;              /* ★ 无间隙 = 融合的关键 */
+        padding: 0 !important;
+        border-bottom: 0 !important;    /* 下边框交给 #settingsTopBar，避免两条线 */
+        background: transparent;
     }
     .settings-tab-btn {
-        padding: 7px 15px;
-        border-radius: 10px;
-        font-size: 13px;
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 14px 16px;
+        border-radius: 0;               /* 方角，彼此紧贴成一条 */
+        font-size: 13.5px;
         color: var(--pixso-brown-soft);
         background: transparent;
         border: none;
         cursor: pointer;
         white-space: nowrap;
-        transition: background .15s ease, color .15s ease;
+        transition: color .15s ease;
     }
+    /* ★ 分栏图标（参照图里每项都有图标）：用 ::before 挂 unicode 符号，
+         不动 HTML 的按钮文字（那些文字被 JS 与检查脚本依赖，不能改）。
+         用 data-settings-tab 定位，插件注册的分栏没有对应图标就不显示。
+       ★ 用**单色几何符号**而不是 emoji —— 参照图是单色线性图标，
+         emoji 是彩色的，一排看过去很花哨，且不跟随主题色
+         （选中时图标应该和文字一起变成主题绿）。 */
+    .settings-tab-btn::before {
+        font-size: 13px;
+        line-height: 1;
+        opacity: .75;
+        /* 让符号继承按钮文字色（选中时随主题色变绿） */
+        color: inherit;
+    }
+    .settings-tab-btn.active::before { opacity: 1; }
+    .settings-tab-btn[data-settings-tab="tab-appearance"]::before { content: '◐'; }
+    .settings-tab-btn[data-settings-tab="tab-character"]::before { content: '☺'; }
+    .settings-tab-btn[data-settings-tab="tab-chat"]::before { content: '◗'; }
+    .settings-tab-btn[data-settings-tab="tab-voice"]::before { content: '♪'; }
+    .settings-tab-btn[data-settings-tab="tab-vision"]::before { content: '◉'; }
+    .settings-tab-btn[data-settings-tab="tab-capability"]::before { content: '✧'; }
+    .settings-tab-btn[data-settings-tab="tab-advanced"]::before { content: '⚙'; }
+    .settings-tab-btn[data-settings-tab="tab-mods"]::before { content: '▣'; }
     .settings-tab-btn:hover {
-        background: rgba(99,102,241,.10);
+        background: transparent;        /* 悬停也不加底色块 —— 只变文字色 */
         color: var(--pixso-brown-dark);
     }
+    /* 选中态：文字加粗着色 + 底部一条指示条（整条导航的"当前页"标记） */
     .settings-tab-btn.active {
-        background: var(--pixso-green);
-        color: #fff;
+        background: transparent;
+        color: var(--pixso-green);
         font-weight: 600;
-        box-shadow: 0 2px 8px rgba(99,102,241,.22);
+        box-shadow: none;
+    }
+    .settings-tab-btn.active::after {
+        content: '';
+        position: absolute;
+        left: 12px;
+        right: 12px;
+        bottom: -1px;
+        height: 2px;
+        border-radius: 2px;
+        background: var(--pixso-green);
     }
     /* 关闭按钮也走主题色（深色下原来写死的 indigo 看不清） */
     #closeSettings:hover { background: rgba(99,102,241,.12); }
     #closeSettings svg { color: var(--pixso-brown-soft) !important; }
     /* 兜底：全局也用主题面板色（移动端那块也受益） */
     #settingsOverlay { background-color: var(--pixso-panel) !important; }
-    #settingsPanel > div:first-child { border-color: var(--pixso-line) !important; }
+    #settingsTopBar { border-color: var(--pixso-line) !important; }
     #settingsPanel > div:last-child { border-top-color: var(--pixso-line) !important; }
     
     /* ==================== 卡片分组 ====================
@@ -2966,13 +3031,17 @@
         background: var(--pixso-panel-soft);
         border: 1px solid var(--pixso-line);
         border-radius: 16px;
-        padding: 16px 18px;
-        margin-bottom: 14px;
-        transition: border-color .15s ease;
+        padding: 18px 20px;
+        /* ★ 卡片之间留出明确间距（用户要求"各个模块是分开的"）——
+           18px 比 14px 更能看出是独立模块，尤其两列并排时。 */
+        margin-bottom: 18px;
+        transition: border-color .15s ease, box-shadow .15s ease;
+        box-shadow: 0 1px 2px rgba(30,27,75,.04);
     }
     #settingsContent .settings-tab-panel > section:hover,
     #settingsContent .settings-tab-panel > div.mb-4:hover {
         border-color: var(--pixso-green);
+        box-shadow: 0 4px 14px rgba(30,27,75,.08);
     }
     /* ★ 原来用 border-t 分隔的"第二段"（如对话页的思考模式）——
        它现在也是独立卡片，那条分隔线要收掉，否则卡片里多一条横线。 */
@@ -3021,22 +3090,33 @@
         #settingsContent .settings-tab-panel.active-panel {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 14px;
+            gap: 18px;                  /* 与卡片 margin 一致，模块之间分得开 */
             align-content: start;
+            /* ★★ `align-items: start` 是必须的 —— 默认的 stretch 会把同一行
+               的卡片拉到**等高**：左边「语音输出」很长，右边「语音输入」很短，
+               结果右边被撑成一个巨大的空盒子（参照图里没有这种现象）。
+               start 让每张卡片只占自己内容的高度。 */
+            align-items: start;
         }
         /* 每张卡片自己是一格；卡片之间用 gap 而不是 margin */
         #settingsContent .settings-tab-panel > section,
         #settingsContent .settings-tab-panel > div.mb-4 {
             margin-bottom: 0;
         }
-        /* 需要整行的大块（插件列表、日志、记忆等）跨两列 */
-        #settingsContent .settings-tab-panel > section.settings-span-2,
-        #settingsContent .settings-tab-panel > div.mb-4.settings-span-2,
+        /* ★ 通栏判定：**只有确实需要整行**的卡片跨两列 ——
+           插件列表（卡片一列放不下）、主题选择器（本身是网格）、多行文本域。
+           ★ 刻意**不**按"有没有滑杆/输入框"自动通栏：那会让
+             「语音输出（大）」通栏、「语音输入（小）」单独占半行，反而更零碎。
+             参照图里同一行的两张卡片本来就都是半宽。
+           ★ 这条必须**独立成规则**并放在 margin 规则之后 ——
+             之前误把它和上面那条的逗号连在一起，`grid-column` 声明整个丢了
+             （表现为"通栏没生效"，grep 都搜不到那个属性）。 */
+        #settingsContent .settings-tab-panel > section:has(textarea),
         #settingsContent .settings-tab-panel > section:has(.mod-card),
         #settingsContent .settings-tab-panel > section:has(#modsList),
-        #settingsContent .settings-tab-panel > section:has(textarea),
-        /* 外观页的主题选择器是网格，需要整行宽度才排得下 */
-        #settingsContent .settings-tab-panel > div.mb-4:has(#themePickerBox) {
+        #settingsContent .settings-tab-panel > div.mb-4:has(#themePickerBox),
+        #settingsContent .settings-tab-panel > section.settings-span-2,
+        #settingsContent .settings-tab-panel > div.mb-4.settings-span-2 {
             grid-column: 1 / -1;
         }
     }
@@ -3686,33 +3766,36 @@
         </div>
     </div>
 
-    <!-- ==================== 设置（桌面弹窗 / 移动端整页） ==================== -->
+    <!-- ==================== 设置（全屏页） ====================
+         ★ 2026-10 用户要求：删掉顶部「设置」标题那一行，把关闭 ✕ 移到导航行。
+           理由：全屏页不需要"设置"两个字告诉用户这是设置 —— 省下一行高度，
+           关闭按钮与分栏导航同排，顶部更紧凑。
+         ★ 结构变化会让 CSS 里的 div:first-child / div:nth-child(2) 索引前移 ——
+           本文件里那些选择器已同步改为按 id / 按类定位（见下方设置样式区）。 -->
     <div id="settingsOverlay" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay">
         <div id="settingsPanel" class="modal-panel w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden animate-modal-pop">
-            <div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">
-                <div class="text-base font-bold text-indigo-950">设置</div>
-                <button id="closeSettings" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭设置" aria-label="关闭设置">
-                    <svg class="settings-close-desktop w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-                    <svg class="settings-close-mobile" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6"/></svg>
-                </button>
-            </div>
-
-            <!-- 设置分栏导航
+            <!-- 设置分栏导航 + 关闭按钮（同一行）
                  ★ id 是给插件系统用的：mod 通过 host.slot('settings.tabs', …) 注册的
                    分栏按钮由 mods.js 插进这个容器。点击**不在这里逐个绑定**，见
                    app-07-init.js 的事件委托说明。 -->
-            <div id="settingsTabNav" class="flex gap-1 px-4 pt-3 pb-1 border-b border-white/50 flex-shrink-0 overflow-x-auto">
-                <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance">外观</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-character">角色</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-chat">对话</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-voice">语音</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-vision">视觉</button>
-                <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 web/mods/live2d/）。
-                     这里不能留同名按钮 —— 插槽的撞名检查会因此拒绝插件注册，
-                     表现为"设置里能看到 Live2D，但点开是空的"。 -->
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability">能力</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced">高级</button>
-                <button type="button" class="settings-tab-btn" data-settings-tab="tab-mods">插件</button>
+            <div id="settingsTopBar" class="flex items-center gap-2 px-4 pt-3 pb-1 border-b border-white/50 flex-shrink-0">
+                <div id="settingsTabNav" class="flex gap-1 flex-1 min-w-0 overflow-x-auto">
+                    <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance">外观</button>
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-character">角色</button>
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-chat">对话</button>
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-voice">语音</button>
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-vision">视觉</button>
+                    <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 web/mods/live2d/）。
+                         这里不能留同名按钮 —— 插槽的撞名检查会因此拒绝插件注册，
+                         表现为"设置里能看到 Live2D，但点开是空的"。 -->
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability">能力</button>
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced">高级</button>
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-mods">插件</button>
+                </div>
+                <button id="closeSettings" class="flex-none p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭设置" aria-label="关闭设置">
+                    <svg class="settings-close-desktop w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="settings-close-mobile" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6"/></svg>
+                </button>
             </div>
 
             <div id="settingsContent" class="flex-1 overflow-y-auto scroll-soft px-6 py-5 space-y-7">
