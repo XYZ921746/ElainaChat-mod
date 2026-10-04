@@ -324,9 +324,17 @@ try {
     ok(up, '服务已启动', up ? '' : out.slice(-400));
 
     if (up) {
-        const res = await fetch(`http://127.0.0.1:${PORT}/api/plugins`);
-        const body = await res.json();
-        ok(res.status === 200 && body.ok, 'GET /api/plugins 成功', 'HTTP ' + res.status);
+        // ★ 首个 /api/plugins 请求带**短重试**：服务"端口已开"到"插件清单生成完"
+        //   之间有个小窗口，全套并发跑时首个请求可能撞上（实测偶发，单独跑从不出现）。
+        let res = null, body = null;
+        for (let i = 0; i < 10; i++) {
+            res = await fetch(`http://127.0.0.1:${PORT}/api/plugins`);
+            body = await res.json().catch(() => null);
+            if (res.status === 200 && body && body.ok
+                && (body.plugins || []).some((p) => p.id === 'demo-mod')) break;
+            await wait(300);
+        }
+        ok(res.status === 200 && body && body.ok, 'GET /api/plugins 成功', 'HTTP ' + res.status);
 
         const ids = (body.plugins || []).map((p) => p.id);
         ok(ids.includes('demo-mod'), '★ zip 被自动解压成 mod');
