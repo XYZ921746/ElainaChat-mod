@@ -2868,11 +2868,19 @@
                看起来仍是"放大的弹窗"而不是全屏页。 */
             align-items: stretch !important;
             justify-content: stretch !important;
+            /* ★ 半透明（2026-10 用户要求）：设置页背后能透出聊天界面，
+                 配合模糊形成"毛玻璃整页"的观感。
+                 用 color-mix 把主题面板色压到 82% 不透明 ——
+                 深色/浅色/各套模板都自动跟随，不用为每套主题写一份。
+                 （color-mix 现代浏览器都支持；不支持时下面的实色兜底生效。） */
             background: var(--pixso-panel) !important;
-            backdrop-filter: none !important;
-            -webkit-backdrop-filter: none !important;
+            background: color-mix(in srgb, var(--pixso-panel) 82%, transparent) !important;
+            backdrop-filter: blur(18px) saturate(1.2) !important;
+            -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
         }
-        /* ② 面板：同样铺满，去掉弹窗的一切外观（圆角/描边/阴影/限宽） */
+        /* ② 面板：同样铺满，去掉弹窗的一切外观（圆角/描边/阴影/限宽）。
+              ★ 面板本身**透明** —— 半透明与模糊交给遮罩一层做，
+                两层都设会叠出双倍模糊，背后内容糊成一团看不清。 */
         #settingsPanel {
             width: 100% !important;
             max-width: none !important;
@@ -2882,42 +2890,53 @@
             border: 0 !important;
             border-radius: 0 !important;
             box-shadow: none !important;
-            background: var(--pixso-panel) !important;
+            background: transparent !important;
             backdrop-filter: none !important;
             -webkit-backdrop-filter: none !important;
         }
-        /* ③ 顶栏（导航 + ✕）：通栏、贴顶。
-              ★ 标题行已删（2026-10 用户要求），这条改成作用于 #settingsTopBar。
-              ★ 左右 padding 用 max() 与内容列对齐 —— 内容列是居中 1180px，
-                顶栏/底栏却是通栏；不这么算的话导航与按钮会贴在视口边缘，
-                与中间的内容脱节（截图里一眼能看出来）。 */
+        /* ③ 顶栏：**透明**（自己不画背景），只负责定位与那条分隔线。
+              ★ 用户反馈"导航和 ✕ 没有明确划分，都和背景融成一块" ——
+                根因是它们直接铺在通栏背景上、没有任何自己的容器。
+                参照图的做法：导航是一枚**圆角胶囊**（一组项被框住），
+                ✕ 是一枚**独立圆形按钮**。胶囊与圆按钮的样式见下方
+                「导航胶囊」段（放在基础导航规则之后，保证优先级）。 */
         #settingsTopBar {
-            min-height: 50px !important;
+            min-height: 58px !important;
             margin: 0 !important;
             padding: 0 20px !important;
             border: 0 !important;
             border-bottom: 1px solid var(--pixso-line) !important;
             border-radius: 0 !important;
-            background: var(--pixso-panel-soft) !important;
+            background: transparent !important;
             box-shadow: none !important;
-            /* ★ sticky 保留（滚动内容时导航吸顶）；导航用绝对定位铺满它，
-               这样导航在**整个顶栏**里居中，而不是被右侧 ✕ 挤偏。 */
             position: sticky;
             top: 0;
             z-index: 2;
         }
-        #settingsTopBar > #settingsTabNav {
+        /* ✕：独立圆形按钮（有自己的底色与描边，不再"浮"在背景上）。
+              ★ 绝对定位到右端 —— 这样导航用 margin:auto 时能在**整条顶栏**
+                里真正居中，不会被 ✕ 的宽度挤偏。 */
+        #settingsTopBar > #closeSettings {
             position: absolute;
-            inset: 0;
-            display: flex;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 1;
+            width: 34px;
+            height: 34px;
+            padding: 0;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
-            padding: 0 56px !important;   /* 两侧给 ✕ 留出空间，避免压住按钮 */
+            border-radius: 9999px;
+            background: var(--pixso-panel);
+            border: 1px solid var(--pixso-line);
+            box-shadow: 0 1px 3px rgba(30,27,75,.06);
+            transition: background .15s ease, border-color .15s ease;
         }
-        #settingsTopBar > #closeSettings {
-            position: relative;
-            margin-left: auto;
-            z-index: 1;
+        #settingsTopBar > #closeSettings:hover {
+            background: var(--pixso-panel-soft);
+            border-color: var(--pixso-green);
         }
         /* ④ 内容区：居中列（太宽时眼睛要横着扫，阅读体验差），
               卡片在这个列里两列排布 */
@@ -2937,34 +2956,52 @@
         }
     }
     
-    /* ==================== 导航：融合成一条（LingChat 式）====================
-       用户要求：导航栏"不是分开的而是融合在一起的"。
-       做法：按钮之间**无间隙**、无独立背景块，选中态用**底部指示条** +
-       文字加粗着色 —— 整排读起来是一条连续的导航栏，而不是一排独立按钮。
-       ★ 居中：导航容器用绝对定位铺满、按钮组用 auto margin 居中 ——
-         这样 ✕ 固定在右侧时，导航仍在**整个顶栏**的正中
-         （否则 flex-1 的导航会被 ✕ 挤偏，看着不居中）。 */
+    /* ==================== 导航：一枚圆角胶囊（LingChat 式）====================
+       用户要求（两轮反馈合起来）：
+         ① 导航项之间**无间隙**、不各自成块 —— 整排读起来是一条连贯的栏；
+         ② 但整排**必须有自己明确的区域**（不能与背景融成一块）。
+
+       做法：把 #settingsTabNav 本身做成**圆角胶囊**（圆角 + 底色 + 描边），
+       内部按钮零间隙、透明背景，选中项在胶囊里填一枚实底小圆角块。
+       这样既有"一整条"的连贯感，又有清晰的分区边界。
+
+       ★ 居中：胶囊用 `margin: auto` 在顶栏里居中，✕ 绝对定位在右端 ——
+         这样 ✕ 的宽度不会把胶囊挤偏（用 flex-1 + margin-left:auto 会偏）。 */
     #settingsTabNav {
+        display: flex;
+        align-items: center;
         justify-content: center;
-        gap: 0 !important;              /* ★ 无间隙 = 融合的关键 */
-        padding: 0 !important;
+        gap: 2px !important;
+        padding: 4px !important;
         border-bottom: 0 !important;    /* 下边框交给 #settingsTopBar，避免两条线 */
-        background: transparent;
+        /* ★ 胶囊本体：明确的区域边界 */
+        background: var(--pixso-panel);
+        border: 1px solid var(--pixso-line);
+        border-radius: 9999px;
+        box-shadow: 0 1px 3px rgba(30,27,75,.06);
+        width: max-content;
+        max-width: calc(100% - 120px);  /* 两侧给 ✕ 留位置 */
+        margin: 0 auto;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: none;
     }
+    #settingsTabNav::-webkit-scrollbar { display: none; }
     .settings-tab-btn {
         position: relative;
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 14px 16px;
-        border-radius: 0;               /* 方角，彼此紧贴成一条 */
-        font-size: 13.5px;
+        /* ★ 胶囊内部的小圆角块：比外圈小一圈（外圈 padding 4px） */
+        padding: 7px 13px;
+        border-radius: 9999px;
+        font-size: 13px;
         color: var(--pixso-brown-soft);
         background: transparent;
         border: none;
         cursor: pointer;
         white-space: nowrap;
-        transition: color .15s ease;
+        transition: background .15s ease, color .15s ease;
     }
     /* ★ 分栏图标（参照图里每项都有图标）：用 ::before 挂 unicode 符号，
          不动 HTML 的按钮文字（那些文字被 JS 与检查脚本依赖，不能改）。
@@ -2989,31 +3026,32 @@
     .settings-tab-btn[data-settings-tab="tab-advanced"]::before { content: '⚙'; }
     .settings-tab-btn[data-settings-tab="tab-mods"]::before { content: '▣'; }
     .settings-tab-btn:hover {
-        background: transparent;        /* 悬停也不加底色块 —— 只变文字色 */
+        background: rgba(99,102,241,.10);   /* 胶囊内的悬停块 */
         color: var(--pixso-brown-dark);
     }
-    /* 选中态：文字加粗着色 + 底部一条指示条（整条导航的"当前页"标记） */
+    /* 选中态：在胶囊里填一枚**实底小圆角块**（不是下划线 ——
+       胶囊里再画下划线会和胶囊边贴在一起，很脏）。 */
     .settings-tab-btn.active {
-        background: transparent;
-        color: var(--pixso-green);
-        font-weight: 600;
-        box-shadow: none;
-    }
-    .settings-tab-btn.active::after {
-        content: '';
-        position: absolute;
-        left: 12px;
-        right: 12px;
-        bottom: -1px;
-        height: 2px;
-        border-radius: 2px;
         background: var(--pixso-green);
+        color: #fff;
+        font-weight: 600;
+        box-shadow: 0 1px 4px rgba(99,102,241,.28);
     }
+    .settings-tab-btn.active::after { content: none; }   /* 清掉旧的下划线伪元素 */
     /* 关闭按钮也走主题色（深色下原来写死的 indigo 看不清） */
     #closeSettings:hover { background: rgba(99,102,241,.12); }
     #closeSettings svg { color: var(--pixso-brown-soft) !important; }
-    /* 兜底：全局也用主题面板色（移动端那块也受益） */
-    #settingsOverlay { background-color: var(--pixso-panel) !important; }
+    /* 遮罩：全局半透明 + 毛玻璃（移动端那块也受益）。
+       ★ 这条**必须在桌面媒体查询之外**且用 background-color ——
+         它原来写的是实色 var(--pixso-panel)，会覆盖掉媒体查询里
+         那条 `background: color-mix(...)`（同权重、靠后者胜），
+         半透明就永远不生效（实测踩到）。 */
+    #settingsOverlay {
+        background-color: transparent !important;
+        background: color-mix(in srgb, var(--pixso-panel) 82%, transparent) !important;
+        backdrop-filter: blur(18px) saturate(1.2) !important;
+        -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
+    }
     #settingsTopBar { border-color: var(--pixso-line) !important; }
     #settingsPanel > div:last-child { border-top-color: var(--pixso-line) !important; }
     
@@ -3028,7 +3066,11 @@
     #settingsContent .settings-tab-panel > section,
     #settingsContent .settings-tab-panel > div.mb-4 {
         position: relative;
+        /* ★ 卡片也半透明（比背景更实一点）—— 配合半透明背景形成层次：
+             背景 82% 透明 → 卡片再压一层，卡片里的文字仍然清楚。
+             用 color-mix 跟随主题色，深浅色都自动适配。 */
         background: var(--pixso-panel-soft);
+        background: color-mix(in srgb, var(--pixso-panel-soft) 90%, transparent);
         border: 1px solid var(--pixso-line);
         border-radius: 16px;
         padding: 18px 20px;
