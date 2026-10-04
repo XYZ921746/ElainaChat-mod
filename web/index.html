@@ -2951,6 +2951,11 @@
     .mod-group-body > *{min-height:0;overflow:hidden}
     .mod-group-body.is-collapsed{
         grid-template-rows:minmax(0, 0fr);
+        /* ★ 隐式行也钳死：分栏里有卡片时重渲染后 body 可能同时含
+           卡片 + 空状态提示两个子元素，第二个落进**隐式行** ——
+           template-rows 只管显式行，隐式行按内容撑开（实测折叠后
+           多出一行 107px）。grid-auto-rows 把隐式行也钳到 0。 */
+        grid-auto-rows:minmax(0, 0fr);
         opacity:0;
         padding-top:0;
         padding-bottom:0;
