@@ -819,11 +819,15 @@
             return el.getAttribute('data-model-name') || el.getAttribute('data-mod-id') || '';
         }
 
-        /** FLIP：改动布局前后测量，用 transform 把位移"演"回去 */
+        /** FLIP：改动布局前后测量，用 transform 把位移"演"回去。
+         *  scope = 布局被改动的容器。跨容器搬家时对**旧容器**再调一次，
+         *  两边的项都得到位移补偿（否则另一边的项会瞬移，动画"消失"）。 */
         function flip(scope, mutate) {
             const items = [...scope.querySelectorAll(ITEM_SEL + ', .' + PLACEHOLDER_CLASS)];
             const first = new Map();
             for (const el of items) first.set(el, el.getBoundingClientRect());
+            // 跨容器：占位块自身的旧屏幕位置也记下（它要从那里"飞"到新家）
+            const phRect = drag && drag.ph ? drag.ph.getBoundingClientRect() : null;
             mutate();
             for (const [el, r] of first) {
                 if (!el.isConnected) continue;
@@ -836,6 +840,19 @@
                     el.style.transition = 'transform .18s cubic-bezier(.2,.8,.3,1)';
                     el.style.transform = '';
                 });
+            }
+            // 占位块跨容器：从旧位置演到新位置（否则它瞬移 —— "动画消失"的观感来源）
+            if (phRect && drag && drag.ph.isConnected) {
+                const nowP = drag.ph.getBoundingClientRect();
+                const dy = phRect.top - nowP.top;
+                if (dy) {
+                    drag.ph.style.transition = 'none';
+                    drag.ph.style.transform = 'translateY(' + dy + 'px)';
+                    requestAnimationFrame(() => {
+                        drag.ph.style.transition = 'transform .18s cubic-bezier(.2,.8,.3,1)';
+                        drag.ph.style.transform = '';
+                    });
+                }
             }
         }
 
@@ -895,7 +912,12 @@
                     grabDY: ev.clientY - rect.top,
                     // 上一次的落点，用于判断占位块要不要挪（否则每帧都触发 FLIP）
                     lastBefore: card,
+                    lastParent: null,
+                    // ★ 父容器 rect 缓存：拖动中滚动/结构不变，无需每帧重测
+                    //   （每帧 getBoundingClientRect 是"经过分栏变卡"的元凶之一）。
+                    prCache: null,
                 };
+                drag.prCache = parent.getBoundingClientRect();
                 // 抬起效果：略微放大，像从桌面上"拿起来"。
                 // ★ 与跟随位移写在**同一个内联 transform** 里 —— 否则 CSS 一个 scale、
                 //   JS 一个 translate 会互相覆盖（这正是"不跟手"的成因之一）。
@@ -923,14 +945,28 @@
                     //   a) TOP_MIXED 模式（项在 container 顶层混排，如分栏拖动）：
                     //      候选**始终**用 OUTER_ITEM_SEL —— 卡片与分栏同等级，
                     //      分栏可以插到任何卡片之间（用户要求）。
-                    //   b) 有外层容器且指针纵向移出父容器范围：占位块提升到外层，
-                    //      候选按 OUTER_ITEM_SEL —— 卡片"逃出"分栏（放进去的拿得出来）。
+                    //   b) 有外层容器：指针移出父容器范围 → 占位块提升到外层；
+                    //      指针回到父容器范围 → 降级回栏内。
                     //   c) 其余：候选限定在真实父容器内（普通栏内排序）。
-                    const pr = parent.getBoundingClientRect();
-                    const useOuter = !TOP_MIXED && outer
-                        && (e.clientY < pr.top || e.clientY > pr.bottom);
-                    const activeParent = (useOuter || TOP_MIXED) ? (outer || parent) : parent;
-                    const sel = (useOuter || TOP_MIXED) ? (OUTER_ITEM_SEL || ITEM_SEL) : ITEM_SEL;
+                    //
+                    // ★★ 滞回带（hysteresis）24px：进出外层用**不同的边界** ——
+                    //   走出去要越出边界 24px，走回来要缩进边界内 24px。
+                    //   没有滞回时指针在分栏边缘来回 1px 都会翻转 activeParent，
+                    //   占位块每帧在两个容器间搬家 + FLIP 全量重测 —— 这就是
+                    //   "经过分栏时明显变卡"的根因（每帧两次强制布局）。
+                    const HOVER_BAND = 24;
+                    if (!drag.prCache) drag.prCache = parent.getBoundingClientRect();
+                    const pr = drag.prCache;
+                    let useOuter;
+                    if (drag.lastParent === outer) {
+                        // 已在外层：只有缩回父容器边界内 24px 才回去
+                        useOuter = !(e.clientY > pr.top + HOVER_BAND && e.clientY < pr.bottom - HOVER_BAND);
+                    } else {
+                        // 在父容器内：越出边界 24px 才出去
+                        useOuter = e.clientY < pr.top - HOVER_BAND || e.clientY > pr.bottom + HOVER_BAND;
+                    }
+                    const activeParent = (useOuter && outer) ? outer : parent;
+                    const sel = (activeParent === outer && OUTER_ITEM_SEL) ? OUTER_ITEM_SEL : ITEM_SEL;
 
                     // 占位块按指针纵向位置落位
                     let phNext = null;
@@ -942,10 +978,15 @@
                     if (phNext === drag.lastBefore && activeParent === drag.lastParent) return;
                     drag.lastBefore = phNext;
                     drag.lastParent = activeParent;
+                    // 跨容器搬家：旧容器也要 FLIP 补偿（否则它里面的项瞬移）
+                    const oldParent = drag.ph.parentElement;
                     flip(activeParent, () => {
                         if (phNext) activeParent.insertBefore(drag.ph, phNext);
                         else activeParent.appendChild(drag.ph);
                     });
+                    if (oldParent !== activeParent && oldParent !== drag.ph.parentElement) {
+                        flip(oldParent, () => { /* 占位块已搬走 —— 只补偿留在旧容器的项 */ });
+                    }
                 };
 
                 /** 写内联 transform：位移 +（可选）抬起效果 */

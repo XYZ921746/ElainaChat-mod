@@ -1560,6 +1560,7 @@ function bindGroupDragSort(box, onDone, hooks) {
             //   分栏永远拖不到卡片上面）。
             topLevelMixed: true,
             outerItemSelector: '.mod-card, .mod-group',
+            outerContainer: box,
             canStart(ev) {
                 return !ev.target.closest('.mod-act') && !ev.target.closest('.mod-group-toggle');
             },
