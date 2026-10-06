@@ -18,15 +18,9 @@ jobs:
         with:
           node-version: '20'
 
-      # 很多个人项目仓库没有提交 package-lock.json，所以用 npm install 代替 npm ci
       - name: Install dependencies
         run: npm install
 
-      # 打印 package.json 内容，方便在日志中排查项目配置
-      - name: Debug package.json
-        run: cat package.json
-
-      # 尝试构建前端资源（如果 package.json 里没有 build 脚本，可以删掉这步）
       - name: Build web assets
         run: npm run build || echo "No build script found, skipping build"
 
@@ -36,10 +30,11 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # 移除原先有问题的 android-actions/setup-android@v3
+      # 改为直接接受系统自带的 Android SDK 许可协议，确保 Gradle 能正常下载依赖
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
 
-      # 关键修复：如果仓库里没有 android 文件夹，自动初始化 Capacitor 并添加 Android 平台
       - name: Ensure Android platform exists
         run: |
           if [ ! -d "android" ]; then
