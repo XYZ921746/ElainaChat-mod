@@ -21,6 +21,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # 【关键修复】强制安装 Capacitor 相关依赖，解决 npx cap 命令找不到的问题
+      - name: Install Capacitor Dependencies
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android
+
       - name: Build web assets
         run: npm run build || echo "No build script found, skipping build"
 
@@ -30,8 +34,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      # 移除原先有问题的 android-actions/setup-android@v3
-      # 改为直接接受系统自带的 Android SDK 许可协议，确保 Gradle 能正常下载依赖
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
 
@@ -39,7 +41,9 @@ jobs:
         run: |
           if [ ! -d "android" ]; then
             echo "Android folder not found, initializing Capacitor..."
-            npx cap init "ElainaChat" "com.elaina.chat" --web-dir=dist || true
+            # 使用 npx cap 命令（此时 local node_modules 里已经有 cap 了）
+            # 注意：--web-dir=dist 这个参数需要根据您的打包产物目录来定
+            npx cap init "ElainaChat" "com.elaina.chat" --web-dir=dist
             npx cap add android
           fi
 
