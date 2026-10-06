@@ -27,16 +27,32 @@ jobs:
       - name: Build web assets
         run: npm run build || echo "没有找到 build 脚本，跳过打包"
 
-      # 【核心修复】如果不存在 dist 目录，强制创建并复制静态网页文件
-      - name: Ensure dist directory exists
+      # 【核心修复 1】智能整理网页文件到 dist 目录
+      - name: Prepare web assets (ensure dist/index.html exists)
         run: |
-          if [ ! -d "dist" ]; then
-            echo "未找到 dist 目录，正在创建并复制静态资源..."
-            mkdir -p dist
-            # 尝试将常见的静态资源复制进 dist（容错处理，不存在则忽略）
-            cp index.html dist/ 2>/dev/null || true
-            cp -r css js assets src public build 2>/dev/null || true
+          mkdir -p dist
+          # 如果您的打包输出到了 build 文件夹，复制过去
+          if [ -d "build" ]; then
+            echo "检测到 build 文件夹，复制内容到 dist..."
+            cp -r build/* dist/
           fi
+          
+          # 如果 dist 里还没有 index.html，在仓库里全局寻找（排除 node_modules 和 android）
+          if [ ! -f "dist/index.html" ]; then
+            echo "dist 中未找到 index.html，正在全局搜索..."
+            find . -name "index.html" -not -path "./node_modules/*" -not -path "./android/*" -exec cp {} dist/ \;
+            # 尝试复制常见的静态资源文件夹
+            cp -r public/* dist/ 2>/dev/null || true
+            cp -r css js assets images src 2>/dev/null || true
+          fi
+          
+          # 再次检查，如果还没有，说明仓库真的没有网页文件，直接报错
+          if [ ! -f "dist/index.html" ]; then
+            echo "❌ 错误：无法在仓库中找到 index.html 文件，请检查您的项目结构！"
+            exit 1
+          fi
+          echo "✅ Web 资源准备完毕："
+          ls -la dist/
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -46,6 +62,10 @@ jobs:
 
       - name: Accept Android SDK licenses
         run: yes | sdkmanager --licenses || true
+
+      # 【核心修复 2】清理之前运行失败残留的 android 目录
+      - name: Clean previous Android folder
+        run: rm -rf android
 
       - name: Ensure Android platform exists
         run: |
