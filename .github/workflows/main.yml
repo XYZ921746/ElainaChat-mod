@@ -21,12 +21,22 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # 【关键修复】强制安装 Capacitor 相关依赖，解决 npx cap 命令找不到的问题
       - name: Install Capacitor Dependencies
         run: npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Build web assets
-        run: npm run build || echo "No build script found, skipping build"
+        run: npm run build || echo "没有找到 build 脚本，跳过打包"
+
+      # 【核心修复】如果不存在 dist 目录，强制创建并复制静态网页文件
+      - name: Ensure dist directory exists
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "未找到 dist 目录，正在创建并复制静态资源..."
+            mkdir -p dist
+            # 尝试将常见的静态资源复制进 dist（容错处理，不存在则忽略）
+            cp index.html dist/ 2>/dev/null || true
+            cp -r css js assets src public build 2>/dev/null || true
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -40,9 +50,6 @@ jobs:
       - name: Ensure Android platform exists
         run: |
           if [ ! -d "android" ]; then
-            echo "Android folder not found, initializing Capacitor..."
-            # 使用 npx cap 命令（此时 local node_modules 里已经有 cap 了）
-            # 注意：--web-dir=dist 这个参数需要根据您的打包产物目录来定
             npx cap init "ElainaChat" "com.elaina.chat" --web-dir=dist
             npx cap add android
           fi
