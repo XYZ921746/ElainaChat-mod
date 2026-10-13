@@ -24,15 +24,24 @@ import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const WEB = path.join(ROOT, 'web');
+/**
+ * 插件根目录。
+ *
+ * ★★ 2026-10：从 `web/mods/` 搬到**项目根** `mods/`（与 data/ 平级）——
+ *   插件不再是"应用前端资源的一部分"，而是与运行期数据同级的独立内容。
+ *   这里导出给检查脚本共用，避免各处再写一遍路径（写错会静默少读，见下）。
+ */
+export const MODS = path.join(ROOT, 'mods');
 
 /**
  * 按加载顺序列出前端源码文件。
  *
  * 顺序规则（与 index.html 保持一致）：
  *   1. index.html 本身（含内联 <style>，供样式断言用）
- *   2. web/*.js 顶层脚本（live2d-video.js 等）
+ *   2. web/*.js 顶层脚本
  *   3. web/js/*.js（按文件名排序，app-01 / app-02 … 前缀保证顺序）
- *   4. web/mods/<name>/*.js（插件，按名字排序；manifest 里声明了顺序则按其声明）
+ *   4. mods/<name>/*.js（插件，按名字排序；manifest 里声明了顺序则按其声明）
+ *      ★ 注意是**项目根**的 mods/，不是 web/mods/（2026-10 搬迁）。
  *
  * 只收文本类文件（.html/.js/.css），跳过二进制与 node_modules。
  */
@@ -63,11 +72,14 @@ export function listFrontendFiles() {
     //    （检查脚本会断言"插件是否真的被注册""样式有没有带进去"）
     //
     // ★ 目录名是 `mods` 而不是 `plugins`（2026-09 修）。
-    //   这里原先写的是 `plugins` —— 那是改名之前的旧路径，实际早就是 web/mods。
+    //   这里原先写的是 `plugins` —— 那是改名之前的旧路径。
     //   后果不是报错，而是**静默少读**：readFrontend() 里一个 mod 源码都没有，
     //   于是所有"断言 mod 行为"的检查其实是在空字符串上做匹配。这类假检查
     //   比没有检查更糟 —— 它会给出"已验证"的错觉。
-    const modsDir = path.join(WEB, 'mods');
+    //
+    // ★★ 2026-10：插件目录从 `web/mods/` 搬到**项目根** `mods/`（与 data/ 平级）。
+    //   这里必须跟着改 —— 改错的后果与上面那次一模一样（静默少读、假检查通过）。
+    const modsDir = MODS;
     if (existsSync(modsDir)) {
         const plugins = readdirSync(modsDir)
             .filter((n) => statSync(path.join(modsDir, n)).isDirectory())

@@ -20,7 +20,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 // ★ 模型已搬进资源 mod（2026-10）：web/mods/live2d-models/models/。
 //   服务端实现也从 serve.mjs 搬到了那个插件的 server.mjs —— 这份对拍检查要跟着走，
 //   否则它会在旧位置找不到函数并报错（这恰恰是它该有的行为：搬家了就要同步更新检查）。
-const MODELS_ROOT = path.join(projectRoot, 'web', 'mods', 'live2d-models', 'models');
+const MODELS_ROOT = path.join(projectRoot, 'mods', 'live2d-models', 'models');
 /** 与 live2d-models/server.mjs 里 staticDir('/live2d/models') 指向同一个目录 */
 
 /**
@@ -59,7 +59,7 @@ function extractFn(source, name, label) {
 //   唯一的新依赖是 `ctx.json`：搬家前它们直接操作 res.writeHead/end，
 //   搬家后用宿主注入的 ctx.json（见 mod-server.mjs 的 ctx）。所以这里注入一个
 //   等价桩 —— 语义完全一样（写 JSON 回包），测的仍是真代码。
-const serveSrc = readFileSync(path.join(projectRoot, 'web', 'mods', 'live2d-models', 'server.mjs'), 'utf8');
+const serveSrc = readFileSync(path.join(projectRoot, 'mods', 'live2d-models', 'server.mjs'), 'utf8');
 const ctxStub = {
     json(res, status, obj) {
         res.writeHead(status, { 'Content-Type': 'application/json' });

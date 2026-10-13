@@ -59,12 +59,31 @@ html[data-theme-template="ios"] {
     --pixso-brown-dark: #1b2330;
     --pixso-brown-soft: #566070;
     --pixso-cream: #f7f9fc;
+    /* ★ 补 `--pixso-surface`（原本 4 套主题**都漏了**这个变量）：
+       `#appShell`（应用外壳）用的是它，而 :root 里写死 #ffffff。
+       漏掉时主题切换后外壳仍是纯白，与主题配色割裂 ——
+       浅色下还能勉强看，深色下就是一块刺眼的白（见 8.57）。
+       这里取比 cream 更亮一档的白，保持"外壳比内容更亮"的原有层次。 */
+    --pixso-surface: #ffffff;
     --pixso-panel: #e9eef5;
     --pixso-panel-soft: #f3f6fa;
     --pixso-orange: #007aff;
     --pixso-green: #7aa7f0;
     --pixso-green-dark: #4f7cf0;
     --pixso-line: #d5dce6;
+    /* ★ 2026-10 新增：**警示色**（与品牌主色分开）。
+       为什么需要它：Agent 权限那块有大量"⚠️ 这意味着…"的警示文案，
+       原先在 HTML 里写死成 #b45309（橙）。深色模式下写死的浅底配浅字看不清，
+       于是改成主题变量 —— 但**不能借用 --pixso-orange**：它在 iOS 主题下是
+       #007aff（蓝），在 claude 主题下是 #d97757（橙）—— 也就是说
+       "橙色"只是某些主题的巧合，拿它当警示色会让 iOS 主题里的警告变成蓝色，
+       语义直接丢掉（实测踩到：iOS 深色下"⚠️ 开启完全访问意味着"是蓝的）。
+
+       所以单独给一个**在所有主题下都是暖色**的变量，深色下提亮一档保证对比度。 */
+    --pixso-warn: #b45309;
+    --pixso-warn-soft: #9a3412;
+    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+    --pixso-warn-line: #fed7aa;
     --pixso-shadow: 0 30px 80px rgba(18, 30, 50, 0.16), 0 6px 18px rgba(18, 30, 50, 0.08);
 
     /* 本文件内部使用 */
@@ -105,12 +124,20 @@ html[data-theme-template="claude"] {
     --pixso-brown-dark: #2b211a;
     --pixso-brown-soft: #6d5a4d;
     --pixso-cream: #faf6f2;
+    /* ★ 补 --pixso-surface（详见 ios 主题里的说明） */
+    --pixso-surface: #fffdfb;
     --pixso-panel: #f0e9e2;
     --pixso-panel-soft: #f6f1ec;
     --pixso-orange: #d97757;
     --pixso-green: #d97757;
     --pixso-green-dark: #bf5f3f;
     --pixso-line: #ded2c7;
+    /* ★ 警示色（详见 ios 主题里的说明）：claude 主题本身就是暖色系，
+       所以直接复用它的主色，视觉上更协调。 */
+    --pixso-warn: #b45309;
+    --pixso-warn-soft: #9a3412;
+    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+    --pixso-warn-line: #fed7aa;
     --pixso-shadow: 0 30px 80px rgba(58, 45, 36, 0.16), 0 6px 18px rgba(58, 45, 36, 0.08);
 
     --tpl-primary: #d97757;
@@ -158,6 +185,8 @@ html[data-theme-template="sage"] {
     --pixso-brown-dark: #14251c;
     --pixso-brown-soft: #4e6b5a;
     --pixso-cream: #f6faf7;
+    /* ★ 补 --pixso-surface（详见 ios 主题里的说明） */
+    --pixso-surface: #ffffff;
     --pixso-panel: #e4eee8;
     --pixso-panel-soft: #eef6f1;
     --pixso-orange: #3fae87;
@@ -165,6 +194,11 @@ html[data-theme-template="sage"] {
     /* 终点压深：白字对比度靠它拉回来（浅绿 + 深绿渐变，均值约 3.5:1） */
     --pixso-green-dark: #25795a;
     --pixso-line: #cbdcd2;
+    /* ★ 警示色（详见 ios 主题里的说明）：sage 是绿色系，警示仍需暖色才醒目。 */
+    --pixso-warn: #b45309;
+    --pixso-warn-soft: #9a3412;
+    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+    --pixso-warn-line: #fed7aa;
     --pixso-shadow: 0 30px 80px rgba(30, 53, 41, 0.16), 0 6px 18px rgba(30, 53, 41, 0.08);
 
     --tpl-primary: #3fae87;
@@ -203,12 +237,19 @@ html[data-theme-template="sakura"] {
     --pixso-brown-dark: #2f1e26;
     --pixso-brown-soft: #775863;
     --pixso-cream: #fbf6f8;
+    /* ★ 补 --pixso-surface（详见 ios 主题里的说明） */
+    --pixso-surface: #fffdfe;
     --pixso-panel: #f2e8ec;
     --pixso-panel-soft: #f8f1f4;
     --pixso-orange: #d97b93;
     --pixso-green: #d97b93;
     --pixso-green-dark: #c2607b;
     --pixso-line: #e0cdd4;
+    /* ★ 警示色（详见 ios 主题里的说明）：樱花是粉紫系，警示仍需暖色才醒目。 */
+    --pixso-warn: #b45309;
+    --pixso-warn-soft: #9a3412;
+    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+    --pixso-warn-line: #fed7aa;
     --pixso-shadow: 0 30px 80px rgba(64, 42, 52, 0.16), 0 6px 18px rgba(64, 42, 52, 0.08);
 
     --tpl-primary: #d97b93;
@@ -490,12 +531,27 @@ html[data-theme="dark"] {
     --pixso-brown-dark: #eef2f7;
     --pixso-brown-soft: #9aa4b6;
     --pixso-cream: #232833;
+    /* ★★ 2026-10 补：`--pixso-surface` 原来**只定义了一次**（index.html 的 :root，
+       值是 #ffffff），深色块里漏了它 —— 而 `#appShell` 用的正是这个变量
+       （`#appShell { background: var(--pixso-surface) }`）。
+       后果：深色模式下整个应用外壳是**纯白**（实测计算值 rgb(255,255,255)），
+       顶栏那块白卡片、以及页面边缘露出的白边都来自这里。
+       手机端尤其明显 —— 手机是全屏 `#appShell`，等于整页白底。
+       这里补上与 panel 同色系的深色值，让"外壳"和"面板"在深色下层次一致。 */
+    --pixso-surface: #151a21;
     --pixso-panel: #1a2029;
     --pixso-panel-soft: #222833;
     --pixso-orange: #0a84ff;
     --pixso-green: #4f7cf0;
     --pixso-green-dark: #3d6ae0;
     --pixso-line: #2c3542;
+    /* ★ 警示色（深色）：底要压暗（否则浅底 + 浅字读不清，实测六个隐私开关全糊），
+       文字要提亮（#b45309 在深底上对比度只有 3.7:1，偏暗）。
+       这里选琥珀色 #fbbf24 —— 与"警告"的语义一致，且在深底上对比度约 9:1。 */
+    --pixso-warn: #fbbf24;
+    --pixso-warn-soft: #fcd34d;
+    --pixso-warn-bg: rgba(251, 191, 36, 0.10);
+    --pixso-warn-line: rgba(251, 191, 36, 0.35);
     --pixso-shadow: 0 30px 80px rgba(0, 0, 0, 0.5), 0 6px 18px rgba(0, 0, 0, 0.3);
 
     --tpl-primary: #0a84ff;
@@ -540,7 +596,11 @@ html[data-theme="dark"] .glass-button {
 }
 html[data-theme="dark"] .modal-input,
 html[data-theme="dark"] .modal-textarea {
-    background: rgba(255, 255, 255, 0.09) !important;
+    /* ★ 用 `background-color`，不要用 `background` 简写：简写带 `!important`
+       会把 `background-image` 一并重置为 `none` —— 而 `<select>` 也带
+       `.modal-input` 类，于是**深色下所有下拉的小三角被它抹掉**。
+       （与文件下方 `#settingsPanel` 那条是同一个坑，两处都要用 background-color。） */
+    background-color: rgba(255, 255, 255, 0.09) !important;
     border-color: rgba(255, 255, 255, 0.16) !important;
     color: var(--pixso-brown) !important;
 }
@@ -717,9 +777,72 @@ html[data-theme="dark"] #settingsPanel .glass-button {
 html[data-theme="dark"] #settingsPanel .modal-input,
 html[data-theme="dark"] #settingsPanel .modal-textarea,
 html[data-theme="dark"] #settingsPanel select {
-    background: rgba(255, 255, 255, 0.07) !important;
+    /* ★ 必须用 `background-color` 而不是 `background` 简写（2026-10 修）：
+       简写会把 `background-image` 一并重置为 `none`，而它带 `!important` ——
+       于是**深色下所有下拉右侧的小三角全部消失**。
+       用户反馈"边上还是要加小三角，不然人家都不知道有下拉"就是这个原因
+       （浅色下正常、只有深色下没有，所以很难第一时间想到是这里）。
+       只改背景色就不会碰掉自绘三角（雪佛龙规则在 index.html 的样式区）。 */
+    background-color: rgba(255, 255, 255, 0.07) !important;
     border-color: rgba(255, 255, 255, 0.14) !important;
     color: var(--pixso-brown) !important;
+}
+
+/* ★★★ 2026-10 修：深色下下拉**弹层**是白底浅字，几乎看不清。
+ *
+ * 实测症状（截图确认）：点开「模型名」下面那个 select，弹出的候选列表
+ * **背景纯白**，而未选中的选项是**浅灰色**（#dfe6f0 系）—— 白底浅字，读不出来。
+ *
+ * ── 为什么只给 select 设 color 会坏 ──────────────────────────────────────
+ * 上面那条 `#settingsPanel select { color: var(--pixso-brown) }` 设的是
+ * **select 自身的文字色**（深色主题下是浅色）。而弹层里的每一项是 `<option>`，
+ * 它**默认继承** select 的 color，却**不继承** select 的 background ——
+ * option 的背景由浏览器/系统按默认值给（浅色主题下就是白）。
+ * 于是就成了"浅字 + 白底"。
+ *
+ * ── 为什么 color-scheme 也没救回来 ──────────────────────────────────────
+ * theme.js 里确实设了 `color-scheme: dark`（那个也该有），但 Chromium 的
+ * 下拉弹层在**部分平台/版本上仍按系统默认配色绘制 option** ——
+ * 实测这台机器上 `color-scheme` 已生效（计算值是 dark）而弹层**依然是白的**。
+ * 所以不能只靠它，必须**显式给 option 设背景与文字色**。
+ *
+ * ── 为什么两种写法都要 ─────────────────────────────────────────────────
+ *   · `option`（元素选择器）—— 覆盖弹层里的每一项。
+ *   · `option:checked` / `option:hover` —— 选中/悬停项要更亮一档，
+ *     否则和背景糊在一起（Chromium 默认给选中项画系统蓝，深色下很刺眼）。
+ *
+ * ⚠️ 诚实说明：`<option>` 的样式支持度**依浏览器而异**。
+ *   Chromium 桌面版认 background-color / color；某些平台（尤其 macOS 原生
+ *   select、部分移动端 WebView）会**忽略**这些规则，仍用系统配色 ——
+ *   那种情况下唯一能做的就是我们已经在做的 `color-scheme`。
+ *   所以这里写的是"能让它正确的浏览器就正确"，不是"保证所有平台都对"。
+ *   （这也是为什么不能只写一条 —— 两层保险。） */
+html[data-theme="dark"] #settingsPanel select option,
+html[data-theme="dark"] #settingsPanel select optgroup {
+    background-color: #1a2029 !important;   /* = 深色主题的 --pixso-panel */
+    color: #dfe6f0 !important;              /* = 深色主题的 --pixso-brown */
+}
+html[data-theme="dark"] #settingsPanel select option:checked,
+html[data-theme="dark"] #settingsPanel select option:hover {
+    background-color: #2c3542 !important;   /* = 深色主题的 --pixso-line，比底色亮一档 */
+    color: #ffffff !important;
+}
+/* 浅色主题下也要显式给一份 —— 否则"跟随系统深色"时，浏览器可能按系统偏好
+   把 option 画成深底，而我们的 select 是浅底，同样割裂。 */
+html:not([data-theme="dark"]) #settingsPanel select option,
+html:not([data-theme="dark"]) #settingsPanel select optgroup {
+    background-color: #ffffff !important;
+    color: #253040 !important;
+}
+html:not([data-theme="dark"]) #settingsPanel select option:checked {
+    background-color: #e9eef5 !important;
+    color: #1b2330 !important;
+}
+/* ★ 设置面板之外的 select（例如移动会话的"移动到…"）同样处理。
+   用同一个变量体系，不重复写死颜色。 */
+html[data-theme="dark"] select option {
+    background-color: #1a2029 !important;
+    color: #dfe6f0 !important;
 }
 /* 设置里的选项卡片（主题卡片等） */
 html[data-theme="dark"] .theme-tpl-card {

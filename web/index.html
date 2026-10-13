@@ -104,8 +104,10 @@
         *, *::before, *::after { box-sizing: inherit; }
 
         body {
-            background: linear-gradient(135deg, #FFF0F5 0%, #FFE4E1 40%, #E6E6FA 100%);
-            background-attachment: fixed;
+            /* ★ 这里的 background 会被下面（约 1475 行）那条**同级但更靠后**的
+               `body { background: … }` 覆盖 —— 真正生效的是那一条。
+               保留这一处只为"早期渲染不闪白"，改配色请改那一条（有说明）。 */
+            background: var(--pixso-canvas);
             color: var(--text-body);
             font-family: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
             -webkit-font-smoothing: antialiased;
@@ -113,8 +115,9 @@
             overflow: hidden;
         }
 
+        /* ★ 选中文字的底色：原来是写死的粉 rgba(236,72,153,.25) */
         ::selection {
-            background: rgba(236, 72, 153, 0.25);
+            background: color-mix(in srgb, var(--pixso-green) 32%, transparent);
         }
 
         .scroll-soft::-webkit-scrollbar { width: 5px; height: 5px; }
@@ -266,8 +269,12 @@
         }
         .modal-input:focus, .modal-textarea:focus {
             background: rgba(255, 255, 255, 0.8);
-            border-color: rgba(236, 72, 153, 0.5);
-            box-shadow: 0 2px 12px rgba(236, 72, 153, 0.2), 0 0 0 3px rgba(236, 72, 153, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+            /* ★ 2026-10：原来是写死的粉色 rgba(236,72,153,…) —— 与默认主题
+               （暖米绿）不符。这里是**较早的一段**规则，会被下面 1789 行起的
+               `.modal-input` 那套（走 --pixso-*）覆盖，所以大多数输入框看不出问题；
+               但先把它改对，避免"哪段生效取决于顺序"这种脆弱状态。 */
+            border-color: var(--pixso-green);
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.10), 0 0 0 3px rgba(167, 187, 108, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.7);
         }
         .modal-input::placeholder, .modal-textarea::placeholder { color: rgba(100, 116, 139, 0.5); }
 
@@ -280,7 +287,10 @@
         }
 
         .gradient-text {
-            background: linear-gradient(135deg, var(--color-secondary), var(--color-primary), var(--color-accent));
+            /* ★ 2026-10：原来用 --color-primary/secondary/accent（那套是 #ec4899 粉紫，
+               只服务于"自定义"主题与 Tailwind 兜底），在默认主题下就是一段粉紫文字 ——
+               与暖米绿界面不符。改用主题色渐变。 */
+            background: linear-gradient(135deg, var(--pixso-green-dark), var(--pixso-green), var(--pixso-orange));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -303,18 +313,18 @@
             appearance: none;
             width: 22px; height: 14px;
             border-radius: 9999px;
-            background: linear-gradient(135deg, rgba(255, 211, 219, 0.98), rgba(255, 180, 200, 0.98));
+            background: linear-gradient(135deg, color-mix(in srgb, var(--pixso-green) 60%, #fff), var(--pixso-green));
             border: 2px solid rgba(255, 255, 255, 0.95);
-            box-shadow: 0 2px 6px rgba(244, 114, 182, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            box-shadow: 0 2px 6px color-mix(in srgb, var(--pixso-green) 55%, transparent), 0 0 0 1px rgba(255, 255, 255, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.6);
             cursor: pointer;
         }
-        .custom-slider::-webkit-slider-thumb:hover { transform: scale(1.1); box-shadow: 0 3px 10px rgba(255, 182, 193, 0.7); }
+        .custom-slider::-webkit-slider-thumb:hover { transform: scale(1.1); box-shadow: 0 3px 10px color-mix(in srgb, var(--pixso-green) 55%, transparent); }
         .custom-slider::-moz-range-thumb {
             width: 22px; height: 14px;
             border-radius: 9999px;
-            background: linear-gradient(135deg, rgba(255, 211, 219, 0.98), rgba(255, 180, 200, 0.98));
+            background: linear-gradient(135deg, color-mix(in srgb, var(--pixso-green) 60%, #fff), var(--pixso-green));
             border: 2px solid rgba(255, 255, 255, 0.95);
-            box-shadow: 0 2px 6px rgba(244, 114, 182, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            box-shadow: 0 2px 6px color-mix(in srgb, var(--pixso-green) 55%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.6);
             cursor: pointer;
         }
 
@@ -343,7 +353,7 @@
             bottom: -14px;
             left: -14px;
             border-radius: 9999px;
-            border: 1.5px solid rgba(244, 114, 182, 0.28);
+            border: 1.5px solid color-mix(in srgb, var(--pixso-green) 34%, transparent);
             animation: pulse-glow 1.8s ease-out infinite;
             pointer-events: none;
         }
@@ -380,9 +390,15 @@
             line-height: 1.5;
         }
         .process-row {
-            border: 1px solid var(--color-border-soft, rgba(120, 100, 90, 0.18));
+            /* ★ 2026-10：边框与底色改用**主题变量**。
+               原来这里是 `var(--color-border-soft, …)` / `var(--color-surface-muted, …)`，
+               而这两个变量**全项目从未定义**（grep 确认）—— 于是永远落到浅米色兜底值，
+               深色模式下过程行就成了一块浅米色卡片，与深色界面割裂（用户实测报的）。
+               换成 --pixso-line / --pixso-cream：它们在每套主题与深色块里都有定义，
+               自动跟随主题深浅，光靠变量就能修好，无需再写一套深色覆盖。 */
+            border: 1px solid var(--pixso-line);
             border-radius: 10px;
-            background: var(--color-surface-muted, rgba(255, 252, 248, 0.7));
+            background: var(--pixso-cream);
             margin-bottom: 6px;
             overflow: hidden;
         }
@@ -399,7 +415,9 @@
             color: var(--pixso-brown-soft, #6b5a4e);
             font: inherit;
         }
-        .process-row-head:hover { background: rgba(0, 0, 0, 0.03); }
+        /* ★ 2026-10：hover 底色原为写死的 rgba(0,0,0,.03) —— 深色下等于又压暗一层（方向正好相反）。
+           改用 --pixso-panel：各主题下都比行底色深一档，浅色下近似原来的淡灰、深色下也能看出反馈。 */
+        .process-row-head:hover { background: var(--pixso-panel); }
         .process-row-icon { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; opacity: 0.75; }
         .process-row-icon svg { width: 14px; height: 14px; display: block; }
         .process-row-title { flex: 0 0 auto; font-weight: 600; }
@@ -418,14 +436,18 @@
         .process-row-body {
             display: none;
             padding: 2px 10px 9px 30px;
-            border-top: 1px dashed var(--color-border-soft, rgba(120, 100, 90, 0.18));
+            /* 同上：这两个 --color-* 变量从未定义，深色下会露出浅色虚线 —— 改用主题变量 */
+            border-top: 1px dashed var(--pixso-line);
         }
         .process-row.is-open .process-row-body { display: block; }
         .process-row-body pre {
             margin: 6px 0 0;
             padding: 7px 8px;
             border-radius: 7px;
-            background: rgba(0, 0, 0, 0.045);
+            /* ★ 2026-10：原为写死的 rgba(0,0,0,.045)（深色下几乎看不出、还会偏脏）。
+               改用 --pixso-panel：浅色下是一块比行底略深的浅底（近似原观感），
+               深色下则是一块更暗的内嵌底 —— 两个方向都成立。 */
+            background: var(--pixso-panel);
             font-size: 11.5px;
             line-height: 1.45;
             white-space: pre-wrap;
@@ -441,7 +463,11 @@
             opacity: 0.6;
         }
         /* 状态点：运行中 / 成功 / 失败 / 已停止。
-           颜色之外还给形状差异（动画），不只靠颜色区分 —— 色盲用户同样能分辨。 */
+           颜色之外还给形状差异（动画），不只靠颜色区分 —— 色盲用户同样能分辨。
+           ★ 2026-10 复核深色：这三个语义色（绿/红/琥珀）在深色行底上的对比度约 3.5～4.6:1，
+             作为 7px **图形**（非文字，3:1 即达标）已足够，故保留语义色、不主题化 ——
+             否则把"成功绿/失败红"混成主题主色会丢掉语义（如深色主题主色是蓝）。
+             真正在深色下读不清的是下面那行**失败文案**（11px 小字），单独提亮。 */
         .process-state {
             flex: 0 0 auto;
             width: 7px; height: 7px;
@@ -456,7 +482,14 @@
         .process-row[data-state="ok"] .process-state { background: #3f9d5a; opacity: 1; }
         .process-row[data-state="error"] .process-state { background: #d0523f; opacity: 1; }
         .process-row[data-state="stopped"] .process-state { background: #b08a3f; opacity: 1; }
-        .process-row[data-state="error"] .process-row-status { color: #c0452f; opacity: 1; }
+        .process-row[data-state="error"] .process-row-status {
+            /* ★ 2026-10：原为写死 #c0452f —— 深色底上对比度仅约 2.9:1（11px 小字读不清）。
+               项目没有"失败/危险"专用变量，故用 color-mix 把它混进主题文字色
+               （--pixso-brown 深色下变浅、浅色下变深）→ 浅色下仍是原来的红，
+               深色下自动提亮到约 4.5:1。语义仍是"红"，不会与 stopped 的琥珀混淆。 */
+            color: color-mix(in srgb, #c0452f 68%, var(--pixso-brown));
+            opacity: 1;
+        }
         /* 思考正文：等宽、低对比，和正文明确区分开 */
         .process-reasoning {
             white-space: pre-wrap;
@@ -467,6 +500,24 @@
             max-height: 320px;
             overflow: auto;
         }
+        /* ★★ 2026-10：思考行按参考（DeepSeek 的思维链样式）改成**无框**。
+           用户原话："以这个思维链为参考，不需要框框束缚" —— 去掉卡片边框 / 底色 /
+           圆角，以及展开时那条虚线分隔；思考正文直接以缩进纯文本铺开，观感与参考图一致。
+           ★ 只改思考行（[data-kind="think"]）：工具行仍是卡片 —— 那是"操作记录"，
+             有边界更清楚，性质与思考的"叙述性文字"不同。
+           ★ 底色用 `transparent` 而不是写死白/黑：深浅色与各主题下都自动正确。 */
+        .process-row[data-kind="think"] {
+            border: 0;
+            background: transparent;
+            border-radius: 0;
+        }
+        .process-row[data-kind="think"] .process-row-body {
+            border-top: 0;
+            padding: 0 10px 6px 30px;
+        }
+        .process-row[data-kind="think"] .process-row-head { padding-left: 2px; padding-right: 2px; }
+        /* 思考行 header 不做 hover 底色 —— 那会像"浮出一个框"，与无框设计相悖 */
+        .process-row[data-kind="think"] .process-row-head:hover { background: transparent; }
         /* 每回合总览：把这一轮做过的事压成一行，折叠状态下也能看清全貌 */
         .turn-summary {
             display: flex;
@@ -480,9 +531,76 @@
         .turn-summary-sep { opacity: 0.5; }
         .turn-summary-empty { font-style: italic; }
 
+        /* ==================== 手机：过程区默认折叠成一行 ====================
+           用户反馈"AI 思考部分会挡住下面的内容"。
+
+           ── 问题（实测，412×915 手机视口）──────────────────────────────────
+           过程区每一行都是一条独立卡片，**5 行叠起来占 176px**：
+             总览 27 + 思考 33 + 查看文件 33 + 保存文件 33 + 电脑命令 33
+           于是 AI 正文被推到 **383px** 处。多步操作（8 步上限）时更糟 ——
+           过程区 300+px，正文直接被挤出首屏。桌面上高度宽裕不明显，
+           手机上就是"挡住了内容"。
+
+           ── 改法：手机上把明细行收进总览里 ──────────────────────────────────
+           · 总览行（`已思考 · 3 个操作完成`）保留 —— 它本来就是
+             "这一轮做了什么"的全部信息量，一行就够
+           · 明细行（思考 + 各工具行）默认 `display:none`，
+             由总览行当开关（`is-expanded`）展开
+           · 高度：176px → **约 30px**，正文自然回到首屏
+
+           ★ 为什么不是"把行高压小"：176 → 约 100px 仍然很占，而多步操作
+             只会更长 —— 那是把问题减轻、不是解决。
+           ★ 桌面端**完全不变**（仍逐行展开）：桌面高度宽裕，逐行能看清
+             "哪一步做了什么"，是更好的呈现。所以整段包在媒体查询里。 */
+        /* ==================== 两段式下拉（桌面 + 手机一致）====================
+           用户要求：第一段下拉看"思考内容 + 其中调用的工具"（按先后排序），
+           第二段下拉看对应那一条的详细内容（与 Agent 工具卡片一致）。
+
+           ── 修掉的老毛病 ──────────────────────────────────────────────────
+           ① **三角形点不了**：`.turn-summary-toggle`（箭头）的显示规则原先只写在
+              手机媒体查询里 —— 桌面上箭头根本不渲染 `display`，用户看到的是
+              **思考行自己的**那个 chevron，点它展开的却是思考正文，
+              于是"点三角形没反应、点下面思考内容才有用"。
+              现在箭头常驻（两端都显示），且它整个 `.turn-summary` 都是点击热区。
+           ② 桌面端点总览行**完全没有效果**：`.process-row { display:none }` 只有
+              手机端有，桌面端本来就把所有 .process-row 摊开显示，
+              所以 is-expanded 切换在桌面无任何视觉变化。
+              现在两段式在两端统一：明细默认收起，点总览行 → 展开时间线，
+              点时间线里的一条 → 展开它的详细内容。
+
+           ★ 为什么桌面也默认收起：这是聊天应用，正文才是主角。
+             一轮 agent 任务可能有十几条思考/工具记录，全摊开会把正文顶出屏幕
+             —— 这个理由在桌面同样成立（原来只是"桌面高度宽裕"就摊开了）。 */
+        .turn-summary { cursor: pointer; }
+        .turn-summary-toggle {
+            display: inline-flex;
+            align-items: center;
+            flex: 0 0 auto;
+            opacity: .7;
+            transition: transform .15s ease;
+        }
+        .turn-process.is-expanded .turn-summary-toggle { transform: rotate(90deg); }
+        /* 第一段：明细（时间线）默认收起，展开后才显示 */
+        .turn-process .process-row { display: none; }
+        .turn-process.is-expanded .process-row { display: block; }
+        /* 阶段输出的完整原文：等宽、可滚动，方便与正文对照 */
+        .process-phase-text {
+            max-height: 340px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        /* 两个下拉箭头都随展开态旋转，用户一眼能看出"哪一层开着" */
+        .process-row.is-open .process-row-chevron { transform: rotate(90deg); }
+
+        @media (max-width: 860px) {
+            /* 手机上总览行的箭头推到最右（桌面跟在一行摘要后面更自然） */
+            .turn-summary-toggle { margin-left: auto; }
+        }
+
         .typing-cursor::after {
             content: "|";
-            color: var(--color-primary);
+            color: var(--pixso-green-dark);   /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
             animation: cursor-blink 1s step-end infinite;
             margin-left: 1px;
         }
@@ -524,17 +642,22 @@
         }
 
         .bubble-ai {
-            background: linear-gradient(135deg, rgba(244, 114, 182, 0.14), rgba(139, 92, 246, 0.14));
+            /* ★ 2026-10：原来是写死的粉紫渐变（rgba(244,114,182)/rgba(139,92,246)）
+               + 写死的粉色描边 —— 与默认主题（暖米绿）不符。
+               改用主题变量的淡色混合，跟随主题切换。 */
+            background: linear-gradient(135deg,
+                color-mix(in srgb, var(--pixso-green) 14%, transparent),
+                color-mix(in srgb, var(--pixso-green-dark) 12%, transparent));
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
-            border: 1px solid rgba(236, 72, 153, 0.3);
+            border: 1px solid color-mix(in srgb, var(--pixso-green) 34%, transparent);
             box-shadow: 0 4px 16px rgba(31, 38, 135, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.5);
         }
 
         .sidebar-item-active {
             background: rgba(255, 255, 255, 0.75);
-            border: 1px solid rgba(236, 72, 153, 0.35);
-            box-shadow: 0 2px 12px rgba(236, 72, 153, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+            border: 1px solid color-mix(in srgb, var(--pixso-green) 40%, transparent);
+            box-shadow: 0 2px 12px color-mix(in srgb, var(--pixso-green) 20%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.7);
         }
         #folderList .conversation-inline-actions button,
         #conversationMoveClose {
@@ -756,7 +879,7 @@
         #quoteLikeBtn:focus-visible,
         #quoteFavBtn:focus-visible,
         #sidebarSearchClear:focus-visible {
-            outline: 2px solid rgba(236, 72, 153, 0.48);
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
             outline-offset: 2px;
         }
         .initial-composer {
@@ -771,11 +894,11 @@
             background: rgba(255, 255, 255, 0.48);
             border: 1px solid rgba(255, 255, 255, 0.72);
             border-radius: 18px;
-            box-shadow: 0 12px 28px rgba(104, 79, 145, 0.12), inset 0 1px 0 rgba(255,255,255,0.72);
+            box-shadow: 0 12px 28px rgba(60, 50, 40, 0.10), inset 0 1px 0 rgba(255,255,255,0.72);
         }
         .initial-composer-shell:focus-within {
-            border-color: rgba(236, 72, 153, 0.34);
-            box-shadow: 0 14px 32px rgba(104, 79, 145, 0.15), 0 0 0 3px rgba(236, 72, 153, 0.1), inset 0 1px 0 rgba(255,255,255,0.8);
+            border-color: color-mix(in srgb, var(--pixso-green) 40%, transparent);
+            box-shadow: 0 14px 32px rgba(60, 50, 40, 0.13), 0 0 0 3px color-mix(in srgb, var(--pixso-green) 16%, transparent), inset 0 1px 0 rgba(255,255,255,0.8);
         }
         #initialTextInput {
             flex: 1 1 0%;
@@ -812,11 +935,11 @@
             background: rgba(255, 255, 255, 0.48);
             border: 1px solid rgba(255, 255, 255, 0.72);
             border-radius: 18px;
-            box-shadow: 0 12px 28px rgba(104, 79, 145, 0.12), inset 0 1px 0 rgba(255,255,255,0.72);
+            box-shadow: 0 12px 28px rgba(60, 50, 40, 0.10), inset 0 1px 0 rgba(255,255,255,0.72);
         }
         #inputBar .conversation-composer:focus-within {
-            border-color: rgba(236, 72, 153, 0.34);
-            box-shadow: 0 14px 32px rgba(104, 79, 145, 0.15), 0 0 0 3px rgba(236, 72, 153, 0.1), inset 0 1px 0 rgba(255,255,255,0.8);
+            border-color: color-mix(in srgb, var(--pixso-green) 40%, transparent);
+            box-shadow: 0 14px 32px rgba(60, 50, 40, 0.13), 0 0 0 3px color-mix(in srgb, var(--pixso-green) 16%, transparent), inset 0 1px 0 rgba(255,255,255,0.8);
         }
         #textInput {
             flex: 1 1 0%;
@@ -893,15 +1016,15 @@
         }
         .composer-more-btn:hover {
             background: rgba(255, 255, 255, 0.74);
-            color: var(--color-primary);
+            color: var(--pixso-green-dark);   /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
         }
         .composer-more-btn[aria-expanded="true"] {
-            color: var(--color-primary);
+            color: var(--pixso-green-dark);   /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
             transform: rotate(45deg);
             background: rgba(255, 255, 255, 0.82);
         }
         .composer-more-btn:focus-visible {
-            outline: 2px solid rgba(236, 72, 153, 0.48);
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
             outline-offset: 2px;
         }
         .composer-more-menu {
@@ -1009,16 +1132,16 @@
         }
         .composer-switch-input:checked + .composer-switch {
             background: linear-gradient(135deg, rgba(244, 114, 182, 0.8), rgba(167, 139, 250, 0.85));
-            border-color: rgba(244, 114, 182, 0.28);
+            border-color: color-mix(in srgb, var(--pixso-green) 34%, transparent);
         }
         .composer-switch-input:checked + .composer-switch span { transform: translateX(16px); }
         .composer-switch-input:focus-visible + .composer-switch {
-            outline: 2px solid rgba(236, 72, 153, 0.42);
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
             outline-offset: 2px;
         }
         .composer-memory-status {
             flex: 0 0 auto;
-            color: var(--color-primary);
+            color: var(--pixso-green-dark);   /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
             font-size: 10px;
         }
         .composer-image-preview {
@@ -1077,15 +1200,16 @@
             font: inherit;
         }
         .message-action-btn:focus-visible {
-            outline: 2px solid rgba(236, 72, 153, 0.48);
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
             outline-offset: 2px;
         }
 
         .tab-active {
             background: rgba(255, 255, 255, 0.75);
-            color: var(--color-primary);
-            border: 1px solid rgba(236, 72, 153, 0.3);
-            box-shadow: 0 2px 10px rgba(236, 72, 153, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+            /* ★ 2026-10：原来是写死的粉描边 + 粉阴影，改成主题色 */
+            color: var(--pixso-green-dark);
+            border: 1px solid color-mix(in srgb, var(--pixso-green) 34%, transparent);
+            box-shadow: 0 2px 10px color-mix(in srgb, var(--pixso-green) 16%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.7);
         }
 
         .floating-dock-btn {
@@ -1399,6 +1523,18 @@
             --pixso-green-dark: #738746;
             --pixso-orange: #ff7d4d;
             --pixso-line: #d9c7c0;
+            /* ★★ 2026-10 补：默认（elaina）主题**漏定义**了 --pixso-warn* 四个变量。
+               其余四套主题（ios / claude / sage / sakura）与深色块都定义了它们，
+               只有这里没有 —— 而 :root 是"没切主题"时的生效来源，也就是**默认外观**。
+               后果：`var(--pixso-warn)` 取不到值、`var(--pixso-warn-bg)` 整条声明失效，
+               于是 #settingsPanel 里那些警示文案（Agent 权限、以及新加的 TTS 提示）
+               在默认主题下落回继承色（实测是 --pixso-brown 的深棕 #4c3123）——
+               警示语义丢掉，看起来跟普通说明文字一样。
+               取值与 themes.css 里其它浅色主题保持一致（#b45309 / #9a3412）。 */
+            --pixso-warn: #b45309;
+            --pixso-warn-soft: #9a3412;
+            --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+            --pixso-warn-line: #fed7aa;
             --pixso-shadow: 0 24px 70px rgba(67, 47, 36, 0.18);
             --chat-liquid-background:
                 radial-gradient(ellipse at 12% 18%, rgba(255, 255, 255, .92) 0%, rgba(255, 255, 255, 0) 42%),
@@ -1416,7 +1552,24 @@
         body {
             color: var(--pixso-brown);
             font-family: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+            /* ★★ 2026-10：这里才是**真正生效**的 body 背景（上面的规则与它同级，
+               它在文件更后面，所以由它胜出 —— 我第一次只在前面那份上改渐变，
+               被这一条 `background` 简写整个盖掉了，实测 bgImage=none）。
+
+               原来这里是 `var(--pixso-canvas)` 纯色铺底，而**更前面**还有一条
+               写死的粉紫渐变 `#FFF0F5→#FFE4E1→#E6E6FA`（见上面 body 规则）。
+               两条叠加的结果：纯色压在渐变上，渐变看不见 ——
+               但设置页遮罩只有 82% 不透明，透出来的仍是**画布色**
+               （#a8b974 橄榄绿）与那层粉紫的混合，用户看到偏粉。
+
+               现在统一到主题变量：画布色 + 一层极轻的暖色渐变，
+               既保留层次，又跟随主题切换；不再有任何写死的粉紫。 */
             background: var(--pixso-canvas);
+            background-image: linear-gradient(135deg,
+                color-mix(in srgb, var(--pixso-cream) 90%, transparent) 0%,
+                color-mix(in srgb, var(--pixso-cream) 72%, transparent) 42%,
+                color-mix(in srgb, var(--pixso-panel) 50%, transparent) 100%);
+            background-attachment: fixed;
             overflow: hidden;
         }
         .aurora-orb { display: none !important; }
@@ -1740,6 +1893,28 @@
         .modal-panel .text-fuchsia-500,
         .modal-panel .text-rose-500,
         .modal-panel .text-violet-500 { color: var(--pixso-orange) !important; }
+
+        /* ★★ 2026-10：`.text-pink-500` 等 Tailwind 类在**弹窗之外**的地方
+           （如顶栏金句的 ✨）没有被上面那条覆盖，仍是原生的 `#ec4899` 粉 ——
+           默认主题（暖米绿）下这些粉点是"漏网"的。
+
+           ★ 为什么必须带 `body` 前缀、而不能用 `:where()` 压低特异性：
+             themes.css 里已有的同类规则写的是
+             `html[data-theme-template] body .text-pink-500`（特异性 0,1,3）——
+             那套**只对显式选过模板的主题生效**，默认主题（不设 data-theme-template）
+             一条都不匹配。所以我这里要补的是"默认主题那一档"，
+             选择器得能压过 Tailwind 的单类选择器（0,1,0）：
+             用 `body .text-pink-500`（0,1,1）刚好够，且不与主题模板那套冲突
+             （那套特异性更高，选过模板时由它说了算）。
+
+           ★ 实测教训：第一版我用了 `:where(...)`（特异性 0）——
+             结果被 Tailwind 的 `.text-pink-500` 直接盖掉，**一点没生效**
+             （探针仍报 rgb(236,72,153)）。低特异性在"兜底"场景是反效果。 */
+        body .text-pink-500, body .text-pink-600, body .text-pink-400,
+        body .text-fuchsia-500, body .text-rose-500, body .text-violet-500,
+        body .text-purple-500 {
+            color: var(--pixso-orange);
+        }
         .modal-label {
             margin-bottom: 12px;
             color: var(--pixso-brown);
@@ -1759,6 +1934,185 @@
         }
         .modal-input::placeholder,
         .modal-textarea::placeholder { color: #a48e84; }
+
+        /* ==================== 模型名组合框（★ 2026-10 新增）====================
+           用户要求（原话）："下拉框能不能和输入的地方直接二合一，右边的三角形区域
+           大一些，点右边三角形区域展开更改设置。就比如获取模型那里，点开直接在
+           输入那里显示模型列表；点左边区域可更改模型名称，点右边三角显示模型列表，
+           点击对应的模型直接替换模型上去。如果获取到的模型里有与填写的一样的，
+           列表里就不显示名称，避免显示两个一模一样的。"
+
+           ── 结构 ────────────────────────────────────────────────────────────
+             .model-combo
+               ├ input.model-combo-input      ← 点左边：正常编辑（手填模型名）
+               └ button.model-combo-toggle    ← 点右边三角：展开/收起列表
+               └ div.model-combo-list         ← 候选列表（绝对定位浮层）
+
+           ── 为什么不用 <datalist> ───────────────────────────────────────────
+           `<datalist>` 看起来正好是这个需求，但两个硬伤：
+             ① 各浏览器 UI 完全不受控（Chromium 只在输入时过滤、不显示右三角），
+                与用户要的"右边一块专门点开列表"不是一回事；
+             ② 不能用 JS 精确控制"列表里排除与输入框相同的项"。
+           所以自己拼：一个 input + 一个按钮 + 一个浮层列表，行为完全可控。
+
+           ── 与既有 DOM 的关系 ───────────────────────────────────────────────
+           ★ 保留原来的 <input> 与 <select> 元素**不动**：
+             · input 仍是 `#settingChatModel` / `#settingVisionModel`（真正取值的地方）
+             · select 仍是 `#chatModelsSelect` / `#visionModelsSelect`（承载候选）
+             组合框只是给它们加了一层视觉外壳 + 一个显式的展开按钮，
+             把 select 藏起来当作数据源。这样所有既有代码与检查脚本
+             （check-model-list 的 8 组断言都盯着 input.value 与 select）继续有效。 */
+        .model-combo { position: relative; }
+        /* ★★ 组合框做成**一个整体外框**（2026-10 重做）。
+           ── 第一版错在哪 ─────────────────────────────────────────────────
+           我给 input 和三角按钮**各画了边框**（按钮只去掉左边那条），
+           想靠"边框重叠 1px"骗过眼睛。结果用户一眼看出是**两个部分**：
+             · input 46px 高、普通 select 48px —— 高度都对不上（少 2px）；
+             · 两条边框即使重合，颜色/抗锯齿的接缝仍在，"框里套了个按钮"。
+           ── 正确做法 ────────────────────────────────────────────────────
+           **外框画在容器上**（.model-combo-row），里面两个子元素都**不带边框**：
+             .model-combo-row   ← border + radius + background（唯一的框）
+               ├ input          ← 透明底、无边框、无圆角
+               └ button(toggle) ← 透明底、无边框，只提供"按钮"的语义与 hover
+           这样无论内部怎么分块，外框永远是**一个**圆角矩形 —— 与普通
+           `<select>` 的观感完全一致（select 也是"一个框 + 右侧原生三角"）。
+           ★ 高度必须与普通 select **实测一致**（都是 46px）。
+             第一版我按"modal-input 是 48px"设了 48 —— 实测普通 select 是 **46px**
+             （select 的行高算法与 input 不同）。差 2px 就能看出"两块不一样高"，
+             用户报的"分成两个部分"与此有关。 */
+        .model-combo-row {
+            display: flex;
+            align-items: stretch;
+            height: 46px;                      /* = 实测的普通 select 高度 */
+            border: 1px solid var(--pixso-line);
+            border-radius: 13px;
+            background: var(--pixso-cream);
+            box-sizing: border-box;
+            transition: border-color .15s ease, background .15s ease;
+        }
+        /* 聚焦：外框轻微高亮 —— ★ 但**不再换边框色**（2026-10 用户要求"我不需要绿边"）。
+           原来这里把边框改成 `--pixso-green`，聚焦/展开时外框会出现一圈彩色描边；
+           现在只保留背景的轻微变化作为聚焦提示，边框始终保持普通线色 ——
+           输入框与展开的列表也就天然同色，不会有任何色差。 */
+        .model-combo-row:focus-within {
+            background: var(--pixso-panel-soft);
+        }
+        /* 输入区：透明、无边框、无圆角 —— 它只是外框里的一段 */
+        .model-combo-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            background: transparent !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            height: 100%;
+            padding: 0 14px;
+        }
+        .model-combo-input:focus { background: transparent !important; box-shadow: none !important; }
+        /* 右侧三角：同样是外框里的一段（无边框、无底），
+           只保留 hover 的轻微提示 + "可点"的语义。
+           ★ 用户要求"三角形区域大一些" —— 给足宽度（46px）而不是挤成小箭头。 */
+        .model-combo-toggle {
+            flex: 0 0 auto;
+            width: 46px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 0;
+            background: transparent;
+            color: var(--pixso-brown-soft);
+            cursor: pointer;
+            border-radius: 0 12px 12px 0;   /* 与外框右下同弧度，hover 底色不会溢出圆角 */
+            transition: background .15s ease, color .15s ease;
+        }
+        .model-combo-toggle:hover,
+        .model-combo.is-open .model-combo-toggle { background: rgba(0, 0, 0, .05); color: var(--pixso-brown); }
+        /* 键盘聚焦（Tab 到三角）时的描边 —— ★ 用中性色，不用绿色（"我不需要绿边"） */
+        .model-combo-toggle:focus-visible { outline: 2px solid var(--pixso-brown-soft); outline-offset: -2px; }
+        /* 三角在展开时翻转（朝上），给一个明确的状态提示 */
+        .model-combo-toggle svg { transition: transform .15s ease; }
+        .model-combo.is-open .model-combo-toggle svg { transform: rotate(180deg); }
+        /* 浮层候选列表。
+           ★★ 注意 `right: 0` 而不是 `left: 0; right: 0` 拉满 ——
+             这里右端要**让开「获取模型」按钮**，否则浮层会盖住它。
+             做法：`right` 由 JS 无关的固定值给出（按钮宽度 + gap ≈ 100px 太多，
+             因为浮层宽度只需要覆盖输入框那一段即可）。
+             实测截图：拉满时会压住右侧的「🔄 获取模型」按钮，且下方内容被遮挡。
+           ★ `z-index` 要高于卡片内其它元素，但不能盖过设置面板顶栏（z-index: 2 在
+             顶栏那条规则里，那是面板内的层叠上下文，这里 5 足够盖住同层内容）。 */
+        .model-combo-list {
+            position: absolute;
+            left: 0;
+            /* 宽度对齐"输入框 + 三角"那一段（与 .model-combo 同宽，
+               而 .model-combo 本身就是 flex-1，不含右侧的获取按钮） */
+            right: 0;
+            /* ★ 与输入框**无缝衔接**（原来是 calc(100% + 4px) 留了 4px 间隙，
+               使列表看起来是"另一个浮层"而不是输入框的一部分） */
+            top: 100%;
+            z-index: 5;
+            max-height: 232px;
+            overflow-y: auto;
+            padding: 4px;
+            border: 1px solid var(--pixso-line);
+            border-radius: 13px;
+            background: var(--pixso-cream);
+            box-shadow: 0 10px 30px rgba(30, 27, 75, .16);
+        }
+        .model-combo-list.hidden { display: none; }
+        /* ★★ 展开时把「输入框」与「下拉列表」合成**一块**（2026-10 用户要求）：
+           "把模型名称和下拉栏合并成一个整体，而不是两个分开的地方"。
+           ── 原来为什么是两块 ──────────────────────────────────────────────
+           输入框是一个圆角框（.model-combo-row），候选列表是浮在它下方 4px 处的
+           **另一个**圆角框（各自带边框 + 圆角 + 阴影），中间有空隙 —— 一眼就是两截。
+           ── 现在怎么做 ────────────────────────────────────────────────────
+           展开时（.model-combo.is-open，app-07-init.js 展开加、收起移除）：
+             · 输入框的**下角压平**（两个下圆角设 0）；
+             · 列表的**上角压平**并**去掉上边框** —— 那条分隔线由输入框自身的
+               下边框充当，于是不会出现"两条边框叠在一起"的重边；
+             · 列表顶部紧贴输入框底部（上面的 `top: 100%`）。
+           结果：输入框 + 列表拼成一个连续的圆角矩形，只有**一个**外框。
+           ★ 两个组合框（对话模型 settingChatModel / 视觉模型 settingVisionModel）
+             共用这段规则。 */
+        .model-combo.is-open .model-combo-row {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        .model-combo.is-open .model-combo-toggle { border-bottom-right-radius: 0; }
+        /* ★ 展开时输入框与列表的边框**同色**（都保持普通线色 var(--pixso-line)）——
+           接缝两角干净、无缺口。这里**不再单独指定颜色**：因为聚焦态已不再换成
+           `--pixso-green`，输入框与列表天然同色（用户要求"我不需要绿边"）。 */
+        .model-combo.is-open .model-combo-list {
+            border-top: 0;
+            border-radius: 0 0 13px 13px;
+            box-shadow: 0 16px 30px rgba(30, 27, 75, .14);
+        }
+        .model-combo-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 8px 10px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: var(--pixso-brown);
+            font-size: 0.8125rem;
+            font-family: inherit;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .model-combo-item:hover,
+        .model-combo-item:focus-visible {
+            background: var(--pixso-panel-soft);
+            outline: none;
+        }
+        .model-combo-item.is-current { color: var(--pixso-green-dark); font-weight: 600; }
+        .model-combo-empty {
+            padding: 8px 10px;
+            font-size: 0.75rem;
+            color: var(--pixso-brown-soft);
+        }
         .modal-input:focus,
         .modal-textarea:focus {
             color: var(--pixso-brown);
@@ -1767,6 +2121,92 @@
             background: var(--pixso-panel-soft);
             border-color: var(--pixso-green);
             box-shadow: 0 0 0 3px rgba(167,187,108,.20);
+        }
+
+        /* ==================== 所有下拉统一外观（★ 2026-10）====================
+           用户反馈："还有其他比如语言主题那里的下拉还是老下拉"。
+
+           ── 问题 ────────────────────────────────────────────────────────────
+           `<select>` 默认由**浏览器/系统原生绘制**：Windows 上是一个方角小箭头，
+           在 macOS 上是另一套，与我们的圆角输入框/组合框都不一致 ——
+           而且**深色模式下那个原生箭头不会跟着变**（8.62 记过同类坑）。
+           组合框（模型名）已经是自绘三角，两者并排就更明显。
+
+           ── 做法 ────────────────────────────────────────────────────────────
+           `appearance: none` 去掉原生箭头，再用一条内联 SVG 当背景图自绘三角
+           （与 `.model-combo-toggle` 里那个三角**同一个形状**，视觉一致）。
+           padding-right 留出 34px 给它，避免长选项文字压到箭头上。
+
+           ★ 为什么用 SVG 背景图而不是 `::after` 伪元素：
+             `<select>` 是替换元素，`::after` 在多数浏览器上不渲染 ——
+             这是唯一可靠的自绘方式。
+           ★ 深色模式不用单独写：三角用 `currentColor` 不行（背景图里取不到），
+             所以用 `stroke='%23566070'`（= 浅色的 brown-soft）。
+             深色下会偏暗，但 select 本身有 --pixso-cream 底，
+             对比度仍然够（实测深色下清晰可读）。 */
+        #settingsPanel select.modal-input:not(.hidden),
+        #settingsPanel select.log-select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23566070' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 13px 13px;
+            padding-right: 34px;
+            cursor: pointer;
+        }
+        /* 深色下把箭头提亮（同一个内联 SVG，只换 stroke 色） */
+        html[data-theme="dark"] #settingsPanel select.modal-input:not(.hidden),
+        html[data-theme="dark"] #settingsPanel select.log-select {
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa4b6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+        }
+        /* ★ 下拉的**聚焦**样式与「模型名」字段对齐（2026-10 用户要求
+           "其他地方下拉栏没做呢，比如深色模式/语音输出/思考…"）。
+           ── 差在哪 ────────────────────────────────────────────────────────
+           下拉带 `.modal-input` 类，聚焦时走 `.modal-input:focus` →
+           出现**绿色边框 + 3px 绿色光晕**；而模型名那边已按用户要求去掉了彩色描边
+           （"我不需要绿边"）。于是同一页里两套聚焦观感。
+           ── 做法 ──────────────────────────────────────────────────────────
+           覆盖为中性聚焦：边框维持普通线色、去掉绿色光晕，只保留底色的轻微变化。
+           `#settingsPanel select:focus`（1 个 id）优先级高于 `.modal-input:focus`
+           （2 个类），所以能稳定压住，不必用 !important。 */
+        #settingsPanel select:focus {
+            border-color: var(--pixso-line);
+            box-shadow: none;
+        }
+
+        /* ==================== 设置下拉：自绘弹出面板（★ 2026-10）====================
+           用户要求"改下拉"——要把原生 <select> 的**弹出面板**换成主题化列表，
+           对齐「模型名」组合框的候选列表（原生面板是系统绘制的，CSS 改不了它）。
+           ── 做法 ──────────────────────────────────────────────────────────
+           `select` 元素本身**不动**（仍负责显示当前值、仍是取值来源），只在
+           `mousedown` 时 `preventDefault()` 阻止原生面板，改为弹出下面这个面板。
+           ── 面板样式 ──────────────────────────────────────────────────────
+           复用 `.model-combo-item`（选项行）；面板贴在 select 下沿、顶部不留边框，
+           分隔线由 select 自身的下边框充当，所以看起来是"select + 列表"连成一块。 */
+        .modal-input.cselect-open,
+        .log-select.cselect-open {
+            border-bottom-left-radius: 0 !important;
+            border-bottom-right-radius: 0 !important;
+        }
+        .cselect-panel {
+            position: fixed;
+            z-index: 100020;                    /* 高于设置遮罩（100001） */
+            max-height: 232px;
+            overflow-y: auto;
+            padding: 4px;
+            border: 1px solid var(--pixso-line);
+            border-top: 0;                      /* 分隔线由 select 下边框充当 */
+            border-radius: 0 0 13px 13px;
+            background: var(--pixso-cream);
+            box-shadow: 0 16px 30px rgba(30, 27, 75, .14);
+        }
+        /* 下方空间不够时面板向上弹：改为顶部圆角、底边无边框 */
+        .cselect-panel--up {
+            border-top: 1px solid var(--pixso-line);
+            border-bottom: 0;
+            border-radius: 13px 13px 0 0;
         }
         /* 文件选择按钮（插件页/模型页的上传框）：Tailwind 的 file:bg-indigo-100
            在深色下是一块亮色，换成主题面板色。 */
@@ -1848,6 +2288,15 @@
             min-width: 0;
             max-width: 100%;
         }
+        /* ★ 日志工具栏里的下拉/搜索框**不吃**上面那条 width:100% ——
+           它们是工具栏里的小控件，被拉满整行会把后面的开关/按钮挤到换行，
+           实测截图里工具栏整个竖成一列。这里显式给回自己的宽度。 */
+        #settingsPanel .log-select,
+        #settingsPanel .log-search {
+            width: auto;
+            max-width: 150px;
+        }
+        #settingsPanel .log-search { width: 150px; }
         #settingsPanel .grid > *,
         #settingsPanel .flex > * { min-width: 0; }
         #closeSettings,
@@ -1889,10 +2338,15 @@
             align-items: center;
             gap: 12px;
             color: var(--pixso-brown);
-            background: rgba(255,255,255,.84);
-            border: 1px solid rgba(217,199,192,.88);
+            /* ★ 2026-10 修：原为写死的 `rgba(255,255,255,.84)` ——
+               深色模式下语笺/日记页顶栏是一块**白条**（实测计算值 rgba(255,255,255,.84)），
+               而文字用深色模式的浅色字，白底浅字看不清。
+               改用主题变量，浅色/深色/6 套主题都自动跟随。
+               `--pixso-panel` 在浅色下是奶油白（与原观感接近），深色下是深灰。 */
+            background: var(--pixso-panel);
+            border: 1px solid var(--pixso-line);
             border-radius: 20px;
-            box-shadow: 0 8px 22px rgba(76,49,35,.10), inset 0 1px 0 rgba(255,255,255,.78);
+            box-shadow: 0 8px 22px rgba(76,49,35,.10);
         }
         .page-secondary-copy { flex: 1 1 auto; min-width: 0; }
         .page-secondary-title { color: var(--pixso-brown); font-size: 18px; font-weight: 750; line-height: 1.2; }
@@ -2056,6 +2510,44 @@
         .header-memory-btn.is-running { color: var(--pixso-orange); }
         .header-memory-btn.page-mode-hidden { display: none !important; }
         .header-memory-btn svg { width: 15px; height: 15px; }
+        /* ★ 顶栏「外观模式」开关（2026-10：从「外观 → 深色模式」下拉搬来，
+           并按用户给的截图改成**三段连体胶囊**）：跟随设备 / 浅色 / 深色 三个
+           图标按钮连成一个胶囊，选中的那个是**填充圆底 + 白图标**。
+           ★「跟随设备」= 原来的「跟随系统」（跟随系统深浅色自动切换）。 */
+        .header-theme-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 3px;
+            flex: 0 0 auto;
+            border: 1px solid var(--pixso-line);
+            border-radius: 999px;
+            background: var(--pixso-cream);
+        }
+        .header-theme-switch .theme-seg {
+            appearance: none;
+            -webkit-appearance: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            flex: 0 0 auto;
+            padding: 0;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--pixso-brown-soft);
+            cursor: pointer;
+            transition: background .15s ease, color .15s ease;
+        }
+        .header-theme-switch .theme-seg:hover { color: var(--pixso-brown); }
+        .header-theme-switch .theme-seg svg { width: 16px; height: 16px; }
+        /* 选中段：填充圆底（用主题主色；深色主题下它就是截图里那个亮蓝圆） */
+        .header-theme-switch .theme-seg.is-active {
+            background: var(--pixso-green);
+            color: #fff;
+        }
         #showSidebar {
             color: var(--pixso-brown) !important;
             border: 0;
@@ -2481,6 +2973,164 @@
         .diary-essence { padding: 4px 8px; color: var(--pixso-green-dark); background: rgba(167,187,108,.18); border-radius: 999px; font-size: 10px; font-weight: 700; }
         .diary-empty { padding: 90px 24px; color: var(--pixso-brown-soft); text-align: center; }
 
+        /* ==================== 日志分栏（#tab-log） ====================
+           对齐 AstrBot 的「数据与日志 → 日志」：
+             ① 级别药丸（多选，点掉不想看的级别）
+             ② 工具栏（模块 / 关键词 / 排除对话 / 自动滚动 / 刷新 / 清屏）
+             ③ 终端式日志区（等宽、深色、旧在上、新在下）
+             ④ 状态栏
+
+           ★ 日志区**刻意是深色**，不跟随主题：它是终端式输出，深底浅字
+             才能让级别配色（绿/黄/红）有足够对比度；浅底上黄字几乎看不见。
+             这与 bat 面板的观感也一致 —— 用户要的正是"两处能逐行对照"。
+
+           ★ 这一栏**不套卡片**（其它分栏是 `<section>` 卡片）：
+             卡片自带 18px/20px 内边距，日志区要尽量占满高度，
+             套上之后上下各多一圈空白、能看的行数反而变少。 */
+
+        /* 日志区高度：**填满设置内容区的剩余空间**。
+           ★ 为什么不再用 `calc(var(--app-height) - 260px)` 这类"视口减魔法数字"：
+             那是估算，估不准就会两头顶 —— 实测在 360x640 上内容区有 576px，
+             而按公式算出来的日志区只有 192px，**白白空掉 236px（41%）**；
+             反过来在小视口上又会溢出（曾经撑到 1418px）。
+             让 flex 去分配就没有这个矛盾：内容区多高，日志区就吃掉多少。
+           ★ 配套：`#settingsContent` 在显示日志栏时改成**不滚动 + flex 纵向**
+             （见下面 `#settingsContent:has(#tab-log.active-panel)`），
+             这样 `.log-tab-body` 的 `flex:1` 才有确定的父高度可用。
+             滚动交给日志区自己（它本来就是 overflow-y:auto）。 */
+        .log-tab-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1 1 auto;
+            min-height: 0;      /* 关键：不加则 flex 子项不肯收缩，会顶破容器 */
+        }
+
+        .log-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            flex-shrink: 0;
+        }
+        .log-toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-left: auto;
+        }
+
+        /* ---- 级别药丸 ---- */
+        .log-level-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .log-pill {
+            padding: 3px 11px;
+            font-size: 11px;
+            font-weight: 700;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            letter-spacing: .02em;
+            color: var(--pixso-brown-soft);
+            background: transparent;
+            border: 1px solid var(--pixso-line);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: color .15s ease, border-color .15s ease, background .15s ease;
+        }
+        .log-pill:hover { border-color: var(--pixso-green); color: var(--pixso-brown); }
+        /* 选中态：用该级别自己的颜色（与日志区里的级别文字同色，一眼对应） */
+        .log-pill[aria-pressed="true"][data-level="DEBUG"] { color: #7aa2f7; border-color: #7aa2f7; background: rgba(122,162,247,.12); }
+        .log-pill[aria-pressed="true"][data-level="INFO"] { color: #16a34a; border-color: #16a34a; background: rgba(22,163,74,.12); }
+        .log-pill[aria-pressed="true"][data-level="WARN"] { color: #d97706; border-color: #d97706; background: rgba(217,119,6,.12); }
+        .log-pill[aria-pressed="true"][data-level="ERROR"] { color: #dc2626; border-color: #dc2626; background: rgba(220,38,38,.12); }
+        .log-pill[aria-pressed="true"][data-level="CRITICAL"] { color: #b91c1c; border-color: #b91c1c; background: rgba(185,28,28,.16); }
+        /* 未选中：划掉的感觉 —— 明确"这一类被关掉了" */
+        .log-pill[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+
+        /* ---- 工具栏控件 ---- */
+        .log-select, .log-search {
+            height: 28px;
+            padding: 0 8px;
+            font-size: 11px;
+            color: var(--pixso-brown);
+            background: var(--pixso-cream);
+            border: 1px solid var(--pixso-line);
+            border-radius: 8px;
+            outline: none;
+        }
+        .log-select { max-width: 150px; }
+        .log-search { width: 150px; }
+        .log-search:focus, .log-select:focus { border-color: var(--pixso-green); }
+        .log-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 11px;
+            color: var(--pixso-brown-soft);
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+        .log-switch input { accent-color: var(--pixso-green); cursor: pointer; }
+        .log-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            color: var(--pixso-brown-soft);
+            background: var(--pixso-cream);
+            border: 1px solid var(--pixso-line);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: color .15s ease, border-color .15s ease;
+        }
+        .log-icon-btn:hover { color: var(--pixso-orange); border-color: var(--pixso-orange); }
+        .log-icon-btn svg { width: 14px; height: 14px; }
+
+        /* ---- 终端式日志区 ---- */
+        .log-terminal {
+            flex: 1 1 auto;
+            min-height: 0;
+            padding: 10px 12px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            background: #0f172a;
+            border-radius: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+            font-size: 11px;
+            line-height: 1.65;
+            color: #cbd5e1;
+            /* 长路径/长 JSON 不撑破容器；同时保留换行（多行诊断块要能读） */
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .log-terminal::-webkit-scrollbar { width: 8px; }
+        .log-terminal::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .log-terminal::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .log-line { padding: 1px 4px; border-radius: 4px; }
+        .log-line:hover { background: rgba(255,255,255,.06); }
+        /* 级别配色：与级别药丸同色系，但在深底上要提亮 */
+        .log-line[data-level="DEBUG"] .log-lv { color: #7aa2f7; }
+        .log-line[data-level="INFO"] .log-lv { color: #4ade80; }
+        .log-line[data-level="WARN"] .log-lv { color: #fbbf24; }
+        .log-line[data-level="ERROR"] .log-lv { color: #f87171; }
+        .log-line[data-level="CRITICAL"] .log-lv { color: #fca5a5; font-weight: 700; }
+        .log-time { color: #64748b; }
+        .log-tag { color: #a78bfa; }
+        .log-loc { color: #64748b; }
+        .log-msg { color: #cbd5e1; }
+        .log-empty { color: #64748b; padding: 12px 4px; }
+
+        /* ---- 状态栏 ---- */
+        .log-meta {
+            flex-shrink: 0;
+            padding-top: 2px;
+            color: var(--pixso-brown-soft);
+            font-size: 10px;
+            line-height: 1.5;
+        }
+        .log-meta b { color: var(--pixso-brown); }
+
         @media (max-width: 1080px) and (min-width: 861px) {
             #appShell { width: calc(100vw - 28px); height: calc(100vh - 28px); margin: 14px auto; }
             #sidebar { width: 330px; flex-basis: 330px; }
@@ -2577,7 +3227,16 @@
                 gap: 8px;
                 border: 1px solid var(--pixso-line) !important;
                 border-radius: 20px !important;
-                background: #fff !important;
+                /* ★★ 2026-10 修：这里原本写死 `background: #fff !important` ——
+                   深色模式下顶栏是一块**纯白方块**（实测计算值 rgb(255,255,255)），
+                   而顶栏文字用的是深色模式的浅色字，白底浅字几乎看不清。
+                   改用主题变量：`--pixso-panel` 在浅色下是奶油白、深色下是深灰，
+                   两边都跟着主题走，不需要在 themes.css 里再写一条深色覆盖。
+                   ★ 为什么不直接在 themes.css 加 `html[data-theme="dark"] #mainContent > header`
+                     覆盖：那样只治深色，**其它 5 套主题**（iOS 蓝/陶土橙/鼠尾草/樱花桃）
+                     的顶栏仍然是写死的白色，与它们的配色割裂。
+                     根因是"写死了颜色"，就该改根因。 */
+                background: var(--pixso-panel) !important;
                 box-shadow: 0 8px 22px rgba(76, 49, 35, .10) !important;
                 backdrop-filter: none !important;
                 -webkit-backdrop-filter: none !important;
@@ -2636,6 +3295,16 @@
             }
             .diary-toolbar { padding: 12px calc(16px + var(--safe-right)) 4px calc(16px + var(--safe-left)); }
             .diary-toolbar .diary-count { margin-left: 0; }
+            /* 日志分栏（手机）：工具栏换行、搜索框收窄。
+               ★ 高度**不在这里改** —— 它由 .log-tab-body 的 flex:1 填满内容区，
+                 与机型无关。这里曾经写过 `height: calc(--app-height - 300px)`
+                 和更早的 `height: auto`，两次都是错的：前者在小屏上白空 40%，
+                 后者让日志区按内容撑到 1418px 把状态栏推出屏幕。 */
+            .log-toolbar { gap: 8px; }
+            .log-toolbar-right { margin-left: 0; width: 100%; }
+            .log-search { flex: 1 1 auto; width: auto; min-width: 0; }
+            .log-select { max-width: 120px; }
+            .log-terminal { font-size: 10.5px; padding: 8px 9px; }
             #sidebar .p-3.grid {
                 width: calc(100% - 84px);
                 min-width: 0;
@@ -2677,6 +3346,10 @@
             .header-memory-btn > span:not(#memoryStatusDot) { display: none; }
             .header-memory-btn svg { width: 18px; height: 18px; }
             .header-memory-btn:hover { color: var(--pixso-orange) !important; background: var(--pixso-panel-soft) !important; }
+            /* 顶栏外观模式开关：手机上收窄一点，别挤掉「整理记忆」 */
+            .header-theme-switch { padding: 2px; gap: 1px; }
+            .header-theme-switch .theme-seg { width: 26px; height: 26px; }
+            .header-theme-switch .theme-seg svg { width: 15px; height: 15px; }
             #initialState {
                 justify-content: safe center;
                 overflow-y: auto;
@@ -2707,7 +3380,9 @@
                 user-select: none;
             }
             #folderList [data-conv-id].is-context-target {
-                background: rgba(255,255,255,.74);
+                /* ★ 原为写死的 rgba(255,255,255,.74) —— 深色模式下会话项被长按时
+                   会闪一块**白底**。改用主题变量，跟随深浅色。 */
+                background: var(--pixso-panel-soft);
                 box-shadow: inset 3px 0 0 var(--pixso-green), 0 7px 18px rgba(76,49,35,.08);
             }
             .conversation-inline-actions {
@@ -2728,7 +3403,9 @@
                 border: 0 !important;
                 outline: 0;
                 border-radius: 50% !important;
-                background: rgba(255,255,255,.48);
+                /* ★ 原为写死的 rgba(255,255,255,.48) —— 深色下是一枚**白圆片**。
+                   改用主题变量（浅色下仍是淡底，深色下变深）。 */
+                background: var(--pixso-panel-soft);
                 box-shadow: none !important;
                 -webkit-tap-highlight-color: transparent;
             }
@@ -2783,6 +3460,59 @@
             }
             #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
             #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
+            /* ★ 手机上的分栏导航：9 个分栏在 360px 宽里放不下，**横向滚动**是
+                 手机上的标准做法（浏览器标签页就是这样），不改成换行 ——
+                 换行会占掉 2-3 行高度，把本就紧张的日志区再压小。
+               ★ 关键是别浪费宽度：桌面那条 `max-width: calc(100% - 120px)` 是
+                 给"标题 + ✕"两侧留位的，而手机上标题行已删、✕ 只有一个且绝对定位，
+                 所以只留 ✕ 的宽度（38px）+ 一点间隙即可。实测这样能让
+                 「日志」「插件」这些靠后的分栏少滚一大截。
+               ★★ `justify-content: flex-start` **不在这里写** ——
+                 它在基础 `#settingsTabNav` 规则里（那是真因，见那条注释）。
+                 我上一版写在这里，被文件更后面的基础规则覆盖掉、一点没生效
+                 （实测仍是 `center` → 头尾被裁且滚不回来）。 */
+            #settingsTabNav {
+                max-width: calc(100% - 66px);
+                /* 触摸滚动更跟手；并让点中的分栏吸附到可视区 */
+                -webkit-overflow-scrolling: touch;
+                scroll-snap-type: x proximity;
+                scroll-padding-inline: 8px;
+                /* ★ 左右各留 2px 内边距：让首/末项与容器边缘有一点呼吸，
+                   也让 scroll-snap 吸附后不贴边（实测贴边时看着像被裁）。
+                   ★ 不用 mask 做"右侧渐隐"了 —— mask 是**视觉遮罩**，
+                     它会把首/末项的文字也一起渐隐掉，与"被遮挡"的观感叠加
+                     反而更像 bug。可滑动的提示交给"露出半个分栏"本身。 */
+                padding: 0 2px !important;
+                mask-image: none;
+                -webkit-mask-image: none;
+            }
+            .settings-tab-btn { scroll-snap-align: start; }
+            /* ★★ 手机上**隐藏分栏图标**，只留文字。
+                 两个原因：
+                 ① 宽度：9 个分栏 + 图标在 360px 上要多滚将近一倍
+                    （实测带图标 scrollWidth 341 vs 不带 255）；
+                 ② 可读性：图标是 unicode 符号（◐☺◗♪◉✧⚙☰▣），在安卓的
+                    中文字体里常常**没有对应字形**，会退化成方框或与文字重叠
+                    （实测截图里"外观"的图标和文字叠在一起）。
+                 桌面端宽度充裕、字体也更全，图标保留。
+               ★ 图标是 `display:none`，不占位。 */
+            .settings-tab-btn::before { display: none; }
+            /* ★ 手机上没有悬停，未选中分栏要**更实一点**：
+                 桌面端靠悬停区分选中态，而手机上未选中太淡（opacity .78 + 浅色文字）
+                 在户外/低亮度下几乎看不清"还有哪些分栏可点"。
+                 选中态本来就是主题绿 + 加粗，所以提亮未选中不会混淆。
+               ★★ 注意：分栏的**间距与内边距不在这里改**。
+                 原因：媒体查询在文件里位于**基础 `.settings-tab-btn` 规则之前**，
+                 同权重下后面的基础规则会胜出 —— 我原先在这里写的
+                 `padding/font-size/gap` **全部被覆盖、一点没生效**
+                 （实测 btnPadding 仍是 8px 12px、font-size 仍是 13px）。
+                 这类"规则写了却不生效"不会报错，只能靠量计算样式发现。
+                 所以那些覆盖写在文件后面「手机分栏间距」那一段（基础规则之后）。 */
+            .settings-tab-btn { opacity: .92; color: var(--pixso-brown); }
+            /* ★ 级别药丸在手机上收紧：5 个药丸（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+                 在 360px 上原本要占两行（工具栏 127px 高）。收紧内边距与字号后
+                 仍会换行，但只占两行的一半高度，给日志区多留出可视行数。 */
+            .log-pill { padding: 3px 8px; font-size: 10.5px; }
             #closeSettings {
                 width: 38px;
                 height: 38px;
@@ -2805,10 +3535,14 @@
             #settingsContent > section,
             #settingsContent > section:last-child {
                 padding: 17px;
-                background: rgba(255,255,255,.56);
-                border: 1px solid rgba(255,255,255,.76) !important;
+                /* ★ 原为写死的白色玻璃（rgba(255,255,255,.56) + 白描边 + 白内阴影）——
+                   深色模式下设置卡片会是**白底**，与深色面板割裂。
+                   改用主题变量：浅色下仍是半透明奶油白（观感接近），深色下自动变深。
+                   内阴影的白也去掉（它在深色下是一条刺眼的亮边）。 */
+                background: var(--pixso-panel-soft);
+                border: 1px solid var(--pixso-line) !important;
                 border-radius: 18px;
-                box-shadow: 0 12px 30px rgba(76,49,35,.08), inset 0 1px 0 rgba(255,255,255,.72);
+                box-shadow: 0 12px 30px rgba(76,49,35,.08);
                 backdrop-filter: blur(16px) saturate(1.08);
                 -webkit-backdrop-filter: blur(16px) saturate(1.08);
             }
@@ -2978,7 +3712,33 @@
     #settingsTabNav {
         display: flex;
         align-items: center;
-        justify-content: center;
+        /* ★★ `justify-content` 必须是 `flex-start`，**不能是 `center`**！
+           这是 flexbox 的一个经典陷阱，也是用户报"导航头和尾被遮挡、还滑不动"的真因。
+
+           ── 为什么 `center` 会坏 ──────────────────────────────────────────
+           容器 `overflow-x: auto` + 内容比容器宽时，`justify-content: center`
+           会把**溢出部分均分到两侧**：左边溢出 N/2、右边溢出 N/2。
+           而滚动条的 `scrollLeft` 最小只能是 **0** ——
+           **左边那 N/2 永远滚不到**（它不在可滚动范围内）。
+           于是首项被左边缘裁掉、末项被右边缘裁掉，且怎么滑都露不全。
+
+           实测（412px 视口，9 个分栏）：
+             navScrollW 312 / clientW 302 → 只能滚 10px
+             · 首个按钮 left=23，nav left=32 → **左侧被裁 9px，滚不回来**
+             · 末个按钮 right=344，nav right=334 → 右侧被裁 10px
+           截图里就是「外观」被裁成「观」、「插件」被裁成「插」。
+
+           ── 为什么改成 flex-start 就好了 ────────────────────────────────
+           内容从容器**左边缘**开始排，溢出全部落在右侧 ——
+           右侧在可滚动范围里，一路滑到底就能看到最后一项；
+           左侧没有任何溢出，首项天然完整。
+
+           ★ 桌面端同样受益：桌面内容通常不溢出（居中看着更整齐），
+             但窗口一窄（或分栏变多，比如插件注册了新分栏）就会踩同一个坑。
+             所以直接改基础规则，而不是只在移动端媒体查询里覆盖 ——
+             我上一版就是在媒体查询里写 `flex-start`，**被这条基础规则盖掉了**
+             （同权重、基础规则在文件更后面），实测 `justifyContent` 仍是 `center`。 */
+        justify-content: flex-start;
         gap: 4px !important;
         padding: 0 !important;
         border: 0 !important;
@@ -2986,6 +3746,24 @@
         background: transparent !important;
         box-shadow: none !important;
         border-radius: 0 !important;
+        /* ★★★ 2026-10 修：导航按钮组要**居中**（用户："导航栏应该是居中的，
+           现在选择靠左"）。
+           ── 为什么之前没居中 ────────────────────────────────────────────
+           下面这两行（`width: max-content` + `margin: 0 auto`）本意就是居中，
+           但元素上还挂着 Tailwind 的 **`flex-1`**（= `flex: 1 1 0%`）——
+           它在 flex 父容器里会**撑满整行**，于是 `width: max-content` 被忽略、
+           `margin: 0 auto` 没有剩余空间可分配 → 按钮组贴在左边，
+           右边空出一大片。实测（1440px 视口）：
+             nav 盒子中心 720（= 视口中心，因为被撑满）
+             按钮组中心 403  →  偏离中心 **317px**
+           ── 修法 ───────────────────────────────────────────────────────
+           把 `flex` 改回 `0 1 auto`，让 `width: max-content` 真正生效：
+             · **放得下时**（桌面）→ 宽度 = 按钮组宽度，`margin: 0 auto` 居中。
+             · **放不下时**（手机，9 个分栏 > 屏宽）→ 被 max-width 钳住，
+               内容溢出，而 `justify-content: flex-start` 保证从**左边缘**开始排、
+               右侧可滚 —— 这正是上面那段长注释里修过的坑，**不能改成 center**
+               （center 会把溢出均分到两侧，左侧那半永远滚不回来）。 */
+        flex: 0 1 auto;
         width: max-content;
         max-width: calc(100% - 120px);  /* 两侧给 ✕ 留位置 */
         margin: 0 auto;
@@ -3026,11 +3804,10 @@
     .settings-tab-btn.active::before { opacity: 1; }
     .settings-tab-btn[data-settings-tab="tab-appearance"]::before { content: '◐'; }
     .settings-tab-btn[data-settings-tab="tab-character"]::before { content: '☺'; }
-    .settings-tab-btn[data-settings-tab="tab-chat"]::before { content: '◗'; }
-    .settings-tab-btn[data-settings-tab="tab-voice"]::before { content: '♪'; }
-    .settings-tab-btn[data-settings-tab="tab-vision"]::before { content: '◉'; }
+    .settings-tab-btn[data-settings-tab="tab-model"]::before { content: '◈'; }
     .settings-tab-btn[data-settings-tab="tab-capability"]::before { content: '✧'; }
     .settings-tab-btn[data-settings-tab="tab-advanced"]::before { content: '⚙'; }
+    .settings-tab-btn[data-settings-tab="tab-log"]::before { content: '☰'; }
     .settings-tab-btn[data-settings-tab="tab-mods"]::before { content: '▣'; }
     .settings-tab-btn:hover {
         background: transparent;        /* 无底色块 —— 只提亮文字 */
@@ -3047,6 +3824,61 @@
         box-shadow: none;
     }
     .settings-tab-btn.active::after { content: none; }   /* 清掉旧的下划线伪元素 */
+
+    /* ==================== 手机：分栏之间拉开间距 ====================
+       用户反馈"设置的导航栏分开一点，手机端看着太近了"。
+
+       ── 真正的原因不是 gap 太小，而是**按钮被 flex 压缩了** ──────────────
+       实测诊断（360px 视口）：
+         · 每个按钮**需要 25px**（"外观"两个汉字），实际只有 **11.1px**
+         · 9 个按钮内容合计需要 321px，而导航容器只有 196px
+         · 按钮的 `flex-shrink` 是默认值 **1** → flex 把它们**等比压扁**，
+           文字因此溢出、相邻两项**糊在一起**
+       所以"太近"是**文字被压扁造成的视觉重叠**，不是间距数值问题 ——
+       光把 `gap` 调大反而更糟（可分配宽度更少、压得更狠，实测就是这样）。
+
+       ── 怎么改 ──────────────────────────────────────────────────────────
+       ① `flex-shrink: 0` —— 按钮保持内容宽度，**不压缩**；
+          放不下就让导航**横向滚动**（它本来就是 `overflow-x: auto`，
+          浏览器标签页就是这么做的，手机上也是标准交互）。
+       ② `gap: 12px` —— 间距清晰，配合 ① 才不会互相挤压。
+       ③ `padding: 8px 0` —— 间隔全靠 gap，避免 gap+padding 双重叠加
+          让总宽暴涨（9 个分栏要尽量少滚）。
+
+       ★★ 这段必须放在**基础 `.settings-tab-btn` / `#settingsTabNav` 规则之后**！
+         第一版我写在上面的移动端大块里（2664 行的媒体查询）——
+         那个位置**早于**基础规则，同权重下后面的基础规则胜出，
+         于是我写的 padding / font-size / gap **全部被覆盖、一点没生效**
+         （实测 btnPadding 仍是 8px 12px、font-size 仍是 13px）。
+         这类"规则写了却不生效"**不会报任何错**，只能靠量计算样式发现。 */
+    @media (max-width: 860px) {
+        #settingsTabNav {
+            /* ★ `gap: 12px` 让相邻分栏之间有清晰空隙（原来 4px 太挤）。 */
+            gap: 12px !important;
+            /* ★ 容器宽度：给 ✕ 留出刚好够的位置就行。
+               基础规则是 `calc(100% - 120px)` —— 那是给**桌面端"标题 + ✕"两侧**
+               留的（桌面顶栏左边有标题）。而手机上标题行已删、✕ 只有一个且
+               `right: 20px` 绝对定位（宽 38px），所以只需留 38 + 20 + 8(间隙) ≈ 66px。
+               不改的话导航白白少 54px 可视宽度，能看到的完整分栏更少。
+               （`justify-content: flex-start` 已提到基础规则里 ——
+                写在这里会被它盖掉，见基础规则那条注释。） */
+            max-width: calc(100% - 66px);
+            /* 左右留 2px：首/末项不贴边，不会被误看成"被裁掉" */
+            padding: 0 2px !important;
+            /* ★★ 去掉 `mask` 渐隐：mask 是**视觉遮罩**，会把首/末项的文字
+               一起渐隐掉 —— 与"头尾被遮挡"的观感叠加，反而更像 bug。
+               可滑动的提示交给"露出半个分栏"本身（手机上这是通用约定）。 */
+            mask-image: none;
+            -webkit-mask-image: none;
+        }
+        .settings-tab-btn {
+            padding: 8px 0;
+            font-size: 12.5px;
+            gap: 0;
+            /* ★ 这一条是关键：不压缩，让导航真的滚动起来 */
+            flex-shrink: 0;
+        }
+    }
     /* 关闭按钮也走主题色（深色下原来写死的 indigo 看不清） */
     #closeSettings:hover { background: rgba(99,102,241,.12); }
     #closeSettings svg { color: var(--pixso-brown-soft) !important; }
@@ -3067,6 +3899,50 @@
     /* ★ 底部按钮栏已删除 → 原来这条 `div:last-child` 的边框色规则也去掉
        （它会落到内容区上，给内容区加一条多余的顶边框）。 */
     
+    /* ==================== Agent 权限区块的着色面板（★ 2026-10）====================
+       「AI 权限」与「手机操作」里有几块**带色调**的说明面板（警告橙 / 信息蓝紫）。
+       它们在 HTML 里是用内联 style 写死的浅色底（rgba(255,247,237,.75) 之类）+
+       深色文字（#b45309 / #9a3412）—— 浅色主题下没问题，**深色主题下就糊了**：
+          · 内联背景是浅色的（不跟主题走）；
+          · 而文字颜色被 `html[data-theme="dark"] .text-indigo-700` 这类规则
+            统一改成了**浅色**（rgb(205,214,226)）；
+          · 结果：浅底 + 浅字，几乎看不见。实测六个隐私开关的标签全是这样。
+
+       ★ 这与 8.57 记录的是**同一类 bug**：写死的颜色 + 主题驱动的另一半天。
+         修法与插件页那次一致 —— 用主题变量，让两边一起跟随主题。
+
+       ★ 为什么用 `[style*="..."]` 属性选择器而不是给每块加 class：
+         这些内联 style 出现在 9 个地方（三档卡片 + 两块说明 + 后端摘要 + …），
+         逐个改 HTML 容易漏。属性选择器一次覆盖全部，且**新增同类面板自动生效**。
+         （代价：选择器可读性差一点，所以在这里写清来龙去脉。） */
+    #settingsPanel [style*="rgba(249,249,255"],
+    #settingsPanel [style*="rgba(255,247,237"] {
+        background: var(--pixso-panel-soft) !important;
+        border-color: var(--pixso-line) !important;
+    }
+    /* 警示面板要保留"暖色"语义，所以用**专用的** --pixso-warn* 而不是
+       --pixso-orange —— 后者在 iOS 主题下是蓝色，会把警告画成品牌色。 */
+    #settingsPanel [style*="rgba(255,247,237"] {
+        background: var(--pixso-warn-bg) !important;
+        border-color: var(--pixso-warn-line) !important;
+    }
+    /* 警告类文字（写死的 #b45309 橙 / #9a3412 深橙）换成主题变量：
+       深色下会自动提亮（#fbbf24），浅色下保持原来的橙。 */
+    #settingsPanel [style*="color:#b45309"] {
+        color: var(--pixso-warn) !important;
+    }
+    #settingsPanel [style*="color:#9a3412"] {
+        color: var(--pixso-warn-soft) !important;
+    }
+    /* 三档卡片里的说明文字（text-indigo-400 / 300）在深色下本来就偏暗，
+       放在上面那层 panel-soft 底上要再亮一档才够对比。 */
+    #settingsPanel #agentPermissionSection .text-indigo-400,
+    #settingsPanel #agentPermissionSection .text-indigo-300,
+    #settingsPanel #agentPhoneSection .text-indigo-400,
+    #settingsPanel #agentPhoneSection .text-indigo-300 {
+        color: var(--pixso-brown-soft) !important;
+    }
+
     /* ==================== 卡片分组 ====================
        每个分组一张卡片（标题栏 + 分隔线 + 内容），宽项自动跨两列。
        ★ 纯 CSS 改造，不动那 285 行 HTML —— 现有结构已经是
@@ -3179,7 +4055,51 @@
          （与上面 grid 那条是同一类错误）。 */
     #tab-mods.settings-tab-panel.active-panel { display: block !important; }
     #tab-mods .settings-card { margin-bottom: 0; }
-    
+
+    /* ★ 日志分栏同理：它只有**一块**内容（终端式日志区），
+       如果走上面那条 ≥900px 的两列 grid，这一块只会占**半宽** ——
+       实测截图里就是"日志区被挤成窄窄一条、右边一大片空白"。
+       终端输出要的是整行宽度（长路径 / 长报错不换行才好看），所以固定用 block。 */
+    #tab-log.settings-tab-panel.active-panel { display: block !important; }
+    /* 日志区的宽度与高度都交给它自己（见 .log-tab-body），不要被 grid 影响 */
+    #tab-log .log-tab-body { grid-column: 1 / -1; }
+
+    /* ★★ 日志分栏激活时，内容区改成**不滚动 + flex 纵向** ——
+       这是让 `.log-tab-body { flex: 1 }` 真正生效的前提：
+       flex 子项要"吃掉剩余高度"，父元素必须是有确定高度的 flex 容器。
+       默认的 `#settingsContent` 是 `overflow-y:auto` 的普通块，
+       子元素 flex:1 拿不到可分配的高度，只会按内容高度走。
+
+       ★ 为什么让**内容区不滚动**、把滚动交给日志区自己：
+         日志区本来就是 `overflow-y:auto`。若两层都可滚动，
+         手指在日志区上滑会先滚日志、滑到头再"穿透"滚外层 ——
+         这种滚动链在手机上体验很差（用户想继续看日志，结果整页跟着动）。
+         现在外层不滚，日志区滚，边界清晰。
+       ★ 用 `:has()` 精确限定：只有"当前激活的是日志栏"时才改布局，
+         其它分栏（卡片式、需要整页滚动）完全不受影响。
+         不支持 `:has()` 的旧 WebView 会忽略这条 —— 退化结果是
+         "日志区按内容高度展开、外层滚动"，仍可用，只是不如现在舒服。 */
+    #settingsContent:has(#tab-log.active-panel) {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 0;
+    }
+    /* ★★ 关键第二步：日志栏**自己**必须是 flex 列容器 + 撑满内容区。
+       只把内容区改成 flex 是不够的 —— 实测那样 `#tab-log` 仍是
+       `display: block`（被上面那条 `display:block !important` 定的），
+       它内部的 `.log-tab-body { flex:1 }` 因此无处可依，
+       高度还是按内容撑开（实测 1566px）。
+       这里让 #tab-log 接管 flex 上下文：flex:1 吃掉内容区剩余高度，
+       min-height:0 允许它收缩（不加则 flex 子项会被内容顶破）。
+       特异性 2 个 id > 上面那条的 1 个 id，所以能盖住 `!important`。 */
+    #settingsContent:has(#tab-log.active-panel) > #tab-log.active-panel {
+        display: flex !important;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
     .settings-tab-panel{display:none}.settings-tab-panel.active-panel{display:block}
 
     .l2d-bg-opt.selected { outline: 2px solid #6366f1; outline-offset: 2px; box-shadow: 0 0 0 3px rgba(99,102,241,.35); }
@@ -3271,10 +4191,13 @@
     }
     /* 拖拽期间禁止选中文字（否则拖动会变成划选） */
     body.mod-dragging-active{user-select:none;-webkit-user-select:none;cursor:grabbing}
-    /* 落点提示线：插到这一张的上方 */
+    /* 落点提示线：插到这一张的上方。
+       ★ 2026-10：原来是写死的粉紫渐变 `#ec4899 → #8b5cf6`，与默认主题
+         （暖米绿）对不上 —— 用户反馈"设置页面与对话主题对不上"就是这类。
+         改用主题变量：--pixso-green → --pixso-green-dark（跟随当前模板）。 */
     .mod-card.mod-drop-before::before{
         content:'';position:absolute;left:8px;right:8px;top:-5px;height:3px;border-radius:2px;
-        background:linear-gradient(90deg,#ec4899,#8b5cf6);
+        background:linear-gradient(90deg,var(--pixso-green),var(--pixso-green-dark));
     }
     /* 插件设置：每个插件一块**专属容器**，打开谁就只显示谁那块。
        （原先所有插件共用 #modSettingsBody，互相 innerHTML 清空导致内容串台 ——
@@ -3386,7 +4309,8 @@
         position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:9999px;background:#fff;
         box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;pointer-events:none;
     }
-    .mod-switch input:checked ~ .track{background:linear-gradient(90deg,#ec4899,#8b5cf6)}
+    /* ★ 2026-10：同上，写死的粉紫渐变改成主题变量（开关拨到"开"时的轨道色）。 */
+    .mod-switch input:checked ~ .track{background:linear-gradient(90deg,var(--pixso-green),var(--pixso-green-dark))}
     .mod-switch input:checked ~ .knob{transform:translateX(18px)}
     .mod-switch input:focus-visible ~ .track{outline:2px solid var(--pixso-green);outline-offset:2px}
     /* 卡片底部那排图标按钮 */
@@ -3493,7 +4417,7 @@
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <div class="text-center text-[10px] text-indigo-200 select-none">v2.1.0 · 魔女之旅</div>
+                <div class="text-center text-[10px] text-indigo-200 select-none">v1.3.1 · 魔女之旅</div>
             </div>
         </aside>
 
@@ -3524,16 +4448,30 @@
                         </div>
                     </div>
                 </div>
+                <!-- 顶部按钮插槽挂载点（★ 2026-10 移到最前）：Live2D 的「视频通话」等插件按钮
+                     排在「整理记忆」「外观模式」之前 —— 用户要求视频按钮在按钮组最左边。
+                     display:contents 让按钮直接参与 header 的 flex 布局（gap-3 照常生效），
+                     空着时不占任何空间。 -->
+                <span id="headerModSlot" style="display:contents"></span>
                 <button id="headerMemoryBtn" class="header-memory-btn" type="button" title="整理当前记忆">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/><path stroke-linecap="round" d="M17 17h3m-1.5-1.5v3"/></svg>
                     <span>整理记忆</span>
                     <span id="memoryStatusDot" class="hidden w-2 h-2 rounded-full bg-current animate-pulse"></span>
                 </button>
-                <!-- 视频通话按钮已改由 web/mods/live2d/ 通过 header.actions 插槽渲染 -->
-                <!-- 顶部按钮插槽挂载点：mod 通过 host.slot('header.actions', …) 注册的按钮
-                     插在这里。display:contents 让按钮直接参与 header 的 flex 布局
-                     （gap-3 照常生效），空着时不占任何空间。 -->
-                <span id="headerModSlot" style="display:contents"></span>
+                <!-- 外观模式开关（★ 2026-10：从「外观 → 深色模式」下拉搬来，并按用户给的
+                     截图改成**三段连体胶囊**）：跟随设备 / 浅色 / 深色，选中的那段是
+                     填充圆底 + 白图标。★「跟随设备」就是原来的「跟随系统」。 -->
+                <div id="headerThemeBtn" class="header-theme-switch" role="group" aria-label="外观模式">
+                    <button type="button" class="theme-seg" data-mode="system" title="跟随设备（跟随系统深浅色自动切换）" aria-label="跟随设备">
+                        <svg class="icon-device" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8M12 16.5V20"/></svg>
+                    </button>
+                    <button type="button" class="theme-seg" data-mode="light" title="浅色" aria-label="浅色">
+                        <svg class="icon-sun" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+                    </button>
+                    <button type="button" class="theme-seg" data-mode="dark" title="深色" aria-label="深色">
+                        <svg class="icon-moon" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+                    </button>
+                </div>
             </header>
 
             <!-- 初始状态-->
@@ -3838,17 +4776,34 @@
                  忘了写 !important 就会让线又冒出来（这类"幽灵边框"踩过）。
                  另外 pt-3 pb-1 也去掉了 —— 高度交给 CSS 的 min-height 统一控制。 -->
             <div id="settingsTopBar" class="flex items-center gap-2 px-4 flex-shrink-0">
-                <div id="settingsTabNav" class="flex gap-1 flex-1 min-w-0 overflow-x-auto">
+                <!-- ★★ 2026-10：class 里**去掉了 `flex-1`**。
+                     它是"导航按钮组贴左边、不居中"的直接原因：
+                     `flex-1` = `flex: 1 1 0%`，在 flex 父容器里会把本元素撑满整行，
+                     于是 CSS 里的 `width: max-content` + `margin: 0 auto` 全部失效
+                     （实测 1440px 视口下按钮组中心偏离视口中心 317px）。
+                     居中改由 CSS 的 `flex: 0 1 auto` 负责（见基础导航规则那段注释）。 -->
+                <div id="settingsTabNav" class="flex gap-1 min-w-0 overflow-x-auto">
                     <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance">外观</button>
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-character">角色</button>
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-chat">对话</button>
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-voice">语音</button>
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-vision">视觉</button>
+                    <!-- ★★ 2026-10 用户要求：「对话 / 语音 / 视觉」三个分栏合并成「模型」。
+                         理由：这三栏装的其实是**同一类东西** —— 都是"用哪个模型/服务"：
+                           对话栏 = 主模型（LLM）、语音栏 = TTS 与 ASR 模型、视觉栏 = 转述模型。
+                         拆三栏的代价是导航要放 9 个分栏（手机上一屏放不下、要横向滚动），
+                         而收益只是"少往下滚一点"。合并后导航 7 个，一屏能看全。
+                         ★ 三个 id 已统一为 tab-model；旧 id 不再存在，别照着旧代码找。 -->
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-model">模型</button>
                     <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 web/mods/live2d/）。
                          这里不能留同名按钮 —— 插槽的撞名检查会因此拒绝插件注册，
                          表现为"设置里能看到 Live2D，但点开是空的"。 -->
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability">能力</button>
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced">高级</button>
+                    <!-- 日志：独立分栏（2026-10 用户要求）。
+                         ★ 为什么给它一个分栏而不是塞进「高级」：塞进去时它是高级的最后一项，
+                           而高级那一栏比屏幕还高（920px > 842px 视口），入口被挤到**屏幕外**，
+                           用户根本看不见（实测：按钮 top=895，视口高 900）。
+                           给它自己的分栏就永远在导航上、一眼可见。
+                         ★ 也不要放回主界面 rail —— 那是每天用的功能位，日志是排查用的。 -->
+                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-log">日志</button>
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-mods">插件</button>
                 </div>
                 <button id="closeSettings" class="flex-none p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭设置" aria-label="关闭设置">
@@ -3871,8 +4826,7 @@
                               <span class="text-pink-500">✦</span> 外观主题
                           </div>
                           <div class="text-[11px] text-indigo-400 mb-2 leading-relaxed">
-                              换配色方案。默认「粉紫」就是原本的样式；其余几套是液态玻璃风格。
-                              选择会记住，下次打开还是它。
+                              默认设置（暖米绿）为默认主题，选择其他主题后，自动替换原来方案。
                           </div>
                           <div id="themePickerBox" class="mb-3"></div>
 
@@ -3883,21 +4837,12 @@
                           <div id="themeCustomEditor"
                                style="display:none;padding:10px;border-radius:12px;background:rgba(255,255,255,.5);border:1px solid var(--pixso-line)"></div>
 
-                          <!-- 深色模式：三态（浅色 / 深色 / 跟随系统）
-                               为什么不用单个开关：手机/电脑都有系统级深色设置，
-                               用户通常希望"跟着系统走"（白天浅色、晚上深色）。
-                               只有开/关两态的话，要么每次手动切，要么永远跟不了系统。 -->
-                          <div class="flex items-center gap-2 flex-wrap mt-3">
-                              <span class="text-xs text-indigo-700 font-medium">深色模式</span>
-                              <select id="themeDarkMode" class="modal-input text-xs py-1" style="width:auto;min-width:120px">
-                                  <option value="light">浅色</option>
-                                  <option value="dark">深色</option>
-                                  <option value="system">跟随系统</option>
-                              </select>
-                              <span id="themeDarkHint" class="text-[11px] text-indigo-400"></span>
-                          </div>
-                          <div class="text-[11px] text-indigo-400 mt-1 leading-relaxed">
-                              深色可与任意主题叠加。「跟随系统」会随系统的深色开关自动切换。
+                          <!-- ★ 2026-10：深色模式下拉**已删除**，改到顶栏右上角的按钮
+                               （#headerThemeBtn，挨着「整理记忆」）：深色下显太阳、
+                               浅色下显月亮，点一下即切换。这里只留一句说明，免得用户找不到。
+                               ★ 随之移除的还有原下拉的第三态「跟随系统」（用户要求删掉这个开关）。 -->
+                          <div class="text-[11px] text-indigo-400 mt-3 leading-relaxed">
+                              深色模式已移到顶栏右上角
                           </div>
                       </div>
                 </div><!-- /tab-appearance -->
@@ -3930,10 +4875,6 @@
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="text-xs text-indigo-500 mb-1 block">世界观设定</label>
-                        <textarea id="ccWorldSetting" rows="8" class="modal-textarea text-sm resize-y" placeholder="描述世界规则、时代背景，以及角色与用户为何能够面对面交流"></textarea>
-                    </div>
-                    <div class="mb-3">
                         <label class="text-xs text-indigo-500 mb-1 block">完整角色卡</label>
                         <textarea id="ccCharacterPrompt" rows="18" class="modal-textarea text-sm resize-y" placeholder="直接填写完整角色身份、性格、表达方式、能力边界与对话规则"></textarea>
                     </div>
@@ -3946,9 +4887,28 @@
                         <button id="resetCharacterBtn" class="btn-secondary text-xs">恢复默认伊蕾娜卡</button>
                     </div>
                 </section>
+
+                <!-- ★ 世界观卡：从「角色设定卡」里拆出来的**独立模块**（与上方「人设」分开）。
+                     #ccWorldSetting 仍按 id 被 app-02-data.js / app-06-settings.js 读写，位置变动无影响。 -->
+                <section id="worldSettingsSection" class="mt-6 pt-4 border-t border-indigo-100">
+                    <div class="modal-label flex items-center gap-2 mb-2">
+                        <span class="text-pink-500">✦</span> 世界观卡
+                        <span class="text-[11px] text-indigo-300 font-normal">世界规则与时代背景</span>
+                    </div>
+                    <div class="mb-3">
+                        <label class="text-xs text-indigo-500 mb-1 block">世界观设定</label>
+                        <textarea id="ccWorldSetting" rows="8" class="modal-textarea text-sm resize-y" placeholder="描述世界规则、时代背景，以及角色与用户为何能够面对面交流"></textarea>
+                    </div>
+                    <p class="text-[11px] text-indigo-300 leading-relaxed">这段设定会随当前所选的那套人设一起保存、一起切换。</p>
+                </section>
                 </div><!-- /tab-character -->
 
-                <div id="tab-chat" class="settings-tab-panel">
+                <!-- ============ 模型：主模型 / 语音 / 视觉 ============
+                     ★★ 2026-10 合并（原 tab-chat + tab-voice + tab-vision 三栏）。
+                     三栏装的都是"用哪个模型/服务"，合成一栏后按**对话 → 语音 → 视觉**
+                     的顺序排；每块仍是独立 `<section>` 卡片（卡片样式与分隔由
+                     #settingsContent 的规则统一处理，不需要额外 class）。 -->
+                <div id="tab-model" class="settings-tab-panel">
                 <section>
                     <div class="modal-label flex items-center gap-2"><span class="text-violet-500">✦</span> 对话模型（多 API 格式）</div>
                     <div class="space-y-3">
@@ -3968,11 +4928,26 @@
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">模型名</label>
+                            <!-- ★ 2026-10 组合框：点左边编辑、点右边三角展开候选列表。
+                                 结构与行为说明见样式区 `.model-combo` 那段注释。
+                                 ★ input 与 select 的 id **保持不变** ——
+                                   真正取值仍读 input.value，select 只当候选数据源，
+                                   所以既有代码与 check-model-list 的断言继续有效。 -->
                             <div class="flex items-center gap-2">
-                                <input id="settingChatModel" autocomplete="off" type="text" class="modal-input text-sm flex-1" placeholder="deepseek-chat">
-                                <button id="fetchChatModelsBtn" class="btn-secondary text-xs" type="button" title="从当前 API 地址拉取可用模型列表">🔄 获取模型</button>
+                                <div class="model-combo flex-1 min-w-0">
+                                    <div class="model-combo-row">
+                                        <input id="settingChatModel" autocomplete="off" type="text" class="modal-input text-sm model-combo-input" placeholder="deepseek-chat">
+                                        <button id="chatModelsToggle" type="button" class="model-combo-toggle"
+                                            aria-label="展开模型列表" aria-expanded="false"
+                                            title="展开/收起模型列表（先点「获取模型」拉取）">
+                                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg>
+                                        </button>
+                                    </div>
+                                    <select id="chatModelsSelect" class="hidden" aria-hidden="true" tabindex="-1"></select>
+                                    <div id="chatModelsList" class="model-combo-list hidden" role="listbox"></div>
+                                </div>
+                                <button id="fetchChatModelsBtn" class="btn-secondary text-xs flex-none" type="button" title="从当前 API 地址拉取可用模型列表">🔄 获取模型</button>
                             </div>
-                            <select id="chatModelsSelect" class="modal-input text-xs mt-2 hidden" style="max-width:100%"></select>
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">API Key（Ollama 本地可留空）</label>
@@ -3986,7 +4961,7 @@
                     <p id="chatFormatHint" class="text-[11px] text-indigo-300 leading-relaxed mt-2">请求从当前设备直接发给所选服务商，不经过作者服务器。Android Key 使用系统 Keystore 加密；Web Key 仅保存在当前标签页会话。</p>
                 </section>
 
-                <!-- ============ 思考模式 ============
+                <!-- ============ 对话优化（思考模式 + 第三人称）============
                      从「对话工具」菜单移过来的（原来在输入框旁边的 ⊕ 里）。
                      移过来的原因：它是**模型参数**，不是"这一次对话的工具"——
                      和模型名、输出上限是同一类东西，用户找它时会去设置里找，
@@ -3996,12 +4971,22 @@
                      默认**关闭**：思考模式会让首字延迟从 1 秒变成十几秒，
                      对一个角色扮演聊天应用来说默认开着是负体验。
                      但要注意 DeepSeek 现在服务端默认是**开**的，
-                     所以"关闭"必须由我们显式发 disabled（见 buildThinkingParams）。 -->
+                     所以"关闭"必须由我们显式发 disabled（见 buildThinkingParams）。
+
+                     ★ 2026-10 新增「第三人称」：开启后一轮对话走**两段式生成** ——
+                       先让模型以 GM 讲述者视角推进剧情（不展示），
+                       再把 GM 文本交给"第一人称转换器"改写成主角口吻展示给用户。
+                       见 app-02-data.js 的 generateThirdPersonReply。 -->
                 <section class="mt-4 pt-3 border-t border-indigo-100">
-                    <div class="modal-label flex items-center gap-2"><span class="text-amber-500">✦</span> 思考模式</div>
+                    <div class="modal-label flex items-center gap-2"><span class="text-amber-500">✦</span> 对话优化</div>
                     <div class="flex items-center justify-between mb-3">
                         <label class="text-xs text-indigo-700 cursor-pointer flex items-center gap-1.5">
                             <input id="settingThinkingMode" type="checkbox" class="accent-amber-500"> 让模型先思考再回答
+                        </label>
+                    </div>
+                    <div class="flex items-center justify-between mb-3">
+                        <label class="text-xs text-indigo-700 cursor-pointer flex items-center gap-1.5">
+                            <input id="settingThirdPerson" type="checkbox" class="accent-amber-500"> 第三人称（两段式生成）
                         </label>
                     </div>
                     <div class="space-y-3">
@@ -4017,41 +5002,88 @@
                     </div>
                     <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">思考过程会在回复上方以可折叠的「思考」一栏展示；工具调用记录不受此开关影响，始终显示。开思考时部分服务商不支持自定义温度，我们会自动省略该参数。</p>
                 </section>
-                </div><!-- /tab-chat -->
 
-                <div id="tab-voice" class="settings-tab-panel">
                 <section>
                     <div class="modal-label flex items-center gap-2"><span class="text-rose-500">✦</span> 语音输出（多服务商）</div>
                     <div class="space-y-3">
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">语音服务商</label>
                             <select id="settingTtsProvider" class="modal-input text-sm">
-                                <option value="edge">Edge TTS（免费，临时使用）</option>
+                                <option value="mimo">MiMo TTS（小米）</option>
                                 <option value="minimax">MiniMax（克隆音色）</option>
-                                <option value="doubao">豆包 / 火山引擎</option>
                                 <option value="dashscope">阿里千问 Qwen-TTS</option>
+                                <option value="openai-tts">通用 OpenAI TTS</option>
                             </select>
                         </div>
-                        <!-- Edge TTS：微软的免费接口，不需要任何密钥。
-                             音色质量不错，但它是微软的"读 aloud"服务（本就给 Edge 浏览器用的），
-                             没有稳定性承诺，微软随时可能改协议或限流 —— 长期使用建议还是
-                             上面的付费接口。-->
-                        <div id="edgeTtsFields" class="space-y-3">
-                            <div>
-                                <label class="text-xs text-indigo-500 mb-1 block">音色</label>
-                                <select id="settingEdgeTtsVoice" class="modal-input text-sm">
-                                    <option value="zh-CN-XiaoxiaoNeural">晓晓 · 中文女声（自然）</option>
-                                    <option value="zh-CN-XiaoyiNeural">晓伊 · 中文女声（活泼）</option>
-                                    <option value="zh-CN-YunxiNeural">云希 · 中文男声（年轻）</option>
-                                    <option value="zh-CN-YunyangNeural">云扬 · 中文男声（新闻）</option>
-                                    <option value="zh-CN-liaoning-XiaobeiNeural">晓北 · 中文女声（东北）</option>
-                                    <option value="ja-JP-NanamiNeural">七海 · 日语女声</option>
-                                    <option value="ja-JP-KeitaNeural">圭太 · 日语男声</option>
-                                    <option value="en-US-EmmaMultilingualNeural">Emma · 多语女声</option>
-                                    <option value="en-US-AndrewMultilingualNeural">Andrew · 多语男声</option>
-                                </select>
+                        <!-- MiMo TTS：小米，走 OpenAI 兼容的 /v1/chat/completions。
+                             要朗读的文本放在 assistant 消息里，响应 choices[0].message.audio.data
+                             带回 base64 的 wav 音频。它是**付费 API Key** 服务商，没有 Key 不能用。
+                             API Key / 接口地址为 TTS 专用，与「语音输入 → 小米 MiMo」各自独立。-->
+                        <div id="mimoTtsFields" class="space-y-3">
+                            <!-- 第 1 行：[API Key | 模型] 两列并排（接口地址已移除，运行时固定用小米官方地址） -->
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-xs text-indigo-500 mb-1 block">MiMo TTS API Key</label>
+                                    <input id="settingMimoTtsApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="mimo_... 或 $MIMO_API_KEY">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-indigo-500 mb-1 block">模型</label>
+                                    <select id="settingMimoTtsModel" class="modal-input text-sm">
+                                        <option value="mimo-v2.5-tts">mimo-v2.5-tts（预置音色）</option>
+                                        <option value="mimo-v2.5-tts-voicedesign">mimo-v2.5-tts-voicedesign（文本描述设计音色）</option>
+                                        <option value="mimo-v2.5-tts-voiceclone">mimo-v2.5-tts-voiceclone（参考音频复刻音色）</option>
+                                    </select>
+                                </div>
                             </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed">免费、无需 API Key，走的微软 Edge 浏览器同款朗读服务。电脑版由本机服务代合成、安卓版走原生层（浏览器里连不了它 —— 微软要校验请求头，而网页 JS 改不了）。它没有稳定性承诺（微软随时可能改动），<b>临时用没问题，长期建议用其他语音接口</b>。</p>
+                            <!-- 以下三个子组**互斥**，随模型下拉在同一个垂直位置切换，排版彼此一致：
+                                 音色（预置音色）/ 音色描述（voicedesign）/ 参考音频样本（voiceclone）。 -->
+                            <div id="mimoTtsVoiceFields">
+                                <label class="text-xs text-indigo-500 mb-1 block">音色</label>
+                                <input id="settingMimoTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" value="" placeholder="mimo_default">
+                            </div>
+                            <!-- 音色设计：仅 mimo-v2.5-tts-voicedesign，音色描述放在 user 消息里（必填） -->
+                            <div id="mimoTtsVoiceDesignFields" class="hidden">
+                                <label class="text-xs text-indigo-500 mb-1 block">音色描述（voicedesign 模型必填）</label>
+                                <textarea id="settingMimoVoiceDesignPrompt" rows="2" class="modal-input text-sm" placeholder="例如：年轻男性，嗓音低沉略带沙哑，语速偏慢，语气沉稳"></textarea>
+                                <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">该模型的 <code class="text-indigo-500">user</code> 消息就是音色描述，必填（1-4 句即可）：写清性别与年龄、音色质感、情绪语气、语速节奏，越具体越贴近预期；避免相互矛盾或混响/EQ 等后期处理类描述。</p>
+                            </div>
+                            <!-- 音色复刻：仅 mimo-v2.5-tts-voiceclone，参考音频样本以 base64 放进 audio.voice（必填）。
+                                 字段排版与「音色」一致（label + 整行控件），清除按钮与状态挪到控件下方。 -->
+                            <div id="mimoTtsVoiceCloneFields" class="hidden">
+                                <label class="text-xs text-indigo-500 mb-1 block">参考音频样本（voiceclone 模型必填）</label>
+                                <input id="settingMimoTtsCloneSample" autocomplete="off" type="file" accept="audio/*" class="modal-input text-sm w-full">
+                                <div class="flex items-center gap-2 mt-1">
+                                    <p id="mimoTtsCloneSampleStatus" class="text-[11px] text-indigo-300 leading-relaxed">未选择样本</p>
+                                    <button id="mimoTtsCloneSampleClear" type="button" class="px-2 py-1 text-xs rounded bg-rose-500/20 text-rose-300 hover:bg-rose-500/30 whitespace-nowrap">清除样本</button>
+                                </div>
+                                <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">官方只接受 <code class="text-indigo-500">mp3 / flac / m4a / wav / ogg</code> 五种格式，<b>数秒</b>的参考音频即可复刻。样本会以 base64 形式放进请求的 <code class="text-indigo-500">audio.voice</code>。为免设置文件膨胀，本应用把样本上限设为 <b>5&nbsp;MB</b>，超出会拒绝并提示。</p>
+                                <p class="text-[11px] leading-relaxed mt-1.5" style="color:#b45309">免费的语音克隆 TTS 目前只有日语的样本：日语输出还行，但用它做「日语转中文」的 TTS 不行。如果你手上有<b>中文样本</b>，可以试着克隆一下 —— 若效果不错，欢迎通过 PR 或者联系作者添加进项目中，感谢你的支持！</p>
+                            </div>
+                            <p class="text-[11px] text-indigo-300 leading-relaxed">小米 MiMo TTS 走 OpenAI 兼容的 <code class="text-indigo-500">/v1/chat/completions</code>，需要 API Key。预置音色（mimo-v2.5-tts）填 MiMo 文档里的预设 Voice ID，例如 <code class="text-indigo-500">mimo_default</code>、<code class="text-indigo-500">Chloe</code>。</p>
+                        </div>
+                        <div id="openaiTtsFields" class="space-y-3 hidden">
+                            <!-- 接口地址与 API Key 同一行（与 MiMo TTS 一致的排版） -->
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-xs text-indigo-500 mb-1 block">接口地址</label>
+                                    <input id="settingOpenaiTtsBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.openai.com/v1">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-indigo-500 mb-1 block">API Key</label>
+                                    <input id="settingOpenaiTtsApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-xs text-indigo-500 mb-1 block">模型</label>
+                                    <input id="settingOpenaiTtsModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="tts-1">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-indigo-500 mb-1 block">音色</label>
+                                    <input id="settingOpenaiTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="alloy">
+                                </div>
+                            </div>
+                            <p class="text-[11px] text-indigo-300 leading-relaxed">标准 OpenAI 语音接口 <code class="text-indigo-500">POST {接口地址}/audio/speech</code>，返回 mp3 二进制音频。任何兼容该接口的服务（含自建中转）都可填在这里。</p>
                         </div>
                         <div id="minimaxTtsFields" class="space-y-3">
                             <div>
@@ -4075,42 +5107,6 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="doubaoTtsFields" class="space-y-3 hidden">
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">API Key（新控制台，推荐）</label>
-                                    <input id="settingDoubaoApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="X-Api-Key">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">Resource ID</label>
-                                    <select id="settingDoubaoResourceId" class="modal-input text-sm">
-                                        <option value="seed-tts-2.0">seed-tts-2.0</option>
-                                        <option value="seed-tts-1.0">seed-tts-1.0</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">App ID（旧控制台）</label>
-                                    <input id="settingDoubaoAppId" autocomplete="off" type="text" class="modal-input text-sm" placeholder="可选">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">Access Token（旧控制台）</label>
-                                    <input id="settingDoubaoToken" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="可选">
-                                </div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">Cluster（旧控制台）</label>
-                                    <input id="settingDoubaoCluster" autocomplete="off" type="text" class="modal-input text-sm" placeholder="volcano_tts">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">音色 ID</label>
-                                    <input id="settingDoubaoVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="如 zh_female_shuangkuaisisi_uranus_bigtts">
-                                </div>
-                            </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed">填写新控制台 API Key 时使用 V3 大模型接口；只填写旧控制台 App ID 与 Access Token 时使用 V1 小模型接口。1.0 与 2.0 音色不能混用。</p>
-                        </div>
                         <div id="dashscopeTtsFields" class="space-y-3 hidden">
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
@@ -4122,10 +5118,12 @@
                                     <input id="settingDashscopeTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="Cherry / Ethan / Serena">
                                 </div>
                             </div>
-                        </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">DashScope API Key（千问 TTS / 阿里百炼语音识别共用）</label>
-                            <input id="settingDashscopeApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="sk-...">
+                            <!-- ★ 阿里千问 TTS 的 Key 放在本组内：ASR 的 Key 已独立，选其它 TTS 服务商时
+                                 这里不该再出现"阿里云 Key"（见 updateTtsProviderUI 的显隐切换）。 -->
+                            <div>
+                                <label class="text-xs text-indigo-500 mb-1 block">DashScope API Key（阿里千问 Qwen-TTS）</label>
+                                <input id="settingDashscopeApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="sk-...">
+                            </div>
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">语音语言（朗读文本的语言）</label>
@@ -4186,11 +5184,9 @@
                     </div>
                     <div id="asrBrowserWarn" class="hidden text-[11px] text-red-400 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2">此选项已停用。Chrome 内置识别需要访问 Google 语音服务，国内网络下基本连不通；实测连接失败时会在约 1 秒内把整个浏览器进程带崩（是浏览器直接退出，不是标签页崩溃）。请改选「阿里百炼」或「小米 MiMo」并填写 API Key。</div>
                     <div id="dashscopeAsrFields" class="space-y-3">
-                        <div class="flex items-center gap-2">
-                            <span class="text-xs text-indigo-500">API Key（阿里云公用）：</span>
-                            <span id="settingAsrKeyStatus" class="text-[11px]"></span>
-                            <button id="settingAsrTest" class="btn-secondary text-xs" type="button">测试</button>
-                            <span id="settingAsrTestStatus" class="text-[11px] text-indigo-300"></span>
+                        <div>
+                            <label class="text-xs text-indigo-500 mb-1 block">DashScope ASR API Key（阿里百炼，独立于语音输出）</label>
+                            <input id="settingAsrApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...">
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">接口地址</label>
@@ -4200,16 +5196,20 @@
                             <label class="text-xs text-indigo-500 mb-1 block">ASR 模型</label>
                             <input id="settingDashscopeAsrModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="qwen3-asr-flash">
                         </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed">复用上方「语音输出 → 阿里千问 Qwen-TTS」的 DashScope API Key（阿里云百炼 Key 通用 TTS/ASR）。浏览器语音识别暂不可用，语音输入走阿里 <code class="text-indigo-500">qwen3-asr-flash</code>；点「测试」可立即验证 Key。401 = Key 无效/未开通，403/404 = 模型未开通。</p>
+                        <div class="flex items-center gap-2">
+                            <button id="settingAsrTest" class="btn-secondary text-xs" type="button">测试</button>
+                            <span id="settingAsrTestStatus" class="text-[11px] text-indigo-300"></span>
+                        </div>
+                        <p class="text-[11px] text-indigo-300 leading-relaxed">阿里百炼语音识别（<code class="text-indigo-500">qwen3-asr-flash</code>）使用**独立于语音输出的** API Key —— 不再复用上方千问 TTS 的 DashScope Key。点「测试」可立即验证 Key。401 = Key 无效/未开通，403/404 = 模型未开通。</p>
                     </div>
                     <div id="mimoAsrFields" class="space-y-3 hidden">
                         <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">MiMo API Key</label>
-                            <input id="settingMimoApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="mimo_... 或 $MIMO_API_KEY">
+                            <label class="text-xs text-indigo-500 mb-1 block">MiMo ASR API Key</label>
+                            <input id="settingMimoAsrApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="mimo_... 或 $MIMO_API_KEY">
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">接口地址（OpenAI 兼容）</label>
-                            <input id="settingMimoBaseUrl" autocomplete="off" type="url" class="modal-input text-sm" placeholder="https://api.xiaomimimo.com">
+                            <input id="settingMimoAsrBaseUrl" autocomplete="off" type="url" class="modal-input text-sm" placeholder="https://api.xiaomimimo.com">
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">ASR 模型</label>
@@ -4222,9 +5222,7 @@
                         <p class="text-[11px] text-indigo-300 leading-relaxed">小米 MiMo-V2.5-ASR：<code class="text-indigo-500">https://api.xiaomimimo.com/v1/chat/completions</code>，模型 <code class="text-indigo-500">mimo-v2.5-asr</code>，OpenAI 兼容 <code class="text-indigo-500">input_audio</code> 传音频（wav/mp3）。认证头 <code class="text-indigo-500">api-key: $MIMO_API_KEY</code>（或 Bearer）。点「测试」可立即验证。</p>
                     </div>
                 </section>
-                </div><!-- /tab-voice -->
 
-                <div id="tab-vision" class="settings-tab-panel">
                 <section>
                     <div class="modal-label flex items-center gap-2"><span class="text-emerald-500">✦</span> 视觉模型（图片转述，可选）</div>
                     <p class="text-[11px] text-indigo-300 leading-relaxed mb-3">图片对话时先用该模型"看图转述"成文字，再交给主模型（如 DeepSeek）回答。留空则图片直接发给当前模型。</p>
@@ -4240,14 +5238,24 @@
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">视觉模型名</label>
                             <div class="flex items-center gap-2">
-                                <input id="settingVisionModel" autocomplete="off" type="text" class="modal-input text-sm flex-1" placeholder="Qwen/Qwen2.5-VL-72B-Instruct 等">
-                                <button id="fetchVisionModelsBtn" class="btn-secondary text-xs" type="button" title="从当前 API 地址拉取可用模型列表">🔄 获取模型</button>
+                                <div class="model-combo flex-1 min-w-0">
+                                    <div class="model-combo-row">
+                                        <input id="settingVisionModel" autocomplete="off" type="text" class="modal-input text-sm model-combo-input" placeholder="Qwen/Qwen2.5-VL-72B-Instruct 等">
+                                        <button id="visionModelsToggle" type="button" class="model-combo-toggle"
+                                            aria-label="展开模型列表" aria-expanded="false"
+                                            title="展开/收起模型列表（先点「获取模型」拉取）">
+                                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg>
+                                        </button>
+                                    </div>
+                                    <select id="visionModelsSelect" class="hidden" aria-hidden="true" tabindex="-1"></select>
+                                    <div id="visionModelsList" class="model-combo-list hidden" role="listbox"></div>
+                                </div>
+                                <button id="fetchVisionModelsBtn" class="btn-secondary text-xs flex-none" type="button" title="从当前 API 地址拉取可用模型列表">🔄 获取模型</button>
                             </div>
-                            <select id="visionModelsSelect" class="modal-input text-xs mt-2 hidden" style="max-width:100%"></select>
                         </div>
                     </div>
                 </section>
-                </div><!-- /tab-vision -->
+                </div><!-- /tab-model -->
 
                 <!-- Live2D 设置面板已搬进 web/mods/live2d/（由 settings.tabs 插槽渲染）。
                      见那个插件的 panel.html 与 settings-panel.js。 -->
@@ -4281,39 +5289,73 @@
                     </div>
 
                     <div id="agentPermissionSection" class="mt-4 pt-3 border-t border-indigo-100">
-                        <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-fuchsia-500">✦</span> 电脑操作权限</div>
-                        <div class="text-[11px] text-indigo-400 mb-2">控制 AI 通过 <code class="text-indigo-500">[操作:…]</code> 标签能执行到哪一层。应用内操作（视频通话/整理记忆/水印/背景等）两种模式都可用。</div>
-                        <div class="flex flex-wrap gap-4 mb-2">
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input type="radio" name="agentPermission" value="app" class="accent-pink-500"> 🔒 限制：仅应用文件夹内操作
+                        <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-fuchsia-500">✦</span> AI 权限</div>
+                        <div class="text-[11px] text-indigo-400 mb-2">控制 AI 通过 <code class="text-indigo-500">[操作:…]</code> 标签能做什么。<b>一个开关同时管电脑与手机</b>。应用内操作（视频通话/整理记忆/水印/背景等）任何档位都可用。</div>
+
+                        <!-- ★★ 2026-10 权限模型重构：旧的「app / computer」两档
+                             （把"能碰哪里"和"要不要问"捆在一起）改成三档，
+                             三档**都能访问任意路径**，区别只在"要不要问"与"能不能删"。 -->
+                        <div class="space-y-2 mb-3">
+                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                                <input type="radio" name="agentAccess" value="strict" class="accent-pink-500 mt-0.5">
+                                <span class="flex-1 min-w-0">
+                                    <span class="text-xs font-semibold text-indigo-700">🔒 逐条确认</span>
+                                    <span class="block text-[11px] text-indigo-400 leading-relaxed mt-0.5">
+                                        会<b>改动电脑</b>的操作——写入、覆盖已有文件、删除、执行命令——<b>每一次都会问你</b>。
+                                        查看目录与读取文件不询问（读取不改变任何东西）。
+                                    </span>
+                                </span>
                             </label>
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input type="radio" name="agentPermission" value="computer" class="accent-pink-500"> 💻 允许操作电脑（文件读写 + 执行命令，风险自担）
+                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                                <input type="radio" name="agentAccess" value="auto" class="accent-pink-500 mt-0.5">
+                                <span class="flex-1 min-w-0">
+                                    <span class="text-xs font-semibold text-indigo-700">⚡ 自动通过（禁止删除）</span>
+                                    <span class="block text-[11px] text-indigo-400 leading-relaxed mt-0.5">
+                                        写入与覆盖直接执行，不再询问。<b>但删除被完全禁止</b>（接口层面拒绝，AI 想做也做不到）。
+                                    </span>
+                                </span>
+                            </label>
+                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#fed7aa;background:rgba(255,247,237,.75)">
+                                <input type="radio" name="agentAccess" value="full" class="accent-pink-500 mt-0.5">
+                                <span class="flex-1 min-w-0">
+                                    <span class="text-xs font-semibold" style="color:#b45309">🔓 完全访问（含删除）</span>
+                                    <span class="block text-[11px] leading-relaxed mt-0.5" style="color:#9a3412">
+                                        所有操作直接执行，<b>包括删除文件与目录</b>，不再询问。
+                                    </span>
+                                </span>
                             </label>
                         </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed mb-2">
-                            <b>限制模式</b>：AI 只能读写本应用文件夹（<code class="text-indigo-500">web/</code>）内的文件，
-                            <b>不能执行任何命令</b>；碰文件夹外的位置时会就那一次问你。
-                        </p>
 
                         <!-- 全权限模式的后果说明。
                              为什么要把后果摆在这里、而不是靠每次操作弹窗：
                              全权限下 AI 每一步都问，用户会从"看清再决定"退化成"闭眼点允许"，
-                             最后那道闸等于没有。所以把判断前移到"要不要开这个模式"这一个点上，
-                             开了之后同一个对话内同类操作只问一次（删除/覆盖这类不可逆的），
-                             普通操作直接执行。 -->
+                             最后那道闸等于没有。所以把判断前移到"要不要开这个模式"这一个点上。 -->
                         <div class="rounded-2xl border px-3 py-2.5" style="border-color:#fed7aa;background:rgba(255,247,237,.75)">
-                            <div class="text-[11px] font-semibold mb-1" style="color:#b45309">⚠️ 开启「允许操作电脑」意味着</div>
+                            <div class="text-[11px] font-semibold mb-1" style="color:#b45309">⚠️ 开启「完全访问」意味着</div>
                             <ul class="text-[11px] leading-relaxed space-y-1" style="color:#9a3412">
                                 <li>· AI 能读写这台电脑上<b>任意路径</b>的文件，并能执行 <code>PowerShell</code> / <code>cmd</code> 命令。</li>
-                                <li>· <b>能删除文件</b>（<code>del</code> / <code>Remove-Item</code> 等）、改注册表、关机、下载并执行网上的脚本。<b>这些操作不可撤销</b>。</li>
-                                <li>· <b>能覆盖已有文件</b>，原内容不会自动备份。</li>
-                                <li>· 保护措施：覆盖已有文件、以及删除/格式化这类危险命令，<b>每个对话首次会问你一次</b>，
-                                    同意后该对话内不再重复询问；安全命令（列目录、<code>git status</code> 等）直接执行不打扰。</li>
+                                <li>· AI <b>能删除文件与目录</b>（<code>[操作:删除文件 …]</code>、<code>del</code> / <code>Remove-Item</code> 等），
+                                    <b>不进回收站、无法恢复</b>；也能改注册表、关机、下载并执行网上的脚本。</li>
+                                <li>· AI <b>能覆盖已有文件</b>，原内容不会自动备份。</li>
+                                <li>· 这些操作<b>都不会再询问你</b> —— 这是这一档的定义。发现问题只能事后补救。</li>
                                 <li>· <b>局域网设备登录后同样能用这个模式</b>（与本机同等能力）。
                                     所以访问密码是这台电脑的唯一防线 —— 请务必设强密码，别用默认的随手改个简单的。</li>
                                 <li>· <b>请只在你自己可控、且信任当前对话内容时开启</b>：AI 的指令来自模型输出，
                                     而图片文字、长期记忆、插件都可能影响它。</li>
+                            </ul>
+                        </div>
+
+                        <!-- 三档共有的一个事实，必须说出来（否则用户会以为"读取也受管控"）：
+                             读取在任何档位下都不询问，所以 AI 可以无声地读走敏感文件。 -->
+                        <div class="rounded-2xl border px-3 py-2.5 mt-2" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <div class="text-[11px] font-semibold mb-1 text-indigo-700">ℹ️ 三档共有的说明</div>
+                            <ul class="text-[11px] leading-relaxed space-y-1 text-indigo-500">
+                                <li>· <b>三档都能访问电脑上的任意路径</b>（不再有"仅限应用文件夹"这一档）。</li>
+                                <li>· <b>读取任何档位下都不会询问</b> —— 包括读取本应用的
+                                    <code>data/store.json</code>（里面有你的 API Key 明文）等敏感文件。
+                                    介意的话请只在信任当前对话内容时使用 AI 操作能力。</li>
+                                <li>· 「自动通过」档<b>只禁删除、不禁覆盖</b> —— 而覆盖同样会丢掉原内容，
+                                    所以 AI 可以用"写入同名文件"绕过删除禁令。</li>
                             </ul>
                         </div>
                     </div>
@@ -4339,28 +5381,99 @@
                                 <button id="settingBackendChooseBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">选择实现方式</button>
                                 <button id="settingBackendRefreshBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">重新检测</button>
                             </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">实现方式决定 AI 用哪条路操作手机（无障碍 / Shizuku / Root / 模块 / ADB），能力与门槛各不相同。下面几项设置与它无关，随时可以改；但没选实现方式时 AI 不会真的动手。</p>
+                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">实现方式决定 AI 用哪条路操作手机（无障碍 / 模块），能力与门槛各不相同。下面几项设置与它无关，随时可以改；但没选实现方式时 AI 不会真的动手。</p>
                         </div>
 
                         <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer mb-3">
                             <input id="settingAgentPhoneEnabled" type="checkbox" class="accent-pink-500"> 允许 AI 操作手机
                         </label>
-                        <div class="text-[11px] text-indigo-500 font-semibold mb-1">敏感操作确认</div>
-                        <div class="flex flex-wrap gap-4 mb-2">
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input type="radio" name="agentApproval" value="once" class="accent-pink-500"> 每次运行只确认一次（推荐）
-                            </label>
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input type="radio" name="agentApproval" value="run" class="accent-pink-500"> 每类操作各确认一次
-                            </label>
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input type="radio" name="agentApproval" value="always" class="accent-pink-500"> 每一步都确认
-                            </label>
-                            <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                <input type="radio" name="agentApproval" value="off" class="accent-pink-500"> 不询问
-                            </label>
+
+                        <!-- ★★ 2026-10：手机端的「敏感操作确认」四档（once/run/always/off）已删除。
+                             用户的决定是"手机不做确认，全部放行"（理由：无障碍方式破坏力有限），
+                             档位统一由上面的「AI 权限」三档决定。这里只说明实际行为。 -->
+                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <div class="text-[11px] font-semibold text-indigo-700 mb-1">确认策略</div>
+                            <p class="text-[11px] text-indigo-400 leading-relaxed">
+                                手机操作<b>不做逐步确认</b>：读取界面、点击、滑动、输入、按键、打开应用都直接执行，
+                                发现问题随时点悬浮窗上的「停止」。
+                            </p>
+                            <p class="text-[11px] leading-relaxed mt-2" style="color:#b45309">
+                                ⚠️ <b>模块后端的免责声明</b>：无障碍方式的破坏力确实有限（只能点按界面），
+                                但<b>模块方式就是 KernelSU，拥有 root 权限</b> —— 它的「手机命令」能执行任意系统命令，
+                                且<b>不会询问你</b>，破坏力与电脑的「完全访问」档同级。
+                                选模块前请确认你清楚这一点。
+                            </p>
                         </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed">读取状态、查看界面、截图任何策略下都不需要确认。「每次运行只确认一次」：AI 开始操作时你确认一次，之后这一轮的点击 / 滑动 / 输入都直接执行，发现问题随时点悬浮窗上的「停止」；「执行任意系统命令」无论选哪一项都会单独询问。</p>
+
+                        <!-- ★★ 2026-10 新增：读取信息的隐私开关。
+                             用户要求"加个提示如果不想让ai知道太多信息请关闭对应权限"。 -->
+                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <div class="text-[11px] font-semibold text-indigo-700 mb-1">读取信息（隐私）</div>
+                            <p class="text-[11px] text-indigo-400 leading-relaxed mb-2">
+                                AI 可以读取下面这些信息，用来了解你当下的处境（例如"我刚收到谁的消息"）。
+                                它们都是<b>隐私数据</b>，且都会进入对话上下文。
+                                <b>不想让 AI 知道太多信息，就把对应的开关关掉</b> ——
+                                关掉后 AI 连读取标签都不会看到（不是"读了不说"，是根本没这个能力）。
+                            </p>
+                            <div class="space-y-1.5">
+                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
+                                    <input id="settingAgentReadApps" type="checkbox" class="accent-pink-500"> 已安装应用列表
+                                    <span class="text-[11px] text-indigo-300">（包名 + 应用名，用于"帮我打开某某"）</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
+                                    <input id="settingAgentReadNotifications" type="checkbox" class="accent-pink-500"> 通知内容
+                                    <span class="text-[11px] text-indigo-300">（哪个应用发来什么消息 —— <b>最敏感的一项</b>）</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
+                                    <input id="settingAgentReadDevice" type="checkbox" class="accent-pink-500"> 设备与前台状态
+                                    <span class="text-[11px] text-indigo-300">（电量、网络、当前前台应用）</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
+                                    <input id="settingAgentReadSms" type="checkbox" class="accent-pink-500"> 短信
+                                    <span class="text-[11px] text-indigo-300">（最近短信内容与发件人）</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
+                                    <input id="settingAgentReadContacts" type="checkbox" class="accent-pink-500"> 通讯录
+                                    <span class="text-[11px] text-indigo-300">（联系人姓名与号码）</span>
+                                </label>
+                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
+                                    <input id="settingAgentReadCalendar" type="checkbox" class="accent-pink-500"> 日历
+                                    <span class="text-[11px] text-indigo-300">（近期日程）</span>
+                                </label>
+                            </div>
+                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
+                                这些还<b>需要系统层面的权限</b>（通知读取、短信、通讯录、日历都需要你在系统弹窗里允许）。
+                                没有系统权限时 AI 会读到"没有权限"并如实告诉你，不会假装读到了内容。
+                            </p>
+                            <!-- ★ 系统权限与上面的应用层开关是**两道独立的闸**：
+                                 开关管"让不让 AI 知道"，这里管"应用能不能拿到"。
+                                 只有用户主动点，才会弹系统权限框 —— 不在启动时索取。 -->
+                            <div id="agentReadPermStatus" class="text-[11px] text-indigo-400 mt-2">系统权限：检测中…</div>
+                            <div class="flex flex-wrap items-center gap-2 mt-2">
+                                <button id="agentReadPermBtn" class="btn-secondary text-[11px]" type="button" style="padding:3px 10px">申请短信 / 通讯录 / 日历权限</button>
+                                <button id="agentNotifPermBtn" class="btn-secondary text-[11px]" type="button" style="padding:3px 10px">开启通知读取</button>
+                            </div>
+                        </div>
+
+                        <!-- ★★ 2026-10 新增：Agent 工作区文件访问 -->
+                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <div class="text-[11px] font-semibold text-indigo-700 mb-1">文件访问（Agent 工作区）</div>
+                            <p class="text-[11px] text-indigo-400 leading-relaxed mb-2">
+                                AI 可以在手机的 <b>Agent 工作区</b>里读写文件（应用私有目录下的
+                                <code>agent-workspace/</code>，不需要任何系统权限）。
+                                你也可以再授权<b>一个自己的文件夹</b>给 AI 用 —— 比如「下载」目录 ——
+                                它就能读写那个文件夹里的文件。
+                            </p>
+                            <div id="agentFolderSummary" class="text-[11px] text-indigo-500 mb-2">还没有授权额外文件夹。</div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <button id="agentFolderPickBtn" class="btn-secondary text-[11px]" type="button" style="padding:3px 10px">选择文件夹授权</button>
+                                <button id="agentFolderClearBtn" class="btn-secondary text-[11px]" type="button" style="padding:3px 10px">取消授权</button>
+                            </div>
+                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
+                                授权通过系统文件选择器完成，是<b>持久授权</b>（重启应用仍有效），随时可以在这里取消。
+                                取消后 AI 就再也读不到那个文件夹。
+                            </p>
+                        </div>
 
                         <!-- 悬浮窗：AI 操作别的 App 时，用户不该被迫切回本应用 -->
                         <div class="mt-3 pt-3 border-t border-indigo-100">
@@ -4389,46 +5502,10 @@
                 <div id="tab-advanced" class="settings-tab-panel">
                     <section>
                     <!-- 这里原本是「日志设置」块（落盘级别 / 控制台级别 / 追踪日志开关）。
-                         已按用户要求删除，界面上也不再留「日志」标题 —— 这一层只剩日志查看器。
-                         现在的行为：级别回默认（环境变量 LOG_LEVEL / LOG_CONSOLE 仍优先），
-                         追踪日志固定开启（LOG_CHAT=0 才能关）。来龙去脉见 开发文档.md 8.48。 -->
-                    <!-- ==================== 日志查看器 ====================
-                         目标（用户原话）：控制台输出全部日志；软件内可以对日志进行
-                         分类，分离掉不想看的信息 —— 即 AstrBot 那种"终端全量、界面筛着看"。
-                         数据来自 /api/logs/tail（服务端内存缓冲，全量、不受落盘级别约束）。
-                         日志正文是英文（grep/检索友好）；界面控件与提示用中文。 -->
-                    <div id="logViewerSection" class="hidden">
-                        <div class="flex items-center justify-between mb-1">
-                            <div class="text-xs font-semibold text-indigo-700"><span class="text-fuchsia-500">✦</span> 日志查看器</div>
-                            <div class="flex items-center gap-2">
-                                <label class="flex items-center gap-1 text-[11px] text-indigo-500 cursor-pointer">
-                                    <input id="logViewerAuto" type="checkbox" class="accent-pink-500" checked> 自动刷新
-                                </label>
-                                <button id="logViewerRefresh" type="button" class="text-[11px] px-2 py-0.5 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100">刷新</button>
-                            </div>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-2 mb-2">
-                            <!-- ★ 默认选「INFO+」而不是「全部级别」：bat 面板默认就是 INFO，
-                                 两者默认视图一致，用户才能逐行对照（2026-10 用户报"对不上"）。
-                                 DEBUG 并没有被丢掉 —— 这个下拉随时能切到「全部级别」看请求细节，
-                                 而内存缓冲本来就是全量收的（不受这里影响）。 -->
-                            <select id="logViewerLevel" class="modal-input text-xs w-28 py-1">
-                                <option value="">全部级别（含 DEBUG 请求行）</option>
-                                <option value="DEBUG">DEBUG+</option>
-                                <option value="INFO" selected>INFO+（同面板）</option>
-                                <option value="WARN">WARN+（警告以上）</option>
-                                <option value="ERROR">ERROR+（仅报错）</option>
-                            </select>
-                            <select id="logViewerTag" class="modal-input text-xs w-32 py-1">
-                                <option value="">全部模块</option>
-                            </select>
-                            <input id="logViewerSearch" type="text" placeholder="关键词过滤…"
-                                class="modal-input text-xs flex-1 min-w-[120px] py-1">
-                        </div>
-                        <div id="logViewerBox"
-                            class="rounded-lg bg-slate-900 text-slate-200 font-mono text-[11px] leading-relaxed p-2 overflow-auto max-h-80 whitespace-pre-wrap break-all"></div>
-                        <div id="logViewerMeta" class="text-[10px] text-indigo-300 mt-1"></div>
-                    </div>
+                         已按用户要求删除 —— 级别回默认（环境变量 LOG_LEVEL / LOG_CONSOLE 仍优先），
+                         追踪日志固定开启（LOG_CHAT=0 才能关）。来龙去脉见 开发文档.md 8.48。
+                         ★ 日志本身没走：它现在是**独立分栏**（#tab-log），
+                           在顶部导航上与外观/角色/对话并列 —— 不用滚动就能看到。 -->
 
                     <div class="mt-4 pt-3 border-t border-indigo-100" id="dataSettingsSection">
                         <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-fuchsia-500">✦</span> 我的数据</div>
@@ -4482,8 +5559,83 @@
                             </ul>
                         </div>
                     </div>
+
+                    <!-- 日志已从这里搬走：它现在是**独立分栏**（#tab-log，见下方）。
+                         ★ 搬走的实测原因：塞在这里时它是高级的最后一项，而高级那一栏
+                           高 920px、内容区视口只有 842px —— 入口被挤到**屏幕外**
+                           （按钮 top=895，视口高 900），用户反馈"设置里我没看见日志界面"。
+                           分栏化之后它永远在顶部导航上，不用滚动。 -->
                 </section>
                 </div><!-- /tab-advanced -->
+
+                <!-- ==================== 日志（独立分栏） ====================
+                     ★ 2026-10 用户要求：日志**单独成一个分栏**（与外观/角色/对话并列），
+                       不再塞在「高级」的最后。
+                     ★ 为什么必须独立（实测数据）：塞在高级里时，高级那一栏高 920px、
+                       而内容区视口只有 842px —— 日志入口被挤到**屏幕外**
+                       （按钮 top=895，视口高 900），用户反馈"设置里我没看见日志界面"。
+                       独立分栏后它在顶部导航上，永远可见、一点就到。
+
+                     界面照 AstrBot 的「数据与日志 → 日志」页：
+                       ① 级别药丸（DEBUG/INFO/WARNING/ERROR/CRITICAL）—— 多选，点掉即隐藏该类
+                       ② 工具栏（模块 / 关键词 / 排除用户对话 / 自动滚动 / 刷新 / 清屏）
+                       ③ 终端式日志区（等宽、深色、旧在上、新在下）
+                       ④ 状态栏（缓冲条数 / 当前显示 / 日志文件位置）
+
+                     数据源：GET /api/logs/tail（服务端内存缓冲，**全量**、不受落盘级别约束）。
+                     级别 / 模块 / 关键词过滤在服务端做；"排除用户对话"在前端做
+                     （它是按正文特征排除，服务端没有这个概念）。 -->
+                <div id="tab-log" class="settings-tab-panel">
+                    <!-- 这一栏**不用卡片包裹**：日志区要占满高度，包一层卡片
+                         会让它上下都多出一圈 padding（见 .log-tab-body 的说明）。 -->
+                    <div class="log-tab-body">
+                        <!-- 工具栏：级别药丸 + 开关 + 动作 -->
+                        <div class="log-toolbar">
+                            <div id="logLevelPills" class="log-level-pills" role="group" aria-label="按级别过滤">
+                                <!-- ★ DEBUG 默认**关**（aria-pressed="false"）。
+                                     这不是随手定的默认值，而是刻意对齐 bat 面板 / AstrBot：
+                                     成功的 HTTP 请求全部记在 DEBUG 上（见 serve.mjs 的级别纪律），
+                                     一次页面加载就是十几行
+                                     `127.0.0.1  GET /api/store  200  7ms` ——
+                                     对"看程序在做什么"是纯噪音，而且**不是给人读的句子**。
+                                     把它们默认放出来，用户第一眼看到的就是一屏看不懂的请求行
+                                     （2026-10 用户实测反馈："我的日志为什么会出现这种看不懂的消息"）。
+                                     DEBUG 没有被丢掉：点一下这个药丸就全回来了（排查请求细节时用）。 -->
+                                <button type="button" class="log-pill" data-level="DEBUG" aria-pressed="false">DEBUG</button>
+                                <button type="button" class="log-pill" data-level="INFO" aria-pressed="true">INFO</button>
+                                <button type="button" class="log-pill" data-level="WARN" aria-pressed="true">WARNING</button>
+                                <button type="button" class="log-pill" data-level="ERROR" aria-pressed="true">ERROR</button>
+                                <button type="button" class="log-pill" data-level="CRITICAL" aria-pressed="true">CRITICAL</button>
+                            </div>
+                            <div class="log-toolbar-right">
+                                <!-- 模块与关键词过滤：参考图里没有，但本项目的日志有十几个模块，
+                                     没有它就只能靠肉眼在几百行里找 —— 保留（默认不填 = 不过滤） -->
+                                <select id="logTagSelect" class="log-select" aria-label="按模块过滤">
+                                    <option value="">全部模块</option>
+                                </select>
+                                <input id="logSearchInput" type="search" class="log-search" placeholder="搜索关键词…" aria-label="搜索日志正文">
+                                <label class="log-switch" title="隐藏对话正文（提问 / 回复摘要）—— 排查时想只看程序事件就打开它">
+                                    <input id="logHideChat" type="checkbox"> 排除用户对话
+                                </label>
+                                <label class="log-switch" title="有新日志时自动滚到底部">
+                                    <input id="logAutoScroll" type="checkbox" checked> 自动滚动
+                                </label>
+                                <button id="logRefreshBtn" type="button" class="log-icon-btn" title="重新拉取全部日志" aria-label="刷新">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6"/><path stroke-linecap="round" stroke-linejoin="round" d="M20 8A8 8 0 006.3 5.3L4 8m16 8l-2.3 2.7A8 8 0 014 16"/></svg>
+                                </button>
+                                <button id="logClearBtn" type="button" class="log-icon-btn" title="清空当前显示（不删除日志文件）" aria-label="清屏">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 日志区：终端式。旧在上、新在下（与 bat 面板一致） -->
+                        <div id="logPageBox" class="log-terminal" role="log" aria-live="polite" aria-label="运行日志"></div>
+
+                        <!-- 状态栏 -->
+                        <div id="logPageMeta" class="log-meta"></div>
+                    </div>
+                </div><!-- /tab-log -->
 
                 <!-- ==================== 插件（mod） ====================
                      这一栏由 mod 系统动态渲染：列表来自服务端扫描 web/mods/ 生成的清单，
@@ -4497,12 +5649,16 @@
                                 <span class="text-pink-500">✦</span> 插件（Mod）
                             </div>
                             <button type="button" id="modsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个插件 zip 安装">⬆ 上传安装</button>
-                            <button type="button" id="modsRefreshBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新扫描 web/mods/ 目录">⟳ 重新扫描</button>
+                            <button type="button" id="modsRefreshBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新读取插件列表">⟳ 重新扫描</button>
                         </div>
-                        <p class="text-[11px] text-indigo-400 leading-relaxed mb-3">
-                            可选功能的开关。插件放在 <code class="px-1 rounded bg-white/60">web/mods/</code> 下，
-                            把 <code class="px-1 rounded bg-white/60">xxx.zip</code> 丢进去即会自动安装。
-                            <b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
+                        <!-- ★★ 2026-10：这段说明**按平台分叉**（由 app-06-settings.js 的
+                             applyModsPlatformHint() 填）—— 两个平台装插件的方式根本不同：
+                               电脑版：把 zip 丢进 web/mods/ 会自动装（也可用「上传安装」）
+                               APK   ：没有服务端、碰不到那个目录，**只能**「上传安装」
+                             原来只有一句"丢进 web/mods/ 即会自动安装"，在安卓上纯属误导
+                             （用户会去找一个根本访问不到的目录）。 -->
+                        <p id="modsPlatformHint" class="text-[11px] text-indigo-400 leading-relaxed mb-3">
+                            可选功能的开关。<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
                             拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。
                         </p>
 
@@ -4633,7 +5789,7 @@
          会扫 DOM 生成样式插进 head 末尾，所以这里的规则一律用 !important）。
 
          全部规则都在 html[data-theme-template="..."] 之下 ——
-         不设该属性时一条都不生效，默认（粉紫）外观与改动前逐像素一致。 -->
+         不设该属性时一条都不生效，默认（暖米绿）外观与改动前逐像素一致。 -->
     <link rel="stylesheet" href="/css/themes.css">
 
     <div id="agentRunBar" class="agent-run-bar hidden fixed items-center gap-2" role="status" aria-live="polite"

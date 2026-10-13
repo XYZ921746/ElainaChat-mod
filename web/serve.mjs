@@ -15,7 +15,6 @@ import { fileURLToPath } from 'node:url';
 import { inflateRawSync } from 'node:zlib';
 import dns from 'node:dns';
 import { createStore } from '../server/store.mjs';
-import { synthesizeEdge, probeEdge } from '../server/edge-tts.mjs';
 import { createModManager } from '../server/mods.mjs';
 // 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
 // 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
@@ -62,12 +61,27 @@ const port = Number(process.env.PORT || 4173);
 // 插件（mod）根目录。把 xxx.zip 丢进来就会被自动解压并写进 index.json，
 // 前端只读清单 —— 因为浏览器没法列目录（详见 server/mods.mjs 的说明）。
 //
+// ★★ 2026-10：从 `web/mods/` 搬到**项目根** `mods/`（用户要求）。
+//
+//   为什么搬：`web/` 是**静态文件根**，插件住在那儿意味着"插件目录"与
+//   "应用自己的前端资源"混在同一棵树里 —— 既不好区分（`web/js` 是宿主的、
+//   `web/mods/x/js` 是插件的），也让"哪些是程序本体"这个问题变得含糊。
+//   搬到根目录后与 `data/` 平级：两者都是"运行期内容"，都不在静态根内。
+//
+//   ⚠️ 代价（必须由代码补上，否则插件资源全部 404）：
+//      `/mods/*` 原来是**靠"它正好在 web/ 下"被静态处理器顺手发出去的**。
+//      搬出去之后静态处理器够不到它了，所以下面补了一条**显式的 /mods/* 路由**
+//      （见「插件静态资源」那段）。少了那条路由，立绘 / 背景 / Live2D 模型 /
+//      插件自带的 panel.html 全部 404 —— 正是本项目最忌讳的"装了等于没装"。
+//
 // ★ 可用环境变量 MODS_DIR 覆盖（2026-10 补）：
 //   自动化检查要往插件目录里放测试 zip，而**用户自己的服务可能正跑着** ——
 //   它每次被请求 /api/plugins 都会重新扫描目录，于是会把测试的 zip 抢走，
 //   表现为"检查时好时坏"（实测踩到：单独跑通过、跟别的检查并发跑就失败）。
 //   与 DATA_DIR / LOG_DIR 同理：测试该能完全隔离，不碰用户的真实数据。
-const MODS_DIR = process.env.MODS_DIR ? path.resolve(process.env.MODS_DIR) : path.join(root, 'mods');
+const MODS_DIR = process.env.MODS_DIR
+    ? path.resolve(process.env.MODS_DIR)
+    : path.join(root, '..', 'mods');
 // Live2D 服务端的四个接口与模型目录读写已搬进 web/mods/live2d-models/（见它的 server.mjs）：
 //   GET  /api/live2d/models · POST /api/live2d/upload
 //   DELETE /api/live2d/models/<名> · POST /api/live2d/rename
@@ -90,6 +104,9 @@ function isBlockedWritePath(target) {
 //
 //   控制台  [HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息     （终端支持时带 ANSI 颜色）
 //   文件    [YYYY-MM-DD HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息
+//
+// 毫秒是 2026-10 补上的（原先只到秒）：同一秒里能连打十几条日志，
+// 秒级精度下它们在查看器里分不出先后、也无法与 bat 面板逐行对齐。
 //
 // 级别固定四位（DBUG/INFO/WARN/ERRO/CRIT），WARN 及以上再带 ` [v版本]` —— 都照 AstrBot 抄的，
 // 等宽、能一眼扫出来、也好 grep。
@@ -131,19 +148,30 @@ const LOG_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:[-._][A-Za-z0-9]+)*\
 const LOG_STAMP_LEN = 19;                  // `YYYY-MM-DD_HH-mm-ss` 的长度，用来按"启动"分组
 
 const pad2 = (n) => String(n).padStart(2, '0');
-/** 时刻 → 文件名里的那一段（本地时间） */
+const pad3 = (n) => String(n).padStart(3, '0');
+/** 时刻 → 文件名里的那一段（本地时间）。**不含毫秒** —— 文件名要能当路径用，越短越好 */
 function logStampFor(date) {
     return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
         + `_${pad2(date.getHours())}-${pad2(date.getMinutes())}-${pad2(date.getSeconds())}`;
 }
-/** 时刻 → 日志行里的 `YYYY-MM-DD HH:mm:ss` */
+/**
+ * 时刻 → 日志行里的 `YYYY-MM-DD HH:mm:ss.SSS`。
+ *
+ * ★ 2026-10 加毫秒（对齐 AstrBot 与 LingChat 的日志行）：
+ *   一次启动会连打十几条日志，秒级精度下它们**时间戳完全相同** ——
+ *   在日志查看器里既分不出先后，也无法和 bat 面板逐行对齐（用户报过"对不上"）。
+ *   毫秒让同一秒内的记录可区分，也是"这次请求慢在哪"唯一能看出来的地方。
+ *   文件名仍用秒级（logStampFor），因为它是路径的一部分，且"哪次启动"只需秒级。
+ */
 function logTimeFull(date = new Date()) {
     return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} `
-        + `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+        + `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
+        + `.${pad3(date.getMilliseconds())}`;
 }
-/** 时刻 → 控制台用的 `HH:mm:ss` */
+/** 时刻 → 控制台用的 `HH:mm:ss.SSS` */
 function logTimeShort(date = new Date()) {
-    return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+    return `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`
+        + `.${pad3(date.getMilliseconds())}`;
 }
 
 // ---- 级别（四位，对齐 AstrBot 的 short_levelname）----
@@ -756,10 +784,82 @@ const modServer = createModServer({
 
 
 // ===== AI Agent 文件操作 API =====
-// 权限模式：app = 仅应用文件夹（web/ 目录）；computer = 允许操作电脑任意路径（用户自行承担风险）
+//
+// ★★ 2026-10 权限模型重构：`app`/`computer` 两档 → **三档**。
+//
+//   旧模型把两件事捆在一个开关上：**能碰哪里**（web/ 内 vs 任意路径）
+//   与**要不要问**。结果是用户想要"能碰任意路径但仍然每次都问"时无从表达 ——
+//   他只能切到 computer，而那同时意味着"不再逐条确认"。
+//
+//   新模型把两者拆开：**三档都能访问任意路径**，区别只在"要不要问"与"允不允许删除"：
+//     · strict 逐条确认 —— 会**改动电脑**的操作（写入 / 覆盖 / 删除 / 命令）每次都问；
+//                          读取（列目录 / 读文件）不问。
+//     · auto   自动通过 —— 改动类操作直接放行，但**禁止删除**（删除接口整体拒绝）。
+//     · full   完全访问 —— 含删除在内全部放行。
+//
+//   ⚠️ 两个必须记住的后果（都是刻意的，不是疏漏）：
+//     ① **读取在任何档位下都不询问**。所以 strict 档下 AI 仍可无声地读
+//        `data/store.json`（内含 API Key 明文）、`~/.ssh/id_rsa` 等任意文件。
+//        这是"读取不问"这个选择的直接代价；介意的话把读取也纳入确认。
+//     ② `auto` 档**只禁删除，不禁覆盖** —— 而覆盖一个已有文件同样会丢掉原内容，
+//        所以 AI 可以用"写入同名文件"绕过删除禁令。要堵这条路就把覆盖也禁掉。
 const AGENT_APP_ROOT = path.resolve(root);
 const AGENT_READ_LIMIT = 300 * 1024; // 读文件上限 300KB
 const AGENT_WRITE_LIMIT = 1024 * 1024; // 写请求体上限 1MB
+
+/** 三档权限的权威清单。前端 agentAccess 白名单必须与此保持一致。 */
+const AGENT_ACCESS_LEVELS = ['strict', 'auto', 'full'];
+const AGENT_ACCESS_DEFAULT = 'strict';
+
+/** 把请求里传来的档位收敛到合法值。非法值一律按最严的 strict 处理。 */
+function normalizeAgentAccess(value) {
+    const v = String(value || '').trim();
+    return AGENT_ACCESS_LEVELS.includes(v) ? v : AGENT_ACCESS_DEFAULT;
+}
+
+/** 这一档允不允许删除。只有 full 允许。 */
+function accessAllowsDelete(access) {
+    return normalizeAgentAccess(access) === 'full';
+}
+
+/** 这一档下"改动电脑的操作"要不要逐条询问。只有 strict 要。 */
+function accessAsksBeforeChange(access) {
+    return normalizeAgentAccess(access) === 'strict';
+}
+
+/**
+ * 两个路径是不是同一个（★ 2026-10 新增）。
+ *
+ * ★ 为什么不能直接 `a === b`：**Windows 的路径比较是大小写不敏感的**，
+ *   `D:\222\ElainaChat-Open\web` 与 `D:\222\elainachat-open\web` 是同一个目录，
+ *   但字符串比较说不等。删除守卫若用 `===`，换一下大小写就能绕过
+ *   （实测：`check-pc-command` 的守卫测试正是靠这个才暴露出来）。
+ *
+ * 在大小写敏感的平台上（Linux / macOS 默认）保持严格比较 —— 那里
+ *   `Web` 与 `web` 确实是两个不同目录，不敏感化才是对的。
+ */
+function samePath(a, b) {
+    const ra = path.resolve(String(a || ''));
+    const rb = path.resolve(String(b || ''));
+    return process.platform === 'win32'
+        ? ra.toLowerCase() === rb.toLowerCase()
+        : ra === rb;
+}
+
+/**
+ * target 是否在 dir 内部或就是 dir 本身（同样按平台处理大小写）。
+ * 用于"系统目录不许删"这类**子树**守卫。
+ */
+function isPathInside(target, dir) {
+    const t = path.resolve(String(target || ''));
+    const d = path.resolve(String(dir || ''));
+    if (process.platform === 'win32') {
+        const tl = t.toLowerCase();
+        const dl = d.toLowerCase();
+        return tl === dl || tl.startsWith(dl + path.sep);
+    }
+    return t === d || t.startsWith(d + path.sep);
+}
 
 // ===== 外壳文件夹（桌面/文档/下载…）的真实位置 =====
 // 为什么非要有这块：用户可以把桌面「移动」到任意位置（资源管理器 → 桌面属性 → 位置 → 移动），
@@ -925,68 +1025,61 @@ function hasComputerGrant(request) {
     return isAuthenticated(request);
 }
 
-const PERM_DENIED_MSG = '限制模式：仅可操作应用文件夹（web/）。如需操作电脑其他路径，请在「设置 → 能力 → 电脑操作权限」里切到「允许操作电脑」（局域网设备需先登录）。';
+const PERM_DENIED_MSG = '需要先登录后才能操作电脑（局域网设备请在设置里填访问密码）。';
 
 /**
  * 解析 Agent 路径，并区分"路径无效"与"越界"两种失败。
  *
- * 为什么要区分：越界是**可以申请的**（用户点一次「允许」即可），
- * 而路径无效（空、别名解析不出来）申请也没用。旧实现两者都返回 null，
- * 调用方只能笼统回一句"限制模式…请去改设置" —— 用户被迫去翻设置页，
- * 而其实他只需要就这一次点个「允许」。
+ * ★★ 2026-10 三档权限模型下，这个函数**大幅简化**了：三档都能访问任意路径，
+ *   所以"目标在不在 web/ 内"不再影响放行与否 —— 唯一的硬边界是
+ *   `privileged`（本机或已登录设备）。
+ *
+ *   `allowOutside` 参数保留但已不再使用（历史调用点仍在传）：旧模型下它表示
+ *   "用户已就本次越界批准"，而新模型没有越界这个概念了。保留形参是为了不动
+ *   所有调用方的签名；等调用点都清干净可以删掉。
+ *
+ *   ⚠️ `reason: 'outside'` 永远不会再返回 —— 前端那条 needEscalation 分支
+ *   因此不会再被触发。留着分支无害（老客户端连新服务端时会用不上），
+ *   但不要再基于它做新的判断。
  *
  * @param {string} rawPath
- * @param {string} permission 'app' | 'computer'
+ * @param {string} access 'strict' | 'auto' | 'full'
  * @param {boolean} privileged 已获得操作电脑的授权（本机或已登录的局域网设备）
- * @param {boolean} allowOutside 用户已就本次操作批准越界（前端确认后回传）
- * @returns {{ok:true, path:string} | {ok:false, reason:'invalid'|'outside'|'remote'}}
+ * @returns {{ok:true, path:string} | {ok:false, reason:'invalid'|'remote'}}
  */
-function resolveAgentPathEx(rawPath, permission, privileged, allowOutside = false) {
+function resolveAgentPathEx(rawPath, access, privileged, allowOutside = false) {
     const p = expandPathAliases(rawPath);
     if (!p) return { ok: false, reason: 'invalid' };
     const resolved = path.resolve(p);
-
-    // 全权限：已授权即可（本机 or 已登录的局域网设备）
-    if (privileged && permission === 'computer') return { ok: true, path: resolved };
-
-    // 限制模式：应用文件夹内直接放行
-    if (resolved === AGENT_APP_ROOT || resolved.startsWith(AGENT_APP_ROOT + path.sep)) {
-        return { ok: true, path: resolved };
-    }
-
-    // 越界。★ 只有**已获得操作电脑授权**的请求才允许"申请越界" ——
-    //   未认证的设备即使伪造 allowOutside 也必须被拒（否则等于把 computer 模式
-    //   白送给整个局域网，而认证检查的全部意义就在于此）。
+    // 唯一的硬边界：必须已认证。未认证的设备（猜不到密码）任何路径都拿不到。
     if (!privileged) return { ok: false, reason: 'remote' };
-    if (allowOutside === true) return { ok: true, path: resolved };
-    return { ok: false, reason: 'outside' };
+    return { ok: true, path: resolved };
 }
 
 /** 旧签名保留：只要最终路径，拿不到就是 null（供不关心失败原因的调用方用） */
-function resolveAgentPath(rawPath, permission, privileged, allowOutside = false) {
-    const r = resolveAgentPathEx(rawPath, permission, privileged, allowOutside);
+function resolveAgentPath(rawPath, access, privileged, allowOutside = false) {
+    const r = resolveAgentPathEx(rawPath, access, privileged, allowOutside);
     return r.ok ? r.path : null;
 }
 
 /**
  * 统一的「路径被拒」响应。
  *
- * 越界时回 403 + needEscalation，让前端弹一次「是否允许访问这个位置」；
- * 而不是让用户自己去设置页切换全局模式 —— 那是一次性需求却要改全局配置，
- * 用户改完往往忘了改回来，等于把限制模式永久关掉了。
+ * ★ 三档模型下 'outside' 已不可能出现（见 resolveAgentPathEx），
+ *   但分支保留：老版本前端可能仍在等这个 needEscalation 信号，
+ *   而"返回一个它认识的形状"比"返回 403 让它卡住"要好。
  */
 function denyPath(res, reason, privileged) {
     if (reason === 'outside') {
         return jsonResponse(res, 403, {
             ok: false,
             needEscalation: true,
-            message: '这个位置在应用文件夹之外。需要你确认后才能访问。',
+            message: '这个位置需要你确认后才能访问。',
         });
     }
     if (reason === 'remote') {
-        // 走到这里说明请求既没有 computer 权限、目标又在 web/ 之外。
         // 认证闸门在更前面（未登录的请求根本到不了 /api/agent/*），
-        // 所以这通常意味着"已登录但用的是 app 模式"。
+        // 所以这通常意味着"会话过期了"。
         return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
     }
     return jsonResponse(res, 403, { ok: false, message: '路径无效' });
@@ -1016,16 +1109,14 @@ async function listAgentEntries(target) {
 
 async function agentLs(params, res, privileged) {
     try {
-        const permission = String(params.get('permission') || 'app');
-        const allowOutside = params.get('allowOutside') === '1';
-        const r = resolveAgentPathEx(params.get('path') || AGENT_APP_ROOT, permission, privileged, allowOutside);
+        const access = normalizeAgentAccess(params.get('access') || params.get('permission'));
+        const r = resolveAgentPathEx(params.get('path') || AGENT_APP_ROOT, access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
-        const full = (privileged && permission === 'computer') || allowOutside;
+        // 读取不问确认 —— 但路径提示照给（AI 猜错路径时能自己纠正）
         const info = await stat(target).catch(() => null);
         if (!info || !info.isDirectory()) {
-            // 带上真实位置提示：AI 猜错路径时，下一轮能自己纠正（旧实现只回「目录不存在」，它就卡死了）
-            const hint = full ? shellFolderHint() : '';
+            const hint = shellFolderHint();
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: false, message: '目录不存在：' + target + (hint ? '。' + hint : '') }));
             return;
@@ -1041,15 +1132,13 @@ async function agentLs(params, res, privileged) {
 
 async function agentRead(params, res, privileged) {
     try {
-        const permission = String(params.get('permission') || 'app');
-        const allowOutside = params.get('allowOutside') === '1';
-        const r = resolveAgentPathEx(params.get('path'), permission, privileged, allowOutside);
+        const access = normalizeAgentAccess(params.get('access') || params.get('permission'));
+        const r = resolveAgentPathEx(params.get('path'), access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
-        const full = (privileged && permission === 'computer') || allowOutside;
         const info = await stat(target).catch(() => null);
         if (!info || !info.isFile()) {
-            const hint = full ? shellFolderHint() : '';
+            const hint = shellFolderHint();
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ ok: false, message: '文件不存在：' + target + (hint ? '。' + hint : '') }));
             return;
@@ -1079,57 +1168,47 @@ async function agentWrite(request, res, privileged) {
         }
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return jsonResponse(res, 400, { ok: false, message: '请求体无效' }); }
-        const permission = String(body.permission || 'app');
-        const allowOutside = body.allowOutside === true;
-        const r = resolveAgentPathEx(body.path, permission, privileged, allowOutside);
+        const access = normalizeAgentAccess(body.access || body.permission);
+        const r = resolveAgentPathEx(body.path, access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
-        // 应用文件夹模式下禁写危险类型：这些文件一旦落进 web/，静态服务就会以同源身份
-        // 执行/渲染它们（.html 直接构成存储型 XSS）。computer 模式本来就允许操作电脑
-        // 任意路径（用户自担风险），不做这个限制。
+        // web/ 内禁写危险类型（.html/.js/.svg）：这些文件一旦落进 web/，静态服务就会
+        // 以同源身份执行/渲染它们（.html 直接构成存储型 XSS）。
+        //
+        // ★ 三档模型下只有 `full` 放行 —— 它对应旧的 computer 模式，语义就是
+        //   "用户已授权操作电脑任意路径，风险自担"。strict / auto 仍然拦。
         //
         // 判据走 isBlockedWritePath（剥掉 ADS / 尾随点 / 尾随空格后再取扩展名）——
         // 直接 path.extname(target) 会被 `x.html::$DATA` 这类写法绕过，落盘仍是 x.html。
+        // 所以 in-web 的保护**永不**因"目标在 web/ 外"而放宽。
         //
-        // 注意 allowOutside **不能**参与这条判据，判据只看"目标是否在 web/ 内"：
-        //   · 越界批准只可能发生在 web/ 之外（web/ 内的路径本来就放行，无需批准）；
-        //   · 若写成 `!full && isBlockedWritePath(...)`，那么
-        //     `{path:'web/x.html::$DATA', permission:'app', allowOutside:true}`
-        //     会因为 allowOutside 把 full 顶成 true 而**跳过拦截**，落盘一个 web/ 内的
-        //     .html —— 等于给同源代码注入开了后门。所以 in-web 的保护永不放宽。
-        //
-        // ⚠️ 诚实说明：这道闸门在 computer 模式下**本来就不拦**（本机也是），
-        //    而且它只挡"通过写入接口"这条路 —— 有了命令执行之后，
+        // ⚠️ 诚实说明：这道闸门只挡"通过写入接口"这条路 —— 有了命令执行之后，
         //    `echo x > web/a.html` 这类写法被危险判定归为 **safe**（重定向目标不是
         //    绝对系统路径），不带授权就能落盘。所以它防的是"模型顺手写个文件"，
         //    不是"铁了心要注入的人"。真正的边界是"要不要给命令执行"。
         const inAppRoot = target === AGENT_APP_ROOT || target.startsWith(AGENT_APP_ROOT + path.sep);
-        if (inAppRoot && !(privileged && permission === 'computer') && isBlockedWritePath(target)) {
+        if (inAppRoot && access !== 'full' && isBlockedWritePath(target)) {
             return jsonResponse(res, 400, { ok: false, message: '应用文件夹内不允许写 .html/.js/.svg 等可执行类型的文件（防止同源代码注入）' });
         }
 
-        // ★ 覆盖已有文件 = 修改，必须经用户同意（两种模式都生效，含全权限模式）。
+        // ★ 覆盖已有文件 = 修改。**只有 strict 档要问**。
         //
-        // 为什么这条要放在服务端、且两个模式都拦：
-        //   旧实现是无条件 `writeFile(target, ...)` —— 目标已存在就**静默覆盖**。
-        //   而提示词里却写着「AI 没有修改文件的权限（仅可新建）」，两边不一致：
-        //   AI 只要对已存在的路径发一次 [操作:保存文件 …]，就能在用户毫无察觉的情况下
-        //   改写 web/css/themes.css、web/mods/index.json，全权限模式下更能改写电脑上
-        //   任意文件。所谓"仅可新建"从来没被强制过。
+        // 三档语义（见文件顶部那段说明）：
+        //   strict → 回 needOverwrite，前端弹一次确认，同意后带 overwrite:true 重发
+        //   auto   → 直接放行（用户选的就是"自动通过"）
+        //   full   → 直接放行
+        //
+        // ⚠️ `auto` 档放行覆盖是有意的：它只禁删除。代价是 AI 可以用
+        //    "写入同名文件"绕过删除禁令 —— 见文件顶部第 ② 条说明。
         //
         // 判据用 stat 而不是 existsSync：目标可能是目录（写它会 ENOTDIR/EISDIR），
         // 那种情况交给下面的 writeFile 自己报错，不在这里伪装成"覆盖确认"。
-        //
-        // overwrite 由前端在用户同意后回传（与 allowOutside 同一套模式）：
-        // 服务端不认识"用户是否同意过"这个状态，它只认"这次请求有没有带授权旗标"，
-        // 而前端问不问、问几次由前端按"同一对话只问一次"的语义决定。
-        // 绕过前端直接 POST 的话，不带 overwrite 一样拿不到覆盖能力。
         let targetExists = false;
         try {
             const existed = await stat(target);
             targetExists = existed.isFile();
         } catch { /* 不存在 / 无权限：都按"新建"处理，真正的错误由 writeFile 抛出 */ }
-        if (targetExists && body.overwrite !== true) {
+        if (targetExists && accessAsksBeforeChange(access) && body.overwrite !== true) {
             return jsonResponse(res, 403, {
                 ok: false,
                 needOverwrite: true,
@@ -1154,26 +1233,29 @@ async function agentWrite(request, res, privileged) {
 /**
  * AI 执行电脑命令（PowerShell / cmd）。
  *
- * 权限双模式在这里的落点：
- *   · app（限制）      → **直接拒绝**。命令能做的事远超文件读写，
- *                        在"仅应用文件夹"语义下没有安全的执行子集可给。
- *   · computer（全权限）→ 放行，但**危险命令仍强制要求 approved**。
+ * 三档权限在这里的落点：
+ *   · strict → 放行，但**每条命令都要求 approved**（不只是危险命令）。
+ *              理由：命令是"任意操作"，在"逐条确认"这一档下没有安全的免问子集。
+ *   · auto   → 放行，危险命令（含删除类）仍要求 approved —— 因为这一档禁止删除。
+ *   · full   → 全部放行，连危险命令也不再问（用户已明确选择完全访问）。
  *
  * ★ 为什么危险判定必须在服务端再做一次：
  *   前端已经问过用户了，但前端可以被绕过（直接 POST 这个接口）。
  *   如果服务端只看 `approved` 字段，那"授权"就只是客户端的一个礼貌动作，
  *   攻击者传 approved:true 即可执行任意命令。所以服务端**自己判**，
  *   并且在前端没带 approved 时拒绝 —— 这样绕过前端也拿不到危险命令。
+ *
+ * ⚠️ `full` 档下连删除类命令都不再询问 —— 这正是这一档的定义。
+ *    它的实际含义是：**AI 可以在你的电脑上执行任意命令，包括 rm -rf。**
  */
 async function agentExec(request, res, privileged) {
     try {
         let body;
         try { body = await readJsonBody(request, 256 * 1024); } catch { return jsonResponse(res, 400, { ok: false, message: '请求体无效' }); }
 
-        const permission = String(body.permission || 'app');
-        // 限制模式：命令执行整体不可用（见上）。
-        // privileged = 本机（免密管理员）或**已登录**的局域网设备。
-        if (!(privileged && permission === 'computer')) {
+        const access = normalizeAgentAccess(body.access || body.permission);
+        // 唯一的硬边界：必须已认证。三档都能执行命令，区别只在"要不要问"。
+        if (!privileged) {
             return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
         }
         const command = String(body.command || '').trim();
@@ -1182,20 +1264,27 @@ async function agentExec(request, res, privileged) {
 
         // 服务端权威判定：不信前端传来的 risk
         const verdict = classifyCommand(command);
-        if (verdict.risk === 'dangerous' && body.approved !== true) {
+        // 该不该要求 approved：
+        //   strict → 一律要求（每条命令都问）
+        //   auto   → 只有危险命令要求（这一档禁止删除，而删除类命令正是危险命令）
+        //   full   → 从不要求
+        const needsApproval = access === 'strict' ? true : (access === 'auto' && verdict.risk === 'dangerous');
+        if (needsApproval && body.approved !== true) {
             return jsonResponse(res, 403, {
                 ok: false,
                 needApproval: true,
-                risk: 'dangerous',
-                reasons: verdict.reasons,
-                message: '这是危险命令，需要用户确认后才能执行。',
+                risk: verdict.risk,
+                reasons: access === 'strict' && verdict.risk !== 'dangerous'
+                    ? ['当前是「逐条确认」模式，每条命令都需要你确认']
+                    : verdict.reasons,
+                message: '这条命令需要用户确认后才能执行。',
             });
         }
 
-        // cwd 仍受权限约束：app 模式到不了这里，computer 模式允许指定目录
+        // cwd 仍受认证约束（未认证到不了这里）
         let cwd;
         if (body.cwd) {
-            const target = resolveAgentPath(body.cwd, permission, privileged);
+            const target = resolveAgentPath(body.cwd, access, privileged);
             if (!target) return jsonResponse(res, 403, { ok: false, message: '工作目录无效' });
             cwd = target;
         }
@@ -1212,6 +1301,137 @@ async function agentExec(request, res, privileged) {
             stdout: result.stdout,
             stderr: result.stderr,
             text: formatCommandResult(result),
+        });
+    } catch (err) {
+        jsonResponse(res, 500, { ok: false, message: String(err?.message || err) });
+    }
+}
+
+/**
+ * AI 删除文件或目录（★ 2026-10 新增能力）。
+ *
+ * 为什么单独一个接口、而不是让 AI 用「电脑命令」删：
+ *   · 命令那条路在 strict 档下每条都要问，在 auto 档下又因为"删除类命令"
+ *     被判为 dangerous 而必问 —— 结果就是 auto 档**根本删不掉东西**，
+ *     与这一档"自动通过"的语义直接冲突；
+ *   · 更重要的：命令是字符串，`del a.txt` 与 `del /s /q C:\` 在接口层无从区分，
+ *     只能靠正则黑名单，而黑名单必然漏（见 pc-command.mjs 的说明）。
+ *     这个接口收的是**结构化路径**，删除范围是确定的、可校验的。
+ *
+ * 三档语义：
+ *   · strict → 回 needDelete 让前端确认一次，同意后带 confirmed:true 重发
+ *   · auto   → **整体拒绝**（这一档的定义就是禁止删除）
+ *   · full   → 直接执行
+ *
+ * ★ 服务端自己判档位，不信前端的 confirmed —— 绕过前端直接 POST 也删不掉。
+ *   这是与 agentExec 同一条理由：授权不能只是客户端的礼貌动作。
+ */
+async function agentDelete(request, res, privileged) {
+    try {
+        let body;
+        try { body = await readJsonBody(request, 256 * 1024); } catch { return jsonResponse(res, 400, { ok: false, message: '请求体无效' }); }
+
+        const access = normalizeAgentAccess(body.access || body.permission);
+        if (!privileged) return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
+
+        // auto 档：这一档禁止删除，直接拒绝并说清去哪改。
+        if (!accessAllowsDelete(access) && access === 'auto') {
+            return jsonResponse(res, 403, {
+                ok: false,
+                deleteForbidden: true,
+                message: '当前是「自动通过（禁止删除）」模式，AI 不能删除文件。'
+                    + '需要删除的话，请在「设置 → 能力 → AI 权限」里切到「完全访问」，或自己手动删除。',
+            });
+        }
+
+        const r = resolveAgentPathEx(body.path, access, privileged);
+        if (!r.ok) return denyPath(res, r.reason, privileged);
+        const target = r.path;
+
+        // 拒绝删除几个"删了就回不来 / 会连坐"的位置。
+        //
+        // ★★ 判据刻意是**精确匹配**（+ 系统目录用前缀），不是"整个 web/ 子树"：
+        //   「完全访问」这一档的定义就是"AI 能做任何事，包括删除" ——
+        //   如果把 web/ 下所有文件都禁掉，那 AI 连自己刚建的一个临时文件都删不掉，
+        //   这一档就名不副实了。
+        //
+        //   所以只挡**整锅端**的那几个：盘符根、Windows、Program Files、
+        //   以及应用自己的两个根目录（web/ 与项目根）**本身**。
+        //   删它们等于把应用连根拔掉，而删它们**里面的某个文件**是用户的自由。
+        //
+        //   ⚠️ 诚实说明：这条保护是"防手滑"，不是"防恶意" ——
+        //      完全访问档下 AI 仍可以逐个删掉 web/ 里的文件。
+        //      真正的边界是"要不要开这一档"，这正是设置页里那段后果说明的意义。
+        const projectRoot = path.resolve(AGENT_APP_ROOT, '..');
+        const rootOfTarget = path.parse(target).root;
+        if (samePath(target, rootOfTarget)) {
+            return jsonResponse(res, 400, { ok: false, message: '不能删除盘符根目录：' + target });
+        }
+        // ★ 比较必须走 samePath（Windows 下大小写不敏感）——
+        //   直接 `target === path.resolve(g.p)` 会被 `D:\222\elainachat-open\web`
+        //   这种**换了个大小写**的写法绕过（Windows 认为是同一个目录）。
+        const exactGuard = [
+            { p: projectRoot, why: '项目根目录' },
+            { p: AGENT_APP_ROOT, why: '应用自己的文件夹（web/）' },
+        ];
+        for (const g of exactGuard) {
+            if (samePath(target, g.p)) {
+                return jsonResponse(res, 400, {
+                    ok: false,
+                    message: '不能删除' + g.why + '本身：' + target
+                        + '\n（它里面的单个文件可以删，但整个目录不行 —— 那会把应用连根拔掉。）',
+                });
+            }
+        }
+        const prefixGuard = [
+            { p: process.env.SystemRoot || 'C:\\Windows', why: '系统目录' },
+            { p: process.env.ProgramFiles || 'C:\\Program Files', why: '程序目录' },
+        ];
+        for (const g of prefixGuard) {
+            if (isPathInside(target, g.p)) {
+                return jsonResponse(res, 400, { ok: false, message: '不能删除' + g.why + '：' + target });
+            }
+        }
+
+        const info = await stat(target).catch(() => null);
+        if (!info) return jsonResponse(res, 404, { ok: false, message: '要删除的东西不存在：' + target });
+
+        // strict 档：需要用户确认一次（前端弹窗后带 confirmed:true 重发）
+        if (accessAsksBeforeChange(access) && body.confirmed !== true) {
+            return jsonResponse(res, 403, {
+                ok: false,
+                needDelete: true,
+                isDir: info.isDirectory(),
+                message: '即将**永久删除**：' + target
+                    + '（' + (info.isDirectory() ? '目录及其全部内容' : '文件') + '）。删除后无法恢复，需要你确认。',
+            });
+        }
+
+        const isDir = info.isDirectory();
+        try {
+            if (isDir) {
+                await rm(target, { recursive: true, force: true });
+            } else {
+                await rm(target, { force: true });
+            }
+        } catch (rmErr) {
+            // ★ 删除失败要给**人能看懂**的原因，不能把 Node 的原始错误码甩出去。
+            //   最常见的两种：EBUSY（文件被别的程序占用 —— 比如正开着这个文件）、
+            //   EPERM（没有权限 / 只读）。这两种都不是"操作错了"，而是"现在删不了"。
+            const code = String(rmErr?.code || '');
+            let why = '删除失败';
+            if (code === 'EBUSY') why = '这个文件或目录正被别的程序占用（先关掉它再试）';
+            else if (code === 'EPERM') why = '没有权限删除它（可能是只读，或需要管理员权限）';
+            else if (code === 'ENOTEMPTY') why = '目录非空且其中有删不掉的内容';
+            else if (code === 'ENOENT') why = '它已经不存在了（可能刚被别的程序删掉）';
+            else why = '删除失败（' + code + '）';
+            return jsonResponse(res, 500, { ok: false, code, message: why + '：' + target });
+        }
+        return jsonResponse(res, 200, {
+            ok: true,
+            path: target,
+            wasDir: isDir,
+            message: '已删除' + (isDir ? '目录' : '文件') + '：' + target,
         });
     } catch (err) {
         jsonResponse(res, 500, { ok: false, message: String(err?.message || err) });
@@ -2076,7 +2296,37 @@ async function handleRelay(request, response) {
 
     const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 120000, 1000), RELAY_TIMEOUT_MAX);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // ★★ 2026-10 修「流式被自己的超时腰斩」：这里的超时必须是**空闲**超时，
+    //   不是从发起到结束的**总时长**。
+    //
+    //   旧实现是 `const timer = setTimeout(() => controller.abort(), timeoutMs)`
+    //   一直挂到整条响应体转发完才 clearTimeout —— 于是语义变成"这次请求总共
+    //   只能花 timeoutMs"，而这对流式**是错的**：
+    //     · 长回复（几千字）正常说完就要好几分钟；
+    //     · 高思考强度模型（thinkingEffort=high）首字节本身就常超过 120 秒。
+    //   实测现场（data/logs/2026-10-13_20-23-53.trace.log）：
+    //     `请求失败 POST …/messages — 超过 120 秒没有响应（120020ms）`
+    //     → 前端 `[Chat] anthropic 流式不可用，退回非流式`
+    //   用户看到的就是"AI 不能正常流式输出"：要么干等、要么整段蹦出来。
+    //
+    //   改成每收到一块数据就**续期**：只要上游还在吐数据就永不超时（流式长回复
+    //   因此可以正常走完），只有真正卡死（连接在、但一个字节都不来）才按
+    //   timeoutMs 砍。语义从"总共多久"变成"多久没动静"—— 这才是流式该有的超时。
+    //
+    //   ⚠️ 空闲续期必须配一条**总时长**硬顶，否则"上游一直发心跳、但永远不说正文"
+    //     就能把这条连接永远占住（转发是逐块透传，没有上限就等于免费长连接）。
+    //     硬顶取 RELAY_TIMEOUT_MAX（10 分钟）：正常对话（哪怕边想边说几分钟）
+    //     都在其内，占用也被封住。
+    const relayStartedAt = Date.now();
+    const hardDeadline = relayStartedAt + RELAY_TIMEOUT_MAX;
+    let timer = null;
+    const armIdleTimer = (ms) => {
+        if (timer) clearTimeout(timer);
+        const remaining = hardDeadline - Date.now();
+        if (remaining <= 0) { controller.abort(); return; }
+        timer = setTimeout(() => controller.abort(), Math.min(ms, remaining));
+    };
+    armIdleTimer(timeoutMs);   // 第一段：等响应头（TTFB）
     let abortedByClient = false;
     response.on('close', () => {
         if (!response.writableEnded) { abortedByClient = true; controller.abort(); }
@@ -2095,7 +2345,6 @@ async function handleRelay(request, response) {
     }
 
     let upstream;
-    const relayStartedAt = Date.now();
     try {
         upstream = await fetch(target, {
             method,
@@ -2127,7 +2376,20 @@ async function handleRelay(request, response) {
         'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
+        // ★ SSE 必须**关掉缓冲**：否则中间层（Node 自己的 socket、以及某些
+        //   反向代理）会攒够一块才发，增量就变成了"一批一批蹦"。identity 编码
+        //   已在上面设过，这里再补一条代理侧的显式指令。
+        ...(/text\/event-stream/i.test(upstream.headers.get('content-type') || '')
+            ? { 'X-Accel-Buffering': 'no' } : {}),
     });
+    // ★★ 立刻把头送出去。浏览器的 fetch() 是**收到响应头就 resolve**，之后才开始
+    //    读 body；不 flush 的话头可能和第一块数据一起才发出，前端"开始流式"的时间
+    //    就整体后移 —— 表现上就是"点发送后要愣一愣才开始出字"。
+    if (typeof response.flushHeaders === 'function') {
+        try { response.flushHeaders(); } catch { /* 已经发过头了 */ }
+    }
+    // 头已到 → 空闲计时器重新起算，进入"等正文"阶段（见上面 armIdleTimer 的说明）。
+    armIdleTimer(timeoutMs);
 
     // 边透传边攒一份给日志用。攒到上限就停止记录（**继续透传**），
     // 免得一个长回答把内存吃掉；流式的正文稍后由 parseSseReply 从 data: 行拼回来。
@@ -2137,6 +2399,9 @@ async function handleRelay(request, response) {
         try {
             for await (const chunk of upstream.body) {
                 if (abortedByClient) break;
+                // ★ 每收到一块就续期：只要上游还在吐数据，长回复就永远不会被
+                //   自己的超时砍断；只有"连接还在但一个字节都不来"才会被 abort。
+                armIdleTimer(timeoutMs);
                 response.write(chunk);
                 if (traceBytes < TRACE_ACCUM_MAX) {
                     traceChunks.push(chunk);
@@ -2665,50 +2930,6 @@ const requestHandler = async (request, response) => {
             });
         }
 
-        // ==================== Edge TTS（免费语音合成） ====================
-        //
-        // 为什么由服务端代合成：微软这个端点校验浏览器指纹（User-Agent 等），
-        // 缺了就 403；而浏览器的 `new WebSocket()` **不允许自定义请求头**，
-        // 网页里直接连必失败。Node 没这个限制 —— 所以电脑版走这里，
-        // 手机版走原生插件（android-app 的 EdgeTtsPlugin，同样原因）。
-        //
-        // 零依赖：server/edge-tts.mjs 里手写 WebSocket 握手与帧编解码。
-        if (pathname === '/api/tts/edge' && request.method === 'POST') {
-            let payload;
-            try {
-                payload = JSON.parse((await readRawBody(request, 64 * 1024)).toString('utf8'));
-            } catch {
-                return jsonResponse(response, 400, { ok: false, message: '请求体不是合法 JSON' });
-            }
-            const text = String(payload?.text || '').trim();
-            if (!text) return jsonResponse(response, 400, { ok: false, message: '缺少 text' });
-            if (text.length > 2000) return jsonResponse(response, 400, { ok: false, message: '文本过长（上限 2000 字）' });
-            const voice = String(payload?.voice || 'zh-CN-XiaoxiaoNeural').trim() || 'zh-CN-XiaoxiaoNeural';
-            const ratePct = Number.isFinite(Number(payload?.ratePct)) ? Number(payload.ratePct) : 0;
-            try {
-                const mp3 = await synthesizeEdge({ text, voice, ratePct, timeoutMs: 25000 });
-                if (!mp3 || !mp3.length) {
-                    return jsonResponse(response, 502, { ok: false, message: 'Edge TTS 没有返回音频（服务端可能改了协议或限流）' });
-                }
-                response.writeHead(200, {
-                    'Content-Type': 'audio/mpeg',
-                    'Content-Length': String(mp3.length),
-                    'Cache-Control': 'no-store',
-                });
-                response.end(mp3);
-                return;
-            } catch (error) {
-                const message = String(error && error.message || error);
-                console.warn('[EdgeTTS] 合成失败: ' + message);
-                return jsonResponse(response, 502, { ok: false, message });
-            }
-        }
-        // 自检：只做握手，用于设置页的"测试"按钮
-        if (pathname === '/api/tts/edge/probe' && request.method === 'POST') {
-            const result = await probeEdge({ timeoutMs: 12000 });
-            return jsonResponse(response, 200, result);
-        }
-
         // 鉴权状态（供设置页展示：是否本机管理员、是否仍是初始随机密码）
         // 注意：初始明文密码只回给本机管理员，局域网会话拿不到（避免"能登录的人就能拿到明文密码"）
         if (pathname === '/api/auth/status' && request.method === 'GET') {
@@ -2926,10 +3147,9 @@ const requestHandler = async (request, response) => {
             // 把「桌面/文档/下载…到底在哪」告诉前端 —— 用户可以把桌面移动到任意位置，
             // 让 AI 按惯例猜 C:\Users\<用户名>\Desktop 是会猜错的（实测踩过）。
             const { roots } = resolveShellFolders();
-            // 只有**真正拿到 computer 权限**的请求才看得到真实路径。
-            // 已登录但用 app 模式的设备拿不到（与"app 模式看不见 web/ 之外"语义一致）。
-            const full = privileged && url.searchParams.get('permission') === 'computer';
-            const visible = full ? roots : roots.map(r => ({ ...r, path: undefined }));
+            // 三档都能访问任意路径，所以真实路径一律可见（只要已认证）。
+            // 旧模型下这里按 app/computer 区分可见性，那个区分已随两档模型一起消失。
+            const visible = privileged ? roots : roots.map(r => ({ ...r, path: undefined }));
             return jsonResponse(response, 200, { ok: true, platform: process.platform, roots: visible });
         }
         if (pathname === '/api/agent/ls' && request.method === 'GET') {
@@ -2941,7 +3161,11 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/agent/write' && request.method === 'POST') {
             return await agentWrite(request, response, privileged);
         }
-        // 电脑命令执行（全权限模式）。危险命令由服务端强制要求 approved（见 agentExec）。
+        // 删除（★ 2026-10 新增）。只有 full 档能删；auto 档整体拒绝；strict 档问一次。
+        if (pathname === '/api/agent/delete' && request.method === 'POST') {
+            return await agentDelete(request, response, privileged);
+        }
+        // 电脑命令执行（三档都可执行，区别在"要不要问"，见 agentExec）。
         if (pathname === '/api/agent/exec' && request.method === 'POST') {
             return await agentExec(request, response, privileged);
         }
@@ -3039,6 +3263,73 @@ const requestHandler = async (request, response) => {
         if (pathname === '/favicon.ico') {
             response.writeHead(204, { 'Cache-Control': 'public, max-age=86400' });
             return response.end();
+        }
+
+        // ===== 插件静态资源：/mods/* （★★ 2026-10 新增）=====
+        //
+        // ★ 为什么必须有这一段：插件目录已从 `web/mods/` 搬到**项目根** `mods/`
+        //   （见 MODS_DIR 的说明）。而 `web/` 是静态文件根 ——
+        //   原来 `/mods/*` 是**靠"它正好在 web/ 下"被下面的静态处理器顺手发出去的**，
+        //   搬出去之后静态处理器够不到它了，没有这一段就是**全部 404**：
+        //   立绘、场景背景、Live2D 模型、插件自带的 panel.html 全部加载失败 ——
+        //   正是本项目最忌讳的"装了等于没装"。
+        //
+        // ★ MIME 必须**按真实扩展名**发（不能一律 octet-stream）：
+        //   插件会 `fetch(host.assetUrl('panel.html'))` 拿自己的设置面板 HTML，
+        //   还有 `.mjs`（live2d-models 的服务端半边）、`.css`、`.js`。
+        //   一律 octet-stream 的话，配合下面的 `nosniff`，浏览器会**拒绝执行**
+        //   脚本、拒绝解析 HTML —— 表现为"插件装了但界面是空的"。
+        //
+        // ★ 为什么这里发真实 MIME 不增加风险：插件本来就能在页面里执行任意 JS
+        //   （加载器就是注入它的 `<script>`），所以给它自带目录放行真实 MIME
+        //   并没有给出它本来没有的能力。（用户**上传**的内容仍走
+        //   modServer 的 uploadRoots 分支，那里一律 octet-stream —— 见下面。）
+        //
+        // ★ 安全约束（与静态处理器同一套，逐条对应）：
+        //   · 路径穿越：`..` 已在上面被拒（relative 的段检查）；
+        //     这里再用 resolve + startsWith 二次确认，双保险。
+        //   · 符号链接不跟随（lstat）：防止插件目录里的软链把任意文件读出去。
+        //   · 只发普通文件，目录不给列表（浏览器本来也没法列）。
+        if (pathname.startsWith('/mods/')) {
+            try {
+                const rel = pathname.slice('/mods/'.length);
+                if (!rel || rel.endsWith('/')) {
+                    response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found');
+                    return;
+                }
+                const target = path.resolve(MODS_DIR, rel);
+                // 二次确认仍在插件根内（resolve 之后比较，挡住任何拼接绕过）
+                if (target !== MODS_DIR && !target.startsWith(MODS_DIR + path.sep)) {
+                    response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
+                    return;
+                }
+                const st = lstatSync(target);
+                if (st.isSymbolicLink() || !st.isFile()) throw new Error('Not a regular file');
+
+                // 插件声明的"用户上传落地处"仍按二进制流发（用户上传的 zip 里
+                // 若混入 .html/.svg，同源渲染就是一个 XSS 执行点）。
+                const uploadRoots = modServer.uploadRoots();
+                const inUploadDir = uploadRoots.some((r) => target.startsWith(r + path.sep));
+                const ext = path.extname(target).toLowerCase();
+                const ctype = inUploadDir
+                    ? 'application/octet-stream'
+                    : (contentTypes.get(ext) || 'application/octet-stream');
+
+                response.writeHead(200, {
+                    'Content-Type': ctype,
+                    'Cache-Control': 'no-store',
+                    'X-Content-Type-Options': 'nosniff',
+                    // 插件自带的 HTML（panel.html）不许被第三方 iframe 嵌套
+                    ...(ctype.startsWith('text/html') ? {
+                        'X-Frame-Options': 'DENY',
+                        'Referrer-Policy': 'no-referrer',
+                    } : {}),
+                });
+                return streamFile(response, target);
+            } catch {
+                response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Not found');
+                return;
+            }
         }
 
         const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
@@ -3303,7 +3594,7 @@ mainServer.listen(port, host, async () => {
     }
 
     // 指路（保留中文 —— 这是给人看的一句，也是启动输出里唯一一句）：
-    console.log('[boot] 就绪。日志可在应用内「设置 → 高级 → 日志查看器」按级别/模块筛选查看。');
+    console.log('[boot] 就绪。日志可在应用内「设置 → 日志」按级别/模块筛选查看。');
 });
 
 // 兼容入口：老的 https://IP:4174 链接继续可用（两个端口都支持双协议）。

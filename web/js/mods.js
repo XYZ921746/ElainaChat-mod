@@ -32,8 +32,53 @@
 (function () {
     'use strict';
 
-    /** 插件根目录（相对站点根） */
-    const MOD_ROOT = '/mods/';
+    /**
+     * 插件根目录（相对站点根）。
+     *
+     * ★ 2026-10（原生适配）：`let` 而不是 `const` —— 安卓 APK（Capacitor）上
+     *   这个根会在**首次加载插件之前**被替换成应用数据目录的 WebView 可访问地址：
+     *     `https://localhost/_capacitor_file_/…/files/mods/`
+     *   （由 app-01-core.js 的 `__nativeModsRootPromise` 设置，见那边说明）。
+     *
+     *   为什么换根就能全通：本文件里 MOD_ROOT 的 9 处使用点**全部是 URL 拼接**
+     *   （script/link/fetch/img —— 调研确认），而 convertFileSrc 出来的地址
+     *   能被这些元素正常加载（Live2D 模型的纹理已走同一条路）。
+     *
+     *   ★ 基址**不做编码**：编码由 modDir() 逐段负责（见下）。
+     *     在 app-01-core.js 的赋值处再 encode 一次会双重编码 → 404。
+     */
+    let MOD_ROOT = '/mods/';
+
+    /**
+     * 等原生插件根就绪。
+     *
+     * ★ 判定**不在这里做**（这是 `check-data-single-source.mjs` 的硬约束：
+     *   "平台分支只允许在存储层"，业务文件里不许长 `isNativePlatform` ——
+     *   否则 Web/APK 会分裂成两套代码）。判定在 app-01-core.js：
+     *   它保证非原生环境下 `__nativeModsRootPromise` 不存在（undefined）——
+     *   这里只看这个**结果**，不做平台测试。
+     *
+     * 为什么必须显式等待（不能赌时序）：本 IIFE 同步执行时早于
+     * `fs.getUri()` 这个异步调用完成 —— 首次 loadAll 若不等，就会用
+     * 桌面根 `/mods/` 去加载（APK 上 404）。
+     *
+     * ★ 等待**放进 loadAll 内部**而不是只在 boot() 处：loadAll 的入口不止
+     *   boot 一个（多设备同步收到"插件开关变了"时也会再调，app-07-init.js:70）——
+     *   在入口函数里等，任何触发路径都安全。
+     */
+    let _nativeModRootWaited = null;
+    function awaitNativeModRoot() {
+        // 非原生（或根初始化失败）：app-01-core 不会设置这个 Promise → 立即过
+        if (!window.__nativeModsRootPromise) return Promise.resolve();
+        if (!_nativeModRootWaited) {
+            _nativeModRootWaited = Promise.resolve(window.__nativeModsRootPromise)
+                .then(() => {
+                    if (window.__nativeModBase) MOD_ROOT = window.__nativeModBase;
+                })
+                .catch(() => { /* app-01-core 那边已打日志；回落桌面根 */ });
+        }
+        return _nativeModRootWaited;
+    }
 
     /**
      * 插件在磁盘上的**实际目录名**（已做 URL 编码，可直接拼进 URL）。
@@ -127,10 +172,24 @@
             // 清掉"已注入脚本"的记录时要同时认 id 与**实际目录名** ——
             // 两者可能不同（见 modDir 说明），只按 id 匹配会漏删，
             // 于是重装同一个插件时脚本不会被重新注入（表现为"装了没反应"）。
+            //
+            // ★ 2026-10（原生适配）：匹配从"任意位置子串"改为"**锚定在
+            //   MOD_ROOT 紧后方的第一个路径段**"。两个原因：
+            //   ① 原生模式下 URL 是 `…/_capacitor_file_/…/files/mods/<id>/…`，
+            //      而插件 id 白名单允许叫 `files` / `data`（甚至等于包名）——
+            //      子串匹配下，卸载一个叫 `files` 的插件会把**所有**插件的
+            //      注入记录全清掉（`/files/` 撞进每个 URL）。
+            //   ② 桌面端同款存量问题：id 叫 `mods` 的插件 needle `'/mods/'`
+            //      同样全命中。锚定后两个世界都精确。
+            //   needle 形如 `'/foo/'`，去掉首斜杠要求它紧跟在 MOD_ROOT 之后：
+            //   `…/mods/foo/…` 命中；`…/mods/foo-bar/…`、`…/files/foo/…`、
+            //   `…/mods/bar/foo/…` 全部不命中（实测验证过斜杠边界）。
             const needles = ['/' + id + '/'];
             if (entry && entry.manifest && entry.manifest.dir) needles.push('/' + entry.manifest.dir + '/');
             loadedScripts.forEach((v, k) => {
-                if (needles.some((n) => k.includes(n))) loadedScripts.delete(k);
+                if (!k.startsWith(MOD_ROOT)) return;
+                const tail = k.slice(MOD_ROOT.length);
+                if (needles.some((n) => tail.startsWith(n.slice(1)))) loadedScripts.delete(k);
             });
         } catch (e) { /* 忽略 */ }
     }
@@ -1201,10 +1260,22 @@
      * 为什么需要一份"清单索引"：浏览器里没法列目录。所以约定
      * `mods/index.json` 是插件清单数组（构建/手工维护），
      * 加载器读它。这样"加一个 mod"= 加目录 + 往 index.json 加一行。
+     *
+     * ★ 2026-10（原生适配）：安卓 APK 上没有静态服务，`/mods/index.json`
+     *   根本不存在（纯净版 APK 连内置插件都不带）。原生模式改走
+     *   `/api/plugins` —— 那条请求被 app-01-core.js 的原生拦截器接住，
+     *   从应用数据目录扫描生成清单（形状与这里期望的完全对齐）。
+     *   ★ 必须用**字面量** `/api/plugins`：拦截器精确匹配这个串，
+     *     拼 MOD_ROOT 的话原生基址会是 `_capacitor_file_` 前缀，匹配不上。
+     *   ★ 平台判定不在这里做（见 awaitNativeModRoot 的说明）：
+     *     桌面模式 `__nativeModBase` 恒为 undefined → 恒走桌面地址；
+     *     原生模式它被设置 → 恒走 /api/plugins。判定收敛在 app-01-core。
      */
     async function discover() {
         try {
-            const res = await fetch(MOD_ROOT + 'index.json', { cache: 'no-store' });
+            const res = await fetch(window.__nativeModBase
+                ? '/api/plugins'
+                : (MOD_ROOT + 'index.json'), { cache: 'no-store' });
             if (!res.ok) return [];
             const data = await res.json();
             // 兼容两种写法：数组，或 { plugins: [...] }（后者便于写注释字段）
@@ -1528,6 +1599,10 @@
 
     /** 加载全部插件 */
     async function loadAll() {
+        // ★ 原生模式：先等插件根就绪（幂等，任何触发路径都安全 ——
+        //   本函数的入口不止 boot 一处，多设备同步也会再调）。
+        //   不等的话首次加载会用桌面根 /mods/ 去拼 URL，APK 上全部 404。
+        await awaitNativeModRoot();
         // ★ 先打一条总览日志（console.log，会被前端日志转发带到启动窗口）。
         //
         // 为什么必须有：插件的加载是"看不见的过程"，而"没有 mod 日志"这个现象
@@ -1561,7 +1636,7 @@
             const detail = lack.map((d) => '「' + d.id + '」' + d.reason).join('、');
             console.error('[Mod] ' + (D1 ? D1.problem({
                 what: '插件「' + id + '」的前置插件不可用，它不会被加载',
-                where: 'web/mods/',
+                where: 'mods/',
                 why: '它依赖 ' + detail,
                 how: lack.some((d) => d.reason === '未启用')
                     ? '到「设置 → 插件」把那个前置插件的开关打开，然后刷新页面。'
@@ -1657,7 +1732,7 @@
             label: '插件加载完成：共 ' + total + ' 个，可用 ' + ready.length + ' 个'
                 + (disabled.length ? '，未启用 ' + disabled.length + ' 个' : '')
                 + (broken.length ? '，有问题 ' + broken.length + ' 个' : ''),
-            hint: total ? '插件由 web/mods/ 下的扩展包提供，可在「设置 → 插件」里开关。' : undefined,
+            hint: total ? '插件由 mods/ 下的扩展包提供，可在「设置 → 插件」里开关。' : undefined,
         }], '插件系统'));
 
         // ---- ② 可用的 ----
@@ -1686,7 +1761,7 @@
             const dep = (e.missingDeps || []).map((d) => d.id + '（' + d.reason + '）').join('、');
             console.error('[Mod] ' + D.problem({
                 what: '插件「' + nm(e) + '」' + label,
-                where: 'web/mods/' + (e.manifest.dir || e.manifest.id) + '/',
+                where: 'mods/' + (e.manifest.dir || e.manifest.id) + '/',
                 why: e.error || (dep ? '它依赖的前置插件不可用：' + dep : '加载过程中出错'),
                 how: e.state === 'blocked'
                     ? '先修好它依赖的前置插件（见上面的原因），再刷新页面。'

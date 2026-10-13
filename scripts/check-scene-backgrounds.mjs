@@ -22,7 +22,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MODS = path.join(ROOT, 'web', 'mods');
+const MODS = path.join(ROOT, 'mods');
 
 let pass = 0, fail = 0;
 const failures = [];

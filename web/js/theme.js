@@ -23,7 +23,10 @@
  *
  * ── 主题清单 ─────────────────────────────────────────────────────────────
  *
- *   elaina   —— 现有粉紫样式（默认，保持原样不动）
+ *   elaina   —— **默认主题：暖米色 + 棕 + 橄榄绿**（就是 index.html 的 `:root`，
+ *               不设 data-theme-template 属性时生效；详见 TEMPLATES 里那段说明。
+ *               ★ 它曾叫"粉紫"—— 那是很久以前的配色，早已换成橄榄绿，
+ *                 名字与色点在 2026-10 才跟着改过来）
  *   ios      —— 液态玻璃 · iOS 蓝（上游主视觉）
  *   claude   —— 液态玻璃 · 陶土橙
  *   sage     —— 液态玻璃 · 鼠尾草
@@ -226,9 +229,24 @@
 
     /** 可选模板（顺序即设置里的显示顺序） */
     const TEMPLATES = [
-        { id: 'elaina', name: '粉紫（默认）', dots: ['#ec4899', '#8b5cf6', '#fdf2f8'] },
+        // ★★ 2026-10 改名与改色点：这一项原来叫「粉紫（默认）」、色点是
+        //    ['#ec4899','#8b5cf6','#fdf2f8']（粉/紫/近白），**与应用实际渲染的配色完全不符**。
+        //
+        //    为什么会不符：`elaina` 这个 id 是**默认主题**，theme.js 对它的处理是
+        //    「不设 data-theme-template 属性」（见 setTemplate 的说明），
+        //    于是它落到 index.html 的 `:root` 上 —— 而那是**暖米色 + 棕 + 橄榄绿**
+        //    （--pixso-canvas #a8b974 / --pixso-green #a7bb6c / --pixso-brown #4c3123）。
+        //    名字和色点是很久以前（还是粉紫配色时）定的，后来 `:root` 换成了橄榄绿，
+        //    **theme.js 这边没跟着改** —— 于是主题选择器里显示"粉紫"，
+        //    点进去却是绿的。用户反馈的"设置页面与对话主题对不上"就是这个。
+        //
+        //    ★ 取色口径：直接用 `:root` 里的真实值（画布 / 主色 / 卡片底），
+        //      与 themes.css 里其它四套模板"色点=该模板真值"的写法保持一致。
+        //      改 `:root` 配色时必须同步改这里，否则又会不一致（check-theme 有断言钉住）。
+        { id: 'elaina', name: '暖米绿（默认）', dots: ['#a8b974', '#a7bb6c', '#f8f5f2'] },
         { id: 'ios', name: 'iOS 蓝', dots: ['#007aff', '#8ab4ff', '#eef1f5'] },
-        { id: 'claude', name: '陶土橙', dots: ['#d97757', '#eab38f', '#f6f2ed'] },        { id: 'sage', name: '鼠尾草', dots: ['#4f9d7d', '#9cc9b4', '#eef3ee'] },
+        { id: 'claude', name: '陶土橙', dots: ['#d97757', '#eab38f', '#f6f2ed'] },
+        { id: 'sage', name: '鼠尾草', dots: ['#4f9d7d', '#9cc9b4', '#eef3ee'] },
         { id: 'sakura', name: '樱花桃', dots: ['#d97b93', '#f0b6c4', '#f8f1f3'] },
         // DIY：颜色由用户定，色点也按用户选的实际颜色显示（renderPicker 里特殊处理）
         { id: 'custom', name: '自定义', dots: null },
@@ -298,17 +316,31 @@
         try {
             if (dark) document.documentElement.setAttribute('data-theme', 'dark');
             else document.documentElement.removeAttribute('data-theme');
+            // ★★ 2026-10 必须**同时**设 CSS `color-scheme` —— 这是"深色下原生控件仍是白的"的根因。
+            //
+            //   症状（用户截图）：「设置 → 模型」 里点开「模型名」下面那个下拉，
+            //   弹出来的候选列表是**白底黑字**，与深色界面割裂。
+            //
+            //   为什么只改 CSS 没用：那个下拉弹层是**浏览器原生绘制**的
+            //   （Chromium 的 select popup 不在 DOM 里，CSS 选不中它）。
+            //   决定它按哪套配色画的只有 `color-scheme`。实测深色下它算出来是
+            //   `normal`（从没被设置过）→ 浏览器按浅色画 → 白底。
+            //
+            //   同一件事还影响：滚动条、复选框/单选框、日期选择器、自动填充背景。
+            //   所以这里在**主题层**统一设，一处覆盖全站 12 个 select 与所有原生控件，
+            //   而不是给每个下拉写 ::-webkit-scrollbar 之类的补丁。
+            //
+            //   `dark` / `light` 让浏览器把原生控件按对应模式渲染；
+            //   设成 `light` 而不是删掉，是因为"跟随系统但当前判为浅色"时
+            //   用户的系统偏好可能仍是深色 —— 显式写 light 才能压住它。
+            document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
         } catch (e) { /* 忽略 */ }
-        // 同步界面控件（三态选择）
-        const sel = document.getElementById('themeDarkMode');
-        if (sel && sel.value !== m) sel.value = m;
-        // "跟随系统"时把系统当前状态提示出来，否则用户不知道现在是哪档
-        const hint = document.getElementById('themeDarkHint');
-        if (hint) {
-            hint.textContent = m === 'system'
-                ? (systemPrefersDark() ? '（跟随系统：当前为深色）' : '（跟随系统：当前为浅色）')
-                : '';
-        }
+        // ★ 2026-10：这里原本同步「外观 → 深色模式」下拉（#themeDarkMode）与它的提示
+        //   （#themeDarkHint）。那两个元素已随"深色切换到顶栏"被删除 —— 留着
+        //   getElementById 会变成**悬空引用**（check-dom-refs 报"HTML 里没有这个 id"）。
+        //   顶栏那个三段开关由 app-07-init.js 的 markThemeSeg 同步：它监听
+        //   documentElement 的 data-theme 变化，applyDarkMode 一落 DOM 它就跑，
+        //   所以"跟随设备"时系统切换、以及别处改主题，选中态都能自动跟上。
         return dark;
     }
 
@@ -354,7 +386,12 @@
         document.querySelectorAll('.theme-tpl-card').forEach((c) => {
             const on = c.getAttribute('data-tpl') === cur;
             c.classList.toggle('is-active', on);
-            c.style.borderColor = on ? 'var(--color-primary)' : 'transparent';
+            // ★ 2026-10 修：选中态描边原来用的是 `--color-primary`（= #ec4899 粉），
+            //   而应用真实配色走的是 `--pixso-*`（默认主题下是橄榄绿 #a7bb6c）。
+            //   后果：主题卡片被选中时描边是**粉的**，与整个界面（以及卡片自己的色点）
+            //   都不搭 —— 属于"设置页与对话界面对不上"的一处。
+            //   改用 --pixso-green（与其它选中态、开关、按钮同一套色）。
+            c.style.borderColor = on ? 'var(--pixso-green)' : 'transparent';
         });
         // DIY 编辑区只在选中「自定义」时显示 —— 不选它却摆一堆取色器会让人困惑
         const editor = document.getElementById('themeCustomEditor');

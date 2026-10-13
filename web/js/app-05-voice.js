@@ -1,5 +1,5 @@
 /* ========================================================================
- * 语音：识别 / 输入处理 / 停止按钮 / TTS / Edge TTS
+ * 语音：识别 / 输入处理 / 停止按钮 / TTS
  *
  * 本文件由 web/index.html 的主脚本按分区拆分而来（保持原始加载顺序）。
  * 拆分前提：主脚本是全局作用域，拆分后各文件共享同一全局词法环境，
@@ -9,8 +9,7 @@
  *   · 语音识别
  *   · 输入处理
  *   · AI 输出中的「停止」按钮
- *   · TTS
- *   · Edge TTS（免费，微软朗读服务）
+ *   · TTS（多服务商：MiMo / MiniMax / 千问 / 通用 OpenAI）
  * ======================================================================== */
 
 // ==================== 语音识别 ====================
@@ -84,7 +83,7 @@ function createBrowserRecognition() {
                 updateUI();
                 // 顺序很重要：updateUI() 会用 statusMap[voiceState] 覆盖状态栏文本，
                 // 所以自定义提示必须写在 updateUI() 之后，否则用户什么都看不到
-                elements.statusText.textContent = '浏览器语音识别不可用（网络），可在设置→语音配置阿里百炼/小米 MiMo';
+                elements.statusText.textContent = '浏览器语音识别不可用（网络），可在设置 → 模型 → 语音配置阿里百炼/小米 MiMo';
                 return;
             }
             state.voiceState = 'error';
@@ -145,7 +144,7 @@ function rebuildBrowserRecognition() {
 
 function canUseCloudFinalAsr() {
     const provider = state.settings.asrProvider || 'browser';
-    if (provider === 'aliyun') return Boolean(String(state.settings.dashscopeApiKey || '').trim());
+    if (provider === 'aliyun') return Boolean(String(state.settings.asrApiKey || '').trim());
     if (provider === 'mimo') return Boolean(String(state.settings.mimoApiKey || '').trim());
     return false;
 }
@@ -206,15 +205,15 @@ function friendlyAsrError(err) {
     switch (text) {
         case 'not-allowed':
         case 'service-not-allowed':
-            return '麦克风权限被拒绝，或当前环境不允许语音识别。\n请允许麦克风权限；若通过局域网 IP 或手机访问（非 https），浏览器会禁用语音识别——请改用 localhost 或 https 访问，或在设置 → 语音中配置「阿里百炼」或「小米 MiMo」云端识别。';
+            return '麦克风权限被拒绝，或当前环境不允许语音识别。\n请允许麦克风权限；若通过局域网 IP 或手机访问（非 https），浏览器会禁用语音识别——请改用 localhost 或 https 访问，或在设置 → 模型 → 语音中配置「阿里百炼」或「小米 MiMo」云端识别。';
         case 'network':
-            return '浏览器语音识别需要连接在线语音服务，当前网络不可达（国内网络常见）。\n建议在设置 → 语音中选择「阿里百炼」或「小米 MiMo」作为识别服务，或更换网络后重试。';
+            return '浏览器语音识别需要连接在线语音服务，当前网络不可达（国内网络常见）。\n建议在设置 → 模型 → 语音中选择「阿里百炼」或「小米 MiMo」作为识别服务，或更换网络后重试。';
         case 'audio-capture':
             return '无法获取麦克风音频。请检查麦克风是否被占用、系统权限是否被禁用。';
         case 'no-speech':
             return '未检测到语音，请靠近麦克风后再试。';
         default:
-            return '语音识别出错：' + text + '\n可尝试刷新重试，或在设置 → 语音中配置「阿里百炼」或「小米 MiMo」云端识别。';
+            return '语音识别出错：' + text + '\n可尝试刷新重试，或在设置 → 模型 → 语音中配置「阿里百炼」或「小米 MiMo」云端识别。';
     }
 }
 
@@ -424,8 +423,8 @@ async function transcribeRecordedAudioWithAliyun() {
         return '';
     }
 
-    const dashscopeApiKey = String(state.settings.dashscopeApiKey || '').trim();
-    if (!dashscopeApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 DashScope API Key');
+    const asrApiKey = String(state.settings.asrApiKey || '').trim();
+    if (!asrApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写阿里百炼 ASR API Key');
     const asrUrl = String(state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation').trim();
     const asrModel = String(state.settings.dashscopeAsrModel || 'qwen3-asr-flash').trim();
     const startedAt = performance.now();
@@ -443,7 +442,7 @@ async function transcribeRecordedAudioWithAliyun() {
             },
             parameters: { asr_options: { language: 'zh', enable_itn: true } }
         }, {
-            Authorization: `Bearer ${dashscopeApiKey}`,
+            Authorization: `Bearer ${asrApiKey}`,
             'X-DashScope-DataInspection': 'enable'
         }, ASR_CLOUD_FINAL_TIMEOUT_MS);
     } catch (error) {
@@ -518,7 +517,7 @@ async function startBrowserRecognitionSession() {
     // —— 是浏览器直接退出，不是标签页崩溃，前端既捕获不到也兜不住。
     // 所以这里一律不再启用内置识别做实时预览，统一走「本地录音 + 云端识别」。
     if (!canUseCloudFinalAsr()) {
-        throw new Error('请先在「设置 → 语音 → 语音识别」里选择「阿里百炼」或「小米 MiMo」并填写 API Key。浏览器内置识别需要访问 Google 服务，国内网络下不可用，且实测会导致整个浏览器崩溃，已停用。');
+        throw new Error('请先在「设置 → 模型 → 语音 → 语音识别」里选择「阿里百炼」或「小米 MiMo」并填写 API Key。浏览器内置识别需要访问 Google 服务，国内网络下不可用，且实测会导致整个浏览器崩溃，已停用。');
     }
 
     currentTranscript = '';
@@ -655,7 +654,7 @@ async function startListening() {
     // 浏览器进程带崩，已停用。所以这里只认云端识别。
     if (!canUseCloudFinalAsr()) {
         asrStarting = false;
-        showCustomAlert('语音识别需要先配置云端服务：\n\n设置 → 语音 → 语音识别，选「阿里百炼」或「小米 MiMo」，填入 API Key。\n\n（浏览器内置识别需要访问 Google 服务，国内网络下不可用，且实测会导致整个浏览器崩溃，已停用。）', '语音识别不可用');
+        showCustomAlert('语音识别需要先配置云端服务：\n\n设置 → 模型 → 语音 → 语音识别，选「阿里百炼」或「小米 MiMo」，填入 API Key。\n\n（浏览器内置识别需要访问 Google 服务，国内网络下不可用，且实测会导致整个浏览器崩溃，已停用。）', '语音识别不可用');
         return;
     }
 
@@ -995,7 +994,7 @@ function closeComposerToolsMenu() {
     });
 }
 
-// toggle 参数已经没用了：思考开关搬去「设置 → 对话」，这里不再需要
+// toggle 参数已经没用了：思考开关搬去「设置 → 模型」，这里不再需要
 // 打开菜单时回填勾选状态。保留参数是为了不改动两处调用点。
 function toggleComposerToolsMenu(button, menu) {
     const opening = menu.classList.contains('hidden');
@@ -1007,7 +1006,7 @@ function toggleComposerToolsMenu(button, menu) {
 }
 
 /**
- * 把「设置 → 对话」里的思考开关与强度同步成当前设置值。
+ * 把「设置 → 模型」里的思考开关与强度同步成当前设置值。
  *
  * 以前这里同步的是输入框旁边那个 ⊕ 菜单里的勾选框。开关搬走之后，
  * 仍然保留这个函数：设置面板每次打开都要按 state 回填，
@@ -1020,6 +1019,9 @@ function syncThinkingModeControls() {
     if (effort) effort.value = THINKING_EFFORTS.includes(state.settings.thinkingEffort)
         ? state.settings.thinkingEffort
         : 'medium';
+    // 第三人称（两段式生成）：与思考开关同属「对话优化」块，一并回填。
+    const thirdPerson = elements.settingThirdPerson;
+    if (thirdPerson) thirdPerson.checked = Boolean(state.settings.thirdPerson);
     updateThinkingModeHint();
 }
 
@@ -1061,11 +1063,17 @@ function updateThinkingModeHint() {
 let streamedReplyText = '';
 let streamingPreviewEl = null;
 let streamingPreviewScheduled = false;
+// ★ 打字机式渐进显示：已经"吐"给预览气泡的字符数（见 renderStreamingReplyPreview）。
+//   它**只作用于流式预览气泡**；回复结束的正式渲染用 streamedReplyText 的完整文本，
+//   与本计数无关 —— 千万别拿它去截断最终正文。
+let revealedCount = 0;
 
 function resetStreamingReplyPreview() {
     streamedReplyText = '';
     streamingPreviewEl = null;
     streamingPreviewScheduled = false;
+    // 会话结束 / 预览被移除时归零，下一轮从空白重新"打字"
+    revealedCount = 0;
 }
 
 /** 每帧最多重绘一次：流式一次回复有上千个增量，逐个重排会明显卡顿 */
@@ -1080,9 +1088,43 @@ function scheduleStreamingReplyRender() {
     else setTimeout(run, 16);
 }
 
+/**
+ * 流式预览的**净化**：把协议标签从半截文本里去掉。
+ *
+ * 为什么必须在流式这一层做：增量是**按字节流切**的，标签会被切成好几段
+ * （`[情绪:开` → `心]`），而正式的 `ElainaTags.strip()` 只在**完整文本**上跑一次。
+ * 不净化的话，用户会眼睁睁看着 `[操作:保存文件 D:\x.txt]`、`<voice_jp>…</voice_jp>`
+ * 这些内部协议在气泡里滚过去 —— 最终正文里它们虽然会被剥掉，但"正在输入"的
+ * 那几秒已经把它们露完了。
+ *
+ * ★ 这里刻意**容错半截标签**：正在流入的 `<voice_jp>` 还没闭合时也要藏起来，
+ *   否则朗读稿（日语翻译）会先于正文显示出来。
+ */
+function sanitizeStreamingPreviewText(text) {
+    let out = String(text || '');
+    // ① 完整标签：复用宿主那份权威实现（标签名清单只有一处，不会走样）
+    if (window.ElainaTags && typeof window.ElainaTags.strip === 'function') {
+        out = window.ElainaTags.strip(out);
+    } else {
+        out = out.replace(/\[(表情|动作|情绪|位置|大小|背景|操作|任务)[:：][^\]]*\]/g, '');
+    }
+    // ② <voice_jp>…</voice_jp>：已闭合的整段去掉
+    out = out.replace(/<voice_jp>[\s\S]*?<\/voice_jp>/gi, '');
+    // ③ 还没闭合的朗读稿（正在流入）：从开标签起全部藏起
+    out = out.replace(/<voice_jp>[\s\S]*$/i, '');
+    // ④ <scene>…</scene> 背景标签，同样处理闭合与半截两种情况
+    out = out.replace(/<scene>[^<\n]*<\/scene>/gi, '');
+    out = out.replace(/<scene>[^<\n]*$/i, '');
+    // ⑤ 半截的方括号标签（`[情绪:开`）：只认已知标签名，避免误删正文里的普通 `[`
+    out = out.replace(/\[(?:表情|动作|情绪|位置|大小|背景|操作|任务)[:：][^\]]*$/g, '');
+    return out;
+}
+
 function renderStreamingReplyPreview() {
     if (!elements.conversationHistory) return;
-    const text = streamedReplyText;
+    // ★ 用净化后的文本决定"有没有正文"：只有标签 / 只有朗读稿时**不能**收掉
+    //   三点气泡 —— 否则会出现"气泡没了、正文也没来"的空窗。
+    const text = sanitizeStreamingPreviewText(streamedReplyText);
     if (!text) return;
     // 正文来了 → 收掉三点气泡。留着会变成"三点 + 正文"两个气泡。
     removeThinkingMessage();
@@ -1124,8 +1166,25 @@ function renderStreamingReplyPreview() {
     //   完整的富文本渲染只在回复完成时做一次（下面的正式渲染路径）。
     //   顺带去掉了预览容器的 animate-fade-in-up —— 每次会话它只创建一次，
     //   动画本身无害，但创建时机与 thinking 气泡的 200ms 淡出重叠时会叠影。
-    if (target) target.textContent = text;
+    //
+    // ★★ 2026-10 打字机式渐进显示（修"快模型上不是逐字、而是一句一句蹦"）：
+    //   text 是模型**已吐出的累计文本**（目标）；若直接整段写进去，模型吐多快就一次
+    //   显示多少 —— 快模型一次返回一大句，看起来就是"一句一句蹦出来"。
+    //   改成每帧只多显示一段，让观感回到逐字：
+    //     · 每帧前进 max(1, 剩余/8) —— 落后越多追得越快：既顺滑（不会一格一格跳），
+    //       又能追上模型（差额收敛到 0，不会越积越多直到结束时还剩一大截没显示）。
+    //     · 只要还没显示完就再排下一帧，复用同一套 schedule（不新开第二套调度）。
+    //   ★ 最终正式渲染（removeStreamingReplyPreview + renderMessage）用的是完整文本，
+    //     不经过这里，绝不会被 revealedCount 截断。
+    const step = Math.max(1, Math.ceil((text.length - revealedCount) / 8));
+    // ★ 净化会让文本**变短**（标签被剥掉）：此时 revealedCount 可能已经超过
+    //   text.length，必须夹回来 —— 否则 slice 结果正常、但 revealedCount > length
+    //   会让下面的 `revealedCount < text.length` 恒假、或让后续帧算出负的差额。
+    revealedCount = Math.min(revealedCount, text.length);
+    revealedCount = Math.min(text.length, revealedCount + step);
+    if (target) target.textContent = text.slice(0, revealedCount);
     elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
+    if (revealedCount < text.length) scheduleStreamingReplyRender();
 }
 
 function removeStreamingReplyPreview() {
@@ -1282,13 +1341,19 @@ function handleTextSubmit() {
 }
 
 function isTtsConfigured(settings = state.settings) {
-    const provider = String(settings.ttsProvider || 'edge');
-    // Edge TTS 不需要任何密钥，选了就能用（微软的免费服务，无稳定性承诺）
-    if (provider === 'edge') return true;
-    if (provider === 'doubao') {
-        const hasV3 = Boolean(String(settings.doubaoApiKey || '').trim());
-        const hasV1 = Boolean(String(settings.doubaoAppId || '').trim() && String(settings.doubaoToken || '').trim());
-        return (hasV3 || hasV1) && Boolean(String(settings.doubaoVoice || '').trim());
+    const provider = String(settings.ttsProvider || 'mimo');
+    // MiMo TTS 是**付费 API Key** 服务商（用 TTS 独立的 mimoTtsApiKey），没有 Key 不能用
+    if (provider === 'mimo') {
+        if (!String(settings.mimoTtsApiKey || '').trim()) return false;
+        // v2.5 三个模型必需的"音色"来源不同：预置音色 / 音色描述 / 参考音频样本
+        const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim();
+        if (model === 'mimo-v2.5-tts-voiceclone') return Boolean(String(settings.mimoTtsCloneSample || '').trim());
+        if (model === 'mimo-v2.5-tts-voicedesign') return Boolean(String(settings.mimoTtsVoiceDesignPrompt || '').trim());
+        return Boolean(String(settings.mimoTtsVoice || '').trim());
+    }
+    // 通用 OpenAI TTS 同样必须填 Key
+    if (provider === 'openai-tts') {
+        return Boolean(String(settings.openaiTtsApiKey || '').trim());
     }
     if (provider === 'dashscope') {
         return Boolean(String(settings.dashscopeApiKey || '').trim() && String(settings.dashscopeTtsVoice || '').trim());
@@ -1357,19 +1422,33 @@ async function handleUserInput(message, conversation) {
             // 注意这里**不**直接把增量拼进 aiMessage —— aiMessage 还没建，
             // 而且回复完成后还要做 Live2D 标签剥离、日语朗读稿拆分等处理，
             // 那些处理必须作用在**完整**文本上，所以流式只负责"先让用户看见"。
+            //
+            // ★ 两段式（第三人称）时，chunk 上会带 `phase`：
+            //   第 1 段的思考（GM 的推理）与第 2 段的思考（改写时的推理）
+            //   分别进时间线、互不混合 —— 见 appendTurnReasoning。
+            //   只有第 2 段的**正文**才进气泡（第 1 段正文是隐藏的中间产物，
+            //   由 data 层拦住，不会走到这里）。
             onDelta: (chunk) => {
-                if (chunk.kind === 'reasoning') { appendTurnReasoning(chunk.text); return; }
+                if (chunk.kind === 'reasoning') { appendTurnReasoning(chunk.text, chunk.phase); return; }
                 if (chunk.kind !== 'text') return;
                 streamedReplyText += chunk.text;
                 scheduleStreamingReplyRender();
-            }
+            },
+            // 两段式生成的**阶段输出**：第一段（GM 叙述）与第二段（第一人称正文）
+            // 各存一条，用户可以在过程区里分别展开对照。
+            onPhase: (phase) => { recordTurnPhase(phase); }
         };
         const rawResponse = await callAI(message.text, aiRequestOptions);
         const parsedReply = wantsJp ? splitVoiceReply(rawResponse) : { displayText: rawResponse, voiceJp: '' };
         const response = parsedReply.displayText;
-        // 正式内容就位 → 收掉流式预览气泡（正文交给下面统一的渲染路径，
-        // 两条路同时存在会出现"同一段话显示两遍"）
-        removeStreamingReplyPreview();
+        // ★★ 2026-10：**不要**在这里无条件收掉流式预览。
+        //
+        //   同步模式（simultaneous）下正文要等语音真正开播才提交，而 TTS 生成
+        //   本身要等好几秒 —— 旧代码在这里就把预览拆了，于是那几秒屏幕上
+        //   **一片空白**（三点气泡早在第一个增量到达时就被预览顶掉了），
+        //   用户看到的是"字打完 → 消失 → 等 → 又出现"。
+        //   现在交给 commitAiMessageOnce 在渲染正式消息前收（见下），
+        //   预览正好无缝交接给正式气泡。
         finishTurnTrace();
 
         const t1 = performance.now();
@@ -1422,6 +1501,10 @@ async function handleUserInput(message, conversation) {
         const commitAiMessageOnce = () => {
             if (messageCommitted) return;
             messageCommitted = true;
+            // ★ 正式气泡就位前收掉流式预览 —— 顺序不能反：先 renderMessage 再收，
+            //   中间那一瞬两个气泡并存（同一段话显示两遍）；先收再渲染则是无缝交接。
+            //   放在这里而不是更早，是为了让同步模式的 TTS 等待期仍有正文可看。
+            removeStreamingReplyPreview();
             conversation.messages.push(aiMessage);
             conversation.updatedAt = new Date().toISOString();
             saveConversations();
@@ -1506,34 +1589,38 @@ async function handleUserInput(message, conversation) {
                 return;
             }
             if (!voiceStarted) {
-                if (presentationMode === 'simultaneous') {
-                    console.warn('[TTS] 没有收到可播放语音，同步模式不展示本次回复');
-                    removeThinkingMessage();
-                    state.voiceState = 'error';
-                    updateUI();
-                    showCustomAlert('本次语音未能生成，回复没有显示，请稍后重试。', '语音生成失败');
-                } else {
-                    console.warn('[TTS] 语音未生成，但先文本后语音模式保留文字回复');
-                    setVoicePlaybackState(aiMessage.id, false);
-                    state.voiceState = 'idle';
-                    updateUI();
-                }
+                // ★★ 2026-10 修「语音生成不成功，整条回复就发不出去」：
+                //
+                //   同步模式（simultaneous）的语义是"语音开始播时正文才出现"，
+                //   上面那句 `commitAiMessageOnce()` 挂在 handleVoiceStart 里 ——
+                //   也就是说**只有 TTS 真的出声了，回复才会被提交**。
+                //
+                //   旧实现在这里的同步模式下只弹一句"回复没有显示"就 return：
+                //   用户白等一次完整请求（可能几分钟），正文一个字都看不到，
+                //   聊天记录里连痕迹都不留 —— 用户原话就是
+                //   "必须语音生成成功才能发送全部消息"。
+                //
+                //   正确取舍：**语音是增强，不是闸门**。TTS 失败 → 降级成纯文字回复，
+                //   正文与聊天记录一律保留，只是如实告诉用户这次没声音。
+                //   两个模式在这里合并处理：无论哪种模式都提交（commitAiMessageOnce
+                //   幂等，text-first 时早已提交过，这里只是补齐同步模式的缺口）。
+                console.warn('[TTS] 没有收到可播放语音，降级为纯文字回复（正文与记录均保留）');
+                commitAiMessageOnce();
+                setVoicePlaybackState(aiMessage.id, false);
+                state.voiceState = 'idle';
+                updateUI();
+                showCustomAlert('本次语音未能生成，已保留文字回复。', '语音生成失败');
             }
         }).catch(error => {
             if (isVoiceCancellation(error)) return;
             console.error('[TTS] 自动语音播放失败:', error);
-            if (!voiceStarted && presentationMode === 'simultaneous') {
-                // 语音播放失败：仍提交并保存文字回复，避免丢聊天记录
-                commitAiMessageOnce();
-                removeThinkingMessage();
-                state.voiceState = 'idle';
-                updateUI();
-            }
-            if (presentationMode === 'text-first') {
-                setVoicePlaybackState(aiMessage.id, false);
-                state.voiceState = 'idle';
-                updateUI();
-            } else setVoicePlaybackState(aiMessage.id, false);
+            // ★ 同上：TTS 失败绝不能让正文与聊天记录一起消失。
+            //   commitAiMessageOnce 是幂等的 —— 已经提交过（text-first，或语音已开播）
+            //   就什么都不做，只有"还没提交"的同步模式才真正补上一次。
+            commitAiMessageOnce();
+            setVoicePlaybackState(aiMessage.id, false);
+            state.voiceState = 'idle';
+            updateUI();
             showClientApiError(error);
         }).finally(() => pendingAutomaticVoiceMessageIds.delete(automaticVoiceMessageKey));
     } catch (error) {
@@ -1628,20 +1715,31 @@ function hashTtsText(text) {
 
 function buildMessageTtsCacheKey(message, spokenText, conversationId = state.currentConversationId) {
     const clean = sanitizeTtsText(spokenText || '', false);
-    const provider = String(state.settings.ttsProvider || 'edge');
+    const provider = String(state.settings.ttsProvider || 'mimo');
     let providerFingerprint = '';
-    if (provider === 'doubao') {
-        const v3 = Boolean(String(state.settings.doubaoApiKey || '').trim());
-        providerFingerprint = [
-            v3 ? 'v3' : 'v1',
-            state.settings.doubaoVoice || 'no-voice',
-            state.settings.doubaoCluster || 'volcano_tts',
-            state.settings.doubaoResourceId || 'seed-tts-2.0'
-        ].join('|');
-    } else if (provider === 'dashscope') {
+    if (provider === 'dashscope') {
         providerFingerprint = [
             state.settings.dashscopeTtsModel || 'qwen3-tts-flash',
             state.settings.dashscopeTtsVoice || 'no-voice'
+        ].join('|');
+    } else if (provider === 'mimo') {
+        const mimoModel = String(state.settings.mimoTtsModel || 'mimo-v2.5-tts');
+        // v2.5 的音色来源随模型变化，必须进指纹 —— 否则换了参考样本/描述仍命中旧缓存
+        let voiceToken;
+        if (mimoModel === 'mimo-v2.5-tts-voiceclone') {
+            // 样本是长 base64，指纹只取"文件名 + 长度"这种轻量信息（换样本即变）
+            const sample = String(state.settings.mimoTtsCloneSample || '');
+            voiceToken = sample ? `clone:${state.settings.mimoTtsCloneSampleName || ''}:${sample.length}` : 'clone:none';
+        } else if (mimoModel === 'mimo-v2.5-tts-voicedesign') {
+            voiceToken = `design:${state.settings.mimoTtsVoiceDesignPrompt || ''}`;
+        } else {
+            voiceToken = state.settings.mimoTtsVoice || 'mimo_default';
+        }
+        providerFingerprint = [mimoModel, voiceToken].join('|');
+    } else if (provider === 'openai-tts') {
+        providerFingerprint = [
+            state.settings.openaiTtsModel || 'tts-1',
+            state.settings.openaiTtsVoice || 'alloy'
         ].join('|');
     } else {
         providerFingerprint = [
@@ -1885,31 +1983,68 @@ class PCMStreamPlayer {
 }
 
 
-// ==================== Edge TTS（免费，微软朗读服务） ====================
+// ==================== MiMo TTS（小米，OpenAI 兼容） ====================
 //
-// 这里**不再有** WebSocket 协议实现。原先页面里有一份浏览器直连版
-// （Sec-MS-GEC token + 手写 SHA-256 + speech.config / ssml / audio 帧解析），
-// 但它必然失败：微软端点校验浏览器指纹，而 JS 的 `new WebSocket()`
-// **不允许自定义任何请求头** —— 实测直接 403。
-//
-// 现在两条路都不在页面里拼协议：
-//   · 安卓 App：走原生插件 EdgeTtsPlugin（原生能自定义头）
-//   · 电脑版：走本机后端 POST /api/tts/edge（Node 同样能自定义头）
-// 协议细节分别在 android-app 的 EdgeTtsPlugin/MiniWebSocket 与
-// server/edge-tts.mjs，由 check-edge-tts.mjs 覆盖。
-//
-// 下面这个函数只负责「按平台选一条路 + 拿回 MP3 字节」，不再自己拼协议。
+// 认证头同样是 `api-key`，但**凭据与 ASR 各自独立**（TTS 用 settings.mimoTtsApiKey /
+// settings.mimoTtsBaseUrl；ASR 用 settings.mimoApiKey / settings.mimoBaseUrl）。
+//   · **要朗读的文本放在 assistant 消息里**
+//   · 请求体加 audio: { format: 'wav', ... }
+//   · 响应 choices[0].message.audio.data 是 base64 的 wav 音频
+// 三个模型（v2.5 系列）字段不同，见下：
+//   · mimo-v2.5-tts            → audio.voice = 预置 Voice ID，user 消息可选
+//   · mimo-v2.5-tts-voicedesign → user 消息 = 音色描述（必填），**不支持 voice 字段**
+//   · mimo-v2.5-tts-voiceclone  → audio.voice = 参考音频样本的 base64 data URL（必填），不支持预置音色
+// 它是**付费 API Key** 服务商，没有 Key 就不能用（不像旧版 Edge TTS 免配置）。
 
-async function speakTextEdge(text, onStart, options = {}) {
+async function generateMimoTtsAudio(text, settings = state.settings) {
+    const mimoApiKey = String(settings.mimoTtsApiKey || '').trim();
+    if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写小米 MiMo TTS API Key');
+    const baseUrl = String(settings.mimoTtsBaseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
+    const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim() || 'mimo-v2.5-tts';
+    // ★ 要朗读的文本必须放在 assistant 角色里
+    const assistantMessage = { role: 'assistant', content: text };
+    const audio = { format: 'wav' };
+    let messages;
+    if (model === 'mimo-v2.5-tts-voicedesign') {
+        // 音色设计：user 消息里的音色描述**必填**，且该模型不支持 voice 字段
+        const prompt = String(settings.mimoTtsVoiceDesignPrompt || '').trim();
+        if (!prompt) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 MiMo 音色描述（voicedesign 模型必填）');
+        messages = [{ role: 'user', content: prompt }, assistantMessage];
+    } else if (model === 'mimo-v2.5-tts-voiceclone') {
+        // 音色复刻：参考音频样本（base64 data URL）**必填**，放在 audio.voice 里；不支持预置音色
+        const sample = String(settings.mimoTtsCloneSample || '').trim();
+        if (!sample) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中上传音色复刻的参考音频样本');
+        audio.voice = /^data:audio\//i.test(sample) ? sample : `data:audio/wav;base64,${sample}`;
+        messages = [{ role: 'user', content: '' }, assistantMessage];
+    } else {
+        // 预置音色模型：voice 为预置 Voice ID
+        audio.voice = String(settings.mimoTtsVoice || 'mimo_default').trim() || 'mimo_default';
+        messages = [assistantMessage];
+    }
+    const result = await postJsonFromDevice(baseUrl + '/v1/chat/completions', {
+        model,
+        messages,
+        audio
+    }, {
+        'api-key': mimoApiKey,
+        'Content-Type': 'application/json'
+    });
+    if (!result.ok) await throwProviderResponseError(result, '小米 MiMo 语音生成失败');
+    const audioBase64 = String(result.payload?.choices?.[0]?.message?.audio?.data || '').trim();
+    if (!audioBase64) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '小米 MiMo 语音返回了空音频');
+    // base64(wav) → ArrayBuffer，播放器按 wav 解码（与千问返回的 { bytes, format } 形状一致）
+    return { bytes: base64ToArrayBuffer(audioBase64), format: 'wav' };
+}
+
+async function speakTextMimo(text, onStart, options = {}) {
     const { cacheKey = '', onEnd = null } = options;
     const session = options.session || createVoiceSession(options.messageId || null);
     ensureVoiceSessionActive(session);
-    // 缓存逻辑与其它 provider 相同
     if (cacheKey) {
         const cached = await getCachedTtsAudio(cacheKey);
         ensureVoiceSessionActive(session);
         if (cached?.pcm) {
-            console.log('[TTS Cache] 命中缓存，直接播放，不调用 Edge TTS');
+            console.log('[TTS Cache] 命中缓存，直接播放，不调用 MiMo');
             try {
                 await playCachedPcm(cached, onStart, onEnd, session);
                 if (!isVoiceSessionActive(session)) return { cancelled: true };
@@ -1918,79 +2053,101 @@ async function speakTextEdge(text, onStart, options = {}) {
                 if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
                 console.warn('[TTS Cache] 缓存播放失败，将重新生成:', error);
             }
+        } else {
+            console.log('[TTS Cache] 未命中，首次调用 MiMo 生成');
         }
     }
-    const voice = String(state.settings.edgeTtsVoice || 'zh-CN-XiaoxiaoNeural').trim() || 'zh-CN-XiaoxiaoNeural';
-    const ratePct = Math.round(((Number(state.settings.ttsSpeed) || 1) - 1) * 100);
-    const rate = (ratePct >= 0 ? '+' : '') + ratePct + '%';
-    const volPct = Math.round(((Number(state.settings.ttsVolume) || 1) - 1) * 100);
-    const volume = (volPct >= 0 ? '+' : '') + volPct + '%';
-
-    // ★ 两条路，按平台自动选：
-    //
-    //   · 安卓 App：走原生插件 EdgeTtsPlugin（原生能自定义 WebSocket 请求头）
-    //   · 电脑版：走本机后端的 /api/tts/edge（Node 同样能自定义头）
-    //
-    // 为什么都不能在浏览器里直接连：微软端点校验 User-Agent 等浏览器指纹，
-    // 而 JS 的 `new WebSocket()` **不允许自定义任何请求头** —— 实测直接 403。
-    // 这不是"电脑用不了"，是"浏览器里的 JS 用不了"。
-    const nativePlugin = window.Capacitor?.Plugins?.EdgeTts;
-    const useNative = Boolean(nativePlugin && typeof nativePlugin.synthesize === 'function');
-
-    session.abortController = new AbortController();
     try {
-        let arrayBuf;
-        if (useNative) {
-            const res = await nativePlugin.synthesize({ text, voice, rate, volume, timeoutMs: 30000 });
-            ensureVoiceSessionActive(session);
-            if (!res || !res.ok || !res.audioBase64) {
-                throw new ClientApiError('TTS_FAILED', 'Edge TTS 没有返回音频。');
-            }
-            const raw = atob(res.audioBase64);
-            const bytes = new Uint8Array(raw.length);
-            for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
-            arrayBuf = bytes.buffer;
-        } else {
-            // 电脑版：请本机后端代合成（同源请求，不走中转）
-            const ratePct = Math.round(((Number(state.settings.ttsSpeed) || 1) - 1) * 100);
-            const resp = await fetch('/api/tts/edge', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, voice, ratePct }),
-                signal: session.abortController.signal,
-            });
-            if (!resp.ok) {
-                let detail = '';
-                try {
-                    const j = await resp.json();
-                    detail = String(j && j.message || '');
-                } catch { /* 非 JSON 响应 */ }
-                throw new ClientApiError('TTS_FAILED',
-                    'Edge TTS 失败（HTTP ' + resp.status + '）' + (detail ? '：' + detail : ''));
-            }
-            arrayBuf = await resp.arrayBuffer();
-            ensureVoiceSessionActive(session);
-            if (!arrayBuf || arrayBuf.byteLength < 200) {
-                throw new ClientApiError('TTS_FAILED', 'Edge TTS 返回的音频为空。');
-            }
-        }
+        session.abortController = new AbortController();
+        const { bytes, format } = await generateMimoTtsAudio(text);
+        ensureVoiceSessionActive(session);
         if (cacheKey) {
-            await saveCachedTtsAudio(cacheKey, arrayBuf, 24000, 'mp3');
-            console.log('[TTS Cache] 首次 Edge 音频已写入 IndexedDB');
+            await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
+            console.log('[TTS Cache] 首次 MiMo 音频已写入 IndexedDB');
         }
-        await playCachedPcm({ pcm: arrayBuf, format: 'mp3' }, onStart, onEnd, session);
+        await playCachedPcm({ pcm: bytes, format }, onStart, onEnd, session);
         if (!isVoiceSessionActive(session)) return { cancelled: true };
         return { cached: false };
-    } catch (err) {
-        if (isVoiceCancellation(err) || !isVoiceSessionActive(session)) return { cancelled: true };
-        // 把底层的连接失败翻译成用户看得懂的话
-        const msg = String(err?.message || err || '');
-        if (/握手失败|HTTP \d|services aren't available|ECONNREFUSED|ENOTFOUND/i.test(msg)) {
-            throw new ClientApiError('TTS_FAILED',
-                'Edge TTS 连接被拒绝：' + msg.slice(0, 200)
-                + '\n（这是微软免费服务的限制，不稳定属正常。建议改用其它语音服务商。）');
+    } catch (error) {
+        if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
+        console.error('[MiMo TTS] error:', error);
+        throw toClientApiError(error);
+    }
+}
+
+// ==================== 通用 OpenAI TTS ====================
+//
+// 标准 OpenAI 语音接口：POST {base}/audio/speech + Bearer 认证，请求体
+// { model, input, voice, response_format: 'mp3' }，响应是**二进制 mp3**（不是 JSON）。
+// 直接读 arrayBuffer 交给播放器 —— 与 MiniMax 返回的 { bytes, format } 形状一致。
+
+async function generateOpenaiTtsAudio(text, settings = state.settings) {
+    const apiKey = String(settings.openaiTtsApiKey || '').trim();
+    if (!apiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写通用 OpenAI TTS 的 API Key');
+    const baseUrl = String(settings.openaiTtsBaseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+    const response = await fetchWithTimeout(baseUrl + '/audio/speech', {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            model: String(settings.openaiTtsModel || 'tts-1').trim(),
+            input: text,
+            voice: String(settings.openaiTtsVoice || 'alloy').trim() || 'alloy',
+            response_format: 'mp3'
+        })
+    }, 120000);
+    if (!response.ok) {
+        let detail = '';
+        try { detail = String((await response.json())?.error?.message || ''); } catch { /* 错误体不是 JSON */ }
+        throw new ClientApiError('UPSTREAM_UNAVAILABLE',
+            `通用 OpenAI TTS 失败（HTTP ${response.status}）` + (detail ? `：${detail}` : ''));
+    }
+    // 二进制音频：读成 ArrayBuffer 直接交给播放器解码（无需再走 Blob → objectURL 一步）
+    const bytes = await response.arrayBuffer();
+    if (!bytes || bytes.byteLength < 200) {
+        throw new ClientApiError('UPSTREAM_UNAVAILABLE', '通用 OpenAI TTS 返回了空音频');
+    }
+    return { bytes, format: 'mp3' };
+}
+
+async function speakTextOpenaiTts(text, onStart, options = {}) {
+    const { cacheKey = '', onEnd = null } = options;
+    const session = options.session || createVoiceSession(options.messageId || null);
+    ensureVoiceSessionActive(session);
+    if (cacheKey) {
+        const cached = await getCachedTtsAudio(cacheKey);
+        ensureVoiceSessionActive(session);
+        if (cached?.pcm) {
+            console.log('[TTS Cache] 命中缓存，直接播放，不调用通用 OpenAI TTS');
+            try {
+                await playCachedPcm(cached, onStart, onEnd, session);
+                if (!isVoiceSessionActive(session)) return { cancelled: true };
+                return { cached: true };
+            } catch (error) {
+                if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
+                console.warn('[TTS Cache] 缓存播放失败，将重新生成:', error);
+            }
+        } else {
+            console.log('[TTS Cache] 未命中，首次调用通用 OpenAI TTS 生成');
         }
-        throw err;
+    }
+    try {
+        session.abortController = new AbortController();
+        const { bytes, format } = await generateOpenaiTtsAudio(text);
+        ensureVoiceSessionActive(session);
+        if (cacheKey) {
+            await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
+            console.log('[TTS Cache] 首次 OpenAI TTS 音频已写入 IndexedDB');
+        }
+        await playCachedPcm({ pcm: bytes, format }, onStart, onEnd, session);
+        if (!isVoiceSessionActive(session)) return { cancelled: true };
+        return { cached: false };
+    } catch (error) {
+        if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
+        console.error('[OpenAI TTS] error:', error);
+        throw toClientApiError(error);
     }
 }
 
@@ -2058,163 +2215,6 @@ async function speakTextMinimax(text, onStart, options = {}) {
     } catch (error) {
         if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
         console.error('[MiniMax TTS] error:', error);
-        throw toClientApiError(error);
-    }
-}
-
-function parseDoubaoSseAudio(rawText) {
-    const chunks = [];
-    let lastError = '';
-    const lines = String(rawText || '').split(/\r?\n/);
-    for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === '[DONE]') continue;
-        let event;
-        try { event = JSON.parse(data); } catch { continue; }
-        const code = Number(event.code ?? 0);
-        if (code !== 0) {
-            lastError = String(event.message || event.error || '未知错误');
-            continue;
-        }
-        const audio = event.data;
-        if (typeof audio === 'string' && audio) {
-            chunks.push(base64ToArrayBuffer(audio));
-        } else if (Array.isArray(audio)) {
-            audio.forEach(item => {
-                const b64 = typeof item === 'string' ? item : (item?.data || item?.audio);
-                if (b64) chunks.push(base64ToArrayBuffer(b64));
-            });
-        } else if (audio && typeof audio === 'object') {
-            const b64 = audio.data || audio.audio || audio.base64;
-            if (b64) chunks.push(base64ToArrayBuffer(b64));
-        }
-    }
-    if (!chunks.length && lastError) {
-        throw new ClientApiError('UPSTREAM_UNAVAILABLE', `豆包语音生成失败：${lastError}`);
-    }
-    return chunks;
-}
-
-async function generateDoubaoTtsAudio(text, settings = state.settings) {
-    const voiceId = String(settings.doubaoVoice || '').trim();
-    if (!voiceId) throw new ClientApiError('BAD_REQUEST', '请先在设置中填写豆包音色 ID');
-    const useV3 = Boolean(String(settings.doubaoApiKey || '').trim());
-    if (!useV3 && (!String(settings.doubaoAppId || '').trim() || !String(settings.doubaoToken || '').trim())) {
-        throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写豆包 App ID 与 Access Token，或改用新控制台 API Key');
-    }
-    const speed = Number(settings.ttsSpeed ?? 1);
-    const volume = Number(settings.ttsVolume ?? 1);
-    let result;
-    if (useV3) {
-        const audioParams = {
-            format: 'mp3',
-            sample_rate: 24000,
-            bit_rate: 64000,
-            speech_rate: Math.max(-50, Math.min(100, Math.round((speed - 1) * 100))),
-            loudness_rate: Math.max(-50, Math.min(100, Math.round((volume - 1) * 100)))
-        };
-        const reqParams = {
-            text,
-            speaker: voiceId,
-            audio_params: audioParams
-        };
-        const explicitLanguage = settings.ttsLang === 'japanese'
-            ? 'ja'
-            : settings.ttsLang === 'chinese' ? 'zh-cn' : '';
-        if (explicitLanguage) {
-            reqParams.additions = JSON.stringify({
-                explicit_language: explicitLanguage,
-                disable_markdown_filter: true
-            });
-        }
-        result = await postJsonFromDevice(DOUBAO_TTS_V3_URL, {
-            user: { uid: generateId() },
-            req_params: reqParams
-        }, {
-            'X-Api-Key': String(settings.doubaoApiKey || '').trim(),
-            'X-Api-Resource-Id': String(settings.doubaoResourceId || 'seed-tts-2.0').trim()
-        });
-    } else {
-        result = await postJsonFromDevice(DOUBAO_TTS_V1_URL, {
-            app: {
-                appid: String(settings.doubaoAppId || '').trim(),
-                token: String(settings.doubaoToken || '').trim(),
-                cluster: String(settings.doubaoCluster || 'volcano_tts').trim()
-            },
-            user: { uid: generateId() },
-            audio: {
-                voice_type: voiceId,
-                encoding: 'mp3',
-                speed_ratio: speed,
-                volume_ratio: volume,
-                pitch_ratio: 1.0
-            },
-            request: {
-                reqid: generateId(),
-                text,
-                text_type: 'plain',
-                operation: 'query',
-                with_frontend: 1,
-                frontend_type: 'unitTson'
-            }
-        }, {
-            Authorization: `Bearer; ${String(settings.doubaoToken || '').trim()}`
-        });
-    }
-    if (!result.ok) await throwProviderResponseError(result, '豆包语音生成失败');
-    let mp3;
-    if (useV3) {
-        const chunks = parseDoubaoSseAudio(result.rawText);
-        if (!chunks.length) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '豆包语音返回了空音频');
-        mp3 = mergePcmChunks(chunks);
-    } else {
-        const providerCode = Number(result.payload?.code || 0);
-        if (providerCode !== 3000 && providerCode !== 0) {
-            await throwProviderResponseError(result, result.payload?.message || '豆包语音生成失败');
-        }
-        const audioBase64 = String(result.payload?.data || '');
-        if (!audioBase64) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '豆包语音返回了空音频');
-        mp3 = base64ToArrayBuffer(audioBase64);
-    }
-    return { bytes: mp3, format: 'mp3' };
-}
-
-async function speakTextDoubao(text, onStart, options = {}) {
-    const { cacheKey = '', onEnd = null } = options;
-    const session = options.session || createVoiceSession(options.messageId || null);
-    ensureVoiceSessionActive(session);
-    if (cacheKey) {
-        const cached = await getCachedTtsAudio(cacheKey);
-        ensureVoiceSessionActive(session);
-        if (cached?.pcm) {
-            console.log('[TTS Cache] 命中缓存，直接播放，不调用豆包');
-            try {
-                await playCachedPcm(cached, onStart, onEnd, session);
-                if (!isVoiceSessionActive(session)) return { cancelled: true };
-                return { cached: true };
-            } catch (error) {
-                if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
-                console.warn('[TTS Cache] 缓存播放失败，将重新生成:', error);
-            }
-        } else {
-            console.log('[TTS Cache] 未命中，首次调用豆包生成');
-        }
-    }
-    try {
-        session.abortController = new AbortController();
-        const { bytes: mp3, format } = await generateDoubaoTtsAudio(text);
-        ensureVoiceSessionActive(session);
-        if (cacheKey) {
-            await saveCachedTtsAudio(cacheKey, mp3, 24000, format);
-            console.log('[TTS Cache] 首次豆包 MP3 音频已写入 IndexedDB');
-        }
-        await playCachedPcm({ pcm: mp3, format }, onStart, onEnd, session);
-        if (!isVoiceSessionActive(session)) return { cancelled: true };
-        return { cached: false };
-    } catch (error) {
-        if (isVoiceCancellation(error) || !isVoiceSessionActive(session)) return { cancelled: true };
-        console.error('[Doubao TTS] error:', error);
         throw toClientApiError(error);
     }
 }
@@ -2368,11 +2368,11 @@ function speakText(text, onStart, options = {}) {
         console.log('[TTS] 同一消息的语音任务仍在进行，复用现有任务');
         return activeTtsTasks.get(cacheKey);
     }
-    const provider = String(state.settings.ttsProvider || 'edge');
-    const task = provider === 'edge'
-        ? speakTextEdge(clean, onStart, options)
-        : provider === 'doubao'
-            ? speakTextDoubao(clean, onStart, options)
+    const provider = String(state.settings.ttsProvider || 'mimo');
+    const task = provider === 'mimo'
+        ? speakTextMimo(clean, onStart, options)
+        : provider === 'openai-tts'
+            ? speakTextOpenaiTts(clean, onStart, options)
             : provider === 'dashscope'
                 ? speakTextDashscope(clean, onStart, options)
                 : speakTextMinimax(clean, onStart, options);

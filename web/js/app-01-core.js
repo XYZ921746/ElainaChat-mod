@@ -385,12 +385,307 @@ async function nativeLive2dFetch(url, options) {
     }
 }
 
-// 原生模式下拦截 /api/live2d/* 请求
+// ==================== 插件（mod）的原生接口（APK） ====================
+//
+// 为什么需要这一层：插件的管理接口（安装/列表/删除）在电脑版由 serve.mjs +
+// server/mods.mjs 提供，而 APK 没有 Node 进程 —— 请求打过去只会 404，
+// 界面上「上传安装」点下去就是一句看不懂的 "Not found"（2026-10 实测复现）。
+//
+// 用户定的方案（2026-10）：**两端同构** —— 手机也走「应用内安装」，
+// 语义与电脑版一致；差异只剩"安卓不允许往安装目录丢文件"这一条
+// （那是电脑的额外便利，不是安装的唯一途径）。
+//
+// 存放位置：应用数据目录（Directory.Data）下的 `mods/<id>/`，
+// 与 Live2D 模型（`live2d/models/`）同一目录体系 —— 卸载 App 时一起清掉，
+// 语义与 Web 版删 data/ 一致。
+//
+// ★ 与电脑版**共享同一套安全规则**（下面逐条对齐 server/mods.mjs）：
+//   路径穿越 / 绝对路径 / 危险扩展名 / 体积上限 —— 安全规则只该有一份语义，
+//   两端各写一份实现可以，但判定标准必须一致。
+
+/** 插件 id 白名单（与 server/mods.mjs 的 MOD_ID_RE 同一形状） */
+const NATIVE_MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** 危险扩展名（对齐 server/mods.mjs 的 MOD_BLOCKED_EXT 的核心集：
+ *  本机可执行 / 服务端脚本。mod 允许 .js —— 它本来就是代码，
+ *  与电脑版 unzip({ allowScripts: true }) 的取舍一致）。 */
+const NATIVE_MOD_BLOCKED_EXT = new Set([
+    '.exe', '.dll', '.bat', '.cmd', '.com', '.scr', '.msi', '.sh', '.ps1',
+    '.html', '.htm', '.xhtml', '.hta', '.svg',
+]);
+/** 单个插件解压后的体积上限（与 server/mods.mjs 的 MOD_MAX_BYTES 一致：64MB。
+ *  之前写 20MB 且注释谎称一致 —— 同一个 30MB 的包电脑能装、手机装不上，
+ *  用户无从理解。两端数值必须同源，注释必须可验证。） */
+const NATIVE_MOD_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
+ * 归一化插件 id：剥掉 zip 文件名里常见的版本尾巴（与 server/mods.mjs 的
+ * normalizeModId **同一形状**：只剥「至少两段」的版本号 `-1.2.3` / `-1.2.3.4`，
+ * 刻意**不剥** `-2` —— `my-mod-2.zip` 的"2"可能是作者编号而不是版本号，
+ * 剥了会让"电脑装成 my-mod-2、手机装成 my-mod"两端不一致。
+ * server/mods.mjs:96-101 有完整论证，两端必须同语义）。
+ */
+function nativeNormalizeModId(raw) {
+    let s = String(raw || '').trim().replace(/\.zip$/i, '');
+    const m = s.match(/^(.+?)-\d+(?:\.\d+)+$/);
+    if (m && m[1] && NATIVE_MOD_ID_RE.test(m[1])) s = m[1];
+    return s;
+}
+
+/**
+ * 有效扩展名判定（**原样移植** server/zip.mjs 的 effectiveExt —— 安全规则两端必须同语义）。
+ *
+ * 为什么不能直接 `lastIndexOf('.')`：Windows 的 NTFS ADS 与尾点/尾空格写法
+ * 能把"看得出是 .html"伪装成看不出来：
+ *     `shell.html::$DATA` → 直接取 ext 得 `.html::$data`（不在黑名单 → 放行 ❌）
+ *     `shell.html.`       → ext 得 `.`（放行 ❌）
+ *     `shell.html␠`       → ext 得 `.html␠`（放行 ❌）
+ * server 端 8.42 就是修的这个（`x.html::$DATA` 存储型 XSS 绕过）。
+ * effectiveExt 先截掉第一个 `:` 之前之后的部分、再剥尾部 `[. ]`，三种写法全部还原成 `.html` 被拦。
+ */
+function nativeEffectiveExt(name) {
+    let s = String(name || '');
+    const colon = s.indexOf(':');
+    if (colon >= 0) s = s.slice(0, colon);           // 剥 ADS 流名（x.html::$DATA → x.html）
+    s = s.replace(/[. ]+$/, '');                      // 剥尾点/尾空格（x.html. → x.html）
+    const dot = s.lastIndexOf('.');
+    return dot >= 0 ? s.slice(dot).toLowerCase() : '';
+}
+
+/** 取插件数据目录（Directory.Data）下的 mods/ 相对路径前缀 */
+const NATIVE_MODS_DIR = 'mods';
+
+/** 读插件目录里的 manifest.json，返回归一化后的清单条目（字段对齐 server/mods.mjs） */
+async function nativeReadModManifest(fs, dir, modId) {
+    let m = null;
+    try {
+        const r = await fs.readFile({ path: `${NATIVE_MODS_DIR}/${modId}/manifest.json`, directory: dir, encoding: 'utf8' });
+        m = JSON.parse(String(r && r.data || '{}'));
+    } catch (e) { /* 没有 manifest：给最小可用清单（与电脑版 readManifest 一致） */ }
+    const declared = m && typeof m.id === 'string' ? m.id.trim() : '';
+    const id = (declared && NATIVE_MOD_ID_RE.test(declared)) ? declared : modId;
+    return {
+        id,
+        dir: modId,
+        name: (m && m.name) || id,
+        version: (m && m.version) || '',
+        description: (m && m.description) || '',
+        entry: (m && m.entry) || 'index.js',
+        scripts: Array.isArray(m && m.scripts) ? m.scripts.filter((s) => typeof s === 'string' && s) : [],
+        styles: Array.isArray(m && m.styles) ? m.styles : [],
+        defaultEnabled: !(m && m.defaultEnabled === false),
+        after: Array.isArray(m && m.after) ? m.after : [],
+        hidden: m ? m.hidden === true : false,
+        hasManifest: Boolean(m),
+    };
+}
+
+/** 递归列一个插件目录下的文件（相对路径），给清单生成用 */
+async function nativeListModFiles(fs, dir, modId, relPath = '', depth = 0) {
+    if (depth > 6) return [];
+    const base = `${NATIVE_MODS_DIR}/${modId}`;
+    let listing;
+    try { listing = await fs.readdir({ path: relPath ? base + '/' + relPath : base, directory: dir }); }
+    catch (e) { return []; }
+    const out = [];
+    for (const f of (listing.files || [])) {
+        const rel = relPath ? relPath + '/' + f.name : f.name;
+        if (f.type === 'directory') out.push(...await nativeListModFiles(fs, dir, modId, rel, depth + 1));
+        else out.push(rel);
+    }
+    return out;
+}
+
+/** 扫描数据目录的 mods/，生成清单（形状对齐 server/mods.mjs 的 scanAndSync 输出） */
+async function nativeListPlugins(fs, dir) {
+    let entries;
+    try { entries = await fs.readdir({ path: NATIVE_MODS_DIR, directory: dir }); }
+    catch (e) { return []; }   // 没装过任何插件 = 正常空态
+    // ★ 只认目录（安全审计 #16）：type 缺失时把文件也当目录，会为它造出幽灵清单条目。
+    //   有些实现不回 type 字段 —— 那就退一步用 stat 确认；stat 失败的跳过。
+    const ids = [];
+    for (const e of (entries.files || [])) {
+        if (!e.name || e.name === 'index.json') continue;
+        if (e.type === 'directory') { ids.push(e.name); continue; }
+        if (e.type) continue;                      // 明确是文件 → 跳过
+        try {
+            const st = await fs.stat({ path: `${NATIVE_MODS_DIR}/${e.name}`, directory: dir });
+            if (!st || st.type === 'directory') ids.push(e.name);
+        } catch (e2) { /* 读不到的条目跳过 */ }
+    }
+    const list = [];
+    for (const id of ids) {
+        try { list.push(await nativeReadModManifest(fs, dir, id)); } catch (e) { /* 跳过坏目录 */ }
+    }
+    return list;
+}
+
+/** 把插件目录递归删掉（卸载） */
+async function nativeDeletePlugin(fs, dir, modId) {
+    if (!NATIVE_MOD_ID_RE.test(modId)) throw new Error('插件名不合法：' + modId);
+    await fs.rmdir({ path: `${NATIVE_MODS_DIR}/${modId}`, directory: dir, recursive: true });
+}
+
+/**
+ * 从内存里的 zip 安装插件到数据目录（对应电脑版 installFromBuffer）。
+ *
+ * 与 unzipBrowser 的分工：那个只管"解开"，这里管**全部安全判定与落盘** ——
+ * 逐条对齐 server/mods.mjs 的 writePluginFiles：
+ *   ① id 白名单（挡 `..` / 绝对路径 / 奇怪字符）
+ *   ② 先清空旧目录再装（重装语义，避免残留上一版文件）
+ *   ③ zip 内单层同名顶层目录剥掉（打包习惯）
+ *   ④ 每条目判不安全名 + 危险扩展名
+ *   ⑤ 解压总体积封顶（超了回滚整个目录）
+ */
+async function nativeInstallPlugin(buf, rawName) {
+    const fs = nativeFs();
+    if (!fs) throw new Error('文件系统插件不可用');
+    const dir = (fs.Directory && fs.Directory.Data) ? fs.Directory.Data : 'DATA';
+
+    // ★ 原始 zip 体积上限（安全审计 #14）：先挡超大包 —— 解压炸弹会把
+    //   WebView 内存吃满（见 unzipBrowser 的说明），那条防线未建之前，
+    //   入口处先卡总量是最便宜的兜底。与电脑版 readRawBody 的上传上限同量级。
+    if (!buf || buf.length < 22) throw new Error('不是有效的 zip 文件');
+    if (buf.length > NATIVE_MOD_MAX_BYTES) {
+        throw new Error('插件包超过 ' + Math.round(NATIVE_MOD_MAX_BYTES / 1024 / 1024) + 'MB 上限');
+    }
+
+    const modId = nativeNormalizeModId(rawName);
+    if (!NATIVE_MOD_ID_RE.test(modId)) throw new Error('插件名不合法：' + rawName);
+
+    const files = await unzipBrowser(buf);
+    if (!files.length) throw new Error('zip 为空或无法解析');
+
+    // ① 先在内存里判定全部条目，全部通过才动文件系统 ——
+    //    与电脑版"先清空再写"不同（那边有 rm 兜底），这里一旦写了一半失败，
+    //    留下的半套比不装更难排查，所以宁可先全量校验。
+    //    ★ 先把条目名统一成正斜杠（server 端 readZip 在解压层就做了）——
+    //      否则 `a\b.js` 形态的包在电脑被平铺、在手机会多套一层目录，
+    //      两端行为分叉（安全审计差异 #2-part1）。
+    for (const f of files) f.name = String(f.name).replace(/\\/g, '/');
+    const topCandidates = new Set(files.map((f) => f.name.split('/')[0]));
+    const stripTop = topCandidates.size === 1 && files.every((f) => f.name.includes('/'));
+    const plan = [];
+    let total = 0;
+    let skipped = 0;
+    for (const f of files) {
+        let rel = f.name;
+        if (stripTop) rel = rel.slice(rel.indexOf('/') + 1);
+        if (!rel || rel.endsWith('/')) continue;
+        // 不安全名：绝对路径 / `..` 穿越（对齐 server 的 isUnsafeEntryName）
+        if (rel.startsWith('/') || /^[A-Za-z]:/.test(rel) || rel.split('/').includes('..')) { skipped++; continue; }
+        // 危险扩展名：★ 用 effectiveExt 语义（见该函数注释）——
+        //   直接 lastIndexOf('.') 会被 `x.html::$DATA` / `x.html.` / `x.html␠`
+        //   三种 Windows 写法绕过（server 端 8.42 修过的同一个洞）。
+        const ext = nativeEffectiveExt(rel.split('/').pop() || '');
+        if (NATIVE_MOD_BLOCKED_EXT.has(ext)) { skipped++; continue; }
+        total += f.data.length;
+        if (total > NATIVE_MOD_MAX_BYTES) throw new Error('插件解压后超过 ' + Math.round(NATIVE_MOD_MAX_BYTES / 1024 / 1024) + 'MB 上限');
+        plan.push({ rel, data: f.data });
+    }
+    if (!plan.length) throw new Error('zip 内没有可用文件');
+
+    // ② 读 manifest（先在内存里解析出**真实 id** —— 目录名以它为准，
+    //    对齐电脑版"manifest.id 是权威身份"的约定）
+    let manifestEntry = null;
+    const mfFile = plan.find((p) => p.rel === 'manifest.json')
+        || plan.find((p) => p.rel.endsWith('/manifest.json'));
+    if (mfFile) {
+        try {
+            const parsed = JSON.parse(new TextDecoder('utf-8').decode(mfFile.data));
+            const declared = parsed && typeof parsed.id === 'string' ? parsed.id.trim() : '';
+            const finalId = (declared && NATIVE_MOD_ID_RE.test(declared)) ? declared : modId;
+            manifestEntry = { parsed, finalId };
+        } catch (e) { /* manifest 坏了按"没有 manifest"装，行为与电脑版一致 */ }
+    }
+    const finalId = manifestEntry ? manifestEntry.finalId : modId;
+
+    // ③ ★ 防顶替（安全审计 #11，本表最重的一条）：
+    //    manifest.id 可以把安装目录**重定向**到另一个名字 —— 若不设防，
+    //    "装 A 静默清空并顶替已装的插件 B"成立（rmdir(recursive) 会把
+    //    mods/B/ 整个删掉再写入）。电脑版没这个洞，因为那边目录名只用
+    //    文件名 id、manifest.id 只影响清单字段。
+    //    这里保留"以 manifest.id 为准"的语义（与前端身份系统一致），
+    //    但目标目录**已存在且不是本次 zip 来源名**时拒绝安装 ——
+    //    让用户先删再装，不能被一个包静默清掉别人的目录。
+    const base = `${NATIVE_MODS_DIR}/${finalId}`;
+    if (finalId !== modId) {
+        let existsAlready = false;
+        try { await fs.stat({ path: base, directory: dir }); existsAlready = true; } catch (e) { /* 不存在 */ }
+        if (existsAlready) {
+            throw new Error(`插件 ${finalId} 已存在（与安装包名 ${modId} 不同）。请先在插件页删除它，再安装这个包。`);
+        }
+    }
+
+    // ④ 清空旧目录（重装语义）→ 逐文件写入
+    await fs.rmdir({ path: base, directory: dir, recursive: true }).catch(() => {});
+    let written = 0;
+    for (const p of plan) {
+        await nativeWriteFile(`${base}/${p.rel}`, dir, p.data);
+        written++;
+    }
+    return { id: finalId, written, skipped };
+}
+
+/** 插件接口的原生分发（形状对齐 nativeLive2dFetch） */
+async function nativePluginsFetch(url, options) {
+    const method = ((options && options.method) || 'GET').toUpperCase();
+    const fs = nativeFs();
+    // ★ 一律走 makeRes 出口（check-native-response 的硬约束：所有 return 都要
+    //   走 makeRes/json —— 裸对象会缺字段，调用方 readJsonSafe 第一行
+    //   await res.text() 直接 TypeError。上一版这里 return 裸对象被该检查抓住。）
+    const makeRes = (status, obj) => ({
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => obj,
+        text: async () => JSON.stringify(obj),
+    });
+    const json = (obj) => makeRes(200, obj);
+    if (!fs) return makeRes(500, { ok: false, message: '文件系统插件不可用' });
+    const dir = (fs.Directory && fs.Directory.Data) ? fs.Directory.Data : 'DATA';
+    try {
+        // 列表：形状对齐电脑版 GET /api/plugins（前端 refreshModsList 只用 plugins 数组）
+        if (url === '/api/plugins' && method === 'GET') {
+            const plugins = await nativeListPlugins(fs, dir);
+            return json({ ok: true, plugins, generatedAt: new Date().toISOString() });
+        }
+        // 安装：请求体是 zip 原始字节（与电脑版同一条协议）
+        if (url.startsWith('/api/plugins/install') && method === 'POST') {
+            const rawName = (() => {
+                try { return decodeURIComponent((url.split('?')[1] || '').replace(/^name=/, '')) || 'plugin.zip'; }
+                catch (e) { return 'plugin.zip'; }
+            })();
+            const body = options && options.body;
+            if (!body) return makeRes(400, { ok: false, message: '无文件' });
+            const buf = new Uint8Array(body instanceof Blob ? await body.arrayBuffer() : await new Response(body).arrayBuffer());
+            const r = await nativeInstallPlugin(buf, rawName);
+            return json({ ok: true, id: r.id, files: r.written, skipped: r.skipped, message: `已安装 ${r.id}（${r.written} 个文件）` });
+        }
+        // 删除：对齐电脑版 DELETE /api/plugins/:id
+        const delMatch = String(url).match(/^\/api\/plugins\/([^/]+)$/);
+        if (delMatch && method === 'DELETE') {
+            const modId = decodeURIComponent(delMatch[1]);
+            await nativeDeletePlugin(fs, dir, modId);
+            return json({ ok: true, deleted: modId });
+        }
+        return makeRes(404, { ok: false, message: 'Not found（手机端未实现该接口）' });
+    } catch (err) {
+        return makeRes(500, { ok: false, message: err.message || String(err) });
+    }
+}
+
+// 原生模式下拦截 /api/live2d/* 与 /api/plugins/* 请求
 if (IS_NATIVE_APP) {
     const nativeOrigFetch = window.fetch.bind(window);
     window.fetch = async (input, options) => {
         const u = typeof input === 'string' ? input : String((input && input.url) || input);
         if (u.startsWith('/api/live2d/')) return nativeLive2dFetch(u, options || {});
+        // ★ 插件管理（安装/列表/删除）：电脑版由 serve.mjs 提供，
+        //   手机版在这里原生实现（见 nativePluginsFetch 的说明）。
+        //   只拦这三个已知前缀，其余照常放行 —— 不然 store.js 等处的
+        //   真实请求会被误劫持。
+        if (u === '/api/plugins' || u.startsWith('/api/plugins/install') || /^\/api\/plugins\/[^/]+$/.test(u)) {
+            return nativePluginsFetch(u, options || {});
+        }
         return nativeOrigFetch(input, options);
     };
 }
@@ -400,6 +695,37 @@ if (IS_NATIVE_APP) {
     window.__nativeSeedPromise = initNativeLive2dStorage()
         .then(seedBundledLive2dModels)
         .catch((e) => { console.warn('[Native] 内置模型初始化失败', e); });
+
+    // ── 插件根目录（mods.js 加载器用）────────────────────────────────────
+    //
+    // ★ 刻意**不**复用 __nativeSeedPromise：那个 Promise 串着内置 Live2D 模型的
+    //   播种（95 个文件、40MB）。插件加载若等它，首屏会白等一次模型播种 ——
+    //   两件不相干的事被一根链子拴住。这里独立起一条。
+    //
+    //   产出 `window.__nativeModBase`：形如
+    //     `https://localhost/_capacitor_file_/data/user/0/<包名>/files/mods/`
+    //   mods.js 拿它替换 `/mods/` 根（mods.js 的 modDir 负责**逐段编码**，
+    //   ★ 这里**绝不能**再 encodeURIComponent —— 双重编码会 404）。
+    //
+    //   失败时保持 undefined：mods.js 会回落桌面根 `/mods/`，插件 404 但不白屏 ——
+    //   与"缺能力要说清楚"的一贯做法一致（启动横幅会打一行原因）。
+    window.__nativeModsRootPromise = (async () => {
+        try {
+            const f = nativeFs();
+            if (!f) throw new Error('Filesystem 插件不可用');
+            const d = (f.Directory && f.Directory.Data) ? f.Directory.Data : 'DATA';
+            await f.mkdir({ path: NATIVE_MODS_DIR, directory: d, recursive: true });
+            const res = await f.getUri({ path: NATIVE_MODS_DIR, directory: d });
+            if (window.Capacitor.convertFileSrc) {
+                window.__nativeModBase = window.Capacitor.convertFileSrc(res.uri) + '/';
+            } else {
+                window.__nativeModBase = res.uri + '/';
+            }
+            console.log('[Native] 插件目录:', window.__nativeModBase);
+        } catch (e) {
+            console.warn('[Native] 插件目录初始化失败（插件加载会回落桌面根）', e);
+        }
+    })();
 }
 /* 对话 API 格式只留三种。
    收敛掉 dashscope / gemini / ollama，因为它们的官方接口都能用标准
@@ -444,10 +770,8 @@ const LEGACY_BASE_URL_REWRITE = Object.freeze({
     'http://127.0.0.1:11434': 'http://127.0.0.1:11434/v1'
 });
 const MINIMAX_TTS_HTTP = 'https://api.minimaxi.com/v1/t2a_v2';
-const DOUBAO_TTS_V1_URL = 'https://openspeech.bytedance.com/api/v1/tts';
-const DOUBAO_TTS_V3_URL = 'https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse';
 const DASHSCOPE_SYNC_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-const API_SECRET_NAMES = Object.freeze(['apiKey', 'minimaxApiKey', 'dashscopeApiKey', 'mimoApiKey', 'doubaoApiKey', 'doubaoToken']);
+const API_SECRET_NAMES = Object.freeze(['apiKey', 'minimaxApiKey', 'dashscopeApiKey', 'asrApiKey', 'mimoApiKey', 'mimoTtsApiKey', 'openaiTtsApiKey']);
 const LEGACY_DEFAULT_GREETING = '欢迎。先说明一下，我是伊蕾娜，正在旅行的灰之魔女。您似乎来自一个没有魔法的世界——那么，今天想和我聊些什么？';
 const DEFAULT_CHARACTER_PREFERENCES = `【伊蕾娜的好恶与偏好】
 
@@ -497,20 +821,36 @@ const ROLEPLAY_HALLUCINATION_GUARD = `
 - 只使用角色卡、世界观、用户明确说明、最近对话与已注入记忆作为事实来源；不确定就说不确定，不要编造。
 - 始终以角色本人身份直接回应，不在回复中承认自己是 AI、模型或助手。`;
 
-// Live2D 表现与 Agent 操作标签指南（注入系统提示词，标签不会显示给用户）
-const LIVE2D_TAG_GUIDE = `# Agent Skill：Live2D 表现与状态控制
-你在与用户进行角色扮演互动时，应当根据当前情景和情绪，在回复中自然使用以下标签来驱动角色的 Live2D 表情与动作（这些标签会被系统识别并执行，不会显示给用户，禁止在标签外使用方括号）：
+// 宿主自己的操作标签指南（注入系统提示词，标签不会显示给用户）。
+//
+// ★★ 2026-10 拆分（方案 A）：这个常量原叫 `LIVE2D_TAG_GUIDE`，把**两类不同归属**
+//   的东西写在了一起，而且**无条件注入**（`buildCharacterSystemMessages` 里没有
+//   任何 Live2D 判断）—— 后果是纯净版 clone（一个插件都没装）也会收到 1007 字符的
+//   Live2D 说明书，里面还教模型输出 `[表情:happy]`、`[操作:隐藏水印]` 这些
+//   根本没东西去执行的标签。这正是本项目反复强调的"能力寄生"：
+//   标签的**执行**早已搬进 live2d mod（`drivePresentation` /
+//   `registerOperationHandler`），只把**说明书**留在了宿主。
+//
+//   现在按归属切开：
+//     · 本常量（宿主）：只留宿主**自己就能执行**的操作 + 定时任务。
+//       这五个动作由 web/js/agent-tags.js 直接分发、app-03-agent.js 执行，
+//       与 Live2D 无关 —— 卸掉 Live2D 它们照常可用。
+//     · 表现类（情绪/表情/动作/位置/大小/背景 + 静音/水印）→ 搬进
+//       mods/live2d/，走 `host.setPromptHint()`。于是**停用插件就自动不注入**
+//       （setPromptHint 的停用摘除机制是现成的）。
+//
+//   ★ 定时任务（[任务:]）特意留在这里：它是宿主的主动行为能力
+//     （见 app-03-agent.js 的 extractAndCreateTasks），跟 Live2D 毫无关系。
+//     原先混在 Live2D 指南里，一旦整段搬走就会变成"关掉 Live2D 就没法定时提醒"。
+const HOST_ACTION_TAG_GUIDE = `# Agent Skill：应用操作与定时任务
+你可以用 [操作:…] 标签触发应用功能（标签不会显示给用户）：
 
-【情绪标签（最常用，请优先使用）】[情绪:开心] / [情绪:难过] / [情绪:生气] / [情绪:害羞] / [情绪:惊讶] / [情绪:委屈] / [情绪:思考] / [情绪:平静] —— 触发对应表情与说话语气。
-【表情标签】[表情:happy] / [表情:sad] / [表情:angry] / [表情:blush] / [表情:cry] / [表情:smile] / [表情:think] / [表情:shy] / [表情:dizzy] —— 直接指定表情。
-【动作标签】[动作:wave]（挥手）/ [动作:bow]（鞠躬）。
-【状态标签】[位置:left|center|right|上|下] —— 移动角色位置；[大小:大|小|特大|特小|65%] —— 调整角色大小。
-【背景标签】[背景:深蓝|蓝紫|星空|紫罗兰|红蓝|深黑|墨蓝|深紫|玫红|青绿] —— 切换通话背景。
-【操作标签】[操作:打开视频通话] / [操作:结束通话] / [操作:整理记忆] / [操作:静音] / [操作:取消静音] / [操作:隐藏水印] / [操作:显示水印] —— 触发应用功能。
-（手机操作、文件操作是另一组标签，是否可用取决于当前设备与设置，系统会单独告知；不要凭这里猜测。）
+【应用操作】[操作:打开视频通话] / [操作:结束通话] / [操作:整理记忆]
+
 【定时任务标签】[任务:频率 时间 内容] —— 创建未来任务，到点系统会请你以角色身份主动给用户发提醒消息。示例：[任务:每天 09:00 提醒我喝水] / [任务:明天 14:00 提醒我开会] / [任务:每3小时 起来活动一下] / [任务:30分钟后 提醒我休息]。当用户表达"每天给我发消息/提醒我/定时..."等意图时，用此标签创建任务，并在回复正文中自然告知用户已安排好。
 
-【使用要求】情绪标签是角色扮演表达的核心部分：每条回复都应根据内容带 1 个情绪或表情标签（内容完全中性时除外）；当情绪发生变化时（如从开心转为难过、从平静转为惊讶），务必切换到对应的情绪/表情标签，让角色的表情跟随情景变化；标签放在回复开头或情绪表达处，一条回复最多 2 个。`;
+（手机操作、文件操作是另一组标签，是否可用取决于当前设备与设置，系统会单独告知；不要凭这里猜测。）`;
+
 
 const ROLEPLAY_TURN_ANCHOR = `# 本轮角色锚点
 继续以角色卡中的人物本人自然回应。保持其既有好恶、习惯、知识边界、关系边界和说话方式；遵守本轮图片或配音格式要求，但不要让格式任务取代角色本身。${ROLEPLAY_HALLUCINATION_GUARD}`;
@@ -545,6 +885,24 @@ const ROLEPLAY_OUTPUT_TOKEN_LIMITS = Object.freeze({
  * 4096 也是 Claude 各代模型都接受的安全值（claude-3-haiku 的输出上限正好是 4096）。
  */
 const ANTHROPIC_MIN_MAX_TOKENS = 4096;
+
+/**
+ * 对话请求的**空闲**超时（毫秒）。
+ *
+ * ★ 语义是"多久没有动静算死"，不是"整个请求最多花多久" —— 服务端
+ *   /api/relay 每收到一块上游数据就把计时器续一次（见 serve.mjs 的 armIdleTimer），
+ *   所以长回复（几分钟）不会被它砍断，只有真正卡住的连接才会。
+ *
+ * 为什么开思考要单独一档：思考型模型在吐第一个 token 前会先推理很久
+ * （thinkingEffort=high 时实测可超过 120 秒），而流式对"首字延迟"毫无帮助 ——
+ * 那段时间本来就没有增量可回调。旧代码统一用 120 秒，于是高思考强度下
+ * 请求会在等待期被本地掐掉，界面表现为"没有流式、等半天还失败"。
+ *
+ * 为什么不上不封顶：连接真断在半路时（拔网线、服务商挂掉）必须有个了结，
+ * 否则"正在输入…"会永远转下去。服务端 RELAY_TIMEOUT_MAX = 10 分钟是硬上限。
+ */
+const CHAT_TIMEOUT_DEFAULT_MS = 120000;   // 普通对话：2 分钟没动静就算死
+const CHAT_TIMEOUT_THINKING_MS = 300000;  // 开思考：5 分钟（首字延迟经常 >2 分钟）
 
 /**
  * 模型名后缀要求的输出上限下限（0 = 这个模型名没提任何要求，别动调用方的值）。
@@ -637,14 +995,28 @@ const DEFAULT_SETTINGS = {
     minimaxApiKey: '',
     minimaxVoice: '',
     minimaxModel: 'speech-2.8-hd',
-    ttsProvider: 'edge',
-    edgeTtsVoice: 'zh-CN-XiaoxiaoNeural',
-    doubaoApiKey: '',
-    doubaoAppId: '',
-    doubaoToken: '',
-    doubaoCluster: 'volcano_tts',
-    doubaoVoice: 'zh_female_shuangkuaisisi_uranus_bigtts',
-    doubaoResourceId: 'seed-tts-2.0',
+    ttsProvider: 'mimo',
+    // MiMo TTS（小米，OpenAI 兼容）：**凭据独立于 ASR**（ASR 仍用 mimoApiKey / mimoBaseUrl）。
+    // 旧版本两者共用同一套 Key/地址，升级时由 app-02-data.js 的一次性迁移把旧值搬过来。
+    mimoTtsApiKey: '',
+    // 接口地址预填小米官方地址（非密钥，预填更直观；留空时运行时同样会回退到这个地址）。
+    mimoTtsBaseUrl: 'https://api.xiaomimimo.com',
+    // ★ 旧版「TTS / ASR 共用 MiMo 凭据」→ TTS 独立键 的一次性迁移标记。
+    //   落盘保存（persistSettings 不剥离这个非密钥键），用来保证迁移**只跑一次**：
+    //   迁移过之后再怎么启动都不再复制（见 app-02-data.js 的 migrateLegacySharedMimoCredentials）。
+    mimoCredsSplitMigrated: false,
+    mimoTtsModel: 'mimo-v2.5-tts',
+    mimoTtsVoice: 'mimo_default',
+    // voicedesign 模型必填：user 消息里的音色描述文本
+    mimoTtsVoiceDesignPrompt: '',
+    // voiceclone 模型必填：参考音频样本（存为 base64 data URL，含原始文件名），随设置一起落盘
+    mimoTtsCloneSample: '',
+    mimoTtsCloneSampleName: '',
+    // 通用 OpenAI TTS（标准 /audio/speech 接口）
+    openaiTtsBaseUrl: 'https://api.openai.com/v1',
+    openaiTtsApiKey: '',
+    openaiTtsModel: 'tts-1',
+    openaiTtsVoice: 'alloy',
     dashscopeTtsModel: 'qwen3-tts-flash',
     dashscopeTtsVoice: 'Cherry',
     ttsSpeed: 1.0,
@@ -653,9 +1025,13 @@ const DEFAULT_SETTINGS = {
     replyDisplayMode: 'text-first',
     asrProvider: 'browser',
     dashscopeApiKey: '',
+    // ★ 阿里百炼 ASR 的 Key：**独立于**语音输出的 dashscopeApiKey（旧版两者共用，升级时一次性迁移，见 app-02-data.js）
+    asrApiKey: '',
+    asrKeySplitMigrated: false,
     dashscopeAsrBaseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
     dashscopeAsrModel: 'qwen3-asr-flash',
     mimoApiKey: '',
+    // ★ 接口地址**预填小米官方地址**（非密钥，预填更直观；留空时运行时同样会回退到这个地址）。
     mimoBaseUrl: 'https://api.xiaomimimo.com',
     mimoAsrModel: 'mimo-v2.5-asr',
     thinkingMode: false,
@@ -663,12 +1039,36 @@ const DEFAULT_SETTINGS = {
     // 交给服务商自己的默认值（DeepSeek 是 high，OpenAI 是 medium）。
     // 默认值选"不指定"而不是"high"：我们不该替用户决定他要花多少思考 token。
     thinkingEffort: 'medium',
+    // ★ 2026-10「对话优化 → 第三人称」：开启后一轮对话走两段式生成
+    //   （先 GM 第三人称推进剧情 → 再转成第一人称展示），见 app-02-data.js。
+    //   默认关闭：它会多花一次模型调用（费用与延迟翻倍），不该默认替用户打开。
+    thirdPerson: false,
     autoMemory: false,
     memoryEvery: 6,
-    agentPermission: 'app',
-    agentApproval: 'once',
+    // ★★ 2026-10 权限模型重构：`agentPermission`('app'|'computer') + `agentApproval`
+    //    （手机四档）合并成**一个三档设置** `agentAccess`：
+    //      'strict' 逐条确认 · 'auto' 自动通过（禁删除） · 'full' 完全访问（含删除）
+    //    一个开关同时管电脑与手机 —— 见 开发文档 里那次改造的说明。
+    //    两个旧字段保留在下面只作**迁移输入**，迁移完成后由 app-02-data.js 删掉。
+    agentAccess: 'strict',
     agentPhoneEnabled: true,
     agentBackend: '',   // 空 = 还没选过实现方式（此时不启用手机操作，入口按钮灰显）
+    // ★★ 2026-10 新增：手机「读取信息」的隐私开关。
+    //   用户要求"如果不想让 ai 知道太多信息请关闭对应权限"。
+    //   默认**全开**（读了才有用），但每一项都能单独关掉 ——
+    //   关掉后 AI 连对应标签都不会看到（见 app-03-agent.js 的 agentPhoneSkillText
+    //   与手机读信息的分发），不是"读了不说"。
+    //   ⚠️ 这些开关只控制**应用层**是否允许读；系统层权限（通知/短信/通讯录/日历）
+    //   仍由 Android 自己的运行时权限把关，两者缺一不可。
+    agentReadApps: true,
+    agentReadNotifications: true,
+    agentReadDevice: true,
+    agentReadSms: true,
+    agentReadContacts: true,
+    agentReadCalendar: true,
+    // 用户通过系统文件选择器授权的文件夹（SAF 持久化 URI）。空 = 没授权。
+    agentFolderUri: '',
+    agentFolderName: '',
     visionBaseUrl: '',
     visionApiKey: '',
     visionModel: ''
@@ -842,10 +1242,12 @@ const elements = {
     settingApiFormat: document.getElementById('settingApiFormat'),
     settingBaseUrl: document.getElementById('settingBaseUrl'),
     settingChatModel: document.getElementById('settingChatModel'),
-    // 思考模式：开关 + 强度。原来在输入框旁的 ⊕ 菜单里，已移到「设置 → 对话」。
+    // 对话优化（原「思考模式」块）：思考开关 + 强度 + 第三人称两段式。
+    // 原来在输入框旁的 ⊕ 菜单里，已移到「设置 → 模型」。
     settingThinkingMode: document.getElementById('settingThinkingMode'),
     settingThinkingEffort: document.getElementById('settingThinkingEffort'),
     thinkingModeHint: document.getElementById('thinkingModeHint'),
+    settingThirdPerson: document.getElementById('settingThirdPerson'),
     settingApiKey: document.getElementById('settingApiKey'),
     testChatConnectionBtn: document.getElementById('testChatConnectionBtn'),
     testTtsConnectionBtn: document.getElementById('testTtsConnectionBtn'),
@@ -853,8 +1255,8 @@ const elements = {
     chatFormatHint: document.getElementById('chatFormatHint'),
     settingTtsProvider: document.getElementById('settingTtsProvider'),
     minimaxTtsFields: document.getElementById('minimaxTtsFields'),
-    edgeTtsFields: document.getElementById('edgeTtsFields'),
-    doubaoTtsFields: document.getElementById('doubaoTtsFields'),
+    mimoTtsFields: document.getElementById('mimoTtsFields'),
+    openaiTtsFields: document.getElementById('openaiTtsFields'),
     dashscopeTtsFields: document.getElementById('dashscopeTtsFields'),
     settingTtsSpeed: document.getElementById('settingTtsSpeed'),
     ttsSpeedLabel: document.getElementById('ttsSpeedLabel'),
@@ -1048,7 +1450,7 @@ function getClientErrorPresentation(error) {
                     + '\n· 不想要思考：把模型名里的 -thinking 去掉，例如 claude-sonnet-4-5-thinking → claude-sonnet-4-5；'
                     + '\n· 想要思考：可以用 -thinking-<数字> 指定预算，但数字越大越慢、也越贵。';
             } else if (imageRelated) {
-                hint = '\n\n图片转述常见原因：视觉模型名不对、图片过大、或该模型不支持图片。请检查 设置→视觉 的模型名，或换用 Qwen-VL 等支持图片的模型。';
+                hint = '\n\n图片转述常见原因：视觉模型名不对、图片过大、或该模型不支持图片。请检查 设置 → 模型 → 视觉模型 的模型名，或换用 Qwen-VL 等支持图片的模型。';
             } else {
                 hint = '\n\n常见原因：服务商对请求格式有额外要求（例如只接受一条 system 消息）、模型名与接口不匹配、'
                     + '或该模型不支持当前参数。上面「服务商返回」那行通常已经写明了真正的原因。';
@@ -1317,10 +1719,11 @@ function detectAgentRoots() {
 /**
  * 同步取已探测到的真实位置，拼成给 AI 看的一段提示。
  * 提示词构造函数是同步的，没法 await，所以只能读缓存（页面启动时就预热了）。
- * 只在「允许操作电脑」模式下注入 —— 限制模式本来就不该去翻磁盘其他位置。
+ *
+ * ★ 三档权限下**一律注入**：三档都能访问任意路径，所以"桌面到底在哪"对每一档
+ *   都有用（旧模型下只有 computer 档才注入，因为 app 档碰不到那些位置）。
  */
 function agentRootsText() {
-    if ((state.settings.agentPermission || 'app') !== 'computer') return '';
     const roots = Array.isArray(agentRootsCache) ? agentRootsCache.filter(r => r && r.path) : [];
     if (!roots.length) return '';
     return '\n# 这台电脑的真实位置（用户可能把桌面/文档移动过，**不要**按惯例猜 C:\\Users\\<用户名>\\Desktop）\n'
@@ -1641,7 +2044,13 @@ function extractProviderErrorMessage(payload) {
 async function throwProviderResponseError(result, fallbackMessage) {
     const payload = result?.payload;
     const rawText = String(result?.rawText || '');
-    const message = String(extractProviderErrorMessage(payload) || fallbackMessage).trim();
+    let message = String(extractProviderErrorMessage(payload) || fallbackMessage).trim();
+    // ★ 429 = 上游限流（不是请求写错）。服务商通常只回一句 "Too many requests"，
+    //   用户看到它无从下手，这里补一句可执行的提示。不改重试逻辑 —— 无退避的自动
+    //   重试只会把 429 撞得更狠。
+    if (Number(result?.status || 0) === 429 && !/稍后|重试|频率|限流/.test(message)) {
+        message += '（上游限流：请等 1～2 分钟再试；若同一个 Key 同时在跑语音识别和语音输出，两者共享同一份调用配额）';
+    }
     // 完整错误日志：状态码 + 服务商返回原文，方便排查"测试能通、实际报错"。
     //
     // ★ 单行、不重复（2026-09 修）：旧版把 message / rawText / payload 三个字段
@@ -1784,7 +2193,22 @@ async function callChatAPI(messages, opts = {}, settings = state.settings) {
     // 注意 providers 里那个老模型名 → deepseek-flash 的映射也**不含** `-thinking` 后缀，
     // 所以先算后算结果一样（以前这里写的是"换成 deepseek-reasoner"，那个映射已经取消）。
     const resolvedOpts = Object.assign({}, opts, {
-        maxTokens: resolveOutputTokenLimit(settings.model, opts.maxTokens, format === 'anthropic')
+        maxTokens: resolveOutputTokenLimit(settings.model, opts.maxTokens, format === 'anthropic'),
+        // ★★ 2026-10 修「高思考强度下流式还没开始就被自己掐断」：
+        //   请求超时原先一路靠 postJsonFromDevice 的默认值 120000（120 秒），
+        //   而那个默认值是给**普通请求**定的。开思考（尤其 thinkingEffort=high）
+        //   时，模型先默默推理几十秒到几分钟才吐第一个 token —— 120 秒经常不够。
+        //   实测现场（data/logs/2026-10-13_20-23-53.trace.log）：
+        //     超过 120 秒没有响应（120020ms）→ [Chat] anthropic 流式不可用，退回非流式
+        //   用户观感就是"AI 不流式"，实际是等待期就被本地掐了。
+        //
+        //   注意：**超时是空闲语义**（见 serve.mjs 的 armIdleTimer）——
+        //   服务端每收到一块数据就续期，所以调大它不会让"长回复"变慢或卡住，
+        //   只会放宽"多久没动静才算死"。这里给思考模式 5 分钟、普通 2 分钟。
+        //   服务端 RELAY_TIMEOUT_MAX（10 分钟）仍是硬上限，不会被这里绕过。
+        timeoutMs: Number.isFinite(opts.timeoutMs)
+            ? opts.timeoutMs
+            : (opts.thinking ? CHAT_TIMEOUT_THINKING_MS : CHAT_TIMEOUT_DEFAULT_MS),
     });
     // 把消息形状打进日志：**只记 role，不记内容**（内容可能含对话隐私与图片 base64）。
     // 排查"服务商拒收请求"时，一眼就能看出是不是 system 的位置/条数不对，

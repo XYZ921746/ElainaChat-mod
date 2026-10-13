@@ -339,6 +339,14 @@ function exitDiaryMode() {
     syncRailActive();
 }
 
+// ==================== 日志（设置里的独立分栏） ====================
+//
+// 日志**不再是页面模式**（曾经做过"独立全屏页 + enterLogMode/exitLogMode"）。
+// 现在是设置面板里的一个分栏（#tab-log），面板打开时聊天区本来就藏着，
+// rail 高亮本来就是「设置」—— 所以原来那套 state.logMode 与 enter/exit 函数
+// 全部删除，改由 app-07-init.js 的 switchSettingsTab() 调 LogViewer.open()/close()。
+
+
 function showInitialState() {
     state.notesMode = false;
     state.diaryMode = false;
@@ -1246,7 +1254,32 @@ function renderThinkingMessage() {
 
 /** 一次回合（= 一条 AI 回复的处理过程）的记录容器 */
 function createTurnTrace() {
-    return { reasoning: '', tools: [], startedAt: Date.now() };
+    return {
+        // ★★ 时间线：思考段与工具调用**按发生先后混排**。
+        //
+        //   为什么不能像原来那样"全部思考拼成一坨 + 工具另存一列"：
+        //   两段式下拉的**第一段**要回答的问题是"它先想了什么、于是调了什么、
+        //   然后又想了什么" —— 那是因果顺序。分开存就再也还原不出来了
+        //   （原来的 trace.reasoning 是纯拼接，工具只有 items 列表，
+        //   两者之间的先后关系信息在存入时就已丢失）。
+        //
+        //   每一项：{ kind:'reasoning'|'tool'|'phase', id, at, ... }
+        //     reasoning → { text }
+        //     tool      → { ref } 指向 tools 里的那一项
+        //     phase     → { ref } 指向 phases 里的那一项（两段式生成的阶段输出）
+        timeline: [],
+        // 两段式生成（第三人称）的阶段输出：{ index, title, text, at }
+        // 第一段 = GM 第三人称叙述，第二段 = 用户实际看到的第一人称正文
+        phases: [],
+        // 全部思考的拼接。总览行与"这一轮有没有思考"的判据用它，
+        // 避免为了一个布尔判断去遍历时间线。
+        reasoning: '',
+        tools: [],
+        // 时间线元素的稳定 id 来源。用它而不是 at（时间戳）当 key ——
+        // 同一毫秒内记两条会撞号，而 data-key 撞号会让"记住用户展开过哪一行"错位。
+        nextId: 1,
+        startedAt: Date.now(),
+    };
 }
 
 /** 当前正在进行的回合记录。一条 AI 回复对应一个，回复完成后清空。 */
@@ -1264,10 +1297,40 @@ function beginTurnTrace(anchorMessageId) {
 /**
  * 追加思考增量。思考开关关着时也允许调用 —— 由渲染层决定显不显示，
  * 而不是由收集层决定收不收：万一用户中途打开开关，已经收到的内容不该是空的。
+ *
+ * ★ 时间线规则（两段式下拉的"按先后排序"就靠它）：
+ *   · 连续的思考增量**合并进同一段**（流式一次回复有上千个增量，
+ *     逐个建段会让时间线爆炸）；
+ *   · 一旦中间插入了工具调用 / 阶段输出，或**换了阶段**（phase 变化），
+ *     下一次思考就另起一段 —— 这样"先想什么→于是调了什么→接着又想什么"
+ *     的因果顺序才留得下来。
+ *   · 原来这里是把所有思考拼成一坨（trace.reasoning），
+ *     与工具列表之间的先后关系在存入时就丢了，事后无法还原。
+ *
+ * @param {string} delta 思考增量
+ * @param {number} [phase] 该增量属于第几阶段（两段式生成时由 data 层打标）
  */
-function appendTurnReasoning(delta) {
+function appendTurnReasoning(delta, phase) {
     if (!activeTurnTrace || !delta) return;
-    activeTurnTrace.reasoning += String(delta);
+    const text = String(delta);
+    const ph = Number.isFinite(phase) ? Number(phase) : null;
+    activeTurnTrace.reasoning += text;
+    const tl = activeTurnTrace.timeline;
+    const last = tl[tl.length - 1];
+    // ★ phase 不同必须另起一段：两段式生成里第一阶段（GM 叙述）与
+    //   第二阶段（第一人称改写）的思考是两次独立的推理，混成一段会让
+    //   用户看到"一段思考里前后矛盾"。
+    if (last && last.kind === 'reasoning' && last.phase === ph) {
+        last.text += text;
+    } else {
+        tl.push({
+            kind: 'reasoning',
+            id: 'think-' + activeTurnTrace.nextId++,
+            at: Date.now(),
+            phase: ph,
+            text,
+        });
+    }
     scheduleTurnProcessRender();
 }
 
@@ -1289,9 +1352,39 @@ function recordTurnTool(entry) {
         args: entry?.args === undefined ? '' : String(entry.args),
         result: entry?.result === undefined ? '' : String(entry.result),
         state: String(entry?.state || 'ok'),
+        // ★ 稳定的时间线 key（见 nextId 的说明）。at 只用于显示相对时间。
+        key: 'tool-' + activeTurnTrace.nextId++,
         at: Date.now()
     };
     activeTurnTrace.tools.push(item);
+    // 同时进时间线 —— 这样"思考 1 → 工具 A → 思考 2"的先后顺序才留得下来
+    activeTurnTrace.timeline.push({ kind: 'tool', id: item.key, at: item.at, ref: item });
+    scheduleTurnProcessRender();
+    return item;
+}
+
+/**
+ * 记录一次**阶段输出**（两段式生成用）。
+ *
+ * 第三人称模式下，一次回复其实由两条模型输出拼成：
+ *   第 1 段 = GM 第三人称叙述（用户看不到，但它是第 2 段的输入）
+ *   第 2 段 = 第一人称转换结果（**这才是用户看到的正文**）
+ * 用户要求把这两段都留下来、并各有一个可单独展开的下拉 —— 就在这里存。
+ *
+ * @param {object} entry { index, title, text, state }
+ */
+function recordTurnPhase(entry) {
+    if (!activeTurnTrace) return null;
+    const item = {
+        index: Number(entry?.index) || (activeTurnTrace.phases.length + 1),
+        title: String(entry?.title || '阶段输出'),
+        text: entry?.text === undefined ? '' : String(entry.text),
+        state: String(entry?.state || 'ok'),
+        key: 'phase-' + activeTurnTrace.nextId++,
+        at: Date.now(),
+    };
+    activeTurnTrace.phases.push(item);
+    activeTurnTrace.timeline.push({ kind: 'phase', id: item.key, at: item.at, ref: item });
     scheduleTurnProcessRender();
     return item;
 }
@@ -1331,6 +1424,8 @@ function processIconSvg(kind) {
         phone: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path stroke-linecap="round" d="M10.5 18.5h3"/>',
         file: '<path stroke-linecap="round" stroke-linejoin="round" d="M13 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V9z"/><path stroke-linecap="round" d="M13 3v6h6"/>',
         think: '<path stroke-linecap="round" stroke-linejoin="round" d="M9.7 17h4.6M12 3a6 6 0 00-3.6 10.8c.7.5 1.1 1.3 1.1 2.2V16h5v-.1c0-.9.4-1.6 1.1-2.2A6 6 0 0012 3z"/>',
+        // 两段式生成的「阶段输出」：用文档图标区分于思考（脑）与工具（齿轮）
+        phase: '<path stroke-linecap="round" stroke-linejoin="round" d="M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/><path stroke-linecap="round" d="M14 3v5h5M9 13h6M9 17h4"/>',
         others: '<circle cx="12" cy="12" r="8"/><path stroke-linecap="round" d="M12 8v4.5l2.5 1.5"/>'
     };
     return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">${paths[kind] || paths.others}</svg>`;
@@ -1344,10 +1439,15 @@ function processStateLabel(state) {
     return '完成';
 }
 
-/** 生成一条过程行的 HTML（思考行 / 工具行通用） */
-function processRowHtml({ kind, title, summary, state, bodyHtml }) {
+/** 生成一条过程行的 HTML（思考行 / 工具行通用）。
+ *
+ *  key：跨重渲染**稳定**的行标识（思考行固定 'think'，工具行 'tool-<at>'）。
+ *       渲染层每次流式增量都用 innerHTML 整体重建过程区，重建会丢掉 .is-open，
+ *       所以需要一个稳定的 key 才能在重建后把"用户手动展开过的行"重新展开 ——
+ *       用索引不行：流式期间会不断追加新的工具行，索引会整体后移，恢复会错位。 */
+function processRowHtml({ kind, key, title, summary, state, bodyHtml }) {
     return `
-        <div class="process-row" data-state="${escapeHtml(state || 'ok')}" data-kind="${escapeHtml(kind)}">
+        <div class="process-row" data-state="${escapeHtml(state || 'ok')}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key || kind)}">
             <button type="button" class="process-row-head" onclick="toggleProcessRow(this)" aria-expanded="false">
                 <span class="process-row-icon" aria-hidden="true">${processIconSvg(kind)}</span>
                 <span class="process-state" aria-hidden="true"></span>
@@ -1371,6 +1471,28 @@ function toggleProcessRow(button) {
 }
 
 /**
+ * 展开/收起**整个过程区**（总览行是这一层的开关）。
+ *
+ * ★★ 2026-10 两段式下拉（用户要求）：
+ *   第一段（点总览行）→ 展开**时间线**：思考段落与工具调用按发生先后排列；
+ *   第二段（点时间线里某一条）→ 展开那条的**详细内容**：
+ *     · 思考条 → 完整思考文本
+ *     · 工具条 → 参数 / 结果（与原来的 Agent 工具卡片一致）
+ *     · 阶段条 → 该阶段的完整输出文本
+ *
+ * 修掉的老毛病：以前只有**手机**能展开（桌面 CSS 里 is-expanded 不影响任何
+ * display，点了毫无反应），而且三角箭头只有手机才显示 —— 桌面上是一个
+ * "看着能点、点了没用"的死三角。现在两段式在**两端都生效**，
+ * 箭头也常驻（见 index.html 的 .turn-summary-toggle 规则）。
+ */
+function toggleTurnProcess(summaryEl) {
+    const host = summaryEl?.closest?.('.turn-process');
+    if (!host) return;
+    const open = host.classList.toggle('is-expanded');
+    summaryEl.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+/**
  * 把当前回合的过程渲染到界面上。
  *
  * 渲染目标：`#turn-process-<锚点消息 id>`。锚点就是 AI 气泡的 id，
@@ -1382,13 +1504,10 @@ function renderTurnProcess() {
     const trace = activeTurnTrace;
     if (!trace) return;
 
-    // 思考开关：只控制**思考行**是否显示。
-    // 工具调用行无条件显示 —— 那是"AI 干了什么"的事实记录，
+    // 思考开关只决定**思考段落**显不显示（见下方 timeline 的过滤）。
+    // 工具调用无条件显示 —— 那是"AI 干了什么"的事实记录，
     // 关掉思考不代表用户可以不知道 AI 动了哪些文件。
     const showReasoning = Boolean(state.settings.thinkingMode);
-    const hasReasoning = showReasoning && trace.reasoning.trim().length > 0;
-    const hasTools = trace.tools.length > 0;
-    if (!hasReasoning && !hasTools) return;
 
     const anchorId = activeTurnAnchorId ? `turn-process-${safeAttrId(activeTurnAnchorId)}` : 'turn-process-active';
     let host = document.getElementById(anchorId);
@@ -1412,50 +1531,139 @@ function renderTurnProcess() {
 
     const parts = [];
 
-    // ---- 每回合总览（放最前面，折叠状态下也能看清这一轮做了什么）----
+    // ---- 第一段：总览行（点它展开时间线）----
+    // 思考开关：只控制**思考段落**是否显示。
+    // 工具调用无条件显示 —— 那是"AI 干了什么"的事实记录，
+    // 关掉思考不代表用户可以不知道 AI 动了哪些文件。
+    const timeline = trace.timeline.filter((item) => item.kind !== 'reasoning' || showReasoning);
+    const visibleReasoning = timeline.filter((item) => item.kind === 'reasoning');
+    const hasReasoning = visibleReasoning.length > 0;
+    const hasTools = trace.tools.length > 0;
+    const hasPhases = trace.phases.length > 0;
+    if (!hasReasoning && !hasTools && !hasPhases) return;
+
     const counts = { ok: 0, error: 0, running: 0, stopped: 0 };
     for (const t of trace.tools) counts[t.state] = (counts[t.state] || 0) + 1;
     const summaryBits = [];
-    if (hasReasoning) summaryBits.push('已思考');
+    // 思考段数只在**多于一段**时报出来（一段时"已思考"就够了，
+    // 报"1 段思考"反而啰嗦）
+    if (hasReasoning) summaryBits.push(visibleReasoning.length > 1 ? `${visibleReasoning.length} 段思考` : '已思考');
+    if (hasPhases) summaryBits.push(`${trace.phases.length} 段阶段输出`);
     if (counts.ok) summaryBits.push(`${counts.ok} 个操作完成`);
     if (counts.error) summaryBits.push(`${counts.error} 个失败`);
     if (counts.running) summaryBits.push(`${counts.running} 个进行中`);
     if (counts.stopped) summaryBits.push(`${counts.stopped} 个已停止`);
     if (summaryBits.length) {
-        parts.push(`<div class="turn-summary">${summaryBits
-            .map((b) => escapeHtml(b))
-            .join('<span class="turn-summary-sep">·</span>')}</div>`);
+        // ★ 总览行是**第一段**开关，两端都生效。
+        //   箭头（.turn-summary-toggle）现在常驻显示 —— 它过去只在手机端出现，
+        //   桌面上是个"没有箭头、点了也没反应"的死行（用户报"三角形点不了"）。
+        parts.push(`<div class="turn-summary" role="button" tabindex="0"`
+            + ` aria-expanded="false" onclick="toggleTurnProcess(this)"`
+            + ` onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTurnProcess(this);}">`
+            + summaryBits.map((b) => escapeHtml(b)).join('<span class="turn-summary-sep">·</span>')
+            + `<span class="turn-summary-toggle" aria-hidden="true">`
+            + `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>`
+            + `</span></div>`);
     }
 
-    // ---- 思考行（只有开关打开时才有）----
-    if (hasReasoning) {
-        const text = trace.reasoning.trim();
-        const firstLine = text.split('\n').map((l) => l.trim()).find(Boolean) || '思考中';
-        parts.push(processRowHtml({
-            kind: 'think',
-            title: '思考',
-            // 摘要用首行并截断 —— 一行摘要 + 省略号，是折叠态的全部信息量
-            summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
-            state: trace.done ? 'ok' : 'running',
-            bodyHtml: `<div class="process-reasoning">${escapeHtml(text)}</div>`
-        }));
+    // ---- 时间线：思考段落 / 工具调用 / 阶段输出，**按发生先后**排列 ----
+    //
+    // 这是第二段的容器：每一条自己再是一个可展开的 .process-row，
+    // 展开后显示它的详细内容。旧的实现把"全部思考"合成一行、
+    // 工具另起若干行，先后因果全丢了。
+    let seq = 0;
+    for (const item of timeline) {
+        seq += 1;
+        if (item.kind === 'reasoning') {
+            const text = item.text.trim();
+            if (!text) continue;
+            const firstLine = text.split('\n').map((l) => l.trim()).find(Boolean) || '思考中';
+            // 阶段标签：两段式生成时让用户知道这段思考属于哪一步
+            const phaseNote = item.phase ? `（第 ${item.phase} 阶段）` : '';
+            parts.push(processRowHtml({
+                kind: 'think',
+                key: item.id,
+                title: '思考' + phaseNote,
+                summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
+                // 最后一段思考且回合未结束时才是"运行中"，中间的段落都已结束
+                state: (!trace.done && item === timeline[timeline.length - 1]) ? 'running' : 'ok',
+                bodyHtml: `<div class="process-reasoning">${escapeHtml(text)}</div>`
+            }));
+            continue;
+        }
+        if (item.kind === 'phase') {
+            const ph = item.ref || {};
+            const text = String(ph.text || '').trim();
+            const firstLine = text.split('\n').map((l) => l.trim()).find(Boolean) || '（空）';
+            parts.push(processRowHtml({
+                kind: 'phase',
+                key: item.id,
+                title: ph.title || ('第 ' + ph.index + ' 阶段输出'),
+                summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
+                state: ph.state || 'ok',
+                // 阶段输出是**完整原文**：用 pre 保留换行，方便对照
+                bodyHtml: `<div class="process-row-label">完整输出</div><pre class="process-phase-text">${escapeHtml(text)}</pre>`
+            }));
+            continue;
+        }
+        if (item.kind === 'tool') {
+            const t = item.ref || {};
+            const body = [];
+            if (t.args) body.push(`<span class="process-row-label">参数</span><pre>${escapeHtml(t.args)}</pre>`);
+            if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
+            parts.push(processRowHtml({
+                kind: t.kind,
+                key: item.id,
+                title: t.title,
+                summary: t.summary,
+                state: t.state,
+                bodyHtml: body.join('')
+            }));
+            continue;
+        }
+    }
+    // 兜底：时间线为空但确有内容（例如历史数据结构不完整）时，
+    // 至少把工具列出来，不让过程区变成空白。
+    if (!parts.some((p) => p.includes('process-row'))) {
+        for (const t of trace.tools) {
+            const body = [];
+            if (t.args) body.push(`<span class="process-row-label">参数</span><pre>${escapeHtml(t.args)}</pre>`);
+            if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
+            parts.push(processRowHtml({
+                kind: t.kind, key: t.key || `tool-${t.at}`, title: t.title,
+                summary: t.summary, state: t.state, bodyHtml: body.join('')
+            }));
+        }
     }
 
-    // ---- 工具调用行 ----
-    for (const t of trace.tools) {
-        const body = [];
-        if (t.args) body.push(`<span class="process-row-label">参数</span><pre>${escapeHtml(t.args)}</pre>`);
-        if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
-        parts.push(processRowHtml({
-            kind: t.kind,
-            title: t.title,
-            summary: t.summary,
-            state: t.state,
-            bodyHtml: body.join('')
-        }));
+    // ★ 覆盖前先快照"用户手动展开过"的行（data-key）。
+    //   为什么必须做：这里是**每帧整体重建**过程区（innerHTML = ...），
+    //   重建会丢掉 toggleProcessRow 加上的 .is-open —— 表现为"每来一段新内容，
+    //   已展开的思考行又被折叠，用户要反复点开"（用户实测）。所以重建后要补回 is-open。
+    const openKeys = new Set();
+    for (const row of host.querySelectorAll('.process-row.is-open')) {
+        const k = row.getAttribute('data-key');
+        if (k) openKeys.add(k);
     }
 
     host.innerHTML = parts.join('');
+
+    // ★ 恢复展开态：只补回快照里出现过的 key。
+    //   新出现的行不在快照里 → 保持默认收起，符合"只有用户点开过的才保持展开"。
+    if (openKeys.size) {
+        for (const row of host.querySelectorAll('.process-row')) {
+            if (!openKeys.has(row.getAttribute('data-key'))) continue;
+            row.classList.add('is-open');
+            const head = row.querySelector('.process-row-head');
+            if (head) head.setAttribute('aria-expanded', 'true');
+        }
+    }
+    // ★ 总览行的 is-expanded 在**宿主** .turn-process 上，重建 innerHTML 不会清掉它
+    //   （只换子节点），所以手机端的整体展开态天然保留；但总览元素本身是新造的、
+    //   aria-expanded 默认 false，这里同步一下，免得辅助技术读到"已收起"与视觉不符。
+    const summaryEl = host.querySelector('.turn-summary');
+    if (summaryEl) summaryEl.setAttribute('aria-expanded', host.classList.contains('is-expanded') ? 'true' : 'false');
+
     // 自动滚到底：流式输出时用户视线在底部，不滚的话新内容会出现在屏幕外
     elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
 }

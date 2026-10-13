@@ -64,7 +64,7 @@ function prefixesOverlap(a, b) {
 
 /**
  * @param {object} opts
- * @param {string} opts.modsDir  插件根目录（web/mods）
+ * @param {string} opts.modsDir  插件根目录（2026-10 起是项目根的 mods/）
  * @param {string[]} opts.hostRoutePrefixes 宿主自己已占用的 /api 前缀（撞名拒绝用）
  * @param {Function} opts.jsonResponse  宿主统一的 JSON 回包（签名同 serve.mjs 的）
  * @param {Function} opts.readJsonBody  宿主统一的 JSON 请求体解析

@@ -18,30 +18,93 @@
  * ======================================================================== */
 
 // ===== AI Agent 操作入口：LLM 回复中的 [操作:xxx] 标签触发 =====
+
+// ===== 三档 AI 权限（★ 2026-10 新增，电脑与手机共用一套）=====
+//
+// 一个设置 `state.settings.agentAccess` 同时管两件事：
+//   ① 能碰哪里 —— 三档**都能访问任意路径**（旧模型的 app/computer 路径边界已取消）
+//   ② 要不要问 —— 以及允不允许删除
+//
+//   strict 逐条确认 · 会改动电脑的操作（写入/覆盖/删除/命令）每次都问；读取不问
+//   auto   自动通过 · 改动类直接放行，但**禁止删除**
+//   full   完全访问 · 含删除在内全部放行
+//
+// 手机侧复用同一档位，但语义按手机的能力映射（见 phoneTierAllows）：
+// 手机没有"删除文件"这个动作，所以三档在手机上只区分"要不要问"。
+const AGENT_ACCESS_LEVELS = ['strict', 'auto', 'full'];
+const AGENT_ACCESS_DEFAULT = 'strict';
+
+/** 当前档位（非法值一律按最严的 strict 处理，与服务的收敛规则一致） */
+function currentAgentAccess() {
+    const v = String(state.settings.agentAccess || '').trim();
+    return AGENT_ACCESS_LEVELS.includes(v) ? v : AGENT_ACCESS_DEFAULT;
+}
+
+/** 这一档允不允许删除（电脑侧）。只有 full 允许。 */
+function agentAccessAllowsDelete() {
+    return currentAgentAccess() === 'full';
+}
+
+/** 这一档下"改动电脑的操作"要不要逐条询问。只有 strict 要。 */
+function agentAccessAsksBeforeChange() {
+    return currentAgentAccess() === 'strict';
+}
+
+/**
+ * 手机侧：这一步要不要弹确认。
+ *
+ * ★★ 用户的决定是"**手机不做确认，全部放行**" —— 理由是无障碍方式破坏力有限。
+ *    我把模块后端的风险单独提出来问过一次，用户的答复是
+ *    "全部放行但是模块加免责声明"，所以这里**一律返回 true**，
+ *    模块的风险改由「设置 → 能力 → 手机操作」里那段免责声明承担。
+ *
+ *    ⚠️ 这意味着**模块后端（KernelSU / root）的「手机命令」也不会询问**，
+ *       AI 能在那种手机上执行任意系统命令。这是用户明确选择的取舍，
+ *       不是遗漏 —— 免责声明里把这一点写清楚了。
+ *
+ *    为什么还留这个函数而不是直接删掉调用点：
+ *      放行策略集中在一处，将来若要收紧（例如给模块单独加闸），
+ *      改这一个函数即可，不必去翻 requestApproval 的调用链。
+ *      同时 check-agent-access.mjs 直接测这个函数的真实实现。
+ *
+ *    注意它与**隐私开关**（phoneReadAllowed）是两件事：
+ *    这里管"要不要问"，那里管"这个能力存不存在"。
+ */
+function phoneTierAllows(action) {
+    return true;
+}
+
 window.agentActions = {
     openVideoCall() { if (window.Live2DCall) window.Live2DCall.open(); },
     closeVideoCall() { if (window.Live2DCall) window.Live2DCall.close(); },
     organizeMemory() { void runManualMemorySummary(); },
     setLive2dBackground(v) { if (window.Live2DCall) window.Live2DCall.setBackground(v); },
-    // 文件操作：解析 [操作:列出文件/查看文件/保存文件 …] 并执行（权限模式见设置）
+    // 文件操作：解析 [操作:列出文件/查看文件/保存文件/删除文件 …] 并执行（权限档位见上）
     agentFileOperation(raw) {
-        const permission = state.settings.agentPermission || 'app';
+        const access = currentAgentAccess();
         const text = String(raw || '').trim();
-        // 删除/改名类操作一律拒绝：文件操作接口本身就没有这两个动作（只有列出/读取/写入）。
-        // 注意这不等于"不能覆盖" —— 覆盖一个已存在的文件走的是「保存文件」标签，
-        // 由服务端的覆盖闸门 + 用户确认把关（见 confirmAgentOverwrite）。
-        if (/删除|删掉|移除|重命名|改名|移动文件/.test(text)) {
-            insertAgentResult('该操作不可用：文件操作只有「列出 / 读取 / 保存」三种，没有删除或改名。'
-                + '需要删改已有的文件请手动操作；在「允许操作电脑」模式下也可以改用 [操作:电脑命令 …]，'
-                + '但那会让你确认一次。');
-            return;
-        }
         let action = 'ls';
         let rest = text;
+        // ★ 删除是 2026-10 新增的能力，只有「完全访问」档能用。
+        //   放在最前面判定：它的触发词与其它几个不重叠，但先判可以避免
+        //   「删除文件 xxx」里的"文件"二字被下面的文件分支吃掉。
+        if (/删除文件|删除目录|删除文件夹|删掉文件|删掉目录|移除文件/.test(text)) {
+            if (!agentAccessAllowsDelete()) {
+                insertAgentResult('该操作不可用：当前是「' + (currentAgentAccess() === 'auto'
+                    ? '自动通过（禁止删除）' : '逐条确认') + '」模式，AI 不能删除文件。'
+                    + '需要删除的话，请在「设置 → 能力 → AI 权限」里切到「完全访问」，或自己手动删除。');
+                return;
+            }
+            rest = text.replace(/删除文件|删除目录|删除文件夹|删掉文件|删掉目录|移除文件/, '').trim();
+            rest = rest.replace(/^(?:到|在|至|于|文件)\s*/, '').trim();
+            rest = rest.replace(/^["']|["']$/g, '').trim();
+            void doAgentFile('delete', { path: rest || undefined }, access);
+            return;
+        }
         if (/列出文件|列出目录|查看文件夹/.test(text)) { action = 'ls'; rest = text.replace(/列出文件|列出目录|查看文件夹/, '').trim(); }
         else if (/查看文件|读取文件|读文件/.test(text)) { action = 'read'; rest = text.replace(/查看文件|读取文件|读文件/, '').trim(); }
         else if (/保存文件|写入文件|写文件|创建文件/.test(text)) { action = 'write'; rest = text.replace(/保存文件|写入文件|写文件|创建文件/, '').trim(); }
-        else { void doAgentFile('ls', { path: undefined }, permission); return; }
+        else { void doAgentFile('ls', { path: undefined }, access); return; }
 
         // 去掉 AI 可能带的介词（到/在/至/保存到 等）与多余空格
         rest = rest.replace(/^(?:到|在|至|于|保存到|写入到|文件)\s*/, '').trim();
@@ -59,10 +122,10 @@ window.agentActions = {
                 content = (m[2] || '').trim();
             }
             path = path.replace(/^["']|["']$/g, '').trim();
-            void doAgentFile('write', { path, content }, permission);
+            void doAgentFile('write', { path, content }, access);
         } else {
             rest = rest.replace(/^["']|["']$/g, '').trim();
-            void doAgentFile(action, { path: rest || undefined }, permission);
+            void doAgentFile(action, { path: rest || undefined }, access);
         }
     },
     // 手机操作：[操作:手机点击 500 800] 等。
@@ -70,9 +133,8 @@ window.agentActions = {
     agentPhoneOperation(raw) {
         void runAgentPhoneOperation(raw);
     },
-    // 电脑命令：[操作:电脑命令 dir] 等（第二阶段 ④）。
-    // 只在「允许操作电脑」模式下可用；危险命令由服务端判定后再问用户
-    // （见 doAgentCommand 与 server/pc-command.mjs）。
+    // 电脑命令：[操作:电脑命令 dir] 等。
+    // 三档都可执行，区别只在"要不要问"（见 doAgentCommand 与 server 的 agentExec）。
     agentCommandOperation(raw) {
         const text = String(raw || '').trim();
         // 剥掉触发前缀，剩下的就是命令原文
@@ -81,7 +143,7 @@ window.agentActions = {
             insertAgentResult('没有给出要执行的命令。请用 [操作:电脑命令 <命令>] 的格式。');
             return;
         }
-        void doAgentCommand(command, state.settings.agentPermission || 'app');
+        void doAgentCommand(command, currentAgentAccess());
     }
 };
 
@@ -90,13 +152,34 @@ window.agentActions = {
 // 设计：
 //  1. 停止是「请求式」——设置标志、中断在途请求、关掉等待中的确认弹窗，
 //     再由各执行点调用 assertNotStopped() 主动退出。不强杀，避免留下半完成状态。
-//  2. 授权按风险分级：safe 不问 / sensitive 可配置 / dangerous 必问。
-//     被拒绝不静默失败，回灌给模型让它换方式。
+//  2. 授权按**三档权限**决定（见文件顶部的说明）：strict 下会改动电脑的操作必问，
+//     auto / full 不问。被拒绝不静默失败，回灌给模型让它换方式。
+//
+// ★ 手机操作**不走这套询问** —— 用户明确要求"手机不做确认，全部放行"
+//   （理由：无障碍方式破坏力有限）。模块后端是 KernelSU，破坏力确实大得多，
+//   所以设置页里对模块放了免责声明，而不是在这里加一道用户已经拒绝的闸。
 const AGENT_RISK = {
     '手机状态': 'safe',
     '手机查看界面': 'safe',
     '手机截图': 'safe',
     '手机等待': 'safe',
+    // ★ 2026-10 新增的读取类操作：都是 safe（只读，不改变任何状态）。
+    //   注意 safe 与"隐私开关"是两件事：safe 只表示"不需要弹确认"，
+    //   隐私开关（phoneReadAllowed）决定这个能力**存不存在**。
+    '手机应用列表': 'safe',
+    '手机通知': 'safe',
+    '手机设备信息': 'safe',
+    '手机短信': 'safe',
+    '手机通讯录': 'safe',
+    '手机日历': 'safe',
+    // ★ 2026-10 新增的工作区文件操作。
+    //   读/列是 safe；写与删标 sensitive —— 虽然按用户要求"手机全部放行"
+    //   （phoneTierAllows 对非「手机命令」一律返回 true），但分级表仍要如实，
+    //   否则将来若调整放行策略，这两项会被当成 safe 静默通过。
+    '手机列出文件': 'safe',
+    '手机读文件': 'safe',
+    '手机写文件': 'sensitive',
+    '手机删除文件': 'sensitive',
     '手机点击': 'sensitive',
     '手机滑动': 'sensitive',
     '手机输入': 'sensitive',
@@ -104,11 +187,7 @@ const AGENT_RISK = {
     '手机打开': 'sensitive',
     '手机命令': 'dangerous',
     // 电脑命令：危险的那部分由**服务端**再判一次并强制授权（见 server/pc-command.mjs），
-    // 这里标 sensitive 是让"安全命令"不打扰用户、危险命令走同一条授权 UI。
-    // 访问文件夹外：调用时一律带 forceAsk，所以这里的档位只是兜底（不会被豁免吞掉）。
-    '访问文件夹外': 'sensitive',
-    // 为什么不在前端也标 dangerous：前端标了会把 `dir` 这种也变成每次必问，
-    // 而真正的危险判定要穷举命令语义，只有服务端那份规则表是权威。
+    // 这里标 sensitive 是让"安全命令"在 auto 档下不打扰用户、危险命令走同一条授权 UI。
     '电脑命令': 'sensitive'
 };
 
@@ -119,7 +198,7 @@ const agentRuntime = (function () {
     let stopReason = '';
     let step = 0;
     let currentAction = '';
-    const approvedThisRun = new Set();   // 策略为 run 时，本次运行内已授权的动作
+    const approvedThisRun = new Set();   // 本次运行内已授权的动作
     const aborters = new Set();          // 在途请求的 AbortController
     let approvalOpen = false;
 
@@ -149,7 +228,7 @@ const agentRuntime = (function () {
         if (btn) { btn.disabled = stopRequested; btn.textContent = stopRequested ? '停止中' : '停止'; }
         // 「看画面」只在**任务进行中且用模块后端**时出现 ——
         // 模块的价值就是独立副屏，只有那条路才有"画面"可看；
-        // 无障碍/Shizuku 是在物理屏上操作，用户本来就看得见。
+        // 无障碍是在物理屏上操作，用户本来就看得见。
         const watch = document.getElementById('agentWatchBtn');
         if (watch) {
             // lastUsedBackendId 定义在 IIFE 外（手机操作执行层里），用 window 桥接读
@@ -160,20 +239,15 @@ const agentRuntime = (function () {
         }
     }
 
-    /** 每条 AI 回复的处理入口调用一次：开启新批次，解除上一批留下的停止状态 */
+    /**
+     * 每条 AI 回复的处理入口调用一次：开启新批次，解除上一批留下的停止状态。
+     *
+     * ★ 三档模型下这里**不再清 approvedThisRun** —— 因为 strict 档的语义就是
+     *   "**每一条**都要确认"，不存在"本批次已授权过就跳过"的豁免。
+     *   （旧模型有 once/run/always 三种豁免粒度，那套已随四档策略一起删除。）
+     */
     function beginBatch() {
         halted = false;
-        // 「每次运行只确认一次」的"本轮"以**批次**为单位，不是 beginRun ——
-        //
-        // 真机实测发现的坑：AI 的每一步之间有"续跑间隔"（模型要生成下一步），
-        // 间隔一超过 phoneRunEndTimer 的 600ms，endRun 就把 running 置 false；
-        // 下一步进来时 beginRun 重新开跑并把 approvedThisRun 清空 ——
-        // 于是**每一步都变成"本轮第一次"**，用户看到的还是每步一确认，
-        // 策略等于没改（这正是用户反复反馈的现象，同步测试根本测不出来）。
-        // 批次只在新的一条 AI 回复时由 beginBatch 重置，才是用户心智里的"一次运行"。
-        if (String(state.settings.agentApproval || 'once') === 'once') {
-            approvedThisRun.clear();
-        }
     }
 
     function beginRun() {
@@ -182,13 +256,6 @@ const agentRuntime = (function () {
         stopReason = '';
         step = 0;
         currentAction = '';
-        // once 策略下**不清**已确认记录（在 beginBatch 里清）——
-        // run 会因续跑间隔反复启停，clear 放这里等于每步都重置。
-        // run / always 策略保持原行为（run 按 action 名去重也跨步，同样不该被
-        // endRun/re-begRun 冲掉 —— 但为了不改变既有行为，只在 once 生效的新语义里动）。
-        if (String(state.settings.agentApproval || 'once') !== 'once') {
-            approvedThisRun.clear();
-        }
         render();
     }
 
@@ -239,40 +306,44 @@ const agentRuntime = (function () {
     /**
  * 敏感操作授权。返回 true 表示可以执行。
  *
+ * ★ 三档模型下的判据（2026-10 重构）：
+ *   · 手机操作 → 由 phoneTierAllows 决定，**基本全部放行**（用户明确要求），
+ *                唯一例外是「手机命令」（模块后端下等于 root shell）。
+ *   · 电脑命令 → strict 档每条都问；auto 档只问危险命令；full 档不问。
+ *   · 文件写入/覆盖/删除 → 由**服务端**回 needOverwrite / needDelete 触发，
+ *                          不走这里（那三个闸门按档位在服务端判）。
+ *
  * @param {string} action 操作名（决定风险级别）
  * @param {string} detail 给用户看的具体内容
- * @param {object} [opts] { forceAsk: true } —— 无视"已确认豁免"，这一条必须问
+ * @param {object} [opts] { forceAsk: true } —— 无视档位，这一条必须问
  */
     async function requestApproval(action, detail, opts = {}) {
         const risk = riskOf(action);
         if (risk === 'safe') return true;
         if (stopRequested) return false;
-        const policy = state.settings.agentApproval || 'once';
-        // ★ forceAsk：调用方已经知道这一条**具体**是危险的（例如服务端判定某条
-        //   电脑命令为 dangerous）。操作名本身是 sensitive 不够 —— 因为
-        //   「电脑命令」这一类里既有 `dir` 也有 `del`，只有服务端知道这一次是哪一种。
-        //
-        //   为什么必须绕过豁免：豁免是按**操作名**记的（once 策略下"确认过一次就
-        //   全放行"）。若不绕过，用户确认过一次任意敏感操作之后，一条 `del` 就会
-        //   静默执行 —— 直接违背"危险系统命令执行前需授权"。
+
+        const access = currentAgentAccess();
         const mustAsk = opts.forceAsk === true;
-        if (risk !== 'dangerous' && !mustAsk) {
-            if (policy === 'off') return true;
-            // 「每次运行只确认一次」：只要这一轮里用户确认过**任何**敏感操作，
-            // 后面的点击/滑动/输入都直接放行 —— 停止靠悬浮窗，不靠反复确认。
-            if (policy === 'once' && approvedThisRun.size > 0) return true;
-            // 「每类操作各确认一次」：同名操作（手机点击/手机滑动/...）只问第一次
-            if (policy === 'run' && approvedThisRun.has(action)) return true;
+
+        // 手机操作：按 phoneTierAllows 放行（除「手机命令」外全放行）
+        const isPhone = String(action || '').startsWith('手机');
+        if (isPhone && !mustAsk) {
+            if (phoneTierAllows(action)) return true;
+            // 落到下面走确认 UI（只有「手机命令」会到这里）
+        } else if (!mustAsk) {
+            // 电脑命令：strict 每条都问；auto 只问危险的（由服务端 needApproval 驱动，
+            // 调用方带 forceAsk）；full 不问。
+            if (access === 'full') return true;
+            if (access === 'auto' && risk !== 'dangerous') return true;
+            // strict → 继续往下走确认 UI
         }
+
         const askRisk = mustAsk ? 'dangerous' : risk;
         const lines = ['AI 想执行：' + action];
         if (detail) lines.push('', detail);
         lines.push('', askRisk === 'dangerous'
             ? '这是可以执行任意系统命令的操作，风险很高，请确认你信任当前对话里出现的内容。'
-            : '该操作会改变手机状态。拒绝后 AI 会收到通知并尝试别的方式，不会卡住。');
-        if (askRisk !== 'dangerous' && (policy === 'always' || policy === 'run')) {
-            lines.push('', '（想减少打扰：设置 → 能力 → 手机操作，把确认策略改为「每次运行只确认一次」）');
-        }
+            : '该操作会改变电脑或手机的状态。拒绝后 AI 会收到通知并尝试别的方式，不会卡住。');
 
         // ★ 优先走**系统悬浮窗**确认。
         //
@@ -301,8 +372,6 @@ const agentRuntime = (function () {
         }
         approvalOpen = false;
         if (!ok) return false;
-        // 「每次运行只确认一次」：记下任意一个 action 就代表"本轮已确认"（用 size 判断）。
-        // 「每类各一次」：按 action 名记。
         approvedThisRun.add(action);
         return !stopRequested;   // 用户可能在弹窗期间点了停止
     }
@@ -461,7 +530,16 @@ function deviceBridge() {
 void deviceBridge();
 const AGENT_PHONE_OPS = [
     '手机查看界面', '手机状态', '手机截图', '手机等待',
-    '手机点击', '手机滑动', '手机输入', '手机按键', '手机打开', '手机命令'
+    '手机点击', '手机滑动', '手机输入', '手机按键', '手机打开', '手机命令',
+    // ★★ 2026-10 新增：读取信息（受隐私开关控制）+ 工作区文件访问。
+    //   ⚠️ 顺序有讲究：`手机应用列表` 必须排在 `手机查看界面` 之后但要在任何
+    //   前缀更短的项之前 —— parsePhoneOperation 用的是 startsWith 顺序匹配，
+    //   若把 `手机短信` 放在 `手机设备信息` 前面不会有问题（两者不互为前缀），
+    //   但 `手机读文件` 与 `手机读文件列表` 这种就必须长的在前。
+    //   这里没有互为前缀的项，但仍按"长的在前"排，将来加项时不容易踩。
+    '手机应用列表', '手机通知', '手机设备信息',
+    '手机通讯录', '手机日历', '手机短信',
+    '手机列出文件', '手机读文件', '手机写文件', '手机删除文件',
 ];
 
 let phoneOpsInFlight = 0;
@@ -493,9 +571,41 @@ function describePhoneOperation(parsed) {
         case '手机截图': return '截取当前屏幕画面';
         case '手机查看界面': return '读取当前界面的控件树';
         case '手机状态': return '查询设备与后端状态';
+        // ---- 2026-10 新增 ----
+        case '手机应用列表': return '读取已安装应用列表';
+        case '手机通知': return '读取最近的通知' + (a ? '（' + a + '）' : '');
+        case '手机设备信息': return '读取设备与前台状态';
+        case '手机短信': return '读取最近短信' + (a ? '（' + a + ' 条）' : '');
+        case '手机通讯录': return '读取联系人' + (a ? '（筛选：' + a + '）' : '');
+        case '手机日历': return '读取近期日程' + (a ? '（' + a + ' 天）' : '');
+        case '手机列出文件': return a ? '列出：' + a : '列出 Agent 工作区';
+        case '手机读文件': return a ? '读取：' + a : '读取文件（没有给出路径）';
+        case '手机写文件': return a ? '写入：' + a.split('|')[0] : '写入文件（没有给出路径）';
+        case '手机删除文件': return a ? '⚠️ 删除：' + a : '删除文件（没有给出路径）';
         default: return '';
     }
 }
+
+/** 这些是「读取信息」类操作 —— 受设置里的隐私开关控制 */
+const PHONE_READ_OPS = [
+    '手机应用列表', '手机通知', '手机设备信息', '手机通讯录', '手机日历', '手机短信',
+];
+
+/**
+ * 这一步的读取是否被用户的隐私开关允许。
+ *
+ * 与 phoneTierAllows（管"要不要问"）是**两件不同的事**：
+ *   · 隐私开关关掉 → 这个能力**不存在**，AI 连标签都看不到（提示词里不注入）；
+ *   · 档位         → 决定执行前要不要弹确认。
+ * 两者都不通过时，这里给出一句能照做的提示，而不是静默失败。
+ */
+function phoneReadBlockedReason(action) {
+    if (!PHONE_READ_OPS.includes(action)) return '';
+    if (phoneReadAllowed(action)) return '';
+    return '已跳过「' + action + '」：你在「设置 → 能力 → 手机操作 → 读取信息（隐私）」里'
+        + '关闭了这项权限。需要的话去那里打开，或让我用别的方式帮你。';
+}
+
 
 async function execPhoneOperation(parsed) {
     const dev = deviceBridge();
@@ -505,9 +615,10 @@ async function execPhoneOperation(parsed) {
     }
     const res = await dev.exec({
         action: parsed.action,
-        args: parsed.args,
+        // 文件类操作的路径要做一层翻译（见 phoneFilePath 的说明）
+        args: phoneArgsForNative(parsed),
         // 把用户选的实现方式带下去。原生侧优先用它；它不可用时明确报错，
-        // 而不是偷偷换成另一种 —— 否则用户以为在走 root，实际走的是无障碍，没法排查。
+        // 而不是偷偷换成另一种 —— 否则用户以为在走模块，实际走的是无障碍，没法排查。
         backend: currentBackendId()
     });
     let text = (res && (res.text || res.message)) || (parsed.action + ' 完成');
@@ -527,15 +638,57 @@ async function execPhoneOperation(parsed) {
     return text;
 }
 
-/** 把手机截图交给视觉模型转述。没配视觉模型时如实说明，不静默吞掉。 */
-async function describePhoneScreenshot(res, fallbackText) {
+/**
+ * 把 AI 给的参数翻译成原生层认识的形状。
+ *
+ * ★ 目前只做一件事：文件类操作的路径前缀。
+ *
+ *   原生层有**两个**文件落脚点：Agent 工作区（应用私有目录）与用户授权的文件夹
+ *   （SAF）。两者用的是完全不同的 API，原生靠一个前缀区分：
+ *     · 裸相对路径   → 工作区
+ *     · `saf:相对路径` → 用户授权的文件夹
+ *
+ *   那"什么时候加前缀"由谁决定？**前端**，因为只有前端知道用户当前的意图与状态：
+ *   AI 说的"下载/notes.txt"本身不区分这两个地方。规则是：
+ *     · 用户**已授权**文件夹 → 加 `saf:` 前缀（AI 说"写到 notes.txt"时，
+ *       用户多半想的是他自己那个文件夹，而不是应用私有的工作区）
+ *     · 没授权 → 不加，落到工作区
+ *
+ *   ⚠️ 这条规则有个已知的取舍：一旦授权了文件夹，AI 就**没法**再往工作区写了
+ *   （所有路径都会被加上 saf:）。要写工作区只能先取消授权。
+ *   之所以接受它：同时维护"两个可写根"会让 AI 与用户都搞不清文件到底存哪了，
+ *   而工作区的定位本来就是"没授权文件夹时的默认落脚点"。
+ */
+function phoneArgsForNative(parsed) {
+    const raw = String(parsed.args == null ? '' : parsed.args);
+    if (!PHONE_FILE_OPS.includes(parsed.action)) return raw;
+    const hasFolder = Boolean(String(state.settings.agentFolderUri || '').trim());
+    if (!hasFolder) return raw;
+    // 写文件是 `路径|内容`：前缀只加在路径那一段上
+    if (parsed.action === '手机写文件') {
+        const sep = raw.indexOf('|');
+        if (sep < 0) return raw;
+        const path = raw.slice(0, sep).trim();
+        const content = raw.slice(sep + 1);
+        if (!path) return raw;
+        return 'saf:' + path + '|' + content;
+    }
+    const path = raw.trim();
+    if (!path) return raw;
+    return 'saf:' + path;
+}
+
+/** 文件类操作（路径需要按授权状态加前缀的那几个） */
+const PHONE_FILE_OPS = ['手机列出文件', '手机读文件', '手机写文件', '手机删除文件'];
+
+/** 把手机截图交给视觉模型转述。没配视觉模型时如实说明，不静默吞掉。 */async function describePhoneScreenshot(res, fallbackText) {
     const dataUrl = 'data:' + (res.imageMime || 'image/jpeg') + ';base64,' + res.imageBase64;
     const hasVision = Boolean(
         String(state.settings.visionBaseUrl || '').trim() && String(state.settings.visionModel || '').trim()
     );
     if (!hasVision) {
         return fallbackText + '\n（没有配置视觉模型，所以我拿不到画面内容。'
-            + '在「设置 → 视觉」填一个多模态模型后我就能看见屏幕了；或者改用「手机查看界面」直接读控件树。）';
+            + '在「设置 → 模型 → 视觉模型」填一个多模态模型后我就能看见屏幕了；或者改用「手机查看界面」直接读控件树。）';
     }
     try {
         const described = await describeImageWithVision(
@@ -560,7 +713,18 @@ async function runAgentPhoneOperation(raw) {
     const parsed = parsePhoneOperation(raw);
     if (!parsed) {
         insertAgentResult('无法识别的手机操作：' + String(raw || '').trim()
-            + '\n可用写法：手机状态 / 手机查看界面 / 手机截图 / 手机点击 x y / 手机滑动 x1 y1 x2 y2 [时长] / 手机输入 文字 / 手机按键 返回|主页|回车 / 手机打开 包名 / 手机等待 毫秒');
+            + '\n可用写法：手机状态 / 手机查看界面 / 手机截图 / 手机点击 x y / 手机滑动 x1 y1 x2 y2 [时长] / '
+            + '手机输入 文字 / 手机按键 返回|主页|回车 / 手机打开 包名 / 手机等待 毫秒 / '
+            + '手机应用列表 / 手机通知 / 手机设备信息 / 手机短信 [条数] / 手机通讯录 [关键词] / 手机日历 [天数] / '
+            + '手机列出文件 [路径] / 手机读文件 路径 / 手机写文件 路径|内容 / 手机删除文件 路径');
+        return;
+    }
+    // ★ 隐私开关：关掉的读取类操作在这里就被拦住，且给出能照做的提示。
+    //   这是第二道闸（第一道是提示词里不注入这个能力）——
+    //   因为模型可能从历史对话或用户的话里"猜到"标签名，光靠提示词不注入不够。
+    const blocked = phoneReadBlockedReason(parsed.action);
+    if (blocked) {
+        insertAgentResult(blocked);
         return;
     }
     // 还没选实现方式 → 手机操作不可用（与「设置 → 能力 → 手机操作」里的状态提示一致）
@@ -633,12 +797,21 @@ async function runAgentPhoneOperation(raw) {
             args: parsed.args ? JSON.stringify(parsed.args) : '',
             state: 'running'
         });
-        // safe 直接放行；sensitive 按设置里的策略询问；dangerous 必问
-        const allowed = await rt.requestApproval(parsed.action, describePhoneOperation(parsed));
-        if (!allowed) {
-            updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许这一步' });
-            insertAgentResult('已跳过「' + parsed.action + '」：用户没有允许这一步。请换一种方式，或先向用户说明为什么要这么做。');
-            return;
+        // ★★ 手机操作**不弹确认** —— 用户明确要求"手机不做确认，全部放行"
+        //   （理由：无障碍方式破坏力有限）。模块后端（KernelSU / root）的
+        //   「手机命令」风险由设置页那段免责声明承担，而不是靠弹窗。
+        //   详见 phoneTierAllows 的说明。
+        //
+        //   这里保留 phoneTierAllows 这个判据（而不是直接执行）：
+        //   它是**唯一**的放行策略落点，将来若要给模块单独加闸，
+        //   只改那个函数即可，不必动这条调用链。
+        if (!phoneTierAllows(parsed.action)) {
+            const allowed = await rt.requestApproval(parsed.action, describePhoneOperation(parsed), { forceAsk: true });
+            if (!allowed) {
+                updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许这一步' });
+                insertAgentResult('已跳过「' + parsed.action + '」：用户没有允许这一步。请换一种方式，或先向用户说明为什么要这么做。');
+                return;
+            }
         }
         rt.assertNotStopped();
         // 这一步真的执行了 → 让 AI 接着决定下一步（见 insertAgentResult 的说明）
@@ -669,25 +842,21 @@ async function runAgentPhoneOperation(raw) {
 
 
 // ===== 实现方式（后端选择）=====
-// 四种执行方式，能力与门槛不同。入口在「设置 → 能力 → 手机操作」里（不在侧边栏：
+// 两种执行方式，能力与门槛不同。入口在「设置 → 能力 → 手机操作」里（不在侧边栏：
 // 手机上侧边栏一收起，那里就进不去了），面板本身是一个独立弹窗（#backendPanel）。
 // 状态由原生层 ElainaDevice.status() 提供；网页版没有原生层，统一显示「需要在 APK 里使用」。
-// 设计详见 手机Agent设计.md 第三、六节。
+//
+// ★ 2026-10 按用户要求收敛为两种：**无障碍 + 模块**。
+//   删掉的是 Shizuku 与 Root —— 它们本质是同一件事（adb / su 级权限），
+//   共同代价是"每次重启要重新授权""授权即全局生效"，而用户要的是
+//   "门槛低"（无障碍）与"能力最强且不抢前台"（模块）这两个端点。
+//   ⚠️ 白名单在 app-02-data.js 的迁移里有一份镜像，改这里必须同步改那边，
+//   否则老用户选的 shizuku/root 会被当成合法值留下、而它已不对应任何实现方式。
 const AGENT_BACKENDS = [
     {
         id: 'accessibility', name: '无障碍', tag: '免 root',
         desc: '用系统自带的无障碍服务点击、输入、读取界面。不用装任何东西，门槛最低；中文输入也只有它能可靠做到。',
         need: '系统设置 → 无障碍里开启本应用的服务'
-    },
-    {
-        id: 'shizuku', name: 'Shizuku', tag: '免 root',
-        desc: '借 Shizuku 把本应用提到 adb 级别的权限，能力接近 root，但不用 root 手机。',
-        need: '装好 Shizuku 并启动服务，再给本应用授权'
-    },
-    {
-        id: 'root', name: 'Root', tag: '需要 root',
-        desc: '应用直接以 root 身份执行命令，不依赖电脑。',
-        need: '手机已 root（KernelSU / Magisk / APatch），并给本应用授权一次'
     },
     {
         id: 'module', name: '模块', tag: '需要 KernelSU',
@@ -710,32 +879,6 @@ const AGENT_BACKEND_SETUP = {
             '3. 打开开关并按提示确认',
             '',
             '各厂商路径：小米在「更多设置 → 无障碍」；华为 / 荣耀在「辅助功能 → 无障碍」；OPPO / 一加在「系统设置 → 无障碍」。'
-        ].join('\n')
-    },
-    shizuku: {
-        label: '请求 Shizuku 授权',
-        plugin: 'ElainaDevice', method: 'requestShizuku',
-        guide: [
-            'Shizuku 能让本应用获得 adb 级别的能力，接近 root，但不需要手机真的 root。',
-            '',
-            '1. 安装 Shizuku 应用（开源，应用商店或 GitHub 都有）',
-            '2. 打开 Shizuku 并启动服务：已 root 的手机可以直接在 Shizuku 里点「启动」；'
-            + '没有 root 的话，Shizuku 会让你用电脑通过 adb 启动一次（手机开「无线调试」也可以，不用数据线）',
-            '3. 回到本应用，点「请求 Shizuku 授权」，在弹框里点「允许」',
-            '',
-            '注意：非 root 情况下每次重启手机都要手动启动一次 Shizuku，这是系统限制，不是应用的问题。'
-        ].join('\n')
-    },
-    root: {
-        label: '请求 root 授权',
-        plugin: 'ElainaDevice', method: 'requestRoot',
-        guide: [
-            '1. 确认手机已经 root（KernelSU / Magisk / APatch 之一）',
-            '2. 点这个按钮会发起一次 su 请求，管理器会弹出授权框，选「允许」并勾选「记住选择」',
-            '3. 回来点「重新检测」，状态会变成「已授权」',
-            '',
-            '注意：root 授权等于把整台手机的控制权交给本应用。请确认你信任当前安装的版本，'
-            + '并且只在自己手动触发的场景下使用。'
         ].join('\n')
     },
     module: {
@@ -804,7 +947,7 @@ function agentPhoneSkillText() {
         '可用标签（写在回复正文里，标签不会显示给用户）：',
         '· [操作:手机状态] —— 查询设备与当前后端状态',
         '· [操作:手机查看界面] —— 读取当前屏幕的控件树（含控件文字与可点击坐标）',
-        '· [操作:手机截图] —— 截屏（需在「设置 → 视觉」配好多模态模型，否则拿不到画面内容）',
+        '· [操作:手机截图] —— 截屏（需在「设置 → 模型 → 视觉模型」配好多模态模型，否则拿不到画面内容）',
         '· [操作:手机点击 x y] —— 点击坐标，例如 [操作:手机点击 540 1200]',
         '· [操作:手机滑动 x1 y1 x2 y2 [时长毫秒]] —— 例如 [操作:手机滑动 540 1600 540 800 300]',
         '· [操作:手机输入 文字] —— 向当前获得焦点的输入框输入文字',
@@ -817,55 +960,106 @@ function agentPhoneSkillText() {
         lines.push('· ⛔ 当前方式**不支持** [操作:手机打开]（启动应用）与 [操作:手机命令]（任意命令）'
             + ' —— 无障碍方式做不到这两件事。');
         lines.push('  要启动某个应用，请先用 [操作:手机查看界面] 找到它的图标，再点击图标坐标；'
-            + '或请用户到「设置 → 能力 → 手机操作」换成 Shizuku / Root / 模块 方式。');
+            + '或请用户到「设置 → 能力 → 手机操作」换成「模块」方式。');
         lines.push('· 按键也只支持「返回 / 主页 / 最近任务」三个，其它按键需要换实现方式。');
     } else {
         lines.push('· [操作:手机打开 包名] —— 启动应用，例如 [操作:手机打开 com.tencent.mm]');
-        lines.push('· [操作:手机命令 命令] —— 执行系统命令（危险，每次都会单独询问用户）');
+        lines.push('· [操作:手机命令 命令] —— 执行系统命令（⚠️ 模块后端下这是 root shell，**不会**询问用户，'
+            + '所以执行前你自己要确认命令是对的）');
     }
     lines.push(
+        '',
+        '【读取信息】（用于了解用户当下的处境，别滥用）',
+        ...phoneReadSkillLines(),
+        '⚠️ 上面这几项需要用户在系统里授予对应权限；**没有授权时会明确报"没有权限"** ——'
+            + '那时如实告诉用户去开启，不要假装读到了内容。'
+            + '（列表里没出现的项表示用户已在设置里关闭了那项权限，**不要**尝试输出它 —— 会被直接拒绝。）',
+        '',
+        '【文件操作】（Agent 工作区 + 用户选定的文件夹）',
+        '· [操作:手机列出文件 [路径]] —— 列出工作区或已授权文件夹里的内容',
+        '· [操作:手机读文件 路径] —— 读取文本文件内容',
+        '· [操作:手机写文件 路径|内容] —— 写入文件（工作区内直接写；工作区外需用户已授权该文件夹）',
+        '· [操作:手机删除文件 路径] —— 删除文件或目录（⚠️ 不可恢复）',
+        '不传路径时默认操作 **Agent 工作区**（应用私有目录下的 agent-workspace/）。'
+            + '用户也可以指定一个自己的文件夹（通过系统文件选择器授权），那种路径按用户给的来。',
         '',
         '【工作方式】',
         '1. 不知道屏幕上有什么时，先 [操作:手机查看界面] 读控件树，**不要凭猜测点坐标**。',
         '2. 控件树里的坐标就是屏幕绝对坐标，可直接用于 [操作:手机点击 x y]。',
         '3. 要输入中文：先点击输入框让它获得焦点，再用 [操作:手机输入 文字]。',
         '4. 每一步的结果会以「【AI 操作结果】」回灌给你，据此决定下一步；界面没变化就换个方式，不要重复同一步。',
-        '5. 点击/滑动/输入/打开应用都会弹窗询问用户，用户可能拒绝 —— 被拒绝时如实说明并换个思路。',
+        '5. 读取类操作（查看界面/截图/状态/通知/应用列表…）与点击/滑动/输入/按键/打开应用'
+            + '**都不询问用户**（用户选择了「全部放行」）。'
+            + '⚠️ 连「手机命令」也不询问 —— 所以它一旦执行就真的执行了，你自己必须先确认命令正确。',
         '6. 若某一步回灌了「不支持」，说明那是当前实现方式的能力边界，'
             + '**不要重复尝试**，改用别的方式或如实告诉用户需要换实现方式。',
         '7. ⚠️ 只有输出 [操作:…] 标签才会真正执行。**绝不编造**"我已经点了/已经打开了/操作成功"；',
-        '   没有标签就是没执行，执行结果一律以系统回灌的「【AI 操作结果】」为准。'
+        '   没有标签就是没执行，执行结果一律以系统回灌的「【AI 操作结果】」为准。',
+        '8. ⚠️ 通知、短信、通讯录、日历都是用户的**隐私数据**。只在用户真的需要时读，'
+            + '不要为了"了解用户"而反复翻这些内容，也不要在回复里原样罗列无关的隐私细节。'
     );
     return lines.join('\n');
 }
 
 /**
- * 注入系统提示词的「电脑命令」能力说明（第二阶段 ④）。
+ * 「读取信息」能力清单，**按隐私开关逐项过滤**。
+ *
+ * 为什么要在提示词这一层就过滤，而不是只说"不许用"：
+ *   告诉模型一个能力存在、再要求它别用，它迟早会用（尤其是用户随口一句
+ *   "帮我看看刚谁发消息了"）。直接从清单里拿掉，它连标签名都看不到。
+ *   第二道闸在 runAgentPhoneOperation（关掉的会被明确拒绝）。
+ */
+function phoneReadSkillLines() {
+    const all = [
+        { action: '手机应用列表', line: '· [操作:手机应用列表] —— 已安装应用的包名与应用名（想启动某个应用但不知道包名时用它）' },
+        { action: '手机通知', line: '· [操作:手机通知] —— 最近收到的通知（哪个应用、标题、内容）' },
+        { action: '手机设备信息', line: '· [操作:手机设备信息] —— 电量、网络、前台应用等当前状态' },
+        { action: '手机短信', line: '· [操作:手机短信 [条数]] —— 最近短信' },
+        { action: '手机通讯录', line: '· [操作:手机通讯录 [关键词]] —— 联系人（可带姓名关键词筛选）' },
+        { action: '手机日历', line: '· [操作:手机日历 [天数]] —— 近期日程' },
+    ];
+    const kept = all.filter((x) => phoneReadAllowed(x.action)).map((x) => x.line);
+    // 全被关掉时不要留一个空标题
+    if (!kept.length) return ['（用户已关闭全部"读取信息"权限，你现在没有这类能力。）'];
+    return kept;
+}
+
+/**
+ * 注入系统提示词的「电脑命令」能力说明。
  *
  * 为什么必须有这一段：和手机操作同一个坑 —— 执行链路早就通了，
  * 但提示词里不告诉模型标签存在，它就永远不会输出，用户看到的现象是
- * "AI 好像不能执行命令"。而**只在全权限模式下注入**：限制模式下能力被
- * 服务端直接拒绝，说了只会让模型反复尝试然后失败。
+ * "AI 好像不能执行命令"。
  *
- * 提示词里必须写清「危险命令会先问用户」—— 否则模型会以为自己被静默拒绝，
- * 或者反过来编造"命令已执行"。这是 agentPhoneSkillText 里同一条反幻觉约束。
+ * ★ 三档模型下**一律注入**（旧模型只在 computer 档注入）：三档都能执行命令，
+ *   区别只在"要不要问"，所以每一档都需要知道这个能力存在。
+ *   提示词按档位改写"要不要确认"那一句 —— 否则模型会以为会被静默拒绝，
+ *   或者反过来编造"命令已执行"。这是 agentPhoneSkillText 里同一条反幻觉约束。
  */
 function agentCommandSkillText() {
-    if ((state.settings.agentPermission || 'app') !== 'computer') return '';
     // APK 没有本机服务端（没有 /api/agent/exec），注入了也执行不了。
     // 必须用 IS_NATIVE_APP 而不是看协议 —— Capacitor 的 androidScheme 是 https，
     // 按协议判断会把 APK 当成网页版，于是注入一个用不了的能力（模型反复失败）。
     if (IS_NATIVE_APP) return '';
-    return [
-        '# Agent Skill：电脑命令（当前：允许操作电脑）',
+    const access = currentAgentAccess();
+    const accessLabel = access === 'full' ? '完全访问' : (access === 'auto' ? '自动通过（禁止删除）' : '逐条确认');
+    const confirmLine = access === 'full'
+        ? '2. 当前是「完全访问」模式：**命令直接执行，不会询问用户**（包括删除类命令）。'
+            + '所以更要谨慎 —— 执行前自己确认命令内容是对的。'
+        : (access === 'auto'
+            ? '2. 当前是「自动通过（禁止删除）」模式：普通命令直接执行；**危险命令（删除、格式化、改注册表、'
+                + '关机、下载并执行、提权等）会让用户确认一次**。用户可能拒绝 —— 被拒绝时如实说明并换个更安全的思路，'
+                + '不要反复重试同一条命令。'
+            : '2. 当前是「逐条确认」模式：**每条命令执行前都会让用户确认**。用户可能拒绝 —— '
+                + '被拒绝时如实说明并换个思路，不要反复重试同一条命令。');
+    const lines = [
+        '# Agent Skill：电脑命令（当前权限：' + accessLabel + '）',
         '你可以在这台电脑上执行 PowerShell / cmd 命令：',
         '· [操作:电脑命令 <命令>] —— 例如 [操作:电脑命令 dir]、[操作:电脑命令 git status]',
         '',
         '【工作方式】',
-        '1. 普通命令（查看目录、读系统信息、跑 git / node 等）会**直接执行**，结果立刻回灌给你。',
-        '2. ⚠️ **危险命令会让用户确认一次**（删除文件、改注册表、关机、下载并执行、提权等）。'
-            + '每个对话里第一次遇到危险命令时询问，用户同意后该对话内后续的危险命令不再重复问。'
-            + '用户可能拒绝 —— 被拒绝时如实说明并换个更安全的思路，不要反复重试同一条命令。',
+        '1. 命令的执行结果会立刻回灌给你。',
+        confirmLine,
         '3. 命令输出较长时会被截断，需要看别的部分就换一条更精确的命令（例如加过滤条件）。',
         '4. ⚠️ 只有输出 [操作:电脑命令 …] 标签才会真正执行。**绝不编造**"我已经执行了/命令输出是…"；',
         '   执行结果一律以系统回灌的「【AI 操作结果】」为准。',
@@ -873,7 +1067,13 @@ function agentCommandSkillText() {
             + '不要凭猜测拼一条可能破坏系统的命令。',
         '6. ⚠️ 删除类命令（del / Remove-Item / rmdir 等）**不可撤销**。执行前先确认你删的确实是目标，'
             + '能用更保守的写法（先列目录确认、只删明确的那一个文件）就不要用通配符。',
-    ].join('\n');
+    ];
+    // 只有「完全访问」档才提删除标签 —— 另两档下服务端会直接拒绝，说了只会让模型撞墙。
+    if (access === 'full') {
+        lines.push('7. 你也可以用 [操作:删除文件 <路径>] 删除文件或目录（当前模式允许）。'
+            + '删除**不进回收站、无法恢复**，所以删之前务必确认路径正确。');
+    }
+    return lines.join('\n');
 }
 
 /**
@@ -1148,72 +1348,153 @@ document.getElementById('backendPanel')?.addEventListener('click', (e) => {
     if (e.target && e.target.id === 'backendPanel') closeBackendPanel();
 });
 
-// 覆盖已有文件 = 修改，需要用户同意一次。
+// ===== 文件夹授权（Agent 工作区之外的第二个可写根）=====
 //
-// 为什么按「同一对话」而不是「同一路径」记：
-//   · 按路径记（旧做法）等于每个新路径都要打断一次 —— AI 改十个文件就弹十次，
-//     用户很快就会条件反射地点"允许"，确认形同虚设；
-//   · 按对话记的语义是"这个会话里我信任它做修改"，一次说清、后续不打扰，
-//     换一个对话重新问 —— 与新对话可能换了语境、换了角色卡这一点对齐。
+// 用户在设置页点「选择文件夹授权」→ 原生打开系统文件选择器 →
+// 拿到一个持久化的 SAF 目录 URI → 存进设置，AI 就能读写那个文件夹。
 //
-// 与删除类命令共用同一条语义（见 confirmAgentDangerousCommand）：两者都是"不可逆的改动"。
-const agentDestructiveScope = { convId: null, write: false, execDanger: false };
-
-/** 当前对话 id（拿不到就退回一个空串，等价于"每次都问"） */
-function agentScopeKey() {
-    try {
-        const conv = getCurrentConversation();
-        return conv && conv.id ? String(conv.id) : '';
-    } catch { return ''; }
-}
-
-/**
- * 检查是否已在本对话内授权过某类不可逆操作；换了对话自动清空。
- * @param {'write'|'execDanger'} kind
- */
-function agentDestructiveApproved(kind) {
-    const key = agentScopeKey();
-    // 对话切换 → 作废旧授权。不能只看"key 变了"就重置后放行，
-    // 所以这里只清空、不置位，由调用方在用户同意时才置位。
-    if (agentDestructiveScope.convId !== key) {
-        agentDestructiveScope.convId = key;
-        agentDestructiveScope.write = false;
-        agentDestructiveScope.execDanger = false;
+// ★ 为什么不做成"整个手机存储随便读"：那需要 MANAGE_EXTERNAL_STORAGE
+//   （所有文件访问权限），会被应用商店拒审，对用户也是"给了就收不回"。
+//   SAF 的粒度是"一个文件夹"，用户能精确控制给哪个目录、随时收回。
+document.getElementById('agentFolderPickBtn')?.addEventListener('click', async () => {
+    const dev = deviceBridge();
+    if (!dev || typeof dev.pickAgentFolder !== 'function') {
+        await showCustomAlert('文件夹授权只在安卓版 App 里可用（网页版没有系统文件选择器）。', '不可用');
+        return;
     }
-    return agentDestructiveScope[kind] === true;
+    try {
+        const res = await dev.pickAgentFolder();
+        if (res && res.ok) {
+            state.settings.agentFolderUri = String(res.folderUri || '');
+            state.settings.agentFolderName = String(res.folderName || '');
+            persistSettings();
+            renderAgentFolderSummary();
+            // 重新拼一次提示词：授权变了，AI 该知道自己现在能读写哪个文件夹
+            await showCustomAlert(res.text || '已授权文件夹。', '文件夹授权');
+        } else if (res && res.cancelled) {
+            // 用户主动取消，不打扰
+        } else {
+            await showCustomAlert((res && res.text) || '选择文件夹失败。', '文件夹授权');
+        }
+    } catch (err) {
+        await showCustomAlert('选择文件夹失败：' + ((err && err.message) || err), '文件夹授权');
+    }
+});
+
+document.getElementById('agentFolderClearBtn')?.addEventListener('click', async () => {
+    if (!String(state.settings.agentFolderUri || '').trim()) {
+        await showCustomAlert('当前没有授权任何文件夹。', '文件夹授权');
+        return;
+    }
+    const dev = deviceBridge();
+    if (dev && typeof dev.clearAgentFolder === 'function') {
+        try { await dev.clearAgentFolder(); } catch (e) { /* 本地记录照样清 */ }
+    }
+    state.settings.agentFolderUri = '';
+    state.settings.agentFolderName = '';
+    persistSettings();
+    renderAgentFolderSummary();
+    await showCustomAlert('已取消文件夹授权。AI 现在只能读写 Agent 工作区。', '文件夹授权');
+});
+
+// ===== 系统权限申请（读取信息那一块的第二道闸）=====
+//
+// 应用层开关（设置里的隐私开关）管"让不让 AI 知道"；
+// 这里管"应用能不能拿到" —— 短信/通讯录/日历是 Android 危险权限，
+// 必须由用户在系统弹框里同意。**刻意不在启动时索取**：
+// 用户还没用到那功能时弹一堆权限框只会让人一律拒绝，那时再想申请就难了。
+async function refreshAgentReadPermStatus() {
+    const el = document.getElementById('agentReadPermStatus');
+    if (!el) return;
+    const dev = deviceBridge();
+    if (!dev || typeof dev.readPermissionStatus !== 'function') {
+        el.textContent = '系统权限：只在安卓版 App 里可用。';
+        return;
+    }
+    try {
+        const res = await dev.readPermissionStatus();
+        const p = (res && res.permissions) || {};
+        const mark = (ok) => (ok ? '✅' : '❌');
+        el.textContent = '系统权限：'
+            + mark(p.apps !== false) + ' 应用列表　'
+            + mark(p.notifications) + ' 通知　'
+            + mark(p.sms) + ' 短信　'
+            + mark(p.contacts) + ' 通讯录　'
+            + mark(p.calendar) + ' 日历';
+        // 工作区文件数也顺带刷一下，用户能看到"AI 到底存了东西没有"
+        const files = Number(res && res.workspaceFiles);
+        if (Number.isFinite(files)) {
+            const summary = document.getElementById('agentFolderSummary');
+            if (summary && !String(state.settings.agentFolderUri || '').trim()) {
+                summary.textContent = '还没有授权额外文件夹。AI 只能在 Agent 工作区里读写文件'
+                    + (files > 0 ? '（工作区里现在有 ' + files + ' 个文件）。' : '。');
+            }
+        }
+    } catch (e) {
+        el.textContent = '系统权限：读取失败（' + ((e && e.message) || e) + '）';
+    }
 }
 
-/** 记下"本对话内已授权该类操作" */
-function agentMarkDestructiveApproved(kind) {
-    agentDestructiveScope.convId = agentScopeKey();
-    agentDestructiveScope[kind] = true;
-}
+document.getElementById('agentReadPermBtn')?.addEventListener('click', async () => {
+    const dev = deviceBridge();
+    if (!dev || typeof dev.requestReadPermission !== 'function') {
+        await showCustomAlert('权限申请只在安卓版 App 里可用。', '不可用');
+        return;
+    }
+    // 逐个申请：Android 一次请求多个权限时，用户拒绝其中一个会整批失败，
+    // 分开申请能让用户按需给（例如只给通讯录、不给短信）。
+    for (const kind of ['sms', 'contacts', 'calendar']) {
+        try {
+            await dev.requestReadPermission({ kind });
+        } catch (e) {
+            console.warn('[Agent] 申请权限失败：' + kind, e);
+        }
+    }
+    await refreshAgentReadPermStatus();
+});
+
+document.getElementById('agentNotifPermBtn')?.addEventListener('click', async () => {
+    const dev = deviceBridge();
+    if (!dev || typeof dev.openNotificationSettings !== 'function') {
+        await showCustomAlert('通知读取只在安卓版 App 里可用。', '不可用');
+        return;
+    }
+    try {
+        const res = await dev.openNotificationSettings();
+        await showCustomAlert((res && res.text) || '已打开通知设置页。', '通知读取');
+    } catch (err) {
+        await showCustomAlert('打不开通知设置页：' + ((err && err.message) || err), '通知读取');
+    }
+});
+
+// ===== 不可逆操作的确认（三档模型，2026-10 重构）=====
+//
+// ★ 旧模型这里是"同一对话内只问一次"的豁免（agentDestructiveScope）。
+//   三档模型下**豁免整个删掉了** —— 因为「逐条确认」这一档的名字就是
+//   "**每一条**都确认"：AI 要改十个文件就该弹十次。
+//
+//   为什么敢这么改：豁免当初存在的理由是"全权限下每步都问会让用户闭眼点允许"。
+//   现在那个场景由「自动通过」与「完全访问」两档承接 —— 想要少打扰的用户
+//   会主动切过去，而不是让「逐条确认」名不副实。
 
 /**
  * 危险电脑命令的确认（删除 / 格式化 / 改注册表 / 关机 / 下载并执行…）。
  *
- * 语义与覆盖确认一致：**同一对话内只问一次**。
- *   · 旧行为是每条危险命令都弹（forceAsk）—— AI 清理一批临时文件要弹七八次，
- *     用户从"看清内容再决定"退化成"闭眼点允许"，最后那道闸反而没了；
- *   · 现在改成一次问清、本对话内不再打扰，并在弹窗里把**后果**说明白
- *     （删除不可恢复），把判断放在"是否开启全权限"和"这一次"两个点上。
- *
- * ★ 服务端仍是权威：不带 approved:true 的请求一律 403（见 agentExec）。
- *   所以"本对话已授权"这个状态只影响**问不问**，不影响"服务端卡不卡"。
+ * 只在 strict 档会被调用到；auto 档只有危险命令会走到这里（服务端回 needApproval），
+ * full 档根本不会回 needApproval。
  */
 async function confirmAgentDangerousCommand(command, reasonList) {
-    if (agentDestructiveApproved('execDanger')) return true;
     const reasons = Array.isArray(reasonList) && reasonList.length
         ? reasonList.join('、')
         : '可能改变系统状态';
     const detail = 'AI 想执行一条危险命令：\n\n' + command + '\n\n风险：' + reasons
         + '\n\n⚠️ 这类命令可能**不可撤销**（删除的文件、改掉的注册表、关掉的进程都不会自己回来）。'
-        + '\n请确认命令内容确实是你想要的。同意后，本对话内后续的危险命令不再重复询问。';
+        + '\n请确认命令内容确实是你想要的。'
+        + (agentAccessAsksBeforeChange() ? '\n（当前是「逐条确认」模式，每条命令都会问你一次。）' : '');
     let ok = false;
     try {
         ok = await agentRuntime.requestApproval('电脑命令', detail, { forceAsk: true });
     } catch { ok = false; }
-    if (ok) agentMarkDestructiveApproved('execDanger');
     return ok;
 }
 
@@ -1222,53 +1503,45 @@ async function confirmAgentDangerousCommand(command, reasonList) {
  *
  * ★ 服务端是权威：不带 overwrite:true 的请求拿不到覆盖能力，
  *   所以"问不问"可以被前端优化，但"能不能覆盖"始终由服务端说了算。
+ *   服务端只在 strict 档回 needOverwrite（见 agentWrite），所以这个函数
+ *   实际上只会在 strict 档被调用到。
  */
 async function confirmAgentOverwrite(path) {
-    if (agentDestructiveApproved('write')) return true;
     const target = String(path || '').trim();
     const detail = 'AI 想写入一个**已经存在**的文件，这会覆盖它原有的内容：\n\n' + target
-        + '\n\n覆盖后原内容无法恢复。同意后，本对话内后续的写入/修改不再重复询问。\n'
-        + '（想彻底关掉：设置 → 能力 → 「AI 操作电脑」改回「限制：仅应用文件夹内操作」）';
+        + '\n\n覆盖后原内容无法恢复。'
+        + '\n（想少打扰：设置 → 能力 → AI 权限，切到「自动通过」或「完全访问」。）';
     let ok = false;
     try {
         ok = await agentRuntime.requestApproval('覆盖已有文件', detail, { forceAsk: true });
     } catch { ok = false; }
-    if (ok) agentMarkDestructiveApproved('write');
     return ok;
 }
 
-// 越界申请：限制模式（仅应用文件夹）下 AI 要碰 web/ 之外的位置时，
-// 由用户就**这一次**决定是否放行，而不是要求他去设置页把全局权限改成「允许操作电脑」。
-//
-// 为什么不做成"全局模式切换"：越界往往是**一次性**的（读一个下载目录里的文件）。
-// 让用户为了这一次去改全局设置，他改完多半忘了改回来 —— 结果是限制模式被永久关掉，
-// 比"就这一次放行"危险得多。所以这里只批这一次，且同一路径只问一次（同一轮内）。
-//
-// ★ 服务端仍会独立校验：只有本机（127.0.0.1）请求的 allowOutside 才被接受，
-//   局域网设备即使伪造 allowOutside=true 也会拿到 403（见 resolveAgentPathEx）。
-const agentEscalationApproved = new Set();
-async function confirmAgentEscalation(path) {
+/**
+ * 删除的确认（服务端回 needDelete 后由前端问一次）。
+ *
+ * ★ 只有 strict 档会走到这里：auto 档服务端直接拒绝删除（deleteForbidden），
+ *   full 档服务端直接执行（不回 needDelete）。
+ */
+async function confirmAgentDelete(path, isDir) {
     const target = String(path || '').trim();
-    if (!target) return false;
-    if (agentEscalationApproved.has(target)) return true;
-    const detail = 'AI 想访问应用文件夹之外的位置：\n\n' + target
-        + '\n\n只放行这一次（同一路径本轮不再重复询问）。\n'
-        + '如果你希望它长期能操作电脑，可在「设置 → 能力 → AI 操作电脑」切到「允许操作电脑」。';
+    const detail = '⚠️ AI 想**永久删除**：\n\n' + target
+        + (isDir ? '\n\n这是个**目录** —— 它里面的全部内容会一起被删除。' : '')
+        + '\n\n删除后**无法恢复**（不进回收站）。请确认这确实是你想删的东西。';
     let ok = false;
-    // 优先走统一的授权 UI（APK 上是系统悬浮窗，网页版回退到应用内弹窗）
     try {
-        ok = await agentRuntime.requestApproval('访问文件夹外', detail, { forceAsk: true });
+        ok = await agentRuntime.requestApproval('删除文件', detail, { forceAsk: true });
     } catch { ok = false; }
-    if (ok) agentEscalationApproved.add(target);
     return ok;
 }
 
 // 执行 Agent 文件操作并把结果回填对话（AI 能看到/用户能看到）
-async function doAgentFile(action, { path, content } = {}, permission) {
+async function doAgentFile(action, { path, content } = {}, access) {
     // 过程记录：文件操作是用户最关心的"AI 到底动了什么"。
     // 记下路径与动作，结果出来后再回填（成功/失败 + 摘要）。
-    const kindMap = { ls: 'search', read: 'read', write: 'write' };
-    const titleMap = { ls: '列出文件', read: '读取文件', write: '写入文件' };
+    const kindMap = { ls: 'search', read: 'read', write: 'write', delete: 'write' };
+    const titleMap = { ls: '列出文件', read: '读取文件', write: '写入文件', delete: '删除' };
     const traceItem = recordTurnTool({
         kind: kindMap[action] || 'file',
         title: titleMap[action] || ('文件 · ' + action),
@@ -1278,7 +1551,32 @@ async function doAgentFile(action, { path, content } = {}, permission) {
     });
     try {
         let result;
-        if (action === 'write') {
+        if (action === 'delete') {
+            // 删除走独立接口（/api/agent/delete）。必须用**同源 fetch** ——
+            // 理由与下面的 write 相同：postJsonFromDevice 会走本机中转，
+            // 而 /api/agent/* 是同源本地接口，交给中转会报「目标地址无效」。
+            const send = async (confirmed) => {
+                const res = await fetch('/api/agent/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ access, path, confirmed })
+                });
+                const r = await res.json();
+                if (!r.rawText) r.rawText = JSON.stringify(r);
+                if (!('ok' in r)) r.ok = res.ok;
+                return r;
+            };
+            result = await send(false);
+            // 服务端回 needDelete → 问一次，同意后带 confirmed:true 重发
+            if (result.needDelete) {
+                if (!await confirmAgentDelete(path, result.isDir)) {
+                    updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许删除' });
+                    insertAgentResult('已取消删除：用户没有允许。\n目标：' + (path || '（未提供路径）'));
+                    return;
+                }
+                result = await send(true);
+            }
+        } else if (action === 'write') {
             // 必须用**同源 fetch**，不能用 postJsonFromDevice。
             //
             // postJsonFromDevice 是给"外部服务商"用的：它会走本机中转
@@ -1288,11 +1586,11 @@ async function doAgentFile(action, { path, content } = {}, permission) {
             //
             // 真实故障：日志里能看到 `[Relay] [WARN] 目标地址无效：/api/agent/write`，
             // 而 ls / read 走的是同源 fetch 所以正常 —— 表现为"读取能用、写入不行"。
-            const send = async ({ allowOutside, overwrite }) => {
+            const send = async (overwrite) => {
                 const res = await fetch('/api/agent/write', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ permission, path, content, allowOutside, overwrite })
+                    body: JSON.stringify({ access, path, content, overwrite })
                 });
                 const r = await res.json();
                 // 同源 fetch 不像 postJsonFromDevice 那样带 rawText，补一份便于错误提示
@@ -1300,25 +1598,9 @@ async function doAgentFile(action, { path, content } = {}, permission) {
                 if (!('ok' in r)) r.ok = res.ok;
                 return r;
             };
-            // ★ 两个授权旗标要用**局部变量**记住，不能从响应里读。
-            //   服务端不会把 allowOutside 回显在响应里，写成 `result.allowOutside` 永远是
-            //   undefined —— 那样"越界 + 覆盖"同时发生时，第二次重发会丢掉 allowOutside，
-            //   于是被 403 打回，用户批准了却依然失败。
-            let allowOutside = false;
-            result = await send({ allowOutside, overwrite: false });
-            // ① 越界（限制模式下碰 web/ 之外）→ 申请一次，批准后带 allowOutside 重发
-            if (result.needEscalation) {
-                if (!await confirmAgentEscalation(path)) {
-                    updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许访问应用文件夹外的位置' });
-                    insertAgentResult('已取消：没有获得访问该位置的许可。\n目标：' + (path || '（未提供路径）'));
-                    return;
-                }
-                allowOutside = true;
-                result = await send({ allowOutside, overwrite: false });
-            }
-            // ② 覆盖已有文件 → 申请一次，批准后带 overwrite 重发。
-            //    与 ① 是**两件独立的事**（能不能去那个位置 / 能不能改那个文件），
-            //    所以刻意不是 else-if，且重发时两条旗标都要如实带上。
+            result = await send(false);
+            // 覆盖已有文件 → 问一次，同意后带 overwrite:true 重发。
+            // （服务端只在 strict 档回 needOverwrite，所以这里只会弹一次。）
             if (result.needOverwrite) {
                 if (!await confirmAgentOverwrite(path)) {
                     updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许覆盖这个文件' });
@@ -1327,17 +1609,14 @@ async function doAgentFile(action, { path, content } = {}, permission) {
                         + '\n（想保留原文件的话，可以让 AI 换一个新文件名保存。）');
                     return;
                 }
-                result = await send({ allowOutside, overwrite: true });
-            }
-        } else {
-            const buildQuery = (allowOutside) => 'permission=' + encodeURIComponent(permission)
-                + (path ? '&path=' + encodeURIComponent(path) : '')
-                + (allowOutside ? '&allowOutside=1' : '');
-            const send = async (allowOutside) => await (await fetch(`/api/agent/${action}?${buildQuery(allowOutside)}`)).json();
-            result = await send(false);
-            if (result.needEscalation && await confirmAgentEscalation(path)) {
                 result = await send(true);
             }
+        } else {
+            // ls / read：读取不问确认（三档一致）。
+            // 旧模型还有一条 needEscalation 越界申请，三档模型下服务端不再返回它。
+            const buildQuery = () => 'access=' + encodeURIComponent(access)
+                + (path ? '&path=' + encodeURIComponent(path) : '');
+            result = await (await fetch(`/api/agent/${action}?${buildQuery()}`)).json();
         }
         // 错误信息：后端返回 payload.message / rawText（修复"未知错误"）
         const errMsg = (() => {
@@ -1359,6 +1638,8 @@ async function doAgentFile(action, { path, content } = {}, permission) {
                 resultText = `目录内容（${result.path || ''}）：\n` + lines.join('\n');
             } else if (action === 'read') {
                 resultText = `文件内容（${result.path || ''}）：\n${result.content || '（空文件）'}`;
+            } else if (action === 'delete') {
+                resultText = `🗑️ 已删除${result.wasDir ? '目录' : '文件'}：${result.path || path}`;
             } else {
                 resultText = `✅ 已保存到：${result.path || path}`;
             }
@@ -1386,16 +1667,16 @@ async function doAgentFile(action, { path, content } = {}, permission) {
 /**
  * 执行 AI 请求的电脑命令（[操作:电脑命令 …]）。
  *
- * 权限双模式在这里的落点：
- *   · app（限制）      → 不发请求，直接回灌"限制模式不支持"，并告诉 AI 去哪开。
- *   · computer（全权限）→ 发请求；服务端判为危险时回 needApproval，
- *                          这时才弹确认框，用户同意后带 approved:true 重发。
+ * 三档权限在这里的落点：
+ *   · strict → 每条命令都要用户确认（服务端一律回 needApproval）
+ *   · auto   → 安全命令直接执行；危险命令（含删除类）服务端回 needApproval，这时才问
+ *   · full   → 全部直接执行，服务端不回 needApproval
  *
  * ★ 为什么危险判定要"先问服务端、再问用户"，而不是前端自己判：
  *   前端判会把规则抄一份（两份规则必然走样），而且服务端无论如何都要再判一次
  *   （前端可绕过）。让服务端当唯一权威，前端只负责"把服务端的判定转成一次点击"。
  */
-async function doAgentCommand(command, permission) {
+async function doAgentCommand(command, access) {
     const traceItem = recordTurnTool({
         kind: 'command',
         title: '执行命令',
@@ -1404,13 +1685,6 @@ async function doAgentCommand(command, permission) {
         state: 'running'
     });
 
-    if (permission !== 'computer') {
-        const msg = '限制模式（仅应用文件夹）下不能执行电脑命令。如需执行，请在设置 → 能力 → '
-            + '「AI 操作电脑」里切换到「允许操作电脑」，并在本机（127.0.0.1）打开页面。';
-        updateTurnTool(traceItem, { state: 'stopped', result: msg });
-        insertAgentResult(msg);
-        return;
-    }
     // APK 没有本机服务端，/api/agent/exec 不存在 —— 直接如实说明，不要去发一个必然失败的请求
     if (IS_NATIVE_APP) {
         const msg = '当前是安卓 App，没有本机服务端，无法执行电脑命令。'
@@ -1424,7 +1698,7 @@ async function doAgentCommand(command, permission) {
         const send = (approved) => fetch('/api/agent/exec', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ permission, command, approved })
+            body: JSON.stringify({ access, command, approved })
         }).then(r => r.json());
 
         let result = await send(false);

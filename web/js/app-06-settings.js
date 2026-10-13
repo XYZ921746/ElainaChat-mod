@@ -96,16 +96,10 @@ function fillSettingsForm() {
     // 思考模式：开关 + 强度。用 syncThinkingModeControls() 统一回填，
     // 不在这里各写一遍 —— 回填逻辑分散就会有一天忘记同步新增的档位。
     syncThinkingModeControls();
-    elements.settingTtsProvider.value = state.settings.ttsProvider || 'edge';
+    elements.settingTtsProvider.value = state.settings.ttsProvider || 'mimo';
     document.getElementById('settingMinimaxApiKey').value = state.settings.minimaxApiKey || '';
     document.getElementById('settingMinimaxVoice').value = state.settings.minimaxVoice || '';
     document.getElementById('settingMinimaxModel').value = state.settings.minimaxModel || 'speech-2.8-hd';
-    document.getElementById('settingDoubaoApiKey').value = state.settings.doubaoApiKey || '';
-    document.getElementById('settingDoubaoAppId').value = state.settings.doubaoAppId || '';
-    document.getElementById('settingDoubaoToken').value = state.settings.doubaoToken || '';
-    document.getElementById('settingDoubaoCluster').value = state.settings.doubaoCluster || 'volcano_tts';
-    document.getElementById('settingDoubaoVoice').value = state.settings.doubaoVoice || 'zh_female_shuangkuaisisi_uranus_bigtts';
-    document.getElementById('settingDoubaoResourceId').value = state.settings.doubaoResourceId || 'seed-tts-2.0';
     document.getElementById('settingDashscopeTtsModel').value = state.settings.dashscopeTtsModel || 'qwen3-tts-flash';
     document.getElementById('settingDashscopeTtsVoice').value = state.settings.dashscopeTtsVoice || 'Cherry';
     document.getElementById('settingVisionBaseUrl').value = state.settings.visionBaseUrl || '';
@@ -133,21 +127,39 @@ function fillSettingsForm() {
     updateTtsProviderUI();
 
     document.getElementById('settingDashscopeApiKey').value = state.settings.dashscopeApiKey || '';
+    // 阿里百炼 ASR 的 Key：独立于语音输出（旧版共用，升级时一次性迁移）
+    document.getElementById('settingAsrApiKey').value = state.settings.asrApiKey || '';
     document.getElementById('settingDashscopeAsrBaseUrl').value = state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
     document.getElementById('settingDashscopeAsrModel').value = state.settings.dashscopeAsrModel || 'qwen3-asr-flash';
-    document.getElementById('settingMimoApiKey').value = state.settings.mimoApiKey || '';
-    document.getElementById('settingMimoBaseUrl').value = state.settings.mimoBaseUrl || 'https://api.xiaomimimo.com';
+    // MiMo TTS 凭据（独立于 ASR）。Key 默认空；接口地址固定在默认值里（界面上已删除该输入框）。
+    document.getElementById('settingMimoTtsApiKey').value = state.settings.mimoTtsApiKey || '';
+    // MiMo ASR 凭据（内部键名仍为 mimoApiKey / mimoBaseUrl：为兼容已存数据不改键名）
+    document.getElementById('settingMimoAsrApiKey').value = state.settings.mimoApiKey || '';
+    document.getElementById('settingMimoAsrBaseUrl').value = state.settings.mimoBaseUrl || 'https://api.xiaomimimo.com';
+    document.getElementById('settingMimoTtsModel').value = state.settings.mimoTtsModel || 'mimo-v2.5-tts';
+    document.getElementById('settingMimoTtsVoice').value = state.settings.mimoTtsVoice || 'mimo_default';
+    document.getElementById('settingMimoVoiceDesignPrompt').value = state.settings.mimoTtsVoiceDesignPrompt || '';
+    // 文件框不能程序化回填：清空控件，改用状态里保存的文件名/数据展示已存样本
+    const cloneInput = document.getElementById('settingMimoTtsCloneSample');
+    if (cloneInput) cloneInput.value = '';
+    updateMimoTtsCloneSampleStatus();
+    updateMimoTtsModelUI();
+    document.getElementById('settingOpenaiTtsBaseUrl').value = state.settings.openaiTtsBaseUrl || 'https://api.openai.com/v1';
+    document.getElementById('settingOpenaiTtsApiKey').value = state.settings.openaiTtsApiKey || '';
+    document.getElementById('settingOpenaiTtsModel').value = state.settings.openaiTtsModel || 'tts-1';
+    document.getElementById('settingOpenaiTtsVoice').value = state.settings.openaiTtsVoice || 'alloy';
     document.getElementById('settingMimoAsrModel').value = state.settings.mimoAsrModel || 'mimo-v2.5-asr';
     elements.settingAutoMemory.checked = Boolean(state.settings.autoMemory);
     elements.settingMemoryEvery.value = state.settings.memoryEvery || 6;
-    document.querySelectorAll('input[name="agentPermission"]').forEach(r => {
-        r.checked = (r.value === (state.settings.agentPermission || 'app'));
-    });
-    document.querySelectorAll('input[name="agentApproval"]').forEach(r => {
-        r.checked = (r.value === (state.settings.agentApproval || 'once'));
+    // ★ 三档 AI 权限（2026-10 起取代 agentPermission + agentApproval 两个设置）
+    document.querySelectorAll('input[name="agentAccess"]').forEach(r => {
+        r.checked = (r.value === currentAgentAccess());
     });
     const phoneToggle = document.getElementById('settingAgentPhoneEnabled');
     if (phoneToggle) phoneToggle.checked = state.settings.agentPhoneEnabled !== false;
+    fillAgentReadToggles();
+    renderAgentFolderSummary();
+    void refreshAgentReadPermStatus();
     syncAgentSectionsByDevice();
 
     renderCardSelect();
@@ -156,12 +168,10 @@ function fillSettingsForm() {
     renderScheduledTaskList();
     void refreshDataSettings();
     void refreshOverlayStatus();
-    // 日志查看器：设置页打开时让它出现并开始首次全量拉取。
-    // ★ 这一行不是死代码 —— 它是查看器的**显示入口**（删掉它查看器一行日志都
-    //   渲染不出来，实测踩到：check-log-viewer 6 项失败、渲染 0 行）。
-    //   之前引用的 logSettingsSection（日志设置块）已随那块 UI 删除，这里只留查看器本身。
-    try { if (window.LogViewer) window.LogViewer.show(); }
-    catch (e) { /* 查看器出问题不能影响设置页其它部分 */ }
+    // 日志查看器已从设置里搬走（2026-10 用户要求：日志单独成模块，入口在左侧 rail）。
+    // ★ 这里原先调 window.LogViewer.show() —— 那是它的**唯一显示入口**，
+    //   搬走后由 railLogBtn → window.LogViewer.open() 接手（见 app-07-init.js）。
+    //   不要在设置里再调 open()：那会让"打开设置"顺带弹出日志页。
 }
 
 
@@ -662,19 +672,94 @@ function syncAgentSectionsByDevice() {
     if (phoneSection) phoneSection.classList.toggle('hidden', !IS_MOBILE_DEVICE);
 }
 
+// ===== 手机「读取信息」隐私开关（★ 2026-10 新增）=====
+//
+// 用户要求："加个提示如果不想让 ai 知道太多信息请关闭对应权限"。
+// 六个开关各对应一类隐私数据，默认全开；关掉后 AI **连标签都看不到**
+// （见 app-03-agent.js 的 agentPhoneSkillText 与 phoneReadAllowed）——
+// 这是"根本没这个能力"，而不是"读了不说"，后者对用户毫无保障。
+//
+// 开关 id ↔ 设置字段 ↔ 手机操作名 三者的对应关系集中在下面这张表，
+// 避免在四个地方各写一遍字符串而漏掉一处。
+const AGENT_READ_TOGGLES = [
+    { id: 'settingAgentReadApps', key: 'agentReadApps', action: '手机应用列表', label: '已安装应用列表' },
+    { id: 'settingAgentReadNotifications', key: 'agentReadNotifications', action: '手机通知', label: '通知内容' },
+    { id: 'settingAgentReadDevice', key: 'agentReadDevice', action: '手机设备信息', label: '设备与前台状态' },
+    { id: 'settingAgentReadSms', key: 'agentReadSms', action: '手机短信', label: '短信' },
+    { id: 'settingAgentReadContacts', key: 'agentReadContacts', action: '手机通讯录', label: '通讯录' },
+    { id: 'settingAgentReadCalendar', key: 'agentReadCalendar', action: '手机日历', label: '日历' },
+];
+
+/** 把设置里的值刷到界面开关上 */
+function fillAgentReadToggles() {
+    for (const t of AGENT_READ_TOGGLES) {
+        const el = document.getElementById(t.id);
+        // 默认 true：老用户升级后这些能力是可用的（他们的设置里没有这些字段）
+        if (el) el.checked = state.settings[t.key] !== false;
+    }
+}
+
+/**
+ * 从界面开关读回一份设置补丁。
+ *
+ * ★ 元素不在时**保留原值**（而不是写 undefined / 漏掉键）：
+ *   设置页在电脑上会把整块「手机操作」隐藏（syncAgentSectionsByDevice），
+ *   将来若有人把这块 DOM 挪走或按需渲染，漏掉的键会让 state.settings
+ *   丢掉那个字段 —— 而 saveSettings 是**整体替换** state.settings 的，
+ *   丢一个键就等于把用户的开关重置回默认。所以这里显式兜底。
+ */
+function readAgentReadToggles() {
+    const patch = {};
+    for (const t of AGENT_READ_TOGGLES) {
+        const el = document.getElementById(t.id);
+        patch[t.key] = el ? el.checked : (state.settings[t.key] !== false);
+    }
+    return patch;
+}
+
+/**
+ * 某个读取类操作现在允许吗（供 app-03-agent.js 的分发与提示词用）。
+ *
+ * 找不到对应开关的操作（例如手机状态）一律放行 —— 那张表只列**隐私数据**，
+ * 界面/状态这类不涉及隐私的读取不该被这些开关误伤。
+ */
+function phoneReadAllowed(action) {
+    const t = AGENT_READ_TOGGLES.find((x) => x.action === action);
+    if (!t) return true;
+    return state.settings[t.key] !== false;
+}
+
+// ===== Agent 工作区 / 用户授权文件夹（★ 2026-10 新增）=====
+
+/** 把当前授权文件夹的状态刷到设置页文字上 */
+function renderAgentFolderSummary() {
+    const el = document.getElementById('agentFolderSummary');
+    if (!el) return;
+    const name = String(state.settings.agentFolderName || '').trim();
+    const uri = String(state.settings.agentFolderUri || '').trim();
+    if (uri) {
+        el.textContent = '已授权文件夹：' + (name || '（未命名）')
+            + ' —— AI 可以读写这个文件夹里的文件。';
+        el.style.color = '#059669';
+    } else {
+        el.textContent = '还没有授权额外文件夹。AI 只能在 Agent 工作区里读写文件。';
+        el.style.color = '#818cf8';
+    }
+}
+
 function openSettings() {
     fillSettingsForm();
     void refreshAuthStatus();
     // 每次打开设置都刷新插件列表：用户可能在服务运行期间往 web/mods/ 丢了新 zip，
     // 刷新一次就能看到（而不是要求他重启服务）
     void refreshModsList();
-    // 外观主题：同步选择器状态（模板卡片 + 深色三态）
+    // 外观主题：同步模板卡片选择态（深色切换已移到顶栏三段开关，
+    // 由 app-07-init.js 的 markThemeSeg 自行同步 —— 这里不再碰 #themeDarkMode，
+    // 否则会留下"HTML 里没有的 id"悬空引用）
     if (window.ElainaTheme) {
         window.ElainaTheme.renderPicker();
         window.ElainaTheme.markPicker();
-        const darkSel = document.getElementById('themeDarkMode');
-        if (darkSel) darkSel.value = window.ElainaTheme.darkMode();
-        // 让 theme.js 重新落一次 DOM —— 顺带刷新"跟随系统：当前为深色/浅色"的提示
+        // 重新落一次深色模式 DOM：让「跟随设备」在打开设置时取到最新的系统状态
         window.ElainaTheme.setDarkMode(window.ElainaTheme.darkMode());
     }
     elements.settingsOverlay.classList.remove('hidden');
@@ -683,6 +768,26 @@ function openSettings() {
 }
 
 // ==================== 插件（mod）设置栏 ====================
+
+// ===== 插件页的平台说明（★ 2026-10）=====
+//
+// 两个平台**装插件的方式根本不同**，共用一句说明必然误导一边：
+//   电脑版：有服务端，把 zip 丢进 mods/ 会自动解压安装；也能「上传安装」。
+//   APK   ：没有服务端、碰不到应用私有目录，**只能**「上传安装」。
+// 原来的文案只写了前者（"丢进 web/mods/ 即会自动安装"），安卓用户看了会去找
+// 一个根本不存在的目录 —— 这是"说了做不到"的典型。
+function applyModsPlatformHint() {
+    const el = document.getElementById('modsPlatformHint');
+    if (!el) return;
+    const common = '<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。'
+        + '拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。';
+    el.innerHTML = IS_NATIVE_APP
+        ? '可选功能的开关。安卓版没有本地服务端，装插件请点右上角<b>「上传安装」</b>选一个 zip；'
+            + '卸载点卡片上的 🗑。' + common
+        : '可选功能的开关。插件放在项目根的 <code class="px-1 rounded bg-white/60">mods/</code> 下，'
+            + '把 <code class="px-1 rounded bg-white/60">xxx.zip</code> 丢进去即会自动安装'
+            + '（也可以点右上角「上传安装」）。' + common;
+}
 
 /**
  * 渲染「设置 → 插件」列表。
@@ -701,6 +806,8 @@ async function refreshModsList() {
     const box = document.getElementById('modsList');
     if (!box) return;
     const hint = document.getElementById('modsHint');
+    // 平台说明随列表一起刷新（IS_NATIVE_APP 是常量，但集中在一处好维护）
+    applyModsPlatformHint();
 
     let fromServer = [];
     try {
@@ -821,9 +928,22 @@ async function refreshModsList() {
             + (m.enabled ? ' checked' : '') + ' aria-label="启用 ' + name + '">'
             + '<span class="track"></span><span class="knob"></span></label>';
 
-        // 底部那排按钮。只有本机（有服务端）才显示"打开文件夹"与"删除"。
+        // 底部那排按钮。
+        //
+        // ★★ 2026-10 修正：「打开文件夹」只在**电脑版**显示。
+        //   原来两个按钮共用 `canManage = m._fromServer === true`，而 APK 上
+        //   `/api/plugins` 是被原生拦截器接住的（见 app-01-core.js 的
+        //   nativePluginsFetch）—— 于是 _fromServer 也是 true，按钮照样出现，
+        //   但**原生没有实现 open-folder 这个接口**，点下去必然拿到
+        //   「Not found（手机端未实现该接口）」。
+        //
+        //   为什么"删掉这个按钮"是对的而不是"补一个原生实现"：
+        //   那个接口做的是"用系统的文件管理器打开插件目录"（serve.mjs 里调
+        //   explorer/open）。安卓上插件住在应用私有目录，**没有文件管理器能打开它**
+        //   （除非 root）。所以它不是"还没实现"，而是"在安卓上没有意义"。
+        //   「删除」按钮则两端都有意义 —— APK 上走 nativeDeletePlugin。
         const canManage = m._fromServer === true;
-        const openFolderBtn = canManage
+        const openFolderBtn = (canManage && !IS_NATIVE_APP)
             ? '<button type="button" class="mod-act mod-openfolder" data-mod-id="' + id + '"'
                 + ' data-mod-name="' + name + '" title="在文件管理器里打开这个插件的目录">' + ICON.folder + '</button>'
             : '';
@@ -1105,6 +1225,9 @@ async function refreshModsList() {
 }
 
 function closeSettingsPanel() {
+    // ★ 停掉日志轮询：面板一关，日志分栏就不可见了，
+    //   继续每 2 秒拉 /api/logs/tail 是纯自噪音（服务端日志会被它刷屏）。
+    try { if (window.LogViewer) window.LogViewer.close(); } catch (e) { /* 忽略 */ }
     // ★ 关闭前把待保存的改动冲掉 —— 用户改完最后一项马上点 ✕ 时，
     //   那次改动还排在 300ms 防抖里，不冲就会丢（见 flushAutoSave 的说明）。
     try { flushAutoSave(); } catch (e) { /* 忽略：关闭不该因为保存失败而卡住 */ }
@@ -1121,21 +1244,196 @@ function updateAsrProviderUI() {
     // 浏览器识别暂不可用提示
     const warn = document.getElementById('asrBrowserWarn');
     if (warn) warn.classList.toggle('hidden', provider !== 'browser');
-    // 阿里云 Key 状态（复用 TTS 的 DashScope Key）
-    const statusEl = document.getElementById('settingAsrKeyStatus');
-    if (statusEl) {
-        const has = Boolean(String(state.settings.dashscopeApiKey || '').trim());
-        statusEl.textContent = has ? '✓ 已配置' : '未配置（请到上方语音输出填写）';
-        statusEl.className = 'text-[11px] ' + (has ? 'text-green-500' : 'text-amber-400');
-    }
+    // 阿里云 ASR Key 现在是**独立**输入框（#settingAsrApiKey），状态由输入框本身体现，
+    // 不再需要单独的状态提示（原 #settingAsrKeyStatus 已随共用 Key 一起移除）。
 }
 
 function updateTtsProviderUI() {
-    const provider = elements.settingTtsProvider?.value || 'edge';
-    elements.edgeTtsFields?.classList.toggle('hidden', provider !== 'edge');
+    const provider = elements.settingTtsProvider?.value || 'mimo';
+    // MiMo TTS 的 Key / 接口地址是 TTS 专用的（与 ASR 独立），只在 TTS 选了 MiMo 时显示。
+    elements.mimoTtsFields?.classList.toggle('hidden', provider !== 'mimo');
+    elements.openaiTtsFields?.classList.toggle('hidden', provider !== 'openai-tts');
     elements.minimaxTtsFields?.classList.toggle('hidden', provider !== 'minimax');
-    elements.doubaoTtsFields?.classList.toggle('hidden', provider !== 'doubao');
     elements.dashscopeTtsFields?.classList.toggle('hidden', provider !== 'dashscope');
+    // MiMo TTS 三个模型用的字段各不相同，随模型下拉一起切换
+    updateMimoTtsModelUI();
+}
+
+// 依 MiMo TTS 模型切换子字段（三者互斥）：
+//   mimo-v2.5-tts            → 预置音色（audio.voice = Voice ID）
+//   mimo-v2.5-tts-voicedesign → 音色描述（user 消息，必填；该模型不支持 voice 字段）
+//   mimo-v2.5-tts-voiceclone  → 参考音频样本（audio.voice = 样本 base64，必填；不支持预置音色）
+function updateMimoTtsModelUI() {
+    const model = document.getElementById('settingMimoTtsModel')?.value || 'mimo-v2.5-tts';
+    document.getElementById('mimoTtsVoiceFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts');
+    document.getElementById('mimoTtsVoiceDesignFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts-voicedesign');
+    document.getElementById('mimoTtsVoiceCloneFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts-voiceclone');
+}
+
+// 参考音频样本上限：官方示例只需数秒的 mp3/wav，本应用为免设置文件膨胀设 5 MB 硬上限
+const MIMO_TTS_CLONE_SAMPLE_MAX_BYTES = 5 * 1024 * 1024;
+
+// 展示已保存样本的文件名（文件框无法回填，只能靠状态里的文件名）；传 message 则临时覆盖文案。
+// 拆成两个：Display 只渲染（转码完成的回调也用它，避免与 repair 相互触发）。
+function updateMimoTtsCloneSampleStatusDisplay(message, isError) {
+    const el = document.getElementById('mimoTtsCloneSampleStatus');
+    if (!el) return;
+    if (message) {
+        el.textContent = message;
+        el.className = 'text-[11px] leading-relaxed mt-1 ' + (isError ? 'text-red-400' : 'text-emerald-400');
+        return;
+    }
+    const name = String(state.settings.mimoTtsCloneSampleName || '').trim();
+    const hasSample = Boolean(String(state.settings.mimoTtsCloneSample || '').trim());
+    if (hasSample) {
+        el.textContent = `已选择：${name || '(未命名)'}`;
+        el.className = 'text-[11px] text-emerald-400 leading-relaxed mt-1';
+    } else {
+        el.textContent = '未选择样本';
+        el.className = 'text-[11px] text-indigo-300 leading-relaxed mt-1';
+    }
+}
+function updateMimoTtsCloneSampleStatus(message, isError) {
+    // 顺带把「已存但格式不是 wav」的样本转码成 wav（官方 voiceclone 只稳支持 mp3/wav）
+    try { repairMimoTtsCloneSamplePrefix(); } catch (e) { /* 转码失败不影响展示 */ }
+    updateMimoTtsCloneSampleStatusDisplay(message, isError);
+}
+
+// MiMo 音色复刻的参考样本。
+//
+// ★ 官方 API 文档写明：voiceclone 的样本（audio.voice 的 base64）**仅支持 mp3 和 wav**。
+//   而手机录音常是 m4a/aac，还被系统或工具错误地命名成 .mp3 —— 实测用户的样本文件名是
+//   "202610131732.mp3"，真实字节却是 `ftypisom`（m4a 容器），服务端直接以
+//   「invalid audio format」400 拒绝。**光改 data URL 前缀救不了**：字节本身就不是它认的格式。
+// ★ 因此这里**一律转码成 16-bit PCM WAV** —— 浏览器自带的 Web Audio 能解码 m4a/aac/flac/ogg，
+//   于是无论用户丢进来什么，最终都变成服务端最稳的 wav，用户不必自己去外部工具转码。
+// ★ 已存的老样本也会被自动转一次（见 repairMimoTtsCloneSamplePrefix）。
+const MIMO_TTS_CLONE_WAV_PREFIX = 'data:audio/wav;base64,';
+
+// 嗅探容器格式（仅用于日志与排查，不影响处理流程）
+function mimoSampleFormatFromHead(head) {
+    const b = head || new Uint8Array(0);
+    const at = (i, s) => s.split('').every((c, k) => b[i + k] === c.charCodeAt(0));
+    if (b.length >= 12 && at(0, 'RIFF') && at(8, 'WAVE')) return 'wav';
+    if (b.length >= 4 && at(0, 'fLaC')) return 'flac';
+    if (b.length >= 4 && at(0, 'OggS')) return 'ogg';
+    if (b.length >= 12 && at(4, 'ftyp')) return 'm4a';
+    if (b.length >= 3 && at(0, 'ID3')) return 'mp3';
+    if (b.length >= 2 && b[0] === 0xFF && (b[1] & 0xE0) === 0xE0) return 'mp3';
+    return '(未知)';
+}
+function arrayBufferToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+}
+// 编成**单声道** 16-bit PCM WAV：参考样本只为复刻音色，声道数不携带音色信息，
+// 单声道能省一半体积（设置文件里存的是 base64，体积直接翻倍）。
+function encodeMono16Wav(audioBuffer) {
+    const n = audioBuffer.length;
+    const out = new ArrayBuffer(44 + n * 2);
+    const v = new DataView(out);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE');
+    w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, audioBuffer.sampleRate, true);
+    v.setUint32(28, audioBuffer.sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, 'data'); v.setUint32(40, n * 2, true);
+    const chs = [];
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) chs.push(audioBuffer.getChannelData(c));
+    let o = 44;
+    for (let i = 0; i < n; i++) {
+        let sum = 0;
+        for (let c = 0; c < chs.length; c++) sum += chs[c][i];
+        const s = Math.max(-1, Math.min(1, sum / chs.length));
+        v.setInt16(o, s * 0x7fff, true); o += 2;
+    }
+    return out;
+}
+// 任意可解码音频 → WAV data URL；浏览器解不了会 reject
+async function transcodeAudioBufferToWavDataUrl(arrayBuffer) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw new Error('当前浏览器不支持音频转码');
+    const ac = new AC();
+    try {
+        const audioBuffer = await new Promise((resolve, reject) => {
+            // 传副本：decodeAudioData 会 detach 传入的 ArrayBuffer
+            ac.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+        });
+        return MIMO_TTS_CLONE_WAV_PREFIX + arrayBufferToBase64(encodeMono16Wav(audioBuffer));
+    } finally {
+        try { await ac.close(); } catch (e) { /* 关闭失败无所谓 */ }
+    }
+}
+let mimoCloneRepairing = false;
+// 已存样本不是 wav → 异步转成 wav 再存（官方只稳支持 mp3/wav）。幂等：已是 wav 时什么都不做。
+function repairMimoTtsCloneSamplePrefix() {
+    const raw = String(state.settings.mimoTtsCloneSample || '');
+    if (!raw || raw.startsWith(MIMO_TTS_CLONE_WAV_PREFIX)) return false;
+    if (mimoCloneRepairing) return false;   // 防重入（转码完成回调里还会再刷一次状态）
+    const comma = raw.indexOf(',');
+    if (comma < 0) return false;
+    let buf;
+    try { buf = base64ToArrayBuffer(raw.slice(comma + 1)); } catch (e) { return false; }
+    mimoCloneRepairing = true;
+    transcodeAudioBufferToWavDataUrl(buf).then((wav) => {
+        state.settings.mimoTtsCloneSample = wav;
+        persistSettings();
+    }).catch((e) => {
+        console.warn('[MiMo TTS] 已存样本转码失败（保留原样）：', e);
+    }).finally(() => {
+        mimoCloneRepairing = false;
+        updateMimoTtsCloneSampleStatusDisplay();
+    });
+    return true;
+}
+
+async function handleMimoTtsCloneSampleFileChange(event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+    if (file.size > MIMO_TTS_CLONE_SAMPLE_MAX_BYTES) {
+        input.value = '';
+        updateMimoTtsCloneSampleStatus(
+            `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），上限 5 MB，请换更短的参考音频。`, true);
+        showCustomAlert('参考音频样本上限为 5 MB（官方示例只需数秒）。请换一个更短的样本文件。', '样本过大');
+        return;
+    }
+    try {
+        const buf = await file.arrayBuffer();
+        const fmt = mimoSampleFormatFromHead(new Uint8Array(buf.slice(0, 16)));
+        console.log(`[MiMo TTS] 参考样本 ${file.name || '(未命名)'}：原始格式=${fmt} ${(file.size / 1024).toFixed(0)}KB → 转为 wav`);
+        const dataUrl = await transcodeAudioBufferToWavDataUrl(buf);
+        if (dataUrl.length > MIMO_TTS_CLONE_SAMPLE_MAX_BYTES * 1.5) {
+            input.value = '';
+            updateMimoTtsCloneSampleStatus('样本转码后过大，请换更短的参考音频（建议数秒）。', true);
+            showCustomAlert('转码后的样本过大。请换一段更短的参考音频（官方示例只需数秒）。', '样本过大');
+            return;
+        }
+        state.settings.mimoTtsCloneSample = dataUrl;
+        state.settings.mimoTtsCloneSampleName = file.name || '';
+        persistSettings();
+        updateMimoTtsCloneSampleStatus();
+    } catch (e) {
+        console.warn('[MiMo TTS] 样本转码失败：', e);
+        input.value = '';
+        updateMimoTtsCloneSampleStatus('无法读取这个音频，请换 wav / mp3 文件。', true);
+        showCustomAlert('无法解码这个参考音频（文件可能损坏或编码不受支持）。请换一个 wav 或 mp3 文件。', '样本无法读取');
+    }
+}
+
+function clearMimoTtsCloneSample() {
+    state.settings.mimoTtsCloneSample = '';
+    state.settings.mimoTtsCloneSampleName = '';
+    const input = document.getElementById('settingMimoTtsCloneSample');
+    if (input) input.value = '';
+    persistSettings();
+    updateMimoTtsCloneSampleStatus();
 }
 
 // 只负责"刷新提示文案 + 占位符"，不再改写 Base URL 的值。
@@ -1178,20 +1476,30 @@ function readProviderSettingsForm() {
         minimaxApiKey: document.getElementById('settingMinimaxApiKey')?.value.trim() || '',
         minimaxVoice: document.getElementById('settingMinimaxVoice')?.value.trim() || '',
         minimaxModel: document.getElementById('settingMinimaxModel')?.value || 'speech-2.8-hd',
-        ttsProvider: elements.settingTtsProvider?.value || 'minimax',
-        doubaoApiKey: document.getElementById('settingDoubaoApiKey')?.value.trim() || '',
-        doubaoAppId: document.getElementById('settingDoubaoAppId')?.value.trim() || '',
-        doubaoToken: document.getElementById('settingDoubaoToken')?.value.trim() || '',
-        doubaoCluster: document.getElementById('settingDoubaoCluster')?.value.trim() || 'volcano_tts',
-        doubaoVoice: document.getElementById('settingDoubaoVoice')?.value.trim() || 'zh_female_shuangkuaisisi_uranus_bigtts',
-        doubaoResourceId: document.getElementById('settingDoubaoResourceId')?.value || 'seed-tts-2.0',
+        ttsProvider: elements.settingTtsProvider?.value || 'mimo',
+        mimoTtsModel: document.getElementById('settingMimoTtsModel')?.value || 'mimo-v2.5-tts',
+        mimoTtsVoice: document.getElementById('settingMimoTtsVoice')?.value.trim() || 'mimo_default',
+        // 音色描述：voicedesign 模型的 user 消息文本
+        mimoTtsVoiceDesignPrompt: document.getElementById('settingMimoVoiceDesignPrompt')?.value.trim() || '',
+        // 参考音频样本不从这里读（文件框无法回填），直接保留 state.settings 里已存的值（见上方 ...state.settings）
+        // MiMo TTS 凭据（独立于 ASR）：TTS 用自己的 Key / 接口地址
+        mimoTtsApiKey: document.getElementById('settingMimoTtsApiKey')?.value.trim() || '',
+        // MiMo TTS 的接口地址已不在界面上（固定用小米官方地址）：不读 DOM，
+        // 保留 ...state.settings 里已有的值（DEFAULT_SETTINGS + 已存设置）
+        openaiTtsBaseUrl: document.getElementById('settingOpenaiTtsBaseUrl')?.value.trim() || 'https://api.openai.com/v1',
+        openaiTtsApiKey: document.getElementById('settingOpenaiTtsApiKey')?.value.trim() || '',
+        openaiTtsModel: document.getElementById('settingOpenaiTtsModel')?.value.trim() || 'tts-1',
+        openaiTtsVoice: document.getElementById('settingOpenaiTtsVoice')?.value.trim() || 'alloy',
         dashscopeTtsModel: document.getElementById('settingDashscopeTtsModel')?.value.trim() || 'qwen3-tts-flash',
         dashscopeTtsVoice: document.getElementById('settingDashscopeTtsVoice')?.value.trim() || 'Cherry',
         dashscopeApiKey: document.getElementById('settingDashscopeApiKey')?.value.trim() || '',
+        // 阿里百炼 ASR 的 Key（独立于 TTS 的 dashscopeApiKey）
+        asrApiKey: document.getElementById('settingAsrApiKey')?.value.trim() || '',
         dashscopeAsrBaseUrl: document.getElementById('settingDashscopeAsrBaseUrl')?.value.trim() || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
         dashscopeAsrModel: document.getElementById('settingDashscopeAsrModel')?.value.trim() || 'qwen3-asr-flash',
-        mimoApiKey: document.getElementById('settingMimoApiKey')?.value.trim() || '',
-        mimoBaseUrl: document.getElementById('settingMimoBaseUrl')?.value.trim() || 'https://api.xiaomimimo.com',
+        mimoApiKey: document.getElementById('settingMimoAsrApiKey')?.value.trim() || '',
+        // 接口地址预填官方地址；留空时运行时也会回退到同一地址
+        mimoBaseUrl: document.getElementById('settingMimoAsrBaseUrl')?.value.trim() || 'https://api.xiaomimimo.com',
         mimoAsrModel: document.getElementById('settingMimoAsrModel')?.value.trim() || 'mimo-v2.5-asr',
         visionBaseUrl: document.getElementById('settingVisionBaseUrl')?.value.trim() || '',
         visionApiKey: document.getElementById('settingVisionApiKey')?.value.trim() || '',
@@ -1224,11 +1532,17 @@ async function testChatConnection() {
 async function testTtsConnection() {
     await withSettingsTestButton(elements.testTtsConnectionBtn, '测试中…', async () => {
         const draft = readProviderSettingsForm();
-        const provider = String(draft.ttsProvider || 'edge');
-        if (provider === 'doubao') {
-            const audio = await generateDoubaoTtsAudio('你好，这是豆包语音连接测试。', draft);
-            if (!audio?.bytes?.byteLength) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '豆包返回了空音频');
-            showCustomAlert('豆包已成功返回测试音频，凭据与音色可以使用。', '语音连接正常');
+        const provider = String(draft.ttsProvider || 'mimo');
+        if (provider === 'mimo') {
+            const audio = await generateMimoTtsAudio('你好，这是 MiMo 语音连接测试。', draft);
+            if (!audio?.bytes?.byteLength) throw new ClientApiError('UPSTREAM_UNAVAILABLE', 'MiMo 返回了空音频');
+            showCustomAlert('MiMo 已成功返回测试音频，Key、模型与音色可以使用。', '语音连接正常');
+            return;
+        }
+        if (provider === 'openai-tts') {
+            const audio = await generateOpenaiTtsAudio('你好，这是通用 OpenAI 语音连接测试。', draft);
+            if (!audio?.bytes?.byteLength) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '通用 OpenAI TTS 返回了空音频');
+            showCustomAlert('通用 OpenAI TTS 已成功返回测试音频，Key、模型与音色可以使用。', '语音连接正常');
             return;
         }
         if (provider === 'dashscope') {
@@ -1256,15 +1570,16 @@ async function testTtsConnection() {
 }
 
 async function clearApiKeys() {
-    const confirmed = await showCustomConfirm('确认清除这台设备上保存的 DeepSeek、MiniMax、豆包、DashScope 与 MiMo API Key？');
+    const confirmed = await showCustomConfirm('确认清除这台设备上保存的 DeepSeek、MiniMax、DashScope、MiMo 与通用 OpenAI API Key？');
     if (!confirmed) return;
     await clearStoredApiSecrets();
     elements.settingApiKey.value = '';
     document.getElementById('settingMinimaxApiKey').value = '';
-    document.getElementById('settingDoubaoApiKey').value = '';
-    document.getElementById('settingDoubaoToken').value = '';
     document.getElementById('settingDashscopeApiKey').value = '';
-    document.getElementById('settingMimoApiKey').value = '';
+    document.getElementById('settingAsrApiKey').value = '';
+    document.getElementById('settingMimoAsrApiKey').value = '';
+    document.getElementById('settingMimoTtsApiKey').value = '';
+    document.getElementById('settingOpenaiTtsApiKey').value = '';
     showCustomAlert('API Key 已从当前设备清除。', '已清除');
 }
 
@@ -1298,36 +1613,35 @@ async function saveSettings(opts) {
         if (!silent) showCustomAlert('自定义模式下必须填写 API Base URL。', '设置未保存');
         return;
     }
-    // ★ 从「限制」切到「允许操作电脑」时，把后果在这里一次性讲清楚。
+    // ★ 切到「完全访问」时，把后果在这里一次性讲清楚。
     //
     // 为什么放在保存这一步、而不是每次操作都弹：
-    // 全权限下 AI 每一步都问，用户会从"看清内容再决定"退化成"闭眼点允许"，
-    // 最后那道闸反而等于没有（这正是旧版"每步确认"被反馈太烦的原因）。
-    // 所以判断前移到这个**一次性**的节点上：开了之后同类不可逆操作同一对话只问一次。
+    // 完全访问下 AI 每一步都问，用户会从"看清内容再决定"退化成"闭眼点允许"，
+    // 最后那道闸反而等于没有。所以判断前移到这个**一次性**的节点上。
     //
-    // 只在"真的发生切换"时问 —— 已经是 computer 又点保存不该再打扰。
-    const nextPermission = document.querySelector('input[name="agentPermission"]:checked')?.value || 'app';
-    if (nextPermission === 'computer' && (state.settings.agentPermission || 'app') !== 'computer') {
+    // 只在"真的发生切换"时问 —— 已经是 full 又点保存不该再打扰。
+    const nextAccess = document.querySelector('input[name="agentAccess"]:checked')?.value || 'strict';
+    if (nextAccess === 'full' && currentAgentAccess() !== 'full') {
         // ★ 自动保存（silent）路径**也要问** —— 这是安全闸门，不能因为
         //   "弹窗会打断用户"就跳过：改成改完即生效后，用户点一下单选钮
-        //   就会落盘，如果这里不问，"允许操作电脑"就被静默开启了。
+        //   就会落盘，如果这里不问，"完全访问"就被静默开启了。
         //   拒绝时把单选钮拨回原来的档，让界面与实际状态一致
-        //   （否则界面显示"允许"、实际仍是"限制"，用户会以为已经开了）。
+        //   （否则界面显示"完全访问"、实际仍是旧档，用户会以为已经开了）。
         const agreed = await showCustomConfirm(
-            '「允许操作电脑」= 把 AI 的操作范围从应用文件夹扩到整台电脑。\n\n'
+            '「完全访问」= AI 可以在这台电脑上做任何事，且**不再询问你**。\n\n'
             + '开启后，AI 可以：\n'
             + '· 读写这台电脑上任意路径的文件\n'
-            + '· 执行 PowerShell / cmd 命令\n'
-            + '· 删除文件、改注册表、关机、下载并执行网上的脚本\n'
-            + '· 覆盖已有文件（原内容不会自动备份）\n\n'
-            + '其中「覆盖已有文件」和「删除/格式化这类危险命令」会在每个对话里首次询问你一次，'
-            + '同意后该对话内不再重复询问；安全命令直接执行。\n\n'
-            + '这些操作大多不可撤销，请只在你自己可控、且信任当前对话内容时开启。\n\n'
-            + '确定开启吗？',
-            '⚠️ 开启「允许操作电脑」');
+            + '· 执行 PowerShell / cmd 命令（含删除类命令）\n'
+            + '· **删除文件与目录** —— 不进回收站、无法恢复\n'
+            + '· 覆盖已有文件（原内容不会自动备份）\n'
+            + '· 改注册表、关机、下载并执行网上的脚本\n\n'
+            + '与另外两档的关键差别：**这些操作都不会再问你**。\n'
+            + '发现问题只能事后补救，而删除这类操作是补救不了的。\n\n'
+            + '请只在你自己可控、且信任当前对话内容时开启。确定吗？',
+            '⚠️ 开启「完全访问」');
         if (!agreed) {
-            const prev = state.settings.agentPermission || 'app';
-            document.querySelectorAll('input[name="agentPermission"]').forEach((r) => {
+            const prev = currentAgentAccess();
+            document.querySelectorAll('input[name="agentAccess"]').forEach((r) => {
                 r.checked = (r.value === prev);
             });
             return;
@@ -1342,9 +1656,9 @@ async function saveSettings(opts) {
         asrProvider,
         autoMemory: elements.settingAutoMemory.checked,
         memoryEvery: Math.max(3, Math.min(50, parseInt(elements.settingMemoryEvery.value, 10) || 6)),
-        agentPermission: nextPermission,
-        agentApproval: document.querySelector('input[name="agentApproval"]:checked')?.value || 'once',
+        agentAccess: nextAccess,
         agentPhoneEnabled: document.getElementById('settingAgentPhoneEnabled')?.checked !== false,
+        ...readAgentReadToggles(),
         // 思考模式：以设置面板当前状态为准。
         // 注意这两个控件是"改了立刻生效 + 立刻持久化"的（见 app-07-init.js），
         // 这里再读一次是为了覆盖"用户改了控件但没点保存、又点了保存"的路径 ——
@@ -1352,7 +1666,10 @@ async function saveSettings(opts) {
         thinkingMode: elements.settingThinkingMode.checked,
         thinkingEffort: THINKING_EFFORTS.includes(elements.settingThinkingEffort.value)
             ? elements.settingThinkingEffort.value
-            : 'medium'
+            : 'medium',
+        // 对话优化：第三人称两段式开关。与上面两个控件一样"改了立刻生效 + 立刻持久化"，
+        // 这里再读一次是为了覆盖"改了控件但没点保存、又点了保存"的路径。
+        thirdPerson: elements.settingThirdPerson.checked
     };
     try {
         await saveApiSecrets(state.settings);

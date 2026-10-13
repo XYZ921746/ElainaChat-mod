@@ -95,6 +95,9 @@ const rawCtxFactory = new Function('window', `
     // 假 DOM / 假弹窗：populateModelSelect 用到 document.createElement 和 showCustomAlert
     const alertMessages = [];
     function showCustomAlert(msg) { alertMessages.push(String(msg)); }
+    // ★ 2026-10 组合框：populateModelSelect 现在会调 input.__modelComboRefresh()
+    //   刷新浮层列表。假 input 上没有这个方法 —— 真实代码里那行有 typeof 判断，
+    //   所以不崩；这里保持"没有该方法"的状态，正好顺带覆盖那条兜底分支。
     const document = {
         createElement() { return { value: '', textContent: '' }; },
     };
@@ -421,7 +424,11 @@ const PRESET_MODELS = ['deepseek-chat', 'gpt-4.1-mini', 'claude-sonnet-4-2025051
         defaultModels: PRESET_MODELS,
     });
     check('下拉框被填上了', form.options.map(o => o.value), ['claude-haiku-4-5', 'claude-opus-5']);
-    check('下拉框显示出来（不再 hidden）', form.select.classList.removed.includes('hidden'), true);
+    // ★ 2026-10 改判据：组合框改造后，候选**不再靠取消 select 的 hidden 来显示**
+    //   （select 退回纯数据源，可见的是右三角展开的浮层列表）。
+    //   所以这里断言的是"没有去动 hidden"—— 动了才说明旧的可视逻辑又回来了。
+    check('  候选进了数据源（不再把 select 显示出来）',
+        form.select.classList.removed.includes('hidden'), false);
     check('输入框被覆盖成列表里的真实模型',
         ['claude-haiku-4-5', 'claude-opus-5'].includes(form.input.value), true);
     check('  不能还是那个不在列表里的预设名',

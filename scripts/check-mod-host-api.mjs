@@ -27,7 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MODS = path.join(ROOT, 'web', 'mods');
+const MODS = path.join(ROOT, 'mods');
 const INDEX = path.join(MODS, 'index.json');
 
 let pass = 0, fail = 0;
@@ -65,7 +65,7 @@ console.log('=== 1. 插槽与"注册即副作用"：源码约定 ===');
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'app-04-ui.js'), 'utf8');
     const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
     const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'app-05-voice.js'), 'utf8');
-    const l2dSrc = readFileSync(path.join(ROOT, 'web', 'mods', 'live2d', 'index.js'), 'utf8');
+    const l2dSrc = readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8');
     const fsSrc = readFileSync(path.join(ROOT, 'scripts', 'frontend-sources.mjs'), 'utf8');
     const slotsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'host-slots.js'), 'utf8');
 
@@ -162,11 +162,19 @@ console.log('=== 1. 插槽与"注册即副作用"：源码约定 ===');
         'Live2D 侧订阅 voice-energy（走 host.on，停用时可被摘掉）');
 
     // ---- 前端源码读取器必须真的能读到 mod ----
-    ok(/path\.join\(WEB, 'mods'\)/.test(fsSrc) && !/path\.join\(WEB, 'plugins'\)/.test(fsSrc),
-        '★ frontend-sources.mjs 读的是 mods 目录（不是改名前的 plugins）');
+    // ★★ 2026-10：插件根目录从 `web/mods/` 搬到**项目根** `mods/`。
+    //   这里原来断言 `path.join(WEB, 'mods')` —— 搬迁后那个路径**不存在**，
+    //   而检查会因此红。真正要钉住的是"它读的是 mods 目录"这件事，
+    //   而不是某个具体的拼接写法。所以改成：导出里有 MODS，且不再指 web/ 下。
+    ok(/export const MODS = path\.join\(ROOT, 'mods'\)/.test(fsSrc),
+        '★ frontend-sources.mjs 导出 MODS 指向项目根 mods/');
+    ok(!/path\.join\(WEB, 'plugins'\)/.test(fsSrc),
+        '★ 不再读改名前的 plugins 目录');
     const { readFrontend } = await import('./frontend-sources.mjs');
     const fe = readFrontend();
-    ok(fe.includes('web/mods/galgame/index.js'),
+    // 判据同样改成"与位置无关"：只要真的收到了某个插件的源码文件即可。
+    // （写死 `web/mods/…` 会在下次搬迁时又变成假失败 —— 这次搬迁就是例子。）
+    ok(/mods[\\/]galgame[\\/]index\.js/.test(fe),
         '★ readFrontend() 真的包含 mod 源码（否则所有 mod 断言都是在空串上匹配）');
 }
 

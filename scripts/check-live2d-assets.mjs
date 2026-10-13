@@ -13,7 +13,11 @@
  */
 import { readFileSync } from 'node:fs';
 
-const src = readFileSync(new URL('../web/mods/live2d/index.js', import.meta.url), 'utf8');
+// ★★ 2026-10：插件根目录从 `web/mods/` 搬到**项目根** `mods/`。
+//   这里原来写的是 `new URL('../web/mods/live2d/index.js', …)` —— 搬迁后那个
+//   文件不存在，readFileSync 会直接抛 ENOENT，整个检查以"抛异常"形式红掉
+//   （而不是一条清楚的断言失败）。改到新位置。
+const src = readFileSync(new URL('../mods/live2d/index.js', import.meta.url), 'utf8');
 
 /**
  * 按函数名抠出完整函数声明（靠大括号配对找结尾）。
@@ -22,7 +26,7 @@ const src = readFileSync(new URL('../web/mods/live2d/index.js', import.meta.url)
  */
 function extractFn(name) {
     let start = src.indexOf('function ' + name + '(');
-    if (start < 0) throw new Error('在 web/mods/live2d/index.js 里找不到函数: ' + name + '（重命名了？请同步更新本检查）');
+    if (start < 0) throw new Error('在 mods/live2d/index.js 里找不到函数: ' + name + '（重命名了？请同步更新本检查）');
     const asyncMatch = src.slice(Math.max(0, start - 12), start).match(/async\s+$/);
     if (asyncMatch) start -= asyncMatch[0].length;
     // **先跳过参数表**：`opts = {}` 这类默认值里就有大括号，直接找第一个 `{` 会抠出半截函数

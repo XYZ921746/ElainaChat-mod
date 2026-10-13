@@ -4,15 +4,18 @@
 
 ## 怎么用
 
-1. 把整个目录复制到 `web/mods/` 下，并把目录名改成你的插件名：
+1. 把整个目录复制到项目根的 `mods/` 下，并把目录名改成你的插件名：
 
    ```text
-   web/mods/my-first-mod/
+   mods/my-first-mod/
    ├─ manifest.json
    ├─ index.js
    ├─ style.css
    └─ server.mjs      ← 不需要后端就删掉，并删掉 manifest 里的 "server" 段
    ```
+
+   > ★ 2026-10：插件目录从 `web/mods/` 搬到了**项目根** `mods/`
+   > （与 `data/` 平级）。服务端有一条显式的 `/mods/*` 路由来发这些文件。
 
 2. 打开 `manifest.json`，把 `id` 改成你的插件名（字母数字 `.` `_` `-`，
    **建议与目录名一致**），改掉 `name` / `version` / 描述。
@@ -113,5 +116,5 @@
 - 改了 `index.js` / `style.css`：刷新页面即可。
   改了 `manifest.json` 或 `server.mjs`：前者刷新即可（清单每次请求重新扫描），后者要重启服务。
 - 打包发给别人：在仓库根目录跑 `npm run pack:assets` ——
-  它会把 `web/mods/` 下的插件逐个打成 `dist/assets/<id>-<version>.zip`，
+  它会把 `mods/` 下的插件逐个打成 `dist/assets/<id>-<version>.zip`，
   这个 zip 就是别人可以「上传安装」的包（zip 里不带多余的外层目录）。

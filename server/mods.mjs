@@ -6,8 +6,9 @@
 //   ① 有一份清单文件（谁生成？手工维护最容易忘）
 //   ② 服务端扫描目录后生成清单（Node 能列目录）
 //
-// 这里走 ②：把 `xxx.zip` 丢进 web/mods/ 就会被自动解压、写进清单，
+// 这里走 ②：把 `xxx.zip` 丢进 mods/ 就会被自动解压、写进清单，
 // 前端只管读清单。这样"装一个 mod"真的就是"丢个 zip 进去"。
+//   ★ 2026-10：这个目录是**项目根**的 mods/（原为 web/mods/，已搬迁）。
 //
 // ── 安全（这是 mod 系统最大的风险面）──────────────────────────────────────
 //
@@ -113,7 +114,7 @@ const MOD_MAX_BYTES = 64 * 1024 * 1024;
  * 插件管理器。
  *
  * @param {object} opts
- * @param {string} opts.modsDir  插件根目录（web/mods）
+ * @param {string} opts.modsDir  插件根目录（2026-10 起是项目根的 mods/）
  * @param {Function} opts.unzip     解压函数（复用 serve.mjs 里那份，已含体积/类型校验）
  * @param {Function} opts.isUnsafeEntryName 条目名安全检查（同上）
  * @param {Function} opts.effectiveExt 取"最终落盘名"的扩展名（含 ADS/尾随点防护）

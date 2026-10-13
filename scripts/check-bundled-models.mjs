@@ -41,7 +41,7 @@ function ok(cond, label, detail) {
 }
 
 const html = readFrontend();
-const video = readFileSync(path.join(ROOT, 'web', 'mods', 'live2d', 'index.js'), 'utf8');
+const video = readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8');
 
 // ============================================================ 1. 兜底函数
 console.log('=== 1. 兜底函数（直接读打包清单，不依赖原生插件）===');
@@ -246,6 +246,50 @@ if (liteMode || !manifestObj.models.length) {
     ok(names.length === manifestObj.models.length, '总数仍等于清单数（合并而非叠加）', JSON.stringify(names));
     const fromData = (r2.models || []).find((m) => m.name === firstName);
     ok(fromData && !fromData.bundled, '同名时以数据目录里的为准（不带 bundled 标记）');
+}
+
+// ============================================================ 6. 引擎库必须随 APK 分发
+//
+// ★★ 2026-10 新增。这一条防的是"**装了等于没装**"，而且它的失败**不会报错** ——
+//    只表现为"视频通话打不开、提示引擎脚本加载失败"。
+//
+// 背景：Live2D 引擎（live2dcubismcore + pixi-6 + pixi-live2d-display，约 770KB）
+//   有两个可能的位置：
+//     · 插件的 web/mods/live2d-models/vendor/  → 电脑版由 manifest 的
+//       server.static 映射到 /live2d/vendor/
+//     · 宿主的 web/vendor/                     → 插件缺失时的**回落**
+//   APK **没有服务端**，插件的静态路由不装配，所以 `/live2d/vendor/xxx.js`
+//   必然 404 —— 插件的 ensureEngine() 会回落到 `/vendor/`。
+//   于是"这三个文件在不在 APK 的 assets/public/vendor/ 里"直接决定
+//   APK 上 Live2D 能不能用。
+//
+// 而它们进不进 APK 取决于 sync-web.mjs 的 filesToCopy **有没有显式列出**。
+//   （不是"自动收 mods/ 时顺带带上" —— APK 里根本没有 mods/，见上面的纯净版清理。）
+//   我就在这儿踩过：误以为"引擎已搬进插件"，把三行删了。
+console.log('\n=== 6. 引擎库随 APK 分发（插件缺失时的回落）===');
+{
+    const syncSrc = readFileSync(path.join(ROOT, 'scripts', 'sync-web.mjs'), 'utf8');
+    const ENGINE_FILES = [
+        'live2dcubismcore.min.js',
+        'pixi-6.min.js',
+        'pixi-live2d-display-cubism4.min.js',
+    ];
+    for (const f of ENGINE_FILES) {
+        ok(syncSrc.includes(`['vendor/${f}', 'vendor/${f}']`),
+            `sync-web.mjs 显式同步了 vendor/${f}（APK 上引擎的唯一来源）`);
+    }
+    // 源仓库里必须真的存在（列了但文件没了会静默少拷）
+    for (const f of ENGINE_FILES) {
+        ok(existsSync(path.join(ROOT, 'web', 'vendor', f)),
+            `web/vendor/${f} 存在（列了但文件不在会静默少拷）`);
+    }
+    // 插件的回落基址必须是 /vendor/ —— 它和上面那三行是**一对**，改一边就断
+    const modelsMod = readFileSync(path.join(ROOT, 'mods', 'live2d-models', 'index.js'), 'utf8');
+    ok(/return '\/vendor\/';/.test(modelsMod),
+        '★ 插件的 vendorFallbackBase() 仍指向 /vendor/（与上面三行是一对）');
+    // 反过来：不能"只留插件副本、指望 mods/ 一起进包" —— APK 里没有 mods/
+    ok(/withMods/.test(syncSrc),
+        'sync-web.mjs 仍区分 withMods（默认不打插件源码）');
 }
 
 console.log('\n' + '='.repeat(46));

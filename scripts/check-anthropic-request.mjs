@@ -102,6 +102,12 @@ const ctx = new Function('window', `
     // 已随三个协议实现一起迁到 web/js/chat-providers.js（本文件下面会直接加载那个真模块），
     // 所以这里不再从 index.html 抠。
     const ANTHROPIC_MIN_MAX_TOKENS = ${extractNumberConst('ANTHROPIC_MIN_MAX_TOKENS')};
+    // ★ callChatAPI 现在按 thinking 开关选请求超时预算（见它的 timeoutMs 说明）。
+    //   本检查只验证"发出去的请求体形状"，超时值本身无关紧要 —— 但这两个常量
+    //   **必须在作用域里**，否则抠出来的 callChatAPI 一执行就 ReferenceError。
+    //   （踩过：漏了它们会让整套 npm run check 在这一项直接中断退出，而不是报一条 FAIL。）
+    const CHAT_TIMEOUT_DEFAULT_MS = ${extractNumberConst('CHAT_TIMEOUT_DEFAULT_MS')};
+    const CHAT_TIMEOUT_THINKING_MS = ${extractNumberConst('CHAT_TIMEOUT_THINKING_MS')};
     ${extractFn('thinkingSuffixTokenFloor')}
     ${extractFn('resolveOutputTokenLimit')}
     ${extractFn('getChatBaseUrl')}

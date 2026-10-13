@@ -132,22 +132,30 @@
             save: function (patch) {
                 var body = JSON.stringify({ data: patch });
                 var headers = { 'Content-Type': 'application/json', 'X-Store-Client': clientId };
-                // sendBeacon：刚改完设置就关页面/切后台时也能发出去。
+                // ⚠️ sendBeacon 与 fetch(keepalive) 在浏览器里都有**约 64KB 的体积上限**：
+                //    超过时 sendBeacon 返回 false、keepalive fetch 直接抛错（还会被下面的
+                //    .catch 吞掉）→ 写入**静默失败**。端侧 settings 里可能塞着 MiMo 音色复刻的
+                //    参考样本（数 MB 的 base64），照旧用 keepalive 会让整次写入丢失，
+                //    表现就是"刚上传的样本一刷新就没了"（实测复现）。所以大包改走普通 fetch。
+                var keepaliveOk = body.length <= 60000;
+                // sendBeacon：刚改完设置就关页面/切后台时也能发出去（仅小包走这条）。
                 // ⚠️ sendBeacon **不能设自定义请求头** —— 所以这条路上不带 clientId，
                 //    服务端就会把它广播回来（包括发给自己）。这是刻意的取舍：
                 //    宁可多发一次（客户端按键比对后无变化就不动 UI），
                 //    也不要因为丢最后一次修改而损坏数据。
-                try {
-                    if (navigator.sendBeacon) {
-                        var blob = new Blob([body], { type: 'application/json' });
-                        if (navigator.sendBeacon('/api/store', blob)) return Promise.resolve();
-                    }
-                } catch (e) { /* 退回 fetch */ }
+                if (keepaliveOk) {
+                    try {
+                        if (navigator.sendBeacon) {
+                            var blob = new Blob([body], { type: 'application/json' });
+                            if (navigator.sendBeacon('/api/store', blob)) return Promise.resolve();
+                        }
+                    } catch (e) { /* 退回 fetch */ }
+                }
                 return fetch('/api/store', {
                     method: 'POST',
                     headers: headers,
                     body: body,
-                    keepalive: true,
+                    keepalive: keepaliveOk,
                 }).catch(function () { /* 服务端没开就只留内存，下次写入再试 */ });
             },
         };

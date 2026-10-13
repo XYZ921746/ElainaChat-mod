@@ -30,6 +30,26 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const WEB = path.join(ROOT, 'web');
+/**
+ * 把沙箱里的 URL 映射到磁盘路径。
+ *
+ * ★★ 2026-10：插件目录搬到了**项目根** `mods/`（不在 WEB 下）——
+ *   所以不能再一律 `path.join(WEB, rel)`。`/mods/*` 单独走 MODS，
+ *   其余（/js/…、/index.html）仍相对 WEB。
+ *
+ *   不这么分会怎样：`/mods/index.json` 与插件的 index.js 全部解析到
+ *   `web/mods/…`（不存在）→ fetch 一律 404 → 加载器认为"没有任何插件"，
+ *   于是这个检查里所有"依赖缺失/被拒绝加载"的断言都失去输入、集体假失败。
+ *   这正是本脚本第一段注释警告过的那类"读错文件"的红。
+ */
+const MODS = path.join(ROOT, 'mods');
+const resolveUrlToDisk = (url) => {
+    const rel = decodeURIComponent(String(url).split('?')[0]).replace(/^\//, '');
+    if (rel === 'mods' || rel.startsWith('mods/')) {
+        return path.join(ROOT, rel);
+    }
+    return path.join(WEB, rel);
+};
 const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
 // 诊断格式模块：真实页面里 diagnostics.js 排在 mods.js 之前加载
 // （见 index.html），mods.js 的输出格式依赖它。这里照实模拟，
@@ -58,8 +78,7 @@ async function load(store) {
         Map, Set, Promise, Date, Number, String, Boolean, Error, JSON, Object, Array, RegExp,
         encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
         fetch: async (url) => {
-            const rel = decodeURIComponent(String(url).split('?')[0]).replace(/^\//, '');
-            const p = path.join(WEB, rel);
+            const p = resolveUrlToDisk(url);
             if (!existsSync(p)) return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
             const t = readFileSync(p, 'utf8');
             return { ok: true, status: 200, json: async () => JSON.parse(t), text: async () => t };
@@ -98,10 +117,10 @@ async function load(store) {
     const head = {
         appendChild(el) {
             if (el.tag !== 'script') return;
-            const rel = decodeURIComponent(String(el.src).split('?')[0]).replace(/^\//, '');
-            const p = path.join(WEB, rel);
+            // ★ 与上面 fetch 共用同一个 URL→磁盘 映射（含 /mods/ 的分流）
+            const p = resolveUrlToDisk(el.src);
             if (!existsSync(p)) { if (el.onerror) el.onerror(); return; }
-            try { vm.runInContext(readFileSync(p, 'utf8'), ctx, { filename: rel }); if (el.onload) el.onload(); }
+            try { vm.runInContext(readFileSync(p, 'utf8'), ctx, { filename: String(el.src) }); if (el.onload) el.onload(); }
             catch (e) { if (el.onerror) el.onerror(); }
         },
     };

@@ -29,8 +29,12 @@ import { fileURLToPath } from 'node:url';
 import { createZip } from '../server/zip.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MODS_DIR = path.join(ROOT, 'web', 'mods');
-const MODELS_DIR = path.join(ROOT, 'web', 'live2d', 'models');
+// ★★ 2026-10：插件根目录从 `web/mods/` 搬到**项目根** `mods/`（与 data/ 平级）。
+const MODS_DIR = path.join(ROOT, 'mods');
+// ★ 模型仍在**插件目录内**（live2d-models/models）—— 它是那个插件的资源，
+//   跟着插件一起打包，所以路径要跟着 MODS_DIR 走。
+//   （旧写法是 `web/live2d/models`，那是搬迁前的宿主位置，早已不用。）
+const MODELS_DIR = path.join(MODS_DIR, 'live2d-models', 'models');
 const OUT_DIR = path.join(ROOT, 'dist', 'assets');
 
 /** 递归收集目录下的文件（返回相对路径 + 内容） */
@@ -161,7 +165,7 @@ console.log('  输出到: ' + path.relative(ROOT, OUT_DIR));
 if (listOnly) process.exit(0);
 
 if (!pickMods.length && !pickModels.length) {
-    console.error('\n没有可打包的内容。检查 web/mods/ 与 web/live2d/models/ 是否存在。');
+    console.error('\n没有可打包的内容。检查 mods/ 与 mods/live2d-models/models/ 是否存在。');
     process.exit(1);
 }
 

@@ -135,10 +135,20 @@ async function init() {
     //   「恢复默认设置」按钮与 restoreDefaultSettings() 也已按要求彻底删除
     //   （用户明确"直接删了不用留"），所以这里不再有它的绑定。
     bindSettingsAutoSave();
-    // 插件：重新扫描（把刚丢进 web/mods/ 的 zip 装上）+ 全局开关
+    // 插件：重新扫描 + 全局开关
+    //
+    // ★★ 2026-10 修正：两个平台的"扫描"含义不同，提示语要分开。
+    //   电脑版：服务端会扫 web/mods/ 目录，把**手工丢进去的 zip** 自动解压安装。
+    //   APK：没有服务端，插件一律住应用私有目录，只能靠「上传安装」装进来 ——
+    //        这里点一下只是**重读一遍列表**（例如刚装完/刚删完想确认）。
+    //   原来两端共用一句"扫描中…"，在 APK 上会让用户以为"把 zip 拷进某个目录"
+    //   是可行的（安卓上根本碰不到那个目录），是误导。
     document.getElementById('modsRefreshBtn')?.addEventListener('click', () => {
         const hint = document.getElementById('modsHint');
-        if (hint) { hint.textContent = '扫描中…'; hint.className = 'text-[11px] text-indigo-400'; }
+        if (hint) {
+            hint.textContent = IS_NATIVE_APP ? '正在重新读取插件列表…' : '扫描中…';
+            hint.className = 'text-[11px] text-indigo-400';
+        }
         void refreshModsList();
     });
     // 插件：＋添加分栏。
@@ -221,17 +231,30 @@ async function init() {
             e.target.value = '';
         }
     });
-    // 外观主题：深色模式三态（浅色 / 深色 / 跟随系统）。
-    // 用三态而不是单个开关，是因为手机/电脑都有系统级深色设置 ——
-    // "跟随系统"能白天浅色、晚上深色自动切，两态开关做不到。
-    // theme.js 负责落 DOM 与同步控件，这里只转发用户选择。
-    document.getElementById('themeDarkMode')?.addEventListener('change', (e) => {
-        if (window.ElainaTheme) window.ElainaTheme.setDarkMode(e.target.value);
+    // 顶栏「外观模式」三段开关（跟随设备 / 浅色 / 深色）——见 index.html 的
+    // .header-theme-switch。它取代了原「外观 → 深色模式」下拉：
+    //   · 点某一段 → ElainaTheme.setDarkMode(该段的 data-mode)
+    //   · 选中的那段加 .is-active（填充圆底）；「跟随设备」= 原来的「跟随系统」
+    //   · 主题被别处改动（系统深浅色变化等）时靠 MutationObserver 同步选中态
+    const themeSwitch = document.getElementById('headerThemeBtn');
+    const markThemeSeg = () => {
+        if (!themeSwitch || !window.ElainaTheme) return;
+        let mode = 'light';
+        try { mode = window.ElainaTheme.darkMode(); } catch (e) { /* 忽略 */ }
+        themeSwitch.querySelectorAll('.theme-seg').forEach((b) => {
+            b.classList.toggle('is-active', b.dataset.mode === mode);
+        });
+    };
+    themeSwitch?.addEventListener('click', (ev) => {
+        const seg = ev.target && ev.target.closest ? ev.target.closest('.theme-seg') : null;
+        if (!seg || !window.ElainaTheme) return;
+        window.ElainaTheme.setDarkMode(seg.dataset.mode);
+        markThemeSeg();
     });
-    // 设置面板打开时同步一次状态（用户可能在别处改过主题）
-    if (window.ElainaTheme) {
-        const sel = document.getElementById('themeDarkMode');
-        if (sel) sel.value = window.ElainaTheme.darkMode();
+    markThemeSeg();
+    if (document.documentElement && typeof MutationObserver === 'function') {
+        new MutationObserver(markThemeSeg)
+            .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     }
     document.getElementById('authChangeBtn')?.addEventListener('click', changeAccessPassword);
     document.getElementById('authLogoutBtn')?.addEventListener('click', logoutAccess);
@@ -395,6 +418,125 @@ async function init() {
         }
         throw failure || new Error('获取模型列表失败');
     }
+    /**
+     * 渲染组合框的候选列表（★ 2026-10 新增）。
+     *
+     * 用户要求（原话）："点右边三角显示模型列表，点击对应的模型直接替换模型上去。
+     * 如果获取到的模型里有与填写的一样的，列表里就不显示名称，避免显示两个一模一样的。"
+     *
+     * ★ 所以这里有一条**刻意**的规则：**当前输入框里的值不列进候选**。
+     *   理由（用户明确说的）：那是"已经用着的那个"，再列一遍会看到两个一样的名字；
+     *   而且点了也没有任何变化（值本来就等于它）。列表只为"换成别的"服务。
+     *
+     * @param {HTMLElement} listEl  浮层列表容器
+     * @param {string[]} models     全部候选
+     * @param {string} current      输入框当前值（会被排除）
+     * @param {(m:string)=>void} onPick 选中回调
+     */
+    function renderModelComboList(listEl, models, current, onPick) {
+        if (!listEl) return;
+        const cur = String(current || '').trim();
+        // 排除与当前值相同的项（用户要求：避免显示两个一模一样的）
+        const shown = models.filter((m) => m !== cur);
+        listEl.innerHTML = '';
+        if (!shown.length) {
+            // 全部候选都等于当前值（或本来就没有）→ 给一句说明，
+            // 否则用户点了三角看到一个空框，会以为功能坏了。
+            const empty = document.createElement('div');
+            empty.className = 'model-combo-empty';
+            empty.textContent = models.length
+                ? '列表里只有当前这个模型。'
+                : '还没有拉到模型列表 —— 先点「获取模型」。';
+            listEl.appendChild(empty);
+            return;
+        }
+        for (const m of shown) {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'model-combo-item';
+            item.setAttribute('role', 'option');
+            item.textContent = m;
+            item.addEventListener('click', () => {
+                onPick(m);
+                closeModelCombo(listEl);
+            });
+            listEl.appendChild(item);
+        }
+    }
+
+    /** 收起某个组合框的浮层 */
+    function closeModelCombo(listEl) {
+        if (!listEl) return;
+        listEl.classList.add('hidden');
+        const combo = listEl.closest('.model-combo');
+        if (combo) combo.classList.remove('is-open');
+        const btn = combo && combo.querySelector('.model-combo-toggle');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+
+    /**
+     * 给一组「输入框 + 三角按钮 + 浮层列表 + 隐藏的 select」接上组合框行为。
+     *
+     * @param {object} cfg
+     * @param {HTMLInputElement} cfg.input   真正取值的输入框
+     * @param {HTMLButtonElement} cfg.toggle 右侧三角
+     * @param {HTMLElement} cfg.list         浮层列表
+     * @param {HTMLSelectElement} cfg.select 候选数据源（隐藏，沿用既有 id）
+     */
+    function bindModelCombo({ input, toggle, list, select }) {
+        if (!input || !toggle || !list || !select) return;
+
+        /** 当前 select 里有哪些候选 */
+        const candidates = () => [...select.options].map((o) => o.value);
+
+        /** 用输入框的当前值刷新列表内容（排除同名项） */
+        const refresh = () => renderModelComboList(list, candidates(), input.value, (m) => {
+            input.value = m;
+            select.value = m;
+            // 改完要让宿主知道值变了（自动保存靠 change/input 事件）
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+
+        toggle.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const willOpen = list.classList.contains('hidden');
+            // 先关掉**其它**组合框（只允许一个展开）
+            document.querySelectorAll('.model-combo-list').forEach((el) => {
+                if (el !== list) closeModelCombo(el);
+            });
+            if (willOpen) {
+                // ★ 每次展开都重新渲染：输入框的值可能已经改了，
+                //   而"排除同名项"依赖它 —— 不重渲染就会漏掉"刚刚变成同名"的那一项。
+                refresh();
+                list.classList.remove('hidden');
+                const combo = list.closest('.model-combo');
+                if (combo) combo.classList.add('is-open');
+                toggle.setAttribute('aria-expanded', 'true');
+            } else {
+                closeModelCombo(list);
+            }
+        });
+
+        // 点别处 / 按 Esc 收起
+        document.addEventListener('click', (ev) => {
+            if (list.classList.contains('hidden')) return;
+            const combo = list.closest('.model-combo');
+            if (combo && !combo.contains(ev.target)) closeModelCombo(list);
+        });
+        input.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Escape') closeModelCombo(list);
+        });
+        // 输入框的值变了 → 若列表正开着，同步刷新（"排除同名项"要跟着变）
+        input.addEventListener('input', () => {
+            if (!list.classList.contains('hidden')) refresh();
+        });
+
+        // 暴露给 populateModelSelect 用：拉到列表后立刻刷新浮层内容
+        input.__modelComboRefresh = refresh;
+    }
+
     async function populateModelSelect({ btn, input, select, baseUrl, apiKey, apiFormat, defaultModels }) {
         const old = btn.textContent;
         btn.textContent = '⏳ 获取中…';
@@ -407,9 +549,14 @@ async function init() {
                 o.value = m; o.textContent = m;
                 select.appendChild(o);
             }
-            select.classList.remove('hidden');
-            select.onchange = () => { input.value = select.value; };
-            // 必须把模型名**填进输入框** —— 真正发给服务商的是 input 的值
+            // ★ 2026-10 组合框：select **保持隐藏**（它是候选数据源，不再是可见控件）。
+            //
+            //   旧行为是 `select.classList.remove('hidden')` —— 把下拉框显示在输入框
+            //   下方。用户要求"下拉框和输入的地方二合一"，所以可见的那个改成了
+            //   右三角展开的浮层（见 bindModelCombo / renderModelComboList），
+            //   select 退回纯数据源。这里刻意**不再**取消 hidden。
+            //   （check-model-list 里对应的断言已同步改成"候选进了浮层列表"。）
+            select.onchange = () => { input.value = select.value; };            // 必须把模型名**填进输入框** —— 真正发给服务商的是 input 的值
             // （见 readProviderSettingsForm），只填下拉框等于这个功能没生效。
             //
             // 真实故障：Anthropic 下切格式时会自动填预设名 `claude-sonnet-4-20250514`，
@@ -437,6 +584,12 @@ async function init() {
             } else {
                 select.value = models[0];
             }
+            // ★ 2026-10 组合框：候选刚换了一批，立刻刷新浮层内容。
+            //   注意**这里不需要展开列表** —— 用户点的是「获取模型」，
+            //   他的意图是"把列表拉下来备用"，不是"现在就要选"。
+            //   展开由右三角负责（见 bindModelCombo）。这也是用户要的分工：
+            //   "点右边三角显示模型列表"。
+            if (typeof input.__modelComboRefresh === 'function') input.__modelComboRefresh();
         } catch (err) {
             // 上面各分支已经给出**具体**原因（HTML 首页 / 非 JSON / data 为空 / HTTP 码）。
             // 这里只兜底浏览器层失败 —— 那种情况错误信息里只有一句 "Failed to fetch"，
@@ -477,6 +630,24 @@ async function init() {
             apiKey: document.getElementById('settingVisionApiKey')?.value
         });
     });
+
+    // ===== 模型名组合框：接上"点右三角展开列表"的行为（★ 2026-10）=====
+    // 两处（对话模型 / 视觉模型）结构相同，用同一段绑定逻辑。
+    bindModelCombo({
+        input: document.getElementById('settingChatModel'),
+        toggle: document.getElementById('chatModelsToggle'),
+        list: document.getElementById('chatModelsList'),
+        select: document.getElementById('chatModelsSelect'),
+    });
+    bindModelCombo({
+        input: document.getElementById('settingVisionModel'),
+        toggle: document.getElementById('visionModelsToggle'),
+        list: document.getElementById('visionModelsList'),
+        select: document.getElementById('visionModelsSelect'),
+    });
+    // ★ 设置里的所有下拉（深色模式 / API 格式 / 语音输出 / 思考强度 / 日志筛选…）
+    //   改用自绘弹出面板（见文件末尾 initSettingsDropdowns 的说明）。
+    initSettingsDropdowns();
     elements.settingApiFormat.addEventListener('change', () => {
         const apiFormat = elements.settingApiFormat.value || 'openai-compatible';
         const preset = CHAT_API_FORMATS[apiFormat] || CHAT_API_FORMATS['openai-compatible'];
@@ -495,6 +666,11 @@ async function init() {
         updateChatFormatUI();
     });
     elements.settingTtsProvider.addEventListener('change', updateTtsProviderUI);
+    // MiMo TTS 模型下拉切换子字段（预置音色 / 音色描述 / 参考音频样本）
+    document.getElementById('settingMimoTtsModel')?.addEventListener('change', updateMimoTtsModelUI);
+    // 参考音频样本：文件框不触发自动保存（见 bindSettingsAutoSave），这里自己落盘
+    document.getElementById('settingMimoTtsCloneSample')?.addEventListener('change', handleMimoTtsCloneSampleFileChange);
+    document.getElementById('mimoTtsCloneSampleClear')?.addEventListener('click', clearMimoTtsCloneSample);
     elements.testChatConnectionBtn.addEventListener('click', testChatConnection);
     elements.testTtsConnectionBtn.addEventListener('click', testTtsConnection);
     elements.clearApiKeysBtn.addEventListener('click', clearApiKeys);
@@ -506,15 +682,15 @@ async function init() {
     document.querySelectorAll('input[name="asrProvider"]').forEach(r => {
         r.addEventListener('change', updateAsrProviderUI);
     });
-    // 阿里云 ASR 连接测试：发 0.5s 静音验证 Key 与模型开通状态（Key 复用 TTS 的 DashScope Key）
+    // 阿里云 ASR 连接测试：发 0.5s 静音验证 Key 与模型开通状态（Key 为**独立的 ASR Key**，不再复用 TTS 的）
     document.getElementById('settingAsrTest')?.addEventListener('click', async () => {
-        const key = document.getElementById('settingDashscopeApiKey')?.value.trim();
+        const key = document.getElementById('settingAsrApiKey')?.value.trim();
         const asrUrl = document.getElementById('settingDashscopeAsrBaseUrl')?.value.trim() || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
         const asrModel = document.getElementById('settingDashscopeAsrModel')?.value.trim() || 'qwen3-asr-flash';
         const statusEl = document.getElementById('settingAsrTestStatus');
         if (!statusEl) return;
         if (!key) {
-            statusEl.textContent = '请先填写 API Key（语音输出 → 阿里千问）';
+            statusEl.textContent = '请先填写 API Key（语音输入 → 阿里百炼）';
             statusEl.className = 'text-[11px] text-red-400';
             return;
         }
@@ -548,8 +724,8 @@ async function init() {
     });
     // 小米 MiMo ASR 连接测试（OpenAI 兼容 /v1/chat/completions + input_audio）
     document.getElementById('settingMimoAsrTest')?.addEventListener('click', async () => {
-        const key = document.getElementById('settingMimoApiKey')?.value.trim();
-        const baseUrl = (document.getElementById('settingMimoBaseUrl')?.value.trim() || 'https://api.xiaomimimo.com').replace(/\/+$/, '');
+        const key = document.getElementById('settingMimoAsrApiKey')?.value.trim();
+        const baseUrl = (document.getElementById('settingMimoAsrBaseUrl')?.value.trim() || 'https://api.xiaomimimo.com').replace(/\/+$/, '');
         const model = document.getElementById('settingMimoAsrModel')?.value.trim() || 'mimo-v2.5-asr';
         const statusEl = document.getElementById('settingMimoAsrTestStatus');
         if (!statusEl) return;
@@ -646,7 +822,7 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
             updateComposerSendVisibility();
         }
     });
-    // 思考开关与强度：现在住在「设置 → 对话」里，不在输入框的 ⊕ 菜单里。
+    // 思考开关与强度：现在住在「设置 → 模型」里，不在输入框的 ⊕ 菜单里。
     // 直接写进 state 并持久化 —— 这两个是**模型参数**，改了立刻对下一次请求生效，
     // 不需要点「保存设置」才生效（用户不会想到"改个开关还要再点保存"）。
     elements.settingThinkingMode.addEventListener('change', () => {
@@ -659,6 +835,11 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
             ? elements.settingThinkingEffort.value
             : 'medium';
         updateThinkingModeHint();
+        persistSettings();
+    });
+    // 第三人称（两段式生成）：与思考开关同属「对话优化」块，同样是"改了立刻生效 + 持久化"。
+    elements.settingThirdPerson.addEventListener('change', () => {
+        state.settings.thirdPerson = elements.settingThirdPerson.checked;
         persistSettings();
     });
     elements.initialComposerMemoryBtn.addEventListener('click', runManualMemorySummary);
@@ -713,6 +894,11 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         else enterDiaryMode();
     });
     elements.exitDiaryBtn.addEventListener('click', exitDiaryMode);
+
+    // 日志现在是「设置」里的一个**独立分栏**（#tab-log），
+    // 由 switchSettingsTab() 在切栏时调用 window.LogViewer.open() / close()。
+    // ★ 这里原先绑的 #openLogPageBtn 与 #exitLogBtn 已随"独立全屏页"方案一起删除 ——
+    //   那两个元素不存在了（分栏不需要"打开/返回"按钮）。
     elements.exitNotesBtn.addEventListener('click', () => {
         if (state.notesMode) exitNotesMode();
     });
@@ -905,6 +1091,35 @@ function closeSidebarDrawer() {
 function switchSettingsTab(name) {
     document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.settingsTab === name));
     document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.toggle('active-panel', p.id === name));
+    // ★ 让选中的分栏**滚进可视区**（手机必需）。
+    //
+    //   手机上 9 个分栏放不下，导航是横向滚动的：靠后的「日志」「插件」初始时
+    //   在屏幕外。如果用户是通过别的方式切过去的（程序化切栏、恢复上次分栏、
+    //   插件注册的新分栏），导航还停在最左边 —— 看起来像"没有选中任何分栏"。
+    //   点击切换时浏览器会自动滚（:focus），但**程序化切换不会**，所以这里显式做。
+    //   behavior:'smooth' 在部分旧 WebView 上不支持 → 用 try 兜底成瞬时滚动。
+    try {
+        const nav = document.getElementById('settingsTabNav');
+        const btn = nav && nav.querySelector(`.settings-tab-btn[data-settings-tab="${name}"]`);
+        if (btn && typeof btn.scrollIntoView === 'function') {
+            btn.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+        }
+    } catch (e) {
+        try {
+            const nav = document.getElementById('settingsTabNav');
+            const btn = nav && nav.querySelector(`.settings-tab-btn[data-settings-tab="${name}"]`);
+            if (btn) btn.scrollIntoView();
+        } catch (e2) { /* 滚不动也不影响切栏本身 */ }
+    }
+    // ★ 日志分栏：进来时开始拉取与轮询，离开时停掉。
+    //   为什么必须停：它每 2 秒打一次 /api/logs/tail，不停的话"停在别的分栏"
+    //   也在拉；而服务端若把它记进日志就是自噪音（log-buffer.mjs 的注释里有来龙去脉）。
+    try {
+        if (window.LogViewer) {
+            if (name === 'tab-log') window.LogViewer.open();
+            else window.LogViewer.close();
+        }
+    } catch (e) { /* 日志模块出问题不该影响切栏 */ }
     // 通知插件：某个分栏被显示了。
     // 为什么要广播：插件分栏的 render(container) 是**延迟调用**的 ——
     // 挂载时只建空壳，真被点开才渲染，没打开过的分栏不白做初始化。
@@ -938,6 +1153,100 @@ function switchSettingsTab(name) {
 // ===== Live2D 设置逻辑已搬进 web/mods/live2d/settings-panel.js =====
 // 模型列表 / 上传 / 重命名 / 删除 / 背景 / 鼠标跟随都随插件走，
 // 由 settings.tabs 插槽在被点开时渲染（见那个插件的 register）。
+
+// ============================================================================
+//  设置下拉：自绘弹出面板（★ 2026-10）
+//
+//  用户要求"改下拉"：把原生 <select> 的**弹出面板**换成主题化列表，
+//  对齐「模型名」组合框。原生面板由系统绘制、CSS 选不中它，只能自己弹一个。
+//
+//  ── 与既有代码的关系（不动取值逻辑）─────────────────────────────────────
+//  `select` 元素**原样保留**（它仍是取值来源、仍显示当前值），既有 `change`
+//  监听器也不动 —— 只是拦截它的 `mousedown` 阻止原生面板，改弹自绘列表；
+//  用户点选项时写回 `select.value` 并派发冒泡的 `change`，
+//  所以 `settingApiFormat` 等既有处理逻辑照常触发。
+// ============================================================================
+let cselectPanel = null;
+let cselectOwner = null;
+
+function closeCselect() {
+    if (cselectPanel) { cselectPanel.remove(); cselectPanel = null; }
+    if (cselectOwner) { cselectOwner.classList.remove('cselect-open'); cselectOwner = null; }
+}
+
+function openCselect(select) {
+    closeCselect();
+    const rect = select.getBoundingClientRect();
+    const panel = document.createElement('div');
+    panel.className = 'cselect-panel';
+    panel.setAttribute('role', 'listbox');
+    panel.style.left = rect.left + 'px';
+    panel.style.width = rect.width + 'px';
+    let any = false;
+    Array.prototype.forEach.call(select.options, (opt) => {
+        if (opt.hidden || opt.disabled) return;
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'model-combo-item';
+        item.setAttribute('role', 'option');
+        item.textContent = opt.textContent;
+        if (opt.value === select.value) item.classList.add('is-current');
+        item.addEventListener('click', () => {
+            if (select.value !== opt.value) {
+                select.value = opt.value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+            closeCselect();
+        });
+        panel.appendChild(item);
+        any = true;
+    });
+    if (!any) {
+        const empty = document.createElement('div');
+        empty.className = 'model-combo-empty';
+        empty.textContent = '没有可选项目';
+        panel.appendChild(empty);
+    }
+    document.body.appendChild(panel);
+    // 默认贴在 select 下沿；下方空间不够就翻到上沿
+    const h = panel.offsetHeight;
+    if (rect.bottom + h > window.innerHeight - 8 && rect.top - h > 8) {
+        panel.classList.add('cselect-panel--up');
+        panel.style.top = (rect.top - h) + 'px';
+    } else {
+        panel.style.top = rect.bottom + 'px';
+    }
+    select.classList.add('cselect-open');
+    cselectPanel = panel;
+    cselectOwner = select;
+}
+
+function initSettingsDropdowns() {
+    document.querySelectorAll('#settingsPanel select.modal-input, #settingsPanel select.log-select').forEach((select) => {
+        if (select.dataset.cselect) return;
+        select.dataset.cselect = '1';
+        select.addEventListener('mousedown', (ev) => {
+            // 阻止原生面板（Chromium 上 mousedown 的 preventDefault 即可拦住）
+            ev.preventDefault();
+            if (cselectOwner === select) closeCselect();
+            else openCselect(select);
+        });
+        select.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Escape') closeCselect();
+        });
+    });
+}
+
+// 点击别处 / Esc / 滚动 / 缩放都收起面板
+document.addEventListener('mousedown', (ev) => {
+    if (!cselectPanel) return;
+    const t = ev.target;
+    if (t && t.closest && (t.closest('select') || cselectPanel.contains(t))) return;
+    closeCselect();
+}, true);
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeCselect(); });
+window.addEventListener('resize', closeCselect);
+window.addEventListener('scroll', closeCselect, true);
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);

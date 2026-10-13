@@ -179,7 +179,7 @@ const mainLines = main.split('\n').filter((l) => l !== '');
 //     · 每条记录的**首行**必须带完整前缀（时间/标签/级别/来源）→ grep 仍可用
 //     · 续行不带前缀，但必须**有缩进**（视觉上属于上一条记录）
 //   所以断言拆成两条：首行必须合规；不带前缀的行必须缩进。
-const LINE_RE = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[[A-Za-z0-9]+\] \[(DBUG|INFO|WARN|ERRO|CRIT)\]( \[v[^\]]+\])? \[[a-z0-9_.-]+:\d+\]: \s*\S/;
+const LINE_RE = /^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[[A-Za-z0-9]+\] \[(DBUG|INFO|WARN|ERRO|CRIT)\]( \[v[^\]]+\])? \[[a-z0-9_.-]+:\d+\]: \s*\S/;
 const headLines = mainLines.filter((l) => LINE_RE.test(l));
 const contLines = mainLines.filter((l) => !LINE_RE.test(l));
 ok(headLines.length > 0, '主日志有合规的记录首行');
@@ -197,8 +197,9 @@ ok(!main.includes('⏎'), '主日志里没有压平标记 ⏎（多行结构被�
 ok(contLines.length > 0, '★ 存在多行诊断块（说明多行结构确实被保留，没被压成一行）');
 
 // ---- 时间是本地时间（旧实现用 toISOString，差了 8 小时）----
-const first = headLines[0].match(/^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
-ok(!!first, '首行带完整时间戳');
+// 毫秒是 2026-10 补的：同一秒里能连打十几条日志，秒级精度分不出先后。
+const first = headLines[0].match(/^\[(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d{3})/);
+ok(!!first, '首行带完整时间戳（含毫秒）');
 if (first) {
     const t = new Date(+first[1], +first[2] - 1, +first[3], +first[4], +first[5], +first[6]).getTime();
     const skew = Math.abs(Date.now() - t);

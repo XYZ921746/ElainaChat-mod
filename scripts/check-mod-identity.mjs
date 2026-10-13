@@ -175,7 +175,7 @@ try {
         // ★ 不能写死 'elaina-avatar' 目录名 —— 用户可能已经把它改了
         //   （本检查的第一版就写死了，于是在用户改成 1111 之后自己报 ENOENT，
         //    而那是检查的问题、不是产品的问题）。这里按 manifest.id 找真实目录。
-        const modsRoot = path.join(ROOT, 'web', 'mods');
+        const modsRoot = path.join(ROOT, 'mods');
         let avDir = null;
         for (const n of readdirSync(modsRoot)) {
             const mf = path.join(modsRoot, n, 'manifest.json');

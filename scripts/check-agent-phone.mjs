@@ -28,7 +28,7 @@ import { readFrontend } from './frontend-sources.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const html = readFrontend();
-const live2d = readFileSync(path.join(root, 'web', 'mods', 'live2d', 'index.js'), 'utf8');
+const live2d = readFileSync(path.join(root, 'mods', 'live2d', 'index.js'), 'utf8');
 // 标签分发已从 live2d-video.js 移到宿主自有模块（见 web/js/agent-tags.js 的说明）：
 // Live2D 是可卸的 mod，不能让它持有全部 [操作:] 的分发权 —— 否则卸掉它
 // 就等于 Agent 系统（文件/命令/手机）全体失效。
@@ -92,9 +92,25 @@ ok(!/高级 → 手机操作/.test(skillFn), '★ 不再引用已搬走的「高
 const phoneTags = [
     '手机状态', '手机查看界面', '手机截图', '手机等待',
     '手机点击', '手机滑动', '手机输入', '手机按键', '手机打开', '手机命令',
+    // ★ 2026-10 新增：读取信息 + 工作区文件访问
+    '手机应用列表', '手机通知', '手机设备信息', '手机通讯录', '手机日历', '手机短信',
+    '手机列出文件', '手机读文件', '手机写文件', '手机删除文件',
 ];
-const missingTags = phoneTags.filter((t) => !has(skillFn, '[操作:' + t));
-ok(missingTags.length === 0, '可用档列出了全部 10 个手机操作标签', '缺少: ' + missingTags.join('、'));
+// ★ 读取信息那六个标签**不是字面量写在 skillFn 里的** —— 它们由
+//   phoneReadSkillLines() 在运行时按隐私开关过滤后拼出来。
+//   所以判据要分两处看：字面量部分查 skillFn，读取部分查那张过滤表。
+//   （只查 skillFn 会误报"提示词漏了"，而实际是它被刻意做成动态的。）
+const READ_TAGS = ['手机应用列表', '手机通知', '手机设备信息', '手机通讯录', '手机日历', '手机短信'];
+const literalTags = phoneTags.filter((t) => !READ_TAGS.includes(t));
+const missingLiteral = literalTags.filter((t) => !has(skillFn, '[操作:' + t));
+ok(missingLiteral.length === 0, '可用档列出了全部固定手机操作标签', '缺少: ' + missingLiteral.join('、'));
+// 读取标签必须在过滤表里逐项出现（否则开关关掉后清单不会少那一项）
+const readFnMatch = html.match(/function phoneReadSkillLines\(\)\s*\{([\s\S]*?)\n\}/);
+ok(!!readFnMatch, '找得到 phoneReadSkillLines() 的函数体');
+if (readFnMatch) {
+    const missingRead = READ_TAGS.filter((t) => !has(readFnMatch[1], "'" + t + "'"));
+    ok(missingRead.length === 0, '读取信息清单里列出了全部六项', '缺少: ' + missingRead.join('、'));
+}
 
 // ---------- 一之二、能力清单必须按实现方式区分 ----------
 //
@@ -108,13 +124,39 @@ ok(/不支持\*\* \[操作:手机打开\]|不支持.*手机打开/.test(skillFn)
     '无障碍档明确说明**不支持**「手机打开」（原生确实做不到）');
 ok(/手机命令/.test(skillFn) && /不支持|做不到/.test(skillFn),
     '无障碍档明确说明不支持「手机命令」');
-ok(/换成 Shizuku \/ Root \/ 模块|改用 root \/ Shizuku \/ 模块/.test(skillFn),
+// ★ 2026-10：后端收敛为「无障碍 + 模块」，所以这里断言的是"引导去换模块"。
+//   （旧断言写的是 `换成 Shizuku / Root / 模块` —— 那两个后端已删除。）
+ok(/换成「模块」方式|改用「模块」方式/.test(skillFn),
     '无障碍档给出可行替代（换实现方式 / 点图标）');
 ok(/不要重复尝试/.test(skillFn),
     '明确要求模型遇到「不支持」时不要反复重试（否则会刷屏失败）');
 // 非无障碍档才承诺「手机打开 / 手机命令」
 ok(/else \{[\s\S]*手机打开 包名/.test(skillFn),
     '非无障碍档才列出「手机打开 / 手机命令」');
+
+// ---------- 一之三、读取信息受隐私开关控制（★ 2026-10 新增）----------
+//
+// 用户要求："如果不想让 ai 知道太多信息请关闭对应权限"。
+// 光在设置里放开关不够 —— 提示词也必须**按开关过滤**，
+// 否则模型仍会输出标签、每步都被拒绝，用户看到的是一串失败。
+console.log('\n— 隐私开关 —');
+ok(/function phoneReadSkillLines\(/.test(html),
+    '有 phoneReadSkillLines()（按隐私开关过滤能力清单）');
+ok(/phoneReadAllowed\(x\.action\)/.test(html),
+    '读取信息清单逐项按开关过滤');
+ok(/function phoneReadAllowed\(/.test(html), '有 phoneReadAllowed() 判据');
+ok(/function phoneReadBlockedReason\(/.test(html),
+    '有 phoneReadBlockedReason()（执行层的第二道闸）');
+ok(/const PHONE_READ_OPS = \[/.test(html), '有 PHONE_READ_OPS 清单');
+ok(/phoneReadBlockedReason\(parsed\.action\)/.test(html),
+    '★ runAgentPhoneOperation 里真的用了第二道闸（光有函数不算）');
+// 六个开关都要在设置界面里存在（应用层开关）
+for (const id of ['settingAgentReadApps', 'settingAgentReadNotifications', 'settingAgentReadDevice',
+    'settingAgentReadSms', 'settingAgentReadContacts', 'settingAgentReadCalendar']) {
+    ok(has(html, id), `设置界面有隐私开关 ${id}`);
+}
+ok(/不想让 AI 知道太多信息/.test(html),
+    '★ 设置界面明确提示"不想让 AI 知道太多信息就关掉"（用户点名要的那句话）');
 
 // ---------- 二、注入点：两条构建路径都要有 ----------
 console.log('\n— 注入点 —');
@@ -129,23 +171,41 @@ ok(/agentPhoneSkillText\(\)/.test(legacy),
 // 这一条是本检查最有价值的部分：提示词与解析器是两处独立维护的清单，
 // 任何一边加/改标签而另一边没跟上，都会造成"AI 照做了却没人接"。
 console.log('\n— 清单与解析器一致 —');
+// ★ 提取方式：原来用的是 `const AGENT_PHONE_OPS = [...]` 这一段里的**所有**
+//   单引号字符串。2026-10 加了注释与分组后，注释里出现的 `手机短信` 之类
+//   也会被这个正则抓进来（注释里写标签名是刻意的，便于对照），
+//   于是"解析器认识"的判据会被注释污染。所以这里先剥掉注释再抓。
 const opsMatch = html.match(/const AGENT_PHONE_OPS = \[([\s\S]*?)\];/);
 ok(!!opsMatch, '找得到 AGENT_PHONE_OPS（解析器认识的标签清单）');
 if (opsMatch) {
-    const parsed = [...opsMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    // 去掉 // 行注释与 /* */ 块注释，避免注释里的标签名被当成真实条目
+    const bodyNoComments = opsMatch[1]
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/[^\n]*/g, '');
+    const parsed = [...bodyNoComments.matchAll(/'([^']+)'/g)].map((m) => m[1]);
     const notParsed = phoneTags.filter((t) => !parsed.includes(t));
     ok(notParsed.length === 0,
         '提示词里承诺的每个标签，解析器都认识', '解析器不认识: ' + notParsed.join('、'));
-    const notAdvertised = parsed.filter((t) => !has(skillFn, '[操作:' + t));
-    ok(notAdvertised.length === 0,
-        '解析器认识的每个标签，提示词里都告知了模型', '提示词漏了: ' + notAdvertised.join('、'));
+    // 提示词那一侧：固定标签查 skillFn，读取标签查过滤表（见上面的说明）
+    const notAdvertised = parsed
+        .filter((t) => !READ_TAGS.includes(t))
+        .filter((t) => !has(skillFn, '[操作:' + t));
+    const readNotAdvertised = READ_TAGS
+        .filter((t) => parsed.includes(t))
+        .filter((t) => !(readFnMatch && has(readFnMatch[1], "'" + t + "'")));
+    const allMissing = notAdvertised.concat(readNotAdvertised);
+    ok(allMissing.length === 0,
+        '解析器认识的每个标签，提示词里都告知了模型', '提示词漏了: ' + allMissing.join('、'));
 }
 
 // 每个标签都要有风险分级，否则 requestApproval 拿不到级别（会当 safe 放行）
 const riskMatch = html.match(/const AGENT_RISK = \{([\s\S]*?)\};/);
 ok(!!riskMatch, '找得到 AGENT_RISK（风险分级表）');
 if (riskMatch && opsMatch) {
-    const parsed = [...opsMatch[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    const bodyNoComments = opsMatch[1]
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/[^\n]*/g, '');
+    const parsed = [...bodyNoComments.matchAll(/'([^']+)'/g)].map((m) => m[1]);
     const ungraded = parsed.filter((t) => !has(riskMatch[1], "'" + t + "'"));
     ok(ungraded.length === 0, '每个手机操作都有风险分级', '缺分级: ' + ungraded.join('、'));
 }
@@ -167,7 +227,11 @@ ok(/agentPhoneOperation/.test(tags) && /callAction\('agentPhoneOperation'/.test(
 ok(/\^\(手机\|设备\)/.test(tags), 'agent-tags.js 的转发判据认得「手机」前缀');
 ok(!/\^\(手机\|设备\)/.test(live2d),
     '★ live2d-video.js 不再持有手机分发（Live2D 卸掉不影响手机操作）');
-ok(/ElainaDevice/.test(html) && /@CapacitorPlugin\(name = "ElainaDevice"\)/.test(
+// ★ 注解的**写法**不该被这条断言锁死：2026-10 给 @CapacitorPlugin 加了
+//   permissions 段之后它变成了多行形式，而旧正则只认单行
+//   `@CapacitorPlugin(name = "ElainaDevice")` —— 于是"名字一致"这条
+//   因为排版变了而假失败。判据应该只关心**名字**，所以用 \s* 容忍换行。
+ok(/ElainaDevice/.test(html) && /@CapacitorPlugin\(\s*name\s*=\s*"ElainaDevice"/.test(
     readFileSync(path.join(root, '..', 'android-app', 'android', 'app', 'src', 'main', 'java',
         'com', 'elainachat', 'opensource', 'ElainaShellPlugin.java'), 'utf8')),
     '原生插件名与前端查找的名字一致（ElainaDevice）');
@@ -178,14 +242,52 @@ ok(/registerPlugin\(ElainaShellPlugin\.class\)/.test(
 
 // ---------- 五、静态标签指南不得把手机操作说成"总是可用" ----------
 console.log('\n— 不产生误导 —');
-const guideMatch = html.match(/const LIVE2D_TAG_GUIDE = `([\s\S]*?)`;/);
-ok(!!guideMatch, '找得到 LIVE2D_TAG_GUIDE');
+// ★ 2026-10 改动（方案 A 拆分）：常量从 `LIVE2D_TAG_GUIDE` 改名为
+//   `HOST_ACTION_TAG_GUIDE`，且**只留宿主自己就能执行的操作 + 定时任务** ——
+//   表现类（情绪/表情/动作/位置/大小/背景 + 静音/水印）搬进了 live2d mod，
+//   走 host.setPromptHint 注入。手机标签的"可用性随设备变化"这条要求
+//   仍然落在宿主这一段上（它本来就在宿主的指南里，不在 Live2D 那段）。
+const guideMatch = html.match(/const HOST_ACTION_TAG_GUIDE = `([\s\S]*?)`;/);
+ok(!!guideMatch, '找得到 HOST_ACTION_TAG_GUIDE（宿主操作标签指南）');
 if (guideMatch) {
     // 静态指南里不该直接列出手机标签（它的可用性随设备/设置变化，由动态注入负责说）
     ok(!/\[操作:手机点击\]/.test(guideMatch[1]),
         '静态指南没有把手机标签写成"总是可用"（可用性随设备变化，交给动态注入）');
     ok(/系统会单独告知/.test(guideMatch[1]),
         '静态指南说明了手机/文件操作由系统单独告知（避免模型凭这里猜）');
+}
+// ★ 反向断言：表现类标签**不得**再出现在宿主的指南里
+//   （它们已是 live2d mod 的职责；留在这里就等于"卸掉插件后模型还在被要求输出
+//     没人执行的标签" —— 那正是本次拆分要根治的问题）。
+{
+    const hostGuide = guideMatch ? guideMatch[1] : '';
+    ok(!/\[情绪:开心/.test(hostGuide),
+        '★ 宿主指南里不再列表现类情绪标签（已搬进 live2d mod 的 setPromptHint）');
+    ok(!/\[表情:happy/.test(hostGuide),
+        '★ 宿主指南里不再列表情标签（同上）');
+    ok(!/\[背景:深蓝/.test(hostGuide),
+        '★ 宿主指南里不再列背景标签（同上）');
+    // 定时任务必须留下：它是宿主能力，跟 Live2D 无关
+    ok(/\[任务:/.test(hostGuide),
+        '★ 定时任务标签留在宿主（否则关掉 Live2D 就没法定时提醒）');
+    // 宿主自己执行的三个动作也要留
+    for (const act of ['打开视频通话', '结束通话', '整理记忆']) {
+        ok(hostGuide.includes('[操作:' + act + ']'), `★ 宿主动作「${act}」留在宿主指南里`);
+    }
+}
+// live2d mod 侧：表现指南必须真的通过 setPromptHint 注入
+{
+    const l2d = readFileSync(path.join(root, 'mods', 'live2d', 'index.js'), 'utf8');
+    ok(/host\.setPromptHint\(/.test(l2d),
+        '★★ live2d mod 用 host.setPromptHint 注入表现指南（停用即自动摘除）');
+    ok(/LIVE2D_PRESENTATION_GUIDE/.test(l2d), 'live2d mod 里有表现指南常量');
+    ok(/\[情绪:开心/.test(l2d) && /\[表情:happy/.test(l2d),
+        '★ 情绪/表情标签已搬到 live2d mod');
+    ok(/\[操作:静音\]/.test(l2d) && /\[操作:隐藏水印\]/.test(l2d),
+        '★ 静音/水印（本插件独有的两个操作）也在它的指南里');
+    // 水印提示只在模型确实有开关时才加（否则教 AI 输出无效标签）
+    ok(/if \(watermarkExp\)/.test(l2d),
+        '★ 水印段是条件注入（模型没有水印开关就不提）');
 }
 
 console.log(`\n手机 Agent 能力声明检查：${pass} 项通过，${failures.length} 项失败`);

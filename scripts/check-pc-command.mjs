@@ -166,47 +166,64 @@ try {
         body: JSON.stringify(body),
     }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) }));
 
-    // ---- 限制模式：整体拒绝（命令能做的远超文件读写）----
+    // ---- 三档：strict 每条都问 / auto 只问危险 / full 从不问 ----
+    //
+    // ★★ 2026-10 权限模型重构。旧模型是 app（整体拒绝命令）/ computer（放行，
+    //    危险命令要授权）两档。新模型三档都能执行命令，区别只在"要不要问"：
+    //      strict → 一律要求 approved（连 dir 也要）
+    //      auto   → 只有危险命令要求 approved
+    //      full   → 从不要求
+    //    所以下面按档位逐条验证 —— 这是本次改造的核心语义，必须钉死。
     {
-        const r = await post({ permission: 'app', command: 'dir' });
-        ok(r.status === 403, '限制模式下命令被拒绝（403）', `status=${r.status}`);
+        // strict：安全命令也要 approved
+        const r = await post({ access: 'strict', command: 'dir' });
+        ok(r.status === 403, 'strict 档：安全命令也要求授权（403）', `status=${r.status}`);
+        ok(r.json?.needApproval === true, 'strict 档：安全命令也回 needApproval');
+        const r2 = await post({ access: 'strict', command: 'dir', approved: true });
+        ok(r2.status === 200, 'strict 档：批准后执行', `status=${r2.status}`);
     }
-    // ---- 全权限 + 安全命令：直接放行，不需要 approved ----
     {
-        const r = await post({ permission: 'computer', command: 'echo elaina-probe-ok' });
-        ok(r.status === 200, '全权限下安全命令直接执行（无需授权）', `status=${r.status}`);
+        // auto：安全命令直接执行，危险命令要授权
+        const r = await post({ access: 'auto', command: 'echo elaina-probe-ok' });
+        ok(r.status === 200, 'auto 档：安全命令直接执行（无需授权）', `status=${r.status}`);
         ok(String(r.json?.stdout || '').includes('elaina-probe-ok'), '命令真的执行了（输出含探针）',
             JSON.stringify(r.json?.stdout));
         ok(r.json?.risk === 'safe', '服务端回报 risk=safe');
+
+        const d = await post({ access: 'auto', command: 'del definitely-not-exists.txt' });
+        ok(d.status === 403, 'auto 档：危险命令未授权时被拒绝（403）', `status=${d.status}`);
+        ok(d.json?.needApproval === true, 'auto 档：危险命令回 needApproval');
+        ok(Array.isArray(d.json?.reasons) && d.json.reasons.length > 0, '响应带风险原因');
     }
-    // ---- 全权限 + 危险命令 + 未授权：必须拒绝并要授权 ----
     {
-        const r = await post({ permission: 'computer', command: 'del definitely-not-exists.txt' });
-        ok(r.status === 403, '危险命令未授权时被拒绝（403）', `status=${r.status}`);
-        ok(r.json?.needApproval === true, '响应带 needApproval（前端据此弹窗）');
-        ok(Array.isArray(r.json?.reasons) && r.json.reasons.length > 0, '响应带风险原因');
+        // full：连危险命令都不问
+        const r = await post({ access: 'full', command: 'echo elaina-probe-ok' });
+        ok(r.status === 200, 'full 档：安全命令直接执行', `status=${r.status}`);
+        const d = await post({ access: 'full', command: 'del definitely-not-exists-elaina.txt' });
+        ok(d.status === 200, '★ full 档：危险命令**不再询问**，直接执行（完全访问的定义）',
+            `status=${d.status}`);
+        ok(d.json?.risk === 'dangerous', 'full 档仍如实回报 risk=dangerous（只是不问）');
     }
     // ---- ★ 关键：绕过前端直接传 approved:false 也拿不到危险命令 ----
     {
-        const r = await post({ permission: 'computer', command: 'del x.txt', approved: false });
+        const r = await post({ access: 'auto', command: 'del x.txt', approved: false });
         ok(r.status === 403, '显式 approved:false 仍被拒绝（服务端是权威）', `status=${r.status}`);
     }
-    // ---- 授权后放行（真的执行，退出码非 0 也算"执行过了"）----
+    // ---- 非法档位必须收敛到最严的 strict（不能因为传怪值就放行）----
     {
-        const r = await post({ permission: 'computer', command: 'del definitely-not-exists-elaina.txt', approved: true });
-        ok(r.status === 200, '授权后危险命令被执行（不再 403）', `status=${r.status}`);
-        ok(r.json?.risk === 'dangerous', '授权后仍如实回报 risk=dangerous');
+        const r = await post({ access: 'totally-bogus', command: 'dir' });
+        ok(r.status === 403, '非法档位收敛到 strict（仍然要求授权）', `status=${r.status}`);
     }
     // ---- 空命令 / 超长命令 ----
     {
-        const r = await post({ permission: 'computer', command: '' });
+        const r = await post({ access: 'full', command: '' });
         ok(r.status === 400, '空命令被拒绝（400）', `status=${r.status}`);
-        const r2 = await post({ permission: 'computer', command: 'x'.repeat(9000) });
+        const r2 = await post({ access: 'full', command: 'x'.repeat(9000) });
         ok(r2.status === 400, '超长命令被拒绝（400）', `status=${r2.status}`);
     }
     // ---- 命令失败也要 200 + 真实 stderr（AI 需要看到报错才能自我纠正）----
     {
-        const r = await post({ permission: 'computer', command: 'this-command-does-not-exist-xyz' });
+        const r = await post({ access: 'full', command: 'this-command-does-not-exist-xyz' });
         ok(r.status === 200, '不存在的命令仍返回 200（错误交给 AI 看）', `status=${r.status}`);
         ok(r.json?.ok === false, '回报 ok:false');
         ok(Boolean(r.json?.stderr || r.json?.text), '带上了错误输出');
@@ -217,34 +234,33 @@ try {
     // 这是 ④ 里"需申请越界"的落点。旧行为是硬 403 让用户自己去设置页改全局权限；
     // 现在改成就这一次问一次。必须打在真实 HTTP 上，因为"是否放行"是服务端说了算。
     {
-        const outside = path.join(ROOT, '..', 'elaina-escalation-probe.txt');
+        // ★★ 2026-10 三档模型下**没有越界这个概念**了：三档都能访问任意路径，
+        //    needEscalation 那条分支永远不会再触发。所以这里断言的是新语义：
+        //    三档下项目根（web/ 之外）都能直接列出，且**不该**冒出 needEscalation。
+        //    （旧断言是"限制模式越界 403 + needEscalation"，属已删除的两档模型。）
         const ls = (q) => fetch(`${BASE}/api/agent/ls?${q}`);
-        const readQ = (allowOutside) => 'permission=app&path=' + encodeURIComponent(ROOT)
-            + (allowOutside ? '&allowOutside=1' : '');
+        for (const access of ['strict', 'auto', 'full']) {
+            const r = await ls('access=' + access + '&path=' + encodeURIComponent(ROOT));
+            ok(r.status === 200, `${access} 档：项目根（web/ 之外）可直接列出`, `status=${r.status}`);
+            const j = await r.json().catch(() => null);
+            ok(j?.needEscalation !== true, `${access} 档：不再回 needEscalation（越界概念已取消）`);
+        }
 
-        // ① 限制模式下访问 web/ 之外 → 403 且带 needEscalation（前端据此弹窗）
-        const r1 = await ls(readQ(false));
-        const j1 = await r1.json();
-        ok(r1.status === 403, '限制模式越界被拒绝（403）', `status=${r1.status}`);
-        ok(j1?.needEscalation === true, '★ 越界时回 needEscalation（前端才知道该问用户）');
+        // web/ 之内当然也能列
+        const r3 = await ls('access=strict&path=' + encodeURIComponent(path.join(ROOT, 'web')));
+        ok(r3.status === 200, 'web/ 内可访问', `status=${r3.status}`);
 
-        // ② 批准后放行（ROOT 是项目根，web/ 之外，确实是越界路径）
-        const r2 = await ls(readQ(true));
-        ok(r2.status === 200, '★ 用户批准后越界可访问（200）', `status=${r2.status}`);
-
-        // ③ web/ 之内不需要申请（本来就放行），且不该冒出 needEscalation
-        const r3 = await ls('permission=app&path=' + encodeURIComponent(path.join(ROOT, 'web')));
-        ok(r3.status === 200, 'web/ 内无需申请即可访问', `status=${r3.status}`);
-
-        // ④ ★ 越界批准**不能**成为同源代码注入的后门：
-        //    带着 allowOutside 往 web/ 里写 .html 仍必须 400。
-        const w = await fetch(`${BASE}/api/agent/write`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ path: 'web/' + PROBE + '.html', content: '<script>1</script>',
-                permission: 'app', allowOutside: true }),
-        });
-        ok(w.status === 400, '★ 越界批准不能绕过 web/ 内的可执行类型拦截（400）', `status=${w.status}`);
+        // ★ web/ 内的可执行类型拦截**永不放宽**：
+        //   三档里只有 full 放行（对应旧 computer 的"风险自担"语义），
+        //   strict / auto 都必须 400。这是防同源代码注入的那道闸。
+        for (const access of ['strict', 'auto']) {
+            const w = await fetch(`${BASE}/api/agent/write`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ path: 'web/' + PROBE + '.html', content: '<script>1</script>', access }),
+            });
+            ok(w.status === 400, `★ ${access} 档：web/ 内写 .html 被拦截（400）`, `status=${w.status}`);
+        }
 
         // ⑤ 探针不许落盘
         const leaked = (await import('node:fs')).readdirSync(path.join(ROOT, 'web'))
@@ -254,11 +270,12 @@ try {
         try { (await import('node:fs')).rmSync(outside, { force: true }); } catch { /* ignore */ }
     }
 
-    // ---- 覆盖闸门：写入已存在的文件 = 修改，两种模式都必须先经用户同意 ----
+    // ---- 覆盖闸门：三档语义不同（strict 要问 / auto 与 full 直接放行）----
     //
-    // 旧实现是无条件 writeFile —— 目标已存在就**静默覆盖**，而提示词却写着
-    // 「AI 没有修改文件的权限（仅可新建）」。这段就是钉住"文案与实现对齐"的回归：
-    // 只要有人把闸门删了（或忘了让全权限模式也受它约束），这里立刻红。
+    // ★★ 2026-10：旧模型下"两种模式都必须先经用户同意"；新模型下**只有 strict 问**。
+    //    这是用户明确选的：「自动通过」的定义就是不再逐条确认。
+    //    ⚠️ 已知代价（刻意接受）：auto 档只禁删除、不禁覆盖，
+    //       所以 AI 能用"写入同名文件"绕过删除禁令。设置页里写明了这一点。
     {
         const fs = await import('node:fs');
         const ovNew = path.join(ROOT, 'web', PROBE + '_ov_new.txt');
@@ -273,36 +290,132 @@ try {
             fs.writeFileSync(ovExist, 'ORIGINAL', 'utf8');
 
             // ① 新建不存在的文件 → 直接成功（别把"写入"这个功能本身修死）
-            let r = await wpost({ path: 'web/' + PROBE + '_ov_new.txt', content: 'v1', permission: 'app' });
+            let r = await wpost({ path: 'web/' + PROBE + '_ov_new.txt', content: 'v1', access: 'strict' });
             ok(r.status === 200, '覆盖闸门：新建文件直接成功（不误伤）', `status=${r.status}`);
 
-            // ② app 模式覆盖 → 403 + needOverwrite，且磁盘内容原样
-            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'CLOBBER', permission: 'app' });
-            ok(r.status === 403, '★ 覆盖已存在文件被拒（403）', `status=${r.status} ${JSON.stringify(r.j)}`);
-            ok(r.j?.needOverwrite === true, '★ 响应带 needOverwrite（前端据此弹窗）');
+            // ② strict 档覆盖 → 403 + needOverwrite，且磁盘内容原样
+            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'CLOBBER', access: 'strict' });
+            ok(r.status === 403, '★ strict 档：覆盖已存在文件被拒（403）', `status=${r.status} ${JSON.stringify(r.j)}`);
+            ok(r.j?.needOverwrite === true, '★ strict 档：响应带 needOverwrite（前端据此弹窗）');
             ok(fs.readFileSync(ovExist, 'utf8') === 'ORIGINAL', '★ 未获批准时原内容没被改动');
 
             // ③ 带 overwrite:true → 放行
-            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'OK-NEW', permission: 'app', overwrite: true });
-            ok(r.status === 200, '★ 批准后覆盖成功（200）', `status=${r.status}`);
+            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'OK-NEW', access: 'strict', overwrite: true });
+            ok(r.status === 200, '★ strict 档：批准后覆盖成功（200）', `status=${r.status}`);
             ok(fs.readFileSync(ovExist, 'utf8') === 'OK-NEW', '批准后内容已更新');
 
-            // ④ ★★ 全权限（computer）模式同样要拦 —— 这是需求的核心：
-            //    "就算完全开放，也要限制删除和修改"。覆盖就是修改。
-            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'PC-CLOBBER', permission: 'computer' });
-            ok(r.status === 403, '★ 全权限模式覆盖仍被拦截（两模式共同下限）', `status=${r.status}`);
-            ok(r.j?.needOverwrite === true, '★ 全权限模式也回 needOverwrite');
-            ok(fs.readFileSync(ovExist, 'utf8') === 'OK-NEW', '★ 全权限下未获批准也没改动原文件');
+            // ④ auto 档：覆盖**直接放行**（不再询问）—— 这是这一档的定义
+            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'AUTO-CLOBBER', access: 'auto' });
+            ok(r.status === 200, '★ auto 档：覆盖直接放行（不再询问）', `status=${r.status}`);
+            ok(r.j?.needOverwrite !== true, '★ auto 档：不回 needOverwrite');
+            ok(fs.readFileSync(ovExist, 'utf8') === 'AUTO-CLOBBER', 'auto 档确实写进去了');
 
-            // ⑤ 全权限 + 批准 → 放行；且新建仍免问
-            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'PC-OK', permission: 'computer', overwrite: true });
-            ok(r.status === 200, '全权限 + 批准后覆盖成功', `status=${r.status}`);
-            r = await wpost({ path: 'web/' + PROBE + '_ov_new2.txt', content: 'x', permission: 'computer' });
-            ok(r.status === 200, '全权限：新建文件不打扰（无需确认）', `status=${r.status}`);
+            // ⑤ full 档：同样直接放行
+            r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'FULL-OK', access: 'full' });
+            ok(r.status === 200, 'full 档：覆盖直接放行', `status=${r.status}`);
+            ok(fs.readFileSync(ovExist, 'utf8') === 'FULL-OK', 'full 档确实写进去了');
+
+            // ⑥ strict 档新建仍免问（新建不覆盖任何东西）
+            r = await wpost({ path: 'web/' + PROBE + '_ov_new2.txt', content: 'x', access: 'strict' });
+            ok(r.status === 200, 'strict 档：新建文件不打扰（无需确认）', `status=${r.status}`);
         } finally {
             for (const f of [ovNew, ovExist, path.join(ROOT, 'web', PROBE + '_ov_new2.txt')]) {
                 try { fs.rmSync(f, { force: true }); } catch { /* ignore */ }
             }
+        }
+    }
+
+    // ---- ★★ 删除接口（2026-10 新增能力）----
+    //
+    // 这是本次改造里**唯一新增的破坏性能力**，所以三档语义必须逐条钉死：
+    //   strict → 回 needDelete 让前端确认，批准后执行
+    //   auto   → **整体拒绝**（这一档的定义就是禁止删除）
+    //   full   → 直接执行
+    // 同时验证"服务端自己判档位，不信前端的 confirmed"这条权威性。
+    {
+        const fs = await import('node:fs');
+        const dpost = (body) => fetch(`${BASE}/api/agent/delete`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(async (r) => ({ status: r.status, j: await r.json().catch(() => null) }));
+        const probe = (n) => path.join(ROOT, 'web', PROBE + '_del_' + n + '.txt');
+        const make = (n) => { fs.writeFileSync(probe(n), 'x', 'utf8'); return probe(n); };
+
+        try {
+            // ① strict：不确认 → 403 + needDelete，文件还在
+            const f1 = make('strict');
+            let r = await dpost({ access: 'strict', path: f1 });
+            ok(r.status === 403, '★ strict 档：删除需确认（403）', `status=${r.status}`);
+            ok(r.j?.needDelete === true, '★ strict 档：回 needDelete（前端据此弹窗）');
+            ok(fs.existsSync(f1), '★ 未确认时文件还在（没被删）');
+
+            // ② strict + confirmed → 真的删掉
+            r = await dpost({ access: 'strict', path: f1, confirmed: true });
+            ok(r.status === 200, '★ strict 档：确认后删除成功', `status=${r.status}`);
+            ok(!fs.existsSync(f1), '★ strict 档：文件确实被删了');
+
+            // ③ auto：**整体拒绝**，即使带 confirmed:true 也不行
+            const f2 = make('auto');
+            r = await dpost({ access: 'auto', path: f2 });
+            ok(r.status === 403, '★ auto 档：删除被拒绝（403）', `status=${r.status}`);
+            ok(r.j?.deleteForbidden === true, '★ auto 档：回 deleteForbidden（前端能给出准确提示）');
+            ok(fs.existsSync(f2), '★ auto 档：文件没被删');
+            r = await dpost({ access: 'auto', path: f2, confirmed: true });
+            ok(r.status === 403, '★★ auto 档：绕过前端直接传 confirmed:true **仍然拒绝**（服务端是权威）');
+            ok(fs.existsSync(f2), '★ auto 档：带 confirmed 也没删掉');
+
+            // ④ full：直接删，不需要 confirmed
+            r = await dpost({ access: 'full', path: f2 });
+            ok(r.status === 200, '★ full 档：直接删除成功（无需确认）', `status=${r.status}`);
+            ok(!fs.existsSync(f2), '★ full 档：文件确实被删了');
+
+            // ⑤ 删除不存在的目标 → 404（如实报告，而不是假装成功）
+            r = await dpost({ access: 'full', path: probe('missing') });
+            ok(r.status === 404, '删除不存在的目标返回 404', `status=${r.status}`);
+
+            // ⑥ ★ 危险位置保护：整锅端的目录不能删，但**里面的单个文件可以**
+            //
+            //   这个区分是刻意的：「完全访问」的定义是"AI 能做任何事"，
+            //   把 web/ 下所有文件都禁掉会让这一档名不副实
+            //   （AI 连自己刚建的临时文件都删不掉）。所以只挡"整锅端"。
+            r = await dpost({ access: 'full', path: path.join(ROOT, 'web') });
+            ok(r.status === 400, '★★ 不能删除应用自己的文件夹（web/）本身', `status=${r.status}`);
+            r = await dpost({ access: 'full', path: ROOT });
+            ok(r.status === 400, '★★ 不能删除项目根目录本身', `status=${r.status}`);
+            const driveRoot = path.parse(ROOT).root;
+            r = await dpost({ access: 'full', path: driveRoot });
+            ok(r.status === 400, '★★ 不能删除盘符根目录', `status=${r.status}`);
+            // ★ 大小写绕过：Windows 的路径比较不敏感，守卫必须跟着不敏感。
+            //   若守卫写成 `target === path.resolve(p)`，把 web/ 写成 WEB/ 就能删掉它。
+            if (process.platform === 'win32') {
+                const upper = path.join(ROOT, 'WEB');
+                r = await dpost({ access: 'full', path: upper });
+                ok(r.status === 400, '★★ 换个大小写也删不掉 web/（守卫必须大小写不敏感）',
+                    `status=${r.status} path=${upper}`);
+                const upperRoot = ROOT.toUpperCase();
+                r = await dpost({ access: 'full', path: upperRoot });
+                ok(r.status === 400, '★★ 换个大小写也删不掉项目根', `status=${r.status}`);
+            }
+            // 反证：web/ **里面**的文件必须能删（否则这一档等于没开）
+            const inside = path.join(ROOT, 'web', PROBE + '_inside.txt');
+            fs.writeFileSync(inside, 'x', 'utf8');
+            r = await dpost({ access: 'full', path: inside });
+            ok(r.status === 200, '★ web/ 里面的单个文件可以删（完全访问的定义）', `status=${r.status}`);
+            ok(!fs.existsSync(inside), '★ 确实删掉了');
+
+            // ⑦ 目录删除要递归（建一个带子文件的目录）
+            const dir = path.join(ROOT, 'web', PROBE + '_deldir');
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'inner.txt'), 'x', 'utf8');
+            r = await dpost({ access: 'full', path: dir });
+            ok(r.status === 200, '删除目录成功', `status=${r.status}`);
+            ok(!fs.existsSync(dir), '★ 目录被递归删除（连里面的文件一起）');
+        } finally {
+            for (const n of ['strict', 'auto', 'missing']) {
+                try { fs.rmSync(probe(n), { force: true }); } catch { /* ignore */ }
+            }
+            try { fs.rmSync(path.join(ROOT, 'web', PROBE + '_deldir'), { recursive: true, force: true }); } catch { /* ignore */ }
         }
     }
 } catch (err) {
@@ -316,7 +429,7 @@ console.log('\n=== 4. 前端接线 ===');
 {
     const html = readFrontend();
     const agent = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'app-03-agent.js'), 'utf8'));
-    const live2d = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'mods', 'live2d', 'index.js'), 'utf8'));
+    const live2d = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8'));
     const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'app-02-data.js'), 'utf8'));
 
     ok(/agentCommandOperation\(raw\)/.test(agent), 'agentActions 有电脑命令入口');
@@ -332,61 +445,68 @@ console.log('\n=== 4. 前端接线 ===');
     ok(/IS_NATIVE_APP/.test(agent) && !/location\.protocol/.test(agent),
         'APK 判定用 IS_NATIVE_APP 而不是 location.protocol');
 
-    // 越界申请：前端要识别 needEscalation 并问用户，批准后**重发**带 allowOutside 的请求
-    ok(/needEscalation/.test(agent), '前端识别服务端的 needEscalation');
-    ok(/function confirmAgentEscalation/.test(agent), '有越界确认函数');
-    ok(/allowOutside/.test(agent), '批准后重发时带上 allowOutside');
-    ok(/agentEscalationApproved/.test(agent), '同一路径本轮不重复询问');
-    // 越界确认也必须 forceAsk：它属于"改变安全边界"的操作，
-    // 不能被"本轮已确认过任意敏感操作"的豁免吞掉
-    ok(/requestApproval\('访问文件夹外'[\s\S]{0,120}forceAsk: true/.test(agent),
-        '★ 越界确认带 forceAsk（不被豁免吞掉）');
+    // ★★ 2026-10：越界申请（needEscalation / confirmAgentEscalation / allowOutside）
+    //   已随 app/computer 两档模型**整体删除** —— 三档都能访问任意路径，
+    //   不存在"越界"这个概念。这里断言的是"遗留物确实清掉了"，
+    //   防止有人以为还需要它而把死代码加回来。
+    ok(!/function confirmAgentEscalation/.test(agent),
+        '★ 旧的越界确认函数已删除（三档无路径边界）');
+    ok(!/allowOutside/.test(agent),
+        '★ 旧的 allowOutside 旗标已从前端删除');
 
     // ---- 覆盖已有文件：前端识别 needOverwrite 并问用户 ----
     ok(/needOverwrite/.test(agent), '前端识别服务端的 needOverwrite');
     ok(/function confirmAgentOverwrite/.test(agent), '有覆盖确认函数');
-    ok(/overwrite: true/.test(agent), '批准后重发时带上 overwrite:true');
-    // ★ 两个旗标必须用局部变量记住，不能从响应里读 —— 服务端不回显 allowOutside，
-    //   写成 result.allowOutside 永远是 undefined，"越界 + 覆盖"同时发生时
-    //   第二次重发会丢掉 allowOutside，用户批准了却依然 403。
-    ok(/let allowOutside = false;/.test(agent),
-        '★ 越界旗标用局部变量记忆（不能从响应里读，否则越界+覆盖会失败）');
+    // ★ 断言的是"重发时把 overwrite 置真"这件事，而不是某个字面量写法：
+    //   实现用的是 `send(overwrite)` + 简写属性 `{ ..., overwrite }`，
+    //   所以字面量 `overwrite: true` 并不存在 —— 旧断言会假失败。
+    ok(/await send\(true\)/.test(agent) && /overwrite \}/.test(agent),
+        '批准后重发时把 overwrite 置真');
 
-    // ★ 不可逆操作的确认改为"同一对话内只问一次"。
-    //   为什么钉这条：旧的 forceAsk-per-call 会让 AI 清一批文件弹七八次，
-    //   用户退化成闭眼点允许，闸门反而失效。这里断言语义确实按对话收敛。
-    ok(/agentDestructiveScope/.test(agent), '有"按对话记"的不可逆操作授权state');
-    ok(/agentScopeKey/.test(agent) && /getCurrentConversation/.test(agent),
-        '★ 授权范围绑定当前对话 id');
-    ok(/agentDestructiveApproved\('execDanger'\)/.test(agent),
-        '★ 危险命令在同一对话内复用已有授权（不重复弹窗）');
-    ok(/agentDestructiveApproved\('write'\)/.test(agent),
-        '★ 覆盖确认在同一对话内复用已有授权');
-    // 换对话必须作废旧授权（否则"这个对话信任"会泄漏到下一个对话）
-    ok(/agentDestructiveScope\.convId !== key[\s\S]{0,220}agentDestructiveScope\.write = false/.test(agent),
-        '★ 切换对话后旧授权被清空');
+    // ---- ★★ 删除：前端识别 needDelete 并问用户（2026-10 新增）----
+    ok(/needDelete/.test(agent), '★ 前端识别服务端的 needDelete');
+    ok(/function confirmAgentDelete/.test(agent), '★ 有删除确认函数');
+    // 同上：实现是 `send(confirmed)` + 简写属性
+    ok(/await send\(true\)/.test(agent) && /confirmed \}/.test(agent),
+        '★ 批准后重发时把 confirmed 置真');
+    ok(/deleteForbidden/.test(agent), '★ 前端识别 auto 档的 deleteForbidden 并给出准确提示');
+    ok(/无法恢复|不进回收站/.test(agent), '★ 删除确认里写明"无法恢复"');
+    ok(/agentAccessAllowsDelete/.test(agent),
+        '★ 删除标签受档位控制（只有 full 能用）');
 
-    // 设置页必须把全权限的**后果**讲清楚（删除/覆盖不可撤销），
-    // 而不是指望用户从每次弹窗里自己领悟
-    ok(/不可撤销|无法恢复/.test(html), '★ 设置页说明了后果不可撤销');
-    ok(/能删除文件|删除文件、改注册表/.test(html), '★ 设置页列明"能删除文件"');
+    // ★ 旧模型的"同一对话内只问一次"豁免已删除 ——
+    //   三档模型下 strict 的语义就是"每一条都问"，豁免会让它名不副实。
+    //   注意：注释里**提到了** agentDestructiveScope（说明为什么删掉它），
+    //   所以判据要排除注释行，只看代码里还有没有真正使用。
+    const agentCodeOnly = agent
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/[^\n]*/g, '');
+    ok(!/agentDestructiveScope/.test(agentCodeOnly),
+        '★ 旧的"按对话豁免"机制已从代码里删除（strict 档要求逐条确认）');
+    ok(!/agentDestructiveApproved/.test(agentCodeOnly), '★ 旧的豁免判据已从代码里删除');
+
+    // 设置页必须把完全访问的**后果**讲清楚，而不是指望用户从每次弹窗里自己领悟
+    ok(/无法恢复|不可撤销/.test(html), '★ 设置页说明了后果不可撤销');
+    ok(/能删除文件|删除文件与目录/.test(html), '★ 设置页列明"能删除文件"');
     ok(/能覆盖已有文件|覆盖已有文件/.test(html), '★ 设置页列明"能覆盖已有文件"');
-    // 开启全权限时的一次性确认
-    ok(/showCustomConfirm\([\s\S]{0,200}允许操作电脑/.test(html) || /'⚠️ 开启「允许操作电脑」'/.test(html),
-        '★ 切到全权限时弹一次后果确认');
-    ok(/每个对话里首次询问|首次会问你一次|每个对话首次会问你一次/.test(html),
-        '★ 设置页说明了"每个对话首次询问"的确认语义');
+    // 开启完全访问时的一次性确认
+    ok(/开启「完全访问」/.test(html), '★ 切到完全访问时弹一次后果确认');
+    ok(/都不会再询问你/.test(html), '★ 设置页点明"这些操作都不会再询问你"（三档的关键差别）');
+    // 三档共有的重要事实：读取不问
+    ok(/读取任何档位下都不会询问|读取.*不会询问/.test(html),
+        '★ 设置页说明"读取任何档位下都不询问"（否则用户以为读取也受管控）');
+    ok(/只禁删除、不禁覆盖/.test(html),
+        '★ 设置页说明 auto 档"只禁删除不禁覆盖"的绕过风险');
 
-    // ★ 危险命令不能被"本轮已确认过敏感操作"的豁免吞掉。
-    //   这是最容易漏的一条：`电脑命令` 在 AGENT_RISK 里是 sensitive（因为同类里
-    //   既有 dir 也有 del），而 once 策略的豁免是按**操作名**记的。若不显式
-    //   forceAsk，用户确认过一次任意敏感操作后，一条 del 会静默执行 ——
-    //   直接违背"危险系统命令执行前需授权"。
+    // ★ 危险命令必须仍然能强制询问 —— 三档模型下"档位豁免"取代了旧的操作名豁免，
+    //   但 forceAsk 这条通道必须还在：它是"服务端判定为危险"的唯一表达方式。
+    //   （旧断言查的是 `if (risk !== 'dangerous' && !mustAsk)` —— 那是四档策略里
+    //     的豁免分支写法，已随策略一起删除；新实现用的是档位判据。）
     ok(/forceAsk: true/.test(agent), '危险电脑命令强制要求确认（forceAsk）');
-    ok(/opts\.forceAsk === true/.test(agent), 'requestApproval 支持 forceAsk 绕过豁免');
-    // 豁免必须被 forceAsk 挡住：断言判定条件里同时看 risk 和 mustAsk
-    ok(/if \(risk !== 'dangerous' && !mustAsk\)/.test(agent),
-        '★ 豁免分支同时排除 dangerous 与 mustAsk（否则 del 会被静默放行）');
+    ok(/opts\.forceAsk === true/.test(agent), 'requestApproval 支持 forceAsk');
+    ok(/if \(isPhone && !mustAsk\)/.test(agent) && /if \(access === 'full'\) return true;/.test(agent),
+        '★ 放行判据先看档位、再看 mustAsk（full 档也不放过 forceAsk）');
+    ok(/const mustAsk = opts\.forceAsk === true;/.test(agent), 'mustAsk 来自调用方的 forceAsk');
 
     // 分发顺序：电脑命令必须排在文件操作之前，否则命令正文里的
     // "查看文件" 这类词会被文件分支吃掉。
@@ -409,8 +529,15 @@ console.log('\n=== 4. 前端接线 ===');
     ok((data.match(/agentCommandSkillText\(\)/g) || []).length >= 2,
         '分层版与 legacy 两条路径都注入了电脑命令能力');
 
-    // 设置页要说明"危险命令会先确认"（并且确认是按对话收敛的）
-    ok(/危险命令.*确认|危险命令会让用户确认/.test(html), '设置页说明了危险命令需确认');
+    // 设置页要说明"危险命令会不会先确认"—— 三档模型的答案是**取决于档位**，
+    // 所以断言的是那句按档位区分的说明，而不是旧模型里"总是确认"。
+    // （旧模型只有一句"危险命令会确认"，新模型把它拆进了三档各自的说明里。）
+    ok(/执行命令[^<]*每一次都会问你|每一次都会问你/.test(html),
+        '设置页说明了 strict 档"执行命令每一次都会问你"');
+    ok(/每条命令执行前都会让用户确认/.test(html),
+        '★ 提示词侧说明了 strict 档"每条命令都问"');
+    ok(/不会询问你|都不再询问/.test(html),
+        '★ 设置页说明了 full 档"不再询问"');
 }
 
 console.log('\n' + '='.repeat(46));

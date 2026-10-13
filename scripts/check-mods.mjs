@@ -19,7 +19,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const MODS = path.join(ROOT, 'web', 'mods');
+const MODS = path.join(ROOT, 'mods');
 
 /**
  * 按 **manifest.id** 找插件的真实目录名。
@@ -345,7 +345,27 @@ try {
         ok(demo && demo.entry === 'index.js', 'entry 字段生效');
         ok(demo && Array.isArray(demo.styles) && demo.styles.includes('style.css'), 'styles 字段生效');
 
-        const evil = (body.installResults || []).find((r) => r.zip === 'evil-mod.zip');
+        // ★★ 恶意 zip 的结果要**单独重试获取**（2026-10 补）。
+        //
+        //   实测踩到一次偶发失败：`files=undefined`、`恶意 zip 有安装结果回报` 也红。
+        //   原因与上面首个 /api/plugins 那条注释说的是同一件事 ——
+        //   "端口已开"到"插件清单（含 installResults）生成完"之间有个小窗口。
+        //   上面那个重试循环的**退出条件**只等 `demo-mod` 出现在 plugins 里，
+        //   而 installResults 是另算的；并发跑全套检查时服务端更忙，
+        //   于是"plugins 有了、installResults 还没齐"就会漏读到 evil-mod 的结果。
+        //
+        //   修法：单独为安装结果再等一会儿（同样带短重试）。
+        //   为什么值得修而不是"重跑一次就好"：偶发红会训练人忽略失败，
+        //   而这条断言恰恰是**路径穿越防护**的回归 —— 最不该被忽略的一类。
+        let evil = (body.installResults || []).find((r) => r.zip === 'evil-mod.zip');
+        if (!evil) {
+            for (let i = 0; i < 10 && !evil; i++) {
+                await wait(300);
+                const again = await fetch(`http://127.0.0.1:${PORT}/api/plugins`)
+                    .then((r) => r.json()).catch(() => null);
+                evil = ((again && again.installResults) || []).find((r) => r.zip === 'evil-mod.zip');
+            }
+        }
         ok(Boolean(evil), '恶意 zip 有安装结果回报');
 
         // 诊断：失败时把安装结果与服务端输出打出来 —— 否则只剩一句"没回报"，
@@ -389,6 +409,55 @@ try {
         }
         ok((await fetch(`http://127.0.0.1:${PORT}/mods/index.json`)).status === 200, 'mod 清单可被前端读取');
         ok((await fetch(`http://127.0.0.1:${PORT}/js/mods.js`)).status === 200, 'mod 加载器脚本可被加载');
+
+        // ==================== ★★ /mods/* 显式路由（2026-10 搬迁后新增）====================
+        //
+        // 插件目录从 `web/mods/` 搬到**项目根** `mods/` 之后，`/mods/*` 不再由
+        // 静态处理器"顺手"发出（web/ 是静态根，够不到上一级）—— 必须有一条显式路由。
+        // 这一段钉住那条路由的**三件要紧事**，缺任何一件都会让插件"装了等于没装"：
+        //
+        //   ① **真实 MIME**：插件会 fetch 自己的 panel.html（走插槽插进设置页），
+        //      还有 .mjs / .css。一律 octet-stream 的话，配合 nosniff，
+        //      浏览器会拒绝解析 HTML、拒绝执行脚本 —— 插件界面空白。
+        //   ② **路径穿越防护**：/mods/../data/store.json 必须够不到
+        //      （data/ 就在 mods/ 的隔壁，里面是 API Key 明文）。
+        //   ③ 目录不给列表。
+        //
+        // ⚠️ 这里**必须只挑测试临时目录里真实存在的文件**：本脚本把 MODS_DIR
+        //    指向 TEST_MODS（为了不碰用户的真实插件目录），那里只有它自己造的
+        //    elaina-avatar。所以不能用 galgame/index.js、live2d/panel.html 之类的
+        //    真实插件路径 —— 那些在 TEST_MODS 里不存在，断言会假失败。
+        console.log('\n  — /mods/* 显式路由 —');
+        {
+            const js = await fetch(`http://127.0.0.1:${PORT}/mods/elaina-avatar/index.js`);
+            ok(js.status === 200, '/mods/<id>/index.js → 200', 'status=' + js.status);
+            ok((js.headers.get('content-type') || '').includes('javascript'),
+                '★ 插件 JS 发 javascript MIME（nosniff 下错了就不执行）',
+                js.headers.get('content-type'));
+
+            // 造一个 .html 与 .css 进临时目录，专门验 MIME 分流
+            writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'probe.html'), '<p>probe</p>');
+            writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'probe.css'), '.x{}');
+            const panel = await fetch(`http://127.0.0.1:${PORT}/mods/elaina-avatar/probe.html`);
+            ok(panel.status === 200, '/mods/<id>/*.html → 200', 'status=' + panel.status);
+            ok((panel.headers.get('content-type') || '').includes('text/html'),
+                '★ 插件 HTML 发 text/html（否则设置面板插槽拿不到内容）',
+                panel.headers.get('content-type'));
+            const cssRes = await fetch(`http://127.0.0.1:${PORT}/mods/elaina-avatar/probe.css`);
+            ok(cssRes.status === 200, '/mods/<id>/*.css → 200', 'status=' + cssRes.status);
+
+            // 穿越：明文与编码两种写法都要挡住
+            const t1 = await fetch(`http://127.0.0.1:${PORT}/mods/../data/store.json`);
+            ok(t1.status === 403 || t1.status === 404,
+                '★★ /mods/../data/store.json 被拒（data/ 就在隔壁，是密钥明文）', 'status=' + t1.status);
+            const t2 = await fetch(`http://127.0.0.1:${PORT}/mods/%2e%2e/data/store.json`);
+            ok(t2.status === 403 || t2.status === 404, '★★ 编码后的 .. 也被拒', 'status=' + t2.status);
+
+            const miss = await fetch(`http://127.0.0.1:${PORT}/mods/nope/nope.js`);
+            ok(miss.status === 404, '不存在的插件文件 → 404（不是 500）', 'status=' + miss.status);
+            const dir = await fetch(`http://127.0.0.1:${PORT}/mods/`);
+            ok(dir.status === 404, '/mods/ 不给目录列表', 'status=' + dir.status);
+        }
     }
 } finally {
     child.kill();
