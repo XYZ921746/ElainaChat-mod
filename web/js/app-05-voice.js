@@ -410,6 +410,64 @@ async function transcribeRecordedAudioWithCloud() {
     return transcribeRecordedAudioWithAliyun();
 }
 
+/**
+ * 组装阿里百炼 ASR 的请求体 —— **形状随模型家族而变**（2026-10 补）。
+ *
+ * 踩过的坑：应用原先只有 qwen3-asr-flash 一种形状（content 写 { audio: … }、
+ * parameters 写 asr_options）。换成同门的 qwen-audio-3.x-asr-flash 后，服务端直接回
+ * 400「format is empty」—— 因为那一族要求：
+ *   ① content 项必须带 type:'input_audio' + input_audio.data（不是 { audio }）；
+ *   ② parameters 里 **format 必填**（音频格式 wav/mp3/opus…）。
+ * 两种形状互不兼容，用错就是 400，而不是"模型不存在"这类好懂的错。
+ */
+function buildAliyunAsrRequestBody(model, wavBase64) {
+    const data = `data:audio/wav;base64,${wavBase64}`;
+    const m = String(model || '').toLowerCase();
+    // qwen-audio-3.x-asr-flash / fun-asr-flash：input_audio 形状 + 必填 format
+    if (/^(qwen-audio-|fun-asr)/.test(m)) {
+        return {
+            model,
+            input: {
+                messages: [{
+                    role: 'user',
+                    content: [{ type: 'input_audio', input_audio: { data } }]
+                }]
+            },
+            parameters: { format: 'wav', sample_rate: String(ASR_TARGET_SAMPLE_RATE) }
+        };
+    }
+    // 默认（qwen3-asr-flash）：原有形状不变
+    return {
+        model,
+        input: {
+            messages: [{ role: 'user', content: [{ audio: data }] }]
+        },
+        parameters: { asr_options: { language: 'zh', enable_itn: true } }
+    };
+}
+
+/**
+ * 判断阿里百炼 ASR 的返回是不是"音频里没有人声"。
+ *
+ * 为什么单独认这个错：3.x 系列在音频无语音时回 **HTTP 400 + ASR_RESPONSE_HAVE_NO_WORDS**，
+ * 而「测试」按钮发的正是 0.5 秒静音 —— 不认它，就会把"Key 有效、模型可用"误报成失败
+ * （用户看到这条就会以为"还是调不了"）。真实录音里没人声时同理，该按空结果处理，而不是抛错。
+ */
+function isAsrNoWordsError(result) {
+    if (!result || !result.payload) return false;
+    const p = result.payload;
+    const probe = [
+        p.code,
+        p.message,
+        p.base_resp && p.base_resp.status_msg,
+        p.error && (p.error.message || p.error),
+        p.error,
+    ].filter(Boolean).map(String).join(' ');
+    if (/NO_WORDS/i.test(probe) || /no[ _-]?words/i.test(probe)) return true;
+    // 兜底：错误体字段名不固定，整体序列化再找一次（错误体很小，代价可忽略）
+    try { return /NO_WORDS/i.test(JSON.stringify(p)); } catch { return false; }
+}
+
 async function transcribeRecordedAudioWithAliyun() {
     const audio = getRecordedAsrAudio();
     if (!audio || audio.length < ASR_TARGET_SAMPLE_RATE * 0.15) {
@@ -427,21 +485,19 @@ async function transcribeRecordedAudioWithAliyun() {
     if (!asrApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写阿里百炼 ASR API Key');
     const asrUrl = String(state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation').trim();
     const asrModel = String(state.settings.dashscopeAsrModel || 'qwen3-asr-flash').trim();
+    // 流式（实时）模型走 WebSocket 实时接口，本应用是"录完整段 → 一次 HTTP"的非流式实现，调不了它。
+    // 提前拦掉并给出人话，而不是把服务端的 "url error / format is empty" 原样抛给用户。
+    if (/streaming/i.test(asrModel)) {
+        throw new ClientApiError('ASR_STREAMING_UNSUPPORTED',
+            '「' + asrModel + '」是实时流式模型（走 WebSocket），本应用的语音识别是非流式（录完整段再一次请求），无法调用。'
+            + '请改用同系列的非流式模型：qwen-audio-3.0-asr-flash 或 qwen3-asr-flash。');
+    }
     const startedAt = performance.now();
     const wavBase64 = float32ToWavBase64(audio, ASR_TARGET_SAMPLE_RATE);
     console.log(`[ASR] 阿里云识别开始: 音频 ${(audio.length / ASR_TARGET_SAMPLE_RATE).toFixed(1)}s, wav ${Math.round(wavBase64.length / 1024)}KB, 模型 ${asrModel}`);
     let result;
     try {
-        result = await postJsonFromDevice(asrUrl, {
-            model: asrModel,
-            input: {
-                messages: [{
-                    role: 'user',
-                    content: [{ audio: `data:audio/wav;base64,${wavBase64}` }]
-                }]
-            },
-            parameters: { asr_options: { language: 'zh', enable_itn: true } }
-        }, {
+        result = await postJsonFromDevice(asrUrl, buildAliyunAsrRequestBody(asrModel, wavBase64), {
             Authorization: `Bearer ${asrApiKey}`,
             'X-DashScope-DataInspection': 'enable'
         }, ASR_CLOUD_FINAL_TIMEOUT_MS);
@@ -449,7 +505,15 @@ async function transcribeRecordedAudioWithAliyun() {
         console.error('[ASR] 阿里云请求异常（网络/超时/CORS）:', error);
         throw error;
     }
-    if (!result.ok) await throwProviderResponseError(result, '阿里百炼语音识别失败');
+    if (!result.ok) {
+        // 音频里没有人声：3.x 系列回 400 ASR_RESPONSE_HAVE_NO_WORDS。这不是失败，是"确实没听到词"——
+        // 按空结果返回即可，别把它当错误抛给用户（否则静音/环境音都会被报成"识别失败"）。
+        if (isAsrNoWordsError(result)) {
+            console.info('[ASR] 阿里百炼：音频里没有人声（模型如实报告无词）');
+            return '';
+        }
+        await throwProviderResponseError(result, '阿里百炼语音识别失败');
+    }
     const content = result.payload?.choices?.[0]?.message?.content ?? result.payload?.output?.text;
     const text = Array.isArray(content) ? content.map(part => part?.text || '').join(' ') : String(content || '');
     console.info(`[ASR] 阿里百炼完成: ${Math.round(performance.now() - startedAt)}ms, 识别文本="${text.slice(0, 50)}"`);

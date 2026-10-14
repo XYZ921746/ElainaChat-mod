@@ -16,6 +16,10 @@ import { inflateRawSync } from 'node:zlib';
 import dns from 'node:dns';
 import { createStore } from '../server/store.mjs';
 import { createModManager } from '../server/mods.mjs';
+// 技能（skill）是**另一个概念**（给 AI 的指令与知识，纯文本），与插件分开管理：
+//   插件扩应用本身（代码、可装可卸），技能给 AI 用（文本、不注册进应用）。
+// 所以它有自己的管理器与自己的接口（/api/skills），绝不混进插件清单（详见 server/skills.mjs）。
+import { createSkillManager } from '../server/skills.mjs';
 // 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
 // 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
 // 而它放行的是"第三方 JS 在服务端进程里注册接口"，判定错了后面全是空的。
@@ -82,6 +86,15 @@ const port = Number(process.env.PORT || 4173);
 const MODS_DIR = process.env.MODS_DIR
     ? path.resolve(process.env.MODS_DIR)
     : path.join(root, '..', 'mods');
+
+// 技能（skill）根目录。与 MODS_DIR 平级（都在项目根，不在静态根 web/ 内）：
+//   技能**不是**插件、也不会被静态服务直接发出去，所以它同样住在 web/ 之外，
+//   只经 /api/skills 这一组接口暴露（详见 server/skills.mjs）。
+//   ★ 同样可用环境变量 SKILLS_DIR 覆盖 —— 与 MODS_DIR 同理：自动化检查要往
+//     技能目录里放测试包，而用户自己的服务可能正跑着，指向临时目录才能完全隔离。
+const SKILLS_DIR = process.env.SKILLS_DIR
+    ? path.resolve(process.env.SKILLS_DIR)
+    : path.join(root, '..', 'skills');
 // Live2D 服务端的四个接口与模型目录读写已搬进 web/mods/live2d-models/（见它的 server.mjs）：
 //   GET  /api/live2d/models · POST /api/live2d/upload
 //   DELETE /api/live2d/models/<名> · POST /api/live2d/rename
@@ -726,6 +739,19 @@ const modManager = createModManager({
     log: (msg) => console.log('[Mod] ' + msg),
 });
 
+// ===== 技能（skill）管理器 =====
+// 与 modManager 复用**同一份** unzip（已含体积上限、危险类型拦截、路径穿越防护）——
+// 解压是安全敏感代码，只该有一个实现（见 server/zip.mjs 的合并说明）。
+// modsDir 传进去是为了读插件 manifest 里 `"skills": [...]` 的声明（随附技能）。
+const skillManager = createSkillManager({
+    skillsDir: SKILLS_DIR,
+    modsDir: MODS_DIR,
+    unzip,
+    isUnsafeEntryName,
+    effectiveExt,
+    log: (msg) => console.log('[Skill] ' + msg),
+});
+
 /**
  * 宿主自己占用的 `/api` 前缀 —— 插件注册路由时撞名会被**拒绝装载**。
  *
@@ -738,7 +764,7 @@ const modManager = createModManager({
 const HOST_API_PREFIXES = [
     '/api/server-info', '/api/auth', '/api/relay', '/api/client-log',
     '/api/logs', '/api/store', '/api/data', '/api/tts',
-    '/api/plugins', '/api/agent',
+    '/api/plugins', '/api/skills', '/api/agent',
     // ★ '/api/live2d' 已从这份清单里**移除**：它现在是插件
     //   （live2d-models 的 server.routes）自己声明的地址，不再是宿主的。
     //   留着的话，插件会因为"与宿主撞名"而被拒绝装载 —— 这正是这套撞名检查
@@ -3132,6 +3158,104 @@ const requestHandler = async (request, response) => {
                 });
             } catch (err) {
                 return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
+            }
+        }
+
+        // ===== 技能（skill）接口 =====
+        //
+        // ★ 技能与插件是**两回事**（见 server/skills.mjs 的说明）：插件扩展应用本身
+        //   （代码、可装可卸），技能是**给 AI 的指令与知识**（纯文本、不注册进应用）。
+        //   所以这里独立成一组 /api/skills，绝不复用 /api/plugins —— 混在一起会让
+        //   "插件列表"里冒出本不该在那儿的项，而且两者卸载方式根本不同。
+        //
+        // 列出技能：每次请求都重新扫描（理由同 /api/plugins：用户可能刚好往
+        // skills/ 里拷了个目录，启动时扫一次就够会让"我刚放的没出现"无从排查）。
+        if (pathname === '/api/skills' && request.method === 'GET') {
+            try {
+                const result = await skillManager.scan();
+                return jsonResponse(response, 200, { ok: true, skills: result.skills });
+            } catch (err) {
+                return jsonResponse(response, 500, { ok: false, message: '扫描技能目录失败：' + String((err && err.message) || err) });
+            }
+        }
+        // 上传安装技能：POST /api/skills/install?name=xxx
+        //
+        // 与插件上传**同一种传输方式**：请求体就是 zip 原始字节（不是 multipart）——
+        // 前端用 fetch 直接把 File 当 body 发，省掉 multipart 解析、也不引依赖。
+        if (pathname === '/api/skills/install' && request.method === 'POST') {
+            if (!isLocalRequest(request)) {
+                return jsonResponse(response, 403, { ok: false, message: '只有本机可以安装技能' });
+            }
+            const rawName = String(url.searchParams.get('name') || '').trim();
+            if (!rawName) {
+                return jsonResponse(response, 400, { ok: false, message: '缺少技能名（请把 zip 文件名作为 name 参数）' });
+            }
+            // ★ 先拒绝"名字里带路径成分"的请求，**再**净化（顺序同插件安装，理由见那段注释）：
+            //   先净化会把 `../../hack.zip` 静默改成 `hack` 并安装成功 —— 既曲解意图，
+            //   又掩盖一次路径穿越尝试。
+            if (/[\\/]/.test(rawName) || rawName.includes('..')) {
+                return jsonResponse(response, 400, { ok: false, message: '技能名不能包含路径成分（/ \\ ..）' });
+            }
+            const id = rawName.replace(/\.zip$/i, '');
+            if (!id) {
+                return jsonResponse(response, 400, { ok: false, message: '缺少技能名（请把 zip 文件名作为 name 参数）' });
+            }
+            let buf;
+            try {
+                buf = await readRawBody(request, MAX_UPLOAD);
+            } catch (err) {
+                return jsonResponse(response, 413, { ok: false, message: '上传失败或文件过大：' + String((err && err.message) || err) });
+            }
+            if (!buf || buf.length < 22) {
+                return jsonResponse(response, 400, { ok: false, message: '文件为空或不是有效的 zip' });
+            }
+            try {
+                const r = await skillManager.installFromBuffer(buf, id);
+                await skillManager.scan();
+                console.log(`[Skill] 已通过上传安装技能：${id}（${r.written} 个文件${r.skipped ? '，跳过 ' + r.skipped + ' 个' : ''}）`);
+                return jsonResponse(response, 200, {
+                    ok: true, id: r.id, files: r.written, skipped: r.skipped,
+                    message: '已安装 ' + r.id + '（' + r.written + ' 个文件）',
+                });
+            } catch (err) {
+                return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
+            }
+        }
+        // 卸载技能（DELETE /api/skills/<id>）。仅本机 —— 它能删文件，不该让局域网访客调。
+        // ★ 只对**本地**技能有效：插件随附的技能由 skillManager 明确拒绝（要随插件一起卸），
+        //   所以这里不额外判断来源，交给管理器统一给出可读的错误。
+        const skillDel = pathname.match(/^\/api\/skills\/([^/]+)$/);
+        if (skillDel && request.method === 'DELETE') {
+            if (!isLocalRequest(request)) {
+                return jsonResponse(response, 403, { ok: false, message: '只有本机可以卸载技能' });
+            }
+            try {
+                await skillManager.uninstall(decodeURIComponent(skillDel[1]));
+                return jsonResponse(response, 200, { ok: true });
+            } catch (err) {
+                return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
+            }
+        }
+        // 读技能的 SKILL.md（界面上的「查看」）：GET /api/skills/<id>/content
+        //
+        // 为什么走接口而不是让前端 fetch 静态文件：技能目录不在静态根 web/ 内，
+        // 前端拼不出路径；而且随附技能的 id 带斜杠（owner/rel），前端更无从拼。
+        //
+        // ★ 这里用 `(.+)`（可含斜杠）而不是 `([^/]+)`：插件随附技能的 id 是
+        //   `owner/rel` 形式。安全性不靠正则，靠 skillManager.readSkill 内部
+        //   "反查已注册技能"的路径校验（前端传不了任意路径）。
+        const skillContent = pathname.match(/^\/api\/skills\/(.+)\/content$/);
+        if (skillContent && request.method === 'GET') {
+            try {
+                const id = decodeURIComponent(skillContent[1]);
+                const r = await skillManager.readSkill(id);
+                if (!r.ok) {
+                    // 404 表示"没有这个技能 / 没有 SKILL.md"，前端据此提示；不是服务器错误
+                    return jsonResponse(response, 404, { ok: false, message: r.message });
+                }
+                return jsonResponse(response, 200, { ok: true, name: r.name, text: r.text });
+            } catch (err) {
+                return jsonResponse(response, 500, { ok: false, message: String((err && err.message) || err) });
             }
         }
 

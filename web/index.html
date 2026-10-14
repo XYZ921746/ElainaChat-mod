@@ -5200,7 +5200,7 @@
                             <button id="settingAsrTest" class="btn-secondary text-xs" type="button">测试</button>
                             <span id="settingAsrTestStatus" class="text-[11px] text-indigo-300"></span>
                         </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed">阿里百炼语音识别（<code class="text-indigo-500">qwen3-asr-flash</code>）使用**独立于语音输出的** API Key —— 不再复用上方千问 TTS 的 DashScope Key。点「测试」可立即验证 Key。401 = Key 无效/未开通，403/404 = 模型未开通。</p>
+                        <p class="text-[11px] text-indigo-300 leading-relaxed">阿里百炼语音识别使用<b>独立于语音输出</b>的 API Key。模型只能填<b>非流式</b>的：<code class="text-indigo-500">qwen3-asr-flash</code> 或 <code class="text-indigo-500">qwen-audio-3.0-asr-flash</code>；名字带 <code>-streaming</code> 的是实时流式模型（走 WebSocket），本应用调不了。点「测试」可验证：401 = Key 无效/未开通，403/404 = 模型未开通，400「format is empty」= 请求体形状不对（应用已按模型自动适配），400「ASR_RESPONSE_HAVE_NO_WORDS」= 音频里没人声（测试发的是静音，属正常）。</p>
                     </div>
                     <div id="mimoAsrFields" class="space-y-3 hidden">
                         <div>
@@ -5671,6 +5671,29 @@
 
                         <!-- 隐藏的文件选择器：点「上传安装」时触发 -->
                         <input type="file" id="modsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
+
+                        <!-- ==================== 技能（Skill） ====================
+                             ★★ 2026-10：技能与插件是**两回事**，所以这里**独立成块**，
+                             绝不混进上面的 #modsList —— 混在一起会让"插件列表"里冒出
+                             本不该在那儿的项，而且两者卸载方式根本不同。
+                               技能 = 一个含 SKILL.md 的目录，是**给 AI 的指令与知识**，
+                                      纯文本、不注册进应用、不参与运行。
+                               插件 = 扩展应用本身（插槽 / 接口 / 资源，是代码）。
+                             条目由 app-06-settings.js 的 refreshSkillsList() 填（复用 .mod-card
+                             样式，深色模式才能跟着适配）。 -->
+                        <div class="flex items-center gap-2 mt-5 mb-2">
+                            <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
+                                <span class="text-indigo-500">✦</span> 技能（Skill）
+                            </div>
+                            <button type="button" id="skillsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个技能 zip 安装">⬆ 上传安装</button>
+                        </div>
+                        <p id="skillsHint" class="text-[11px] text-indigo-400 leading-relaxed mb-2">
+                            技能是给 AI 的<b>指令与知识</b>（一个含 <code class="px-1 rounded bg-white/60">SKILL.md</code> 的目录），与插件相互独立。
+                            本地技能可以卸载；插件随附的技能住在插件目录里，会随插件一起删掉。
+                        </p>
+                        <div id="skillsList" class="space-y-2"></div>
+                        <!-- 隐藏的文件选择器：点技能的「上传安装」时触发 -->
+                        <input type="file" id="skillsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
                     </section>
                 </div><!-- /tab-mods -->
             </div>

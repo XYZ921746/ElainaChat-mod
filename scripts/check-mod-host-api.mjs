@@ -231,14 +231,27 @@ function cleanup() {
 //   失败，看起来像产品坏了。检查脚本该对自己的残留免疫。
 cleanup();
 
-// ★ 把**真正的模板目录**也装一遍（改 id、打开开关），验证"复制模板就能用"。
+// ★ 把**真正的骨架目录**也装一遍（改 id、打开开关），验证"复制骨架就能用"。
+//   骨架现住在插件开发 skill 里：skills/<技能>/assets/mod-starter/（当前是 skills/插件开发指南/）。
 //
 //   为什么值得单独验：模板是给人复制的交付物，而"语法合法 + manifest 是 JSON"
 //   不等于"装上去真的有反应" —— 恰恰是模板里的 API 名写错、插槽名写错这类问题
 //   只有真装一次才会暴露。检查脚本替用户先撞一遍。
+/** 在 skills/ 下查找插件骨架目录（不写死 skill 目录名 —— 目录名可由用户改） */
+function findStarterDir() {
+    const skillsRoot = path.join(ROOT, 'skills');
+    if (existsSync(skillsRoot)) {
+        for (const name of readdirSync(skillsRoot)) {
+            const p = path.join(skillsRoot, name, 'assets', 'mod-starter');
+            if (existsSync(p)) return p;
+        }
+    }
+    throw new Error('找不到插件骨架目录：skills/*/assets/mod-starter');
+}
+
 const TPL_ID = 'zz-check-tpl';
 {
-    const src = path.join(ROOT, 'templates', 'mod-starter');
+    const src = findStarterDir();
     const dest = path.join(MODS, TPL_ID);
     cpSync(src, dest, { recursive: true });
     // manifest：换 id/名字并打开开关（默认是 false，模板本来就该默认关闭）
@@ -528,7 +541,7 @@ try {
         ok(initial.hint, '★ 插件注入的 system 提示词生效');
         ok(initial.styleEl.exists && initial.styleEl.disabled === false, '★ 插件注入的样式表已生效');
 
-        // ---- ★ 模板目录：证明"复制 templates/mod-starter 就能用" ----
+        // ---- ★ 骨架目录：证明"复制 skill 里的插件骨架就能用" ----
         ok(initial.tplTab, '★【模板】设置分栏出现了（label「我的插件」）');
         ok(initial.tplHeaderBtn, '★【模板】顶部按钮出现了（label「打招呼」）');
         ok(initial.tplSidebar, '★【模板】侧栏底部内容出现了');

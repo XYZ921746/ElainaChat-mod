@@ -808,6 +808,9 @@ async function refreshModsList() {
     const hint = document.getElementById('modsHint');
     // 平台说明随列表一起刷新（IS_NATIVE_APP 是常量，但集中在一处好维护）
     applyModsPlatformHint();
+    // 技能列表与插件列表同在一屏（技能块在插件列表下方），但**是两个独立的数据源**：
+    // 技能不是插件，绝不合并进下面的 fromServer —— 这里只是"刷新插件时顺带刷一下技能"。
+    void refreshSkillsList();
 
     let fromServer = [];
     try {
@@ -2021,6 +2024,163 @@ function bindGroupDragSort(box, onDone, hooks) {
         groupEl.querySelector('.mod-group-body')?.classList.toggle('is-collapsed', g.collapsed);
         groupEl.querySelector('.mod-group-toggle')?.setAttribute('title',
             g.collapsed ? '展开' : '收纳');
+    }
+}
+
+/**
+ * 渲染「设置 → 插件」页面里的**技能（skill）**列表。
+ *
+ * ★ 技能与插件是两回事，所以这里既不合并进 #modsList，也不用插件的数据源：
+ *   它是同一张卡片里、插件列表下方的**独立一屏**，数据来自 /api/skills。
+ *   混在一起会让"插件列表"里冒出本不该在那儿的项，而且两者卸载方式不同。
+ *
+ * 每项显示：名称 / 描述 / 来源 + 查看 / 卸载。
+ *   · 来源 —— 本地技能标「本地」；插件随附的标「来自插件 <owner>」。
+ *   · 查看 —— 读 SKILL.md（GET /api/skills/<id>/content），复用现有说明弹窗 #modReadme*。
+ *   · 卸载 —— **只有本地技能**才给按钮：插件随附的技能住在插件目录里，
+ *           删插件就一起没了；单独给它一个删除按钮只会误导（点了也删不掉）。
+ *
+ * 由 refreshModsList() 顺带触发（见那里的说明），所以用户每次打开设置都能看到最新的。
+ */
+async function refreshSkillsList() {
+    const box = document.getElementById('skillsList');
+    if (!box) return;
+    const hint = document.getElementById('skillsHint');
+    const setHint = (text, cls) => {
+        if (hint) { hint.textContent = text; hint.className = 'text-[11px] ' + (cls || 'text-indigo-400'); }
+    };
+
+    let skills = [];
+    try {
+        const res = await fetch('/api/skills', { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            skills = Array.isArray(data && data.skills) ? data.skills : [];
+        }
+    } catch (e) {
+        // 与插件列表同理：APK 端没有服务端时这个接口不存在，属正常，不必惊动用户
+        box.innerHTML = '';
+        return;
+    }
+
+    if (!skills.length) {
+        box.innerHTML = '<div class="text-[11px] text-indigo-300 py-2 text-center">还没有技能。'
+            + '把含 <code>SKILL.md</code> 的目录放进项目的 skills/，或点上面的「上传安装」选一个 zip。</div>';
+        return;
+    }
+
+    // 复用插件卡片的那两个图标（文档 / 垃圾桶）—— 同一屏内观感要一致
+    const ICON_DOC = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/></svg>';
+    const ICON_TRASH = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 13h8l1-13"/></svg>';
+
+    box.innerHTML = skills.map((s) => {
+        const id = escapeHtml(s.id);
+        const name = escapeHtml(s.name || s.id);
+        const desc = escapeHtml(s.description || '');
+        const isLocal = s.source === 'local';
+        const srcLabel = isLocal
+            ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 ml-1">本地</span>'
+            : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-500 ml-1">来自插件 '
+                + escapeHtml(s.owner || '') + '</span>';
+        // 卸载按钮只在本地技能上给；随附技能只留一句说明（否则按钮点了也没用）
+        const delBtn = isLocal
+            ? '<button type="button" class="mod-act mod-act-danger skill-del-btn" data-skill-id="' + id + '"'
+                + ' data-skill-name="' + name + '" title="卸载这个技能（含安装包）">' + ICON_TRASH + '</button>'
+            : '<span class="text-[10px] text-indigo-300 ml-1" title="插件随附的技能住在插件目录里，删掉插件就一起没了">随插件删除</span>';
+
+        return '<div class="mod-card" data-skill-id="' + id + '">'
+            + '<div class="min-w-0 flex-1">'
+              + '<div class="flex items-start gap-2">'
+                + '<div class="min-w-0 flex-1">'
+                  + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + srcLabel
+                  + (desc ? '<div class="text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + desc + '</div>' : '')
+                + '</div>'
+              + '</div>'
+              + '<div class="flex items-center gap-1.5 mt-2">'
+                + '<button type="button" class="mod-act skill-view-btn" data-skill-id="' + id + '"'
+                  + ' data-skill-name="' + name + '" title="查看 SKILL.md">' + ICON_DOC + '</button>'
+                + delBtn
+              + '</div>'
+            + '</div>'
+            + '</div>';
+    }).join('');
+
+    // 查看 → 读 SKILL.md 并显示在说明弹窗里
+    box.querySelectorAll('.skill-view-btn').forEach((el) => {
+        el.addEventListener('click', () => {
+            void openSkillContent(el.getAttribute('data-skill-id'), el.getAttribute('data-skill-name'));
+        });
+    });
+
+    // 卸载（仅本地技能）→ DELETE /api/skills/<id>
+    box.querySelectorAll('.skill-del-btn').forEach((el) => {
+        el.addEventListener('click', async (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const id = el.getAttribute('data-skill-id');
+            const name = el.getAttribute('data-skill-name') || id;
+            const okToGo = await showCustomConfirm(
+                '卸载技能「' + name + '」？\n\n'
+                + '会把技能目录和安装包一起删掉（下次打开设置不会再出现）。\n\n'
+                + '注意：插件随附的技能不能这样卸 —— 它们住在插件目录里，要连同那个插件一起删。',
+                '卸载技能');
+            if (!okToGo) return;
+
+            el.disabled = true;
+            setHint('正在卸载 ' + name + '…', 'text-indigo-500');
+            try {
+                const res = await fetch('/api/skills/' + encodeURIComponent(id), { method: 'DELETE' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || data.ok === false) {
+                    setHint('卸载失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
+                } else {
+                    setHint('已卸载 ' + name, 'text-emerald-600');
+                    void refreshSkillsList();
+                }
+            } catch (err) {
+                setHint('卸载失败：' + String((err && err.message) || err), 'text-red-500');
+            } finally {
+                el.disabled = false;
+            }
+        });
+    });
+}
+
+/**
+ * 查看单个技能：读它的 SKILL.md 并显示在**复用**的说明弹窗（#modReadme*）里。
+ *
+ * 为什么复用插件 README 那个弹窗而不是再造一个：那套已经处理了滚动、深色模式、
+ * 关闭逻辑，再造第二套只是维护两份一样的壳。技能内容就是一段 markdown 文本，
+ * 与 README 的展示诉求完全一致。
+ *
+ * 走 /api/skills/<id>/content（服务端反查已注册技能后读文件，前端传不了任意路径）。
+ */
+async function openSkillContent(id, name) {
+    const overlay = document.getElementById('modReadmeOverlay');
+    const body = document.getElementById('modReadmeBody');
+    const title = document.getElementById('modReadmeTitle');
+    const fileEl = document.getElementById('modReadmeFile');
+    if (!overlay || !body) return;
+
+    if (title) title.textContent = name + ' · 技能';
+    if (fileEl) fileEl.textContent = '';
+    body.textContent = '正在读取…';
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+
+    try {
+        // id 可能含斜杠（插件随附技能是 owner/rel），encodeURIComponent 会把它编成 %2F，
+        // 服务端按整段捕获再解回来 —— 与插件 README 那种单段 id 的处理一致。
+        const res = await fetch('/api/skills/' + encodeURIComponent(id) + '/content', { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data && data.ok) {
+            body.textContent = String(data.text || '（空文件）');
+            if (fileEl) fileEl.textContent = data.name || 'SKILL.md';
+        } else {
+            body.textContent = (data && data.message) || ('HTTP ' + res.status);
+        }
+    } catch (err) {
+        body.textContent = '读取失败：' + String((err && err.message) || err);
     }
 }
 

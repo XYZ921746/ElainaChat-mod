@@ -231,6 +231,46 @@ async function init() {
             e.target.value = '';
         }
     });
+    // 技能（skill）：上传安装。
+    //
+    // 与上面「插件上传安装」**同一种做法**（请求体就是 zip 原始字节，末尾从 query 取
+    // 技能名），也绑在这里的同一理由：app-07-init 只执行一次 —— 若绑在 refreshSkillsList
+    // 里，每次刷新列表都会重绑一遍，点一次按钮触发 N 个 handler。
+    //
+    // ★ 技能**不是**插件：它走独立的 /api/skills/install，绝不复用 /api/plugins/install
+    //   （混用会让技能被当成插件装进去，而那正是本功能要避免的事）。
+    //   技能名 = zip 文件名去掉 .zip；服务端会再校验一遍（挡路径成分 + 白名单）。
+    document.getElementById('skillsInstallBtn')?.addEventListener('click', () => {
+        document.getElementById('skillsFileInput')?.click();
+    });
+    document.getElementById('skillsFileInput')?.addEventListener('change', async (e) => {
+        const file = e.target.files && e.target.files[0];
+        const hint = document.getElementById('skillsHint');
+        if (!file) return;
+        const setHint = (text, cls) => {
+            if (hint) { hint.textContent = text; hint.className = 'text-[11px] ' + (cls || 'text-indigo-500'); }
+        };
+        setHint('上传中…（' + Math.round(file.size / 1024) + ' KB）', 'text-indigo-500');
+        try {
+            const res = await fetch('/api/skills/install?name=' + encodeURIComponent(file.name), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/zip' },
+                body: file,
+            });
+            const data = await res.json().catch(() => null);
+            if (!res.ok || !data || !data.ok) {
+                setHint('安装失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
+            } else {
+                setHint('✅ ' + (data.message || '已安装'), 'text-emerald-600');
+                void refreshSkillsList();
+            }
+        } catch (err) {
+            setHint('安装失败：' + String((err && err.message) || err), 'text-red-500');
+        } finally {
+            // 清空 input，否则同一个文件再选一次不会触发 change
+            e.target.value = '';
+        }
+    });
     // 顶栏「外观模式」三段开关（跟随设备 / 浅色 / 深色）——见 index.html 的
     // .header-theme-switch。它取代了原「外观 → 深色模式」下拉：
     //   · 点某一段 → ElainaTheme.setDarkMode(该段的 data-mode)
@@ -694,17 +734,21 @@ async function init() {
             statusEl.className = 'text-[11px] text-red-400';
             return;
         }
+        if (/streaming/i.test(asrModel)) {
+            statusEl.textContent = '❌ 「' + asrModel + '」是流式（实时）模型，走 WebSocket 实时接口，本应用的非流式识别调不了它 —— 请改用非流式模型（qwen-audio-3.0-asr-flash 或 qwen3-asr-flash）';
+            statusEl.className = 'text-[11px] text-red-400';
+            return;
+        }
         statusEl.textContent = '测试中…';
         statusEl.className = 'text-[11px] text-indigo-300';
         try {
             const samples = new Float32Array(ASR_TARGET_SAMPLE_RATE * 0.5); // 0.5s 静音
-            const result = await postJsonFromDevice(asrUrl, {
-                model: asrModel,
-                input: { messages: [{ role: 'user', content: [{ audio: `data:audio/wav;base64,${float32ToWavBase64(samples, ASR_TARGET_SAMPLE_RATE)}` }] }] },
-                parameters: { asr_options: { language: 'zh', enable_itn: true } }
-            }, { Authorization: `Bearer ${key}`, 'X-DashScope-DataInspection': 'enable' }, 20000);
-            if (result.ok) {
-                statusEl.textContent = '✅ 连接成功（HTTP ' + (result.status || 200) + '）：Key 有效、' + asrModel + ' 已开通';
+            const result = await postJsonFromDevice(asrUrl,
+                buildAliyunAsrRequestBody(asrModel, float32ToWavBase64(samples, ASR_TARGET_SAMPLE_RATE)),
+                { Authorization: `Bearer ${key}`, 'X-DashScope-DataInspection': 'enable' }, 20000);
+            if (result.ok || isAsrNoWordsError(result)) {
+                statusEl.textContent = '✅ 连接成功（HTTP ' + (result.status || 200) + '）：Key 有效、' + asrModel + ' 可调用'
+                    + (result.ok ? '' : '（测试发的是 0.5 秒静音，模型如实回「没有听到词」—— 属正常，录真话就会出文字）');
                 statusEl.className = 'text-[11px] text-green-500';
             } else {
                 const msg = String(
