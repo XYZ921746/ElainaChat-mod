@@ -60,7 +60,7 @@ ok(missing.size === 0,
 
 // ── 3. 关键键必须存在（业务约定）──
 for (const k of ['elaina_mods_order', 'elaina_mods_groups', 'elaina_mods_group_of',
-    'elaina_mods_top_order', 'elaina_live2d_model_order']) {
+    'elaina_mods_top_order', 'elaina_live2d_model_order', 'elaina_announce_read']) {
     ok(whitelist.has(k), '白名单包含 ' + k);
 }
 

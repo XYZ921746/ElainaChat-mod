@@ -714,7 +714,24 @@ if (IS_NATIVE_APP) {
             const f = nativeFs();
             if (!f) throw new Error('Filesystem 插件不可用');
             const d = (f.Directory && f.Directory.Data) ? f.Directory.Data : 'DATA';
-            await f.mkdir({ path: NATIVE_MODS_DIR, directory: d, recursive: true });
+            // ★★ 2026-10 修（真 bug）：mkdir 对**已存在**的目录会抛错 ——
+            //   Capacitor 的 Filesystem 返回 OS-PLUG-FILE-0010
+            //   "already exists, cannot be overwritten"，**即便传了 recursive: true 也一样**。
+            //   于是只要有第二次启动、或者之前装过插件（files/mods 已存在），这里就抛 →
+            //   下面 getUri 不会执行 → `__nativeModBase` 一直是 undefined →
+            //   mods.js 回落桌面根 `/mods/`（APK 上必然 404）→ **所有插件都不加载**，
+            //   日志里只有一行"插件目录初始化失败（插件加载会回落桌面根）"。
+            //
+            //   为什么以前没暴露：**首次安装** APK 时目录不存在，这一步是成功的；
+            //   坑只在"第二次启动之后"出现，表现是"昨天还能用的插件今天全没了"，
+            //   很难联想到这里。mkdir 的意图本来只是"确保目录存在"，
+            //   已存在就是达成了目标，不该当成失败。
+            //   ⚠️ 只放过"已存在"这一类错误：权限之类的照样要冒出来（不能整个吞掉）。
+            try {
+                await f.mkdir({ path: NATIVE_MODS_DIR, directory: d, recursive: true });
+            } catch (mkdirError) {
+                if (!/exist/i.test(String((mkdirError && mkdirError.message) || mkdirError))) throw mkdirError;
+            }
             const res = await f.getUri({ path: NATIVE_MODS_DIR, directory: d });
             if (window.Capacitor.convertFileSrc) {
                 window.__nativeModBase = window.Capacitor.convertFileSrc(res.uri) + '/';
@@ -1034,11 +1051,13 @@ const DEFAULT_SETTINGS = {
     // ★ 接口地址**预填小米官方地址**（非密钥，预填更直观；留空时运行时同样会回退到这个地址）。
     mimoBaseUrl: 'https://api.xiaomimimo.com',
     mimoAsrModel: 'mimo-v2.5-asr',
+    // 思考：UI 上只有**一个"思考强度"四档下拉** ——
+    //   off（不思考，默认）/ low（快速）/ high（均衡）/ max（深度，慢但更贵）。
+    //   `thinkingMode` 是**派生**布尔量（off ⇒ false，其余 ⇒ true）：
+    //   请求层与「思考」折叠栏都读它，单独留个字段比到处改判据稳得多。
+    //   两者的一致性由 loadSettings 的归一 + 控件 change 监听共同保证。
     thinkingMode: false,
-    // 思考强度：'low' | 'medium' | 'high'。默认 medium = **不显式指定**，
-    // 交给服务商自己的默认值（DeepSeek 是 high，OpenAI 是 medium）。
-    // 默认值选"不指定"而不是"high"：我们不该替用户决定他要花多少思考 token。
-    thinkingEffort: 'medium',
+    thinkingEffort: 'off',
     // ★ 2026-10「对话优化 → 第三人称」：开启后一轮对话走两段式生成
     //   （先 GM 第三人称推进剧情 → 再转成第一人称展示），见 app-02-data.js。
     //   默认关闭：它会多花一次模型调用（费用与延迟翻倍），不该默认替用户打开。
@@ -1046,32 +1065,49 @@ const DEFAULT_SETTINGS = {
     autoMemory: false,
     memoryEvery: 6,
     // ★★ 2026-10 权限模型重构：`agentPermission`('app'|'computer') + `agentApproval`
-    //    （手机四档）合并成**一个三档设置** `agentAccess`：
+    //    （手机四档）合并成**一个档位设置** `agentAccess`：
+    //      'off'    关闭（电脑侧不读不写不改不执行，2026-10 新增）
     //      'strict' 逐条确认 · 'auto' 自动通过（禁删除） · 'full' 完全访问（含删除）
-    //    一个开关同时管电脑与手机 —— 见 开发文档 里那次改造的说明。
+    //    前三档同时管电脑与手机；'off' 只关电脑侧（手机另有 agentPhoneEnabled）——
+    //    见 开发文档 里那次改造的说明。
     //    两个旧字段保留在下面只作**迁移输入**，迁移完成后由 app-02-data.js 删掉。
     agentAccess: 'strict',
     agentPhoneEnabled: true,
     agentBackend: '',   // 空 = 还没选过实现方式（此时不启用手机操作，入口按钮灰显）
     // ★★ 2026-10 新增：手机「读取信息」的隐私开关。
     //   用户要求"如果不想让 ai 知道太多信息请关闭对应权限"。
-    //   默认**全开**（读了才有用），但每一项都能单独关掉 ——
     //   关掉后 AI 连对应标签都不会看到（见 app-03-agent.js 的 agentPhoneSkillText
     //   与手机读信息的分发），不是"读了不说"。
+    //   ★ 2026-10 改成**默认全关**（原来全开）：这些都是隐私数据，
+    //     "用户没表态就当同意"不是个好默认。要用哪一项，由用户自己在设置里打开 ——
+    //     每一项旁边都标着它在系统里的权限现状（见 renderAgentPermBadges）。
     //   ⚠️ 这些开关只控制**应用层**是否允许读；系统层权限（通知/短信/通讯录/日历）
     //   仍由 Android 自己的运行时权限把关，两者缺一不可。
-    agentReadApps: true,
-    agentReadNotifications: true,
-    agentReadDevice: true,
-    agentReadSms: true,
-    agentReadContacts: true,
-    agentReadCalendar: true,
+    agentReadApps: false,
+    agentReadNotifications: false,
+    agentReadDevice: false,
+    agentReadSms: false,
+    agentReadContacts: false,
+    agentReadCalendar: false,
     // 用户通过系统文件选择器授权的文件夹（SAF 持久化 URI）。空 = 没授权。
     agentFolderUri: '',
     agentFolderName: '',
     visionBaseUrl: '',
     visionApiKey: '',
-    visionModel: ''
+    visionModel: '',
+    // ★★ 2026-10：首次运行的「欢迎使用独立开源版」公告**是否已同意过**。
+    //
+    //   用户要求："第一次弹出同意后即消失，后面都不再出现"——
+    //   无论 10.17 生日版还是普通版都一样。
+    //
+    //   为什么存进 settings 而不是单开一个 Store 键：
+    //     · settings 本来就随 data/ 落盘、跨设备同步，语义正好是"这个用户的偏好"；
+    //     · 单开一个键就要同步加进 store.js 的 DATA_KEYS 白名单，否则
+    //       **写入只进内存缓存、刷新即丢**（本项目踩过三次的坑）——
+    //       而那正是"每次都弹"这个 bug 的成因之一，不该再冒一次风险。
+    //   ⚠️ 老用户升级上来时这个字段是 undefined（≠ true），所以**会看到一次**
+    //     然后点同意就再也不出现 —— 这符合"第一次弹出同意后即消失"的要求。
+    announcementAgreed: false
 };
     const ELENA_QUOTES = [
 { text: '旅途的意义，不在于终点，而在于沿途遇见的每一个你。', source: '《魔女之旅》' },
@@ -1111,6 +1147,10 @@ const state = {
     favorites: [],
     notesMode: false,
     diaryMode: false,
+    // ★★ 2026-10：日记页的"只看某段对话"筛选（空 = 显示全部）。
+    //   由 focusDiaryGroup() 设置；进/出日记页时清掉，避免下次进来
+    //   莫名其妙只看到一部分（那会让人以为日记丢了）。
+    diaryFilterConvId: '',
     notesTab: 'message',
     selectedFavoriteId: null,
     catModalExpanded: {},
@@ -1207,6 +1247,12 @@ const elements = {
     quoteSource: document.getElementById('quoteSource'),
     quoteLikeBtn: document.getElementById('quoteLikeBtn'),
     quoteFavBtn: document.getElementById('quoteFavBtn'),
+    // 顶栏「公告」按钮 + 下拉面板（2026-10，见 app-02-data.js 的 syncAnnounceBadge）
+    announceBtn: document.getElementById('headerAnnounceBtn'),
+    announceStatusDot: document.getElementById('announceStatusDot'),
+    announcePanel: document.getElementById('announcePanel'),
+    announceList: document.getElementById('announceList'),
+    announcePanelClose: document.getElementById('announcePanelClose'),
     categoriesModalOverlay: document.getElementById('categoriesModalOverlay'),
     categoriesModalList: document.getElementById('categoriesModalList'),
     categoriesModalClose: document.getElementById('categoriesModalClose'),
@@ -1227,11 +1273,18 @@ const elements = {
     customModalInput: document.getElementById('customModalInput'),
     customModalActions: document.getElementById('customModalActions'),
     customModalCancelBtn: document.getElementById('customModalCancelBtn'),
+    customModalAltBtn: document.getElementById('customModalAltBtn'),
     customModalConfirmBtn: document.getElementById('customModalConfirmBtn'),
     announcementOverlay: document.getElementById('announcementOverlay'),
     announcementTitle: document.getElementById('announcementTitle'),
     announcementContent: document.getElementById('announcementContent'),
     announcementConfirmBtn: document.getElementById('announcementConfirmBtn'),
+    // 远程公告 / 10.17 本地兜底（见 app-02-data.js 的 startAnnouncements / syncAnnounceBadge）
+    serverAnnounceOverlay: document.getElementById('serverAnnounceOverlay'),
+    serverAnnounceTitle: document.getElementById('serverAnnounceTitle'),
+    serverAnnounceContent: document.getElementById('serverAnnounceContent'),
+    serverAnnounceAction: document.getElementById('serverAnnounceAction'),
+    serverAnnounceClose: document.getElementById('serverAnnounceClose'),
     conversationPromptOverlay: document.getElementById('conversationPromptOverlay'),
     conversationWorldInput: document.getElementById('conversationWorldInput'),
     conversationCharacterInput: document.getElementById('conversationCharacterInput'),
@@ -1242,9 +1295,8 @@ const elements = {
     settingApiFormat: document.getElementById('settingApiFormat'),
     settingBaseUrl: document.getElementById('settingBaseUrl'),
     settingChatModel: document.getElementById('settingChatModel'),
-    // 对话优化（原「思考模式」块）：思考开关 + 强度 + 第三人称两段式。
+    // 对话优化：思考强度（四档下拉，off 即"不思考"）+ 第三人称两段式开关。
     // 原来在输入框旁的 ⊕ 菜单里，已移到「设置 → 模型」。
-    settingThinkingMode: document.getElementById('settingThinkingMode'),
     settingThinkingEffort: document.getElementById('settingThinkingEffort'),
     thinkingModeHint: document.getElementById('thinkingModeHint'),
     settingThirdPerson: document.getElementById('settingThirdPerson'),
@@ -1264,6 +1316,10 @@ const elements = {
     ttsVolumeLabel: document.getElementById('ttsVolumeLabel'),
     settingAutoMemory: document.getElementById('settingAutoMemory'),
     settingMemoryEvery: document.getElementById('settingMemoryEvery'),
+    // 记忆模块的步进器按钮与「立即整理记忆」按钮（★ 2026-10 改良）
+    memoryEveryMinus: document.getElementById('memoryEveryMinus'),
+    memoryEveryPlus: document.getElementById('memoryEveryPlus'),
+    memoryNowBtn: document.getElementById('memoryNowBtn'),
     // settingLogLevel / settingLogTrace 已随「日志设置」界面一起移除（见 index.html 的说明）
     memoryBtn: document.getElementById('headerMemoryBtn'),
     memoryStatusDot: document.getElementById('memoryStatusDot'),
@@ -1531,44 +1587,40 @@ function getNativeByokHttpPlugin() {
 //   服务商不认识新字段时会忽略它，而认识的会照做。
 
 /**
- * 思考强度档位。对外只有三档，映射到各家自己的取值：
- *   low    → 快速思考，省 token
- *   medium → 默认（不显式发送，用服务商默认值）
- *   high   → 深思考，最慢但最准
+ * 思考强度档位（对外只有这四个，映射到各家自己的取值）：
+ *   off  → 不思考，直接回答（**默认**；请求里显式发 disabled）
+ *   low  → 快速思考
+ *   high → 均衡
+ *   max  → 深度思考，最慢但最准（也更贵）
  *
- * 为什么对外只给三档而不是把各家的取值原样暴露：
- * 用户在设置里看到的应该是"我要想多深"，而不是"我要发 reasoning_effort 还是 output_config.effort"。
- * 各家的合法取值并不一致（DeepSeek 有 max、OpenAI 有 minimal），
- * 让用户去记这些差异没有意义，映射表放在这里一处维护。
+ * 为什么对外只给这四档而不是把各家的取值原样暴露：
+ * 用户在设置里看到的应该是"我要想多深"，而不是"我要发 reasoning_effort 还是
+ * output_config.effort"。各家的合法取值并不一致（DeepSeek 认 low/high/max；
+ * OpenAI 只认 minimal/low/medium/high，没有 max），让用户去记这些差异没有意义，
+ * 映射表放在这里一处维护。
+ *
+ * ★ 2026-10：由「低/中/高」三档改为「off/低/高/极高」四档 —— 并把原来独立的
+ *   「让模型先思考再回答」勾选框**合并进档位**（off 就是关思考）。
  */
-const THINKING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
 
 /**
  * 把一个"思考强度"档位映射成某个服务商能接受的取值。
  *
- * @param {string} effort 内部档位：low / medium / high
+ * @param {string} effort 内部档位：off / low / high / max
  * @param {string} vendor 'deepseek' | 'anthropic' | 'openai' | 'generic'
- * @returns {string|null} null = 不发这个字段（用服务商默认值）
+ * @returns {string|null} null = 不发这个字段（off 或该服务商不认这一档）
  */
 function mapThinkingEffort(effort, vendor) {
-    const level = String(effort || 'medium').trim().toLowerCase();
-    if (level === 'medium' || !THINKING_EFFORTS.includes(level)) return null;   // 默认档：交给服务商
-    if (vendor === 'deepseek') {
-        // DeepSeek 官方只认 low/high/max，没有 medium（文档里 medium 会被映射成 high）。
-        // 所以「默认档」用不发字段来表达，而不是发一个 medium 让它去映射。
-        return level === 'low' ? 'low' : 'high';
-    }
-    if (vendor === 'openai') {
-        // OpenAI 的 reasoning_effort 取值是 minimal/low/medium/high。
-        // 我们这两档正好都有对应，不需要翻译。
-        return level;
-    }
-    if (vendor === 'anthropic') {
-        // Anthropic 官方 extended thinking 用 budget_tokens（token 预算）而不是档位；
-        // 只有走了 DeepSeek 的 Anthropic 兼容端点时才认 effort（见上面文档）。
-        // 这里返回档位名，由调用方决定放在 reasoning.effort 还是 output_config.effort。
-        return level;
-    }
+    const level = String(effort || '').trim().toLowerCase();
+    // off（以及任何非法值/已废弃的老档位 medium）→ 不发强度字段；
+    // "关掉思考"由调用方用 enabled 表达（见 buildThinkingParams）。
+    if (level === 'off' || !THINKING_EFFORTS.includes(level)) return null;
+    // OpenAI 的 reasoning_effort 只有 minimal/low/medium/high，没有 max ——
+    // 「极高」在它那边降到 high。
+    if (vendor === 'openai' && level === 'max') return 'high';
+    // deepseek（官方取值就是 low/high/max）、anthropic（reasoning.effort: none/low/high/max）、
+    // generic（交给服务商自己判）都原样透传。
     return level;
 }
 
@@ -1700,7 +1752,10 @@ function detectAgentRoots() {
         if (IS_NATIVE_APP) return null;
         if (location.protocol !== 'http:' && location.protocol !== 'https:') return null;
         try {
-            const response = await fetchWithTimeout('/api/agent/roots?permission=computer', { method: 'GET' }, 6000);
+            // 把**真实档位**告诉服务端：`off` 档下服务端会隐去真实路径（连"桌面在哪"
+            // 也算电脑信息）。不再写死 permission=computer —— 那是旧两档模型的遗留。
+            const access = typeof currentAgentAccess === 'function' ? currentAgentAccess() : 'strict';
+            const response = await fetchWithTimeout('/api/agent/roots?access=' + encodeURIComponent(access), { method: 'GET' }, 6000);
             if (!response.ok) return null;
             const info = await response.json();
             return info && info.ok && Array.isArray(info.roots) ? info.roots : null;
@@ -1720,10 +1775,15 @@ function detectAgentRoots() {
  * 同步取已探测到的真实位置，拼成给 AI 看的一段提示。
  * 提示词构造函数是同步的，没法 await，所以只能读缓存（页面启动时就预热了）。
  *
- * ★ 三档权限下**一律注入**：三档都能访问任意路径，所以"桌面到底在哪"对每一档
- *   都有用（旧模型下只有 computer 档才注入，因为 app 档碰不到那些位置）。
+ * ★ strict / auto / full 三档下**一律注入**：三档都能访问任意路径，所以"桌面到底在哪"
+ *   对每一档都有用（旧模型下只有 computer 档才注入，因为 app 档碰不到那些位置）。
+ *   `off` 档是唯一例外 —— 电脑操作整体关闭，真实路径也不该让 AI 知道（见函数内那行）。
  */
 function agentRootsText() {
+    // ★ `off` 档：电脑操作整体关闭时，"桌面/文档/下载在哪"也是**电脑信息**，不注入。
+    //   这是不泄路径的**真正保险**：即便探测缓存里还留着上一次拿到的真实路径，
+    //   只要当前档位是 off，就不会进提示词。
+    if (typeof agentAccessDisabled === 'function' && agentAccessDisabled()) return '';
     const roots = Array.isArray(agentRootsCache) ? agentRootsCache.filter(r => r && r.path) : [];
     if (!roots.length) return '';
     return '\n# 这台电脑的真实位置（用户可能把桌面/文档移动过，**不要**按惯例猜 C:\\Users\\<用户名>\\Desktop）\n'

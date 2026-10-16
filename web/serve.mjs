@@ -43,6 +43,16 @@ import { readZip, BLOCKED_EXT, effectiveExt } from '../server/zip.mjs';
 import { banner } from '../server/diagnostics.mjs';
 // 内存日志缓冲：软件内日志查看器的数据源（控制台全量、界面筛着看）。
 import { createLogBuffer } from '../server/log-buffer.mjs';
+// ★ 2026-10：这两个通用 HTTP 小工具与"电脑端"无关，抽到 server/http-util.mjs 里，
+//   好让手机端内嵌的 Node 用同一份（否则就要复制，细节迟早不一致）。
+//   这里 import 回来，全文件的调用点一行都没改。
+import { jsonResponse, readJsonBody } from '../server/http-util.mjs';
+// ★ 2026-10：本地中继成为**两端共用**的模块（手机端也要跑同一条路），
+//   见 server/relay.mjs。这里只把本机的追踪日志与三个安全判定接上去。
+import { createRelay } from '../server/relay.mjs';
+// ★ 2026-10：网络边界判定（是否本机请求 / 回环主机名 / 内网地址）抽到
+//   server/net-guard.mjs —— 手机端那条中继要用**同一份**判定，安全逻辑不留两份。
+import { isLocalRequest, isLoopbackHostname, isPrivateIPv4, isInternalAddress } from '../server/net-guard.mjs';
 
 const scryptAsync = promisify(scrypt);
 
@@ -150,11 +160,7 @@ const LOG_TO_FILE = String(process.env.LOG_TO_FILE ?? '1') !== '0';
 // 完整对话内容是否写进追踪日志。默认开 —— 排查"AI 为什么这么答"时最缺的就是这个。
 // 只作为**初始值**：运行中可在 设置 → 高级 → 日志 里切换（见 traceEnabled）。
 const LOG_CHAT = String(process.env.LOG_CHAT ?? '1') !== '0';
-const TRACE_MSG_MAX = 4000;                // 单条消息最多记多少字
-const TRACE_BODY_MAX = 64 * 1024;          // 写进追踪日志的单次响应上限
-// 内存里最多攒多少响应字节。比 TRACE_BODY_MAX 大，是因为非流式响应必须**完整**才能 JSON.parse
-// 出回复正文；只攒 64KB 的话稍长一点的回复就解析失败，只能退化成贴一段原始 JSON。
-const TRACE_ACCUM_MAX = 256 * 1024;
+// （本条日志与追踪日志的几个大小上限，已随中继一起搬到 server/relay.mjs —— 它们只服务于中继。）
 
 // 文件名：<时刻>.log / <时刻>.trace.log / <时刻>_2.log / <时刻>.trace_2.log / <时刻>-2.log（同秒再起一个实例）
 const LOG_NAME_RE = /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}(?:[-._][A-Za-z0-9]+)*\.log$/;
@@ -688,6 +694,12 @@ const contentTypes = new Map([
     ['.json', 'application/json'],
     ['.moc3', 'application/octet-stream'],
     ['.svg', 'image/svg+xml'],
+    // ★ 2026-10：软件自带的 MiMo TTS 参考音频（web/audio/mimo-elaina-jp.m4a）。
+    //   注意它**真的是 m4a（ftypisom）容器**，只是原始文件名带 .mp3 —— 项目里
+    //   早就踩过这个坑（见 app-06-settings.js 关于「样本格式要按文件头嗅探」的注释）。
+    //   前端 fetch 后按字节解码再转 wav，所以这里给对 MIME 只是规范问题。
+    ['.mp3', 'audio/mpeg'],
+    ['.m4a', 'audio/mp4'],
 ]);
 
 
@@ -811,36 +823,61 @@ const modServer = createModServer({
 
 // ===== AI Agent 文件操作 API =====
 //
-// ★★ 2026-10 权限模型重构：`app`/`computer` 两档 → **三档**。
+// ★★ 2026-10 权限模型重构：`app`/`computer` 两档 → **三档**；此后又**新增 `off` 档**。
 //
 //   旧模型把两件事捆在一个开关上：**能碰哪里**（web/ 内 vs 任意路径）
 //   与**要不要问**。结果是用户想要"能碰任意路径但仍然每次都问"时无从表达 ——
 //   他只能切到 computer，而那同时意味着"不再逐条确认"。
 //
-//   新模型把两者拆开：**三档都能访问任意路径**，区别只在"要不要问"与"允不允许删除"：
+//   新模型把两者拆开：**三档都能访问任意路径**，区别只在"要不要问"与"允不允许删除"。
+//   再加上一个"整块关闭"的 `off` 档：
+//     · off    关闭     —— 电脑操作**整体不存在**：不能读（列目录 / 读文件 / 拿真实路径）、
+//                          不能写 / 覆盖 / 删 / 执行命令，连"这台电脑的桌面在哪"这类信息也不外泄。
+//                          这是"能力不存在"，与下面几档的"要不要问"不是一回事。
 //     · strict 逐条确认 —— 会**改动电脑**的操作（写入 / 覆盖 / 删除 / 命令）每次都问；
 //                          读取（列目录 / 读文件）不问。
 //     · auto   自动通过 —— 改动类操作直接放行，但**禁止删除**（删除接口整体拒绝）。
 //     · full   完全访问 —— 含删除在内全部放行。
 //
 //   ⚠️ 两个必须记住的后果（都是刻意的，不是疏漏）：
-//     ① **读取在任何档位下都不询问**。所以 strict 档下 AI 仍可无声地读
+//     ① **读取在 strict/auto/full 任何一档下都不询问**。所以 strict 档下 AI 仍可无声地读
 //        `data/store.json`（内含 API Key 明文）、`~/.ssh/id_rsa` 等任意文件。
-//        这是"读取不问"这个选择的直接代价；介意的话把读取也纳入确认。
+//        这是"读取不问"这个选择的直接代价；介意的话把读取也纳入确认，或直接选 `off`。
 //     ② `auto` 档**只禁删除，不禁覆盖** —— 而覆盖一个已有文件同样会丢掉原内容，
 //        所以 AI 可以用"写入同名文件"绕过删除禁令。要堵这条路就把覆盖也禁掉。
 const AGENT_APP_ROOT = path.resolve(root);
 const AGENT_READ_LIMIT = 300 * 1024; // 读文件上限 300KB
 const AGENT_WRITE_LIMIT = 1024 * 1024; // 写请求体上限 1MB
 
-/** 三档权限的权威清单。前端 agentAccess 白名单必须与此保持一致。 */
-const AGENT_ACCESS_LEVELS = ['strict', 'auto', 'full'];
+/** 四档权限的权威清单。前端 agentAccess 白名单必须与此保持一致。 */
+const AGENT_ACCESS_LEVELS = ['off', 'strict', 'auto', 'full'];
 const AGENT_ACCESS_DEFAULT = 'strict';
 
 /** 把请求里传来的档位收敛到合法值。非法值一律按最严的 strict 处理。 */
 function normalizeAgentAccess(value) {
     const v = String(value || '').trim();
     return AGENT_ACCESS_LEVELS.includes(v) ? v : AGENT_ACCESS_DEFAULT;
+}
+
+/**
+ * 这一档是不是"整块关闭电脑操作"（★ 2026-10 新增的 `off` 档）。
+ *
+ * `off` 的语义是**能力不存在**，而不是"要不要问"：AI 既不能读（列目录 / 读文件 /
+ * 拿真实路径），也不能写 / 删 / 执行命令。与 auto / full 那些"放行"档是两回事，
+ * 所以判据单独拎出来，别混进 accessAsksBeforeChange。
+ */
+function accessDisabled(access) {
+    return normalizeAgentAccess(access) === 'off';
+}
+
+/** 统一回给前端/模型的「电脑操作已关闭」响应（四个写/读/命令接口共用一种形状）。 */
+function agentDisabledResponse(res) {
+    return jsonResponse(res, 403, {
+        ok: false,
+        agentDisabled: true,
+        message: 'AI 的电脑操作已在设置里关闭（「AI 权限 → 关闭」）。'
+            + '需要时请在「设置 → 能力 → AI 权限」里改回某一档。',
+    });
 }
 
 /** 这一档允不允许删除。只有 full 允许。 */
@@ -1018,17 +1055,8 @@ function shellFolderHint() {
         + '。路径不存在时请直接用上面的绝对路径，或用别名 %DESKTOP% / %DOCUMENTS% / %DOWNLOADS%。';
 }
 
-/**
- * 判断请求是否来自本机（回环地址，免密视为管理员）。
- *
- * ★ 注意：这个函数**不再**是"能不能操作电脑"的判据。
- *   放开局域网权限后，判据变成了 hasComputerGrant（已认证即可）——
- *   本机只是"免密码"这一种拿到授权的途径，另一种是通过密码登录。
- */
-function isLocalRequest(request) {
-    const addr = request.socket?.remoteAddress || '';
-    return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
-}
+// isLocalRequest 已抽到 server/net-guard.mjs（文件顶部 import 回来）——
+// 手机端那条中继要用同一份判定，见那个文件开头关于"安卓回环是整机共享"的说明。
 
 /**
  * 是否已获得「操作这台电脑」的授权。
@@ -1136,6 +1164,7 @@ async function listAgentEntries(target) {
 async function agentLs(params, res, privileged) {
     try {
         const access = normalizeAgentAccess(params.get('access') || params.get('permission'));
+        if (accessDisabled(access)) return agentDisabledResponse(res);
         const r = resolveAgentPathEx(params.get('path') || AGENT_APP_ROOT, access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
@@ -1159,6 +1188,7 @@ async function agentLs(params, res, privileged) {
 async function agentRead(params, res, privileged) {
     try {
         const access = normalizeAgentAccess(params.get('access') || params.get('permission'));
+        if (accessDisabled(access)) return agentDisabledResponse(res);
         const r = resolveAgentPathEx(params.get('path'), access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
@@ -1195,6 +1225,7 @@ async function agentWrite(request, res, privileged) {
         let body;
         try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return jsonResponse(res, 400, { ok: false, message: '请求体无效' }); }
         const access = normalizeAgentAccess(body.access || body.permission);
+        if (accessDisabled(access)) return agentDisabledResponse(res);
         const r = resolveAgentPathEx(body.path, access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
@@ -1217,10 +1248,18 @@ async function agentWrite(request, res, privileged) {
             return jsonResponse(res, 400, { ok: false, message: '应用文件夹内不允许写 .html/.js/.svg 等可执行类型的文件（防止同源代码注入）' });
         }
 
-        // ★ 覆盖已有文件 = 修改。**只有 strict 档要问**。
+        // ★ strict 档下**任何写入都要先确认**（新建与覆盖都算"改动电脑"）。
+        //
+        //   这与设置页文案（「写入、覆盖已有文件、删除、执行命令 …… 每一次都会问你」）
+        //   以及注入给模型的提示词（app-02-data.js 的 accessNote）保持一致。
+        //
+        //   历史缺口：早期实现只对"覆盖已有文件"要确认，于是 strict 档下
+        //   **新建一个文件（例如在桌面新建）既不弹窗也不询问** —— 用户选了最低档
+        //   却仍被无声写入。这条缺口已在此补上：目标不存在时回 `needCreate`。
         //
         // 三档语义（见文件顶部那段说明）：
-        //   strict → 回 needOverwrite，前端弹一次确认，同意后带 overwrite:true 重发
+        //   strict → 回 needOverwrite / needCreate，前端弹一次确认，
+        //            同意后带 overwrite:true 重发
         //   auto   → 直接放行（用户选的就是"自动通过"）
         //   full   → 直接放行
         //
@@ -1234,11 +1273,20 @@ async function agentWrite(request, res, privileged) {
             const existed = await stat(target);
             targetExists = existed.isFile();
         } catch { /* 不存在 / 无权限：都按"新建"处理，真正的错误由 writeFile 抛出 */ }
-        if (targetExists && accessAsksBeforeChange(access) && body.overwrite !== true) {
+        // overwrite:true = 用户已确认这次写入。新建与覆盖共用这一个确认令牌，
+        // 因为前端两条确认分支复用同一个 send(true) 通道（见 app-03-agent.js 的 doAgentFile）。
+        if (accessAsksBeforeChange(access) && body.overwrite !== true) {
+            if (targetExists) {
+                return jsonResponse(res, 403, {
+                    ok: false,
+                    needOverwrite: true,
+                    message: '目标文件已存在：这次写入会**覆盖**它原有的内容。需要你确认后才能继续。',
+                });
+            }
             return jsonResponse(res, 403, {
                 ok: false,
-                needOverwrite: true,
-                message: '目标文件已存在：这次写入会**覆盖**它原有的内容。需要你确认后才能继续。',
+                needCreate: true,
+                message: 'AI 想在你的电脑上新建一个文件：' + target + '。需要你确认后才能写入。',
             });
         }
 
@@ -1284,6 +1332,8 @@ async function agentExec(request, res, privileged) {
         if (!privileged) {
             return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
         }
+        // `off` 档：整块关闭，连命令执行也不存在（比"要不要问"更靠前的一层）。
+        if (accessDisabled(access)) return agentDisabledResponse(res);
         const command = String(body.command || '').trim();
         if (!command) return jsonResponse(res, 400, { ok: false, message: '命令为空' });
         if (command.length > 8000) return jsonResponse(res, 400, { ok: false, message: '命令过长（上限 8000 字符）' });
@@ -1359,6 +1409,8 @@ async function agentDelete(request, res, privileged) {
 
         const access = normalizeAgentAccess(body.access || body.permission);
         if (!privileged) return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
+        // `off` 档：整块关闭，删除能力不存在（与 auto 档的"禁止删除"不是一回事）。
+        if (accessDisabled(access)) return agentDisabledResponse(res);
 
         // auto 档：这一档禁止删除，直接拒绝并说清去哪改。
         if (!accessAllowsDelete(access) && access === 'auto') {
@@ -1505,11 +1557,7 @@ function isAllowedHost(request) {
     return allowedHostNames.has(hostname);
 }
 
-// 本机回环地址：它们本身就是浏览器的安全上下文（localhost 豁免），
-// 为了麦克风跳到 https 没有意义，只会白多一次证书警告。
-function isLoopbackHostname(h) {
-    return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]';
-}
+// isLoopbackHostname 已抽到 server/net-guard.mjs（文件顶部 import 回来）。
 
 // 同站校验：第三方页面用 <img> / <script> / <a> 发起的 GET 不会带 Origin，
 // 但一定会带 Sec-Fetch-Site: cross-site —— 这正是"任意网页都能读本机文件"的口子。
@@ -1531,52 +1579,9 @@ function isCrossSiteRequest(request) {
 // 证书自签，首次启动时生成到 data/ 下；手机上会提示"证书不受信任"，点继续即可。
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || 4174);
 
-function isPrivateIPv4(ip) {
-    const p = String(ip).split('.').map(Number);
-    if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-    return p[0] === 10
-        || (p[0] === 172 && p[1] >= 16 && p[1] <= 31)
-        || (p[0] === 192 && p[1] === 168);
-}
-
-/**
- * 把 IPv4-mapped / IPv4-compatible 的 IPv6 地址还原成点分 IPv4。
- *
- * 为什么必须有这一步：只按字符串前缀判内网会漏掉 `::ffff:127.0.0.1` 这种写法 ——
- * 它**连的就是 127.0.0.1**（实测 TCP 可连通），但字符串既不 startsWith('127.')
- * 也不是 '::1'，`isPrivateIPv4` 又会因 split('.') 长度不是 4 而返回 false，
- * 于是整个内网判定被绕过。`::ffff:7f00:1` 是同一地址的十六进制写法。
- */
-function mappedIPv4(ip) {
-    const s = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
-    if (!s.includes(':')) return null;
-    // 只处理 ::ffff:a.b.c.d 与 ::a.b.c.d 这两种带点的写法
-    const dotted = s.match(/(?:::ffff:|::)(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-    if (dotted) return dotted[1];
-    // 纯十六进制写法：::ffff:7f00:1 → 7f00:1 → 127.0.0.1
-    const hex = s.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-    if (hex) {
-        const hi = parseInt(hex[1], 16), lo = parseInt(hex[2], 16);
-        return [hi >> 8, hi & 255, lo >> 8, lo & 255].join('.');
-    }
-    return null;
-}
-
-/** 该 IP 是否指向本机或内网（回环 / 私网 / 链路本地 / 唯一本地） */
-function isInternalAddress(ip) {
-    const raw = String(ip || '').toLowerCase().replace(/^\[|\]$/g, '');
-    const v4 = mappedIPv4(raw) || (/^\d+\.\d+\.\d+\.\d+$/.test(raw) ? raw : null);
-    if (v4) {
-        return v4.startsWith('127.')
-            || v4.startsWith('169.254.')     // 链路本地，含云元数据 169.254.169.254
-            || v4 === '0.0.0.0'
-            || isPrivateIPv4(v4);
-    }
-    // IPv6：回环、链路本地 fe80::/10、唯一本地 fc00::/7、以及 IPv4 兼容写法
-    return raw === '::1' || raw === '::'
-        || /^fe[89ab]/.test(raw)             // fe80::/10
-        || /^f[cd]/.test(raw);               // fc00::/7
-}
+// isPrivateIPv4 / mappedIPv4 / isInternalAddress 已抽到 server/net-guard.mjs
+// （文件顶部 import 回来）。上面 localIPv4List 仍在用 isPrivateIPv4 排序 ——
+// 那段"IPv4-mapped IPv6 会被前缀比较绕过"的踩坑记录也一起搬过去了。
 
 function localIPv4List() {
     const out = [];
@@ -1981,28 +1986,8 @@ function redirect(res, location, setCookie) {
     res.end();
 }
 
-function jsonResponse(res, code, obj, extraHeaders = {}) {
-    res.writeHead(code, {
-        'Content-Type': 'application/json; charset=utf-8',
-        'X-Content-Type-Options': 'nosniff',
-        ...extraHeaders,
-    });
-    res.end(JSON.stringify(obj));
-}
-
-async function readJsonBody(request, limit = 64 * 1024) {
-    const chunks = [];
-    let total = 0;
-    let overflow = false;
-    for await (const chunk of request) {
-        total += chunk.length;
-        // 超限后继续把剩余数据读掉（丢弃），否则客户端可能拿不到这次响应而只看到连接被重置
-        if (total > limit) { overflow = true; chunks.length = 0; continue; }
-        chunks.push(chunk);
-    }
-    if (overflow) throw new Error('请求体过大');
-    return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
-}
+// jsonResponse / readJsonBody 已抽到 server/http-util.mjs（文件顶部 import 回来）——
+// 手机端内嵌的 Node 要用同一份实现，见那个文件开头的说明。
 
 /**
  * 读原始请求体（二进制安全）。给数据导入用 —— zip 是二进制，
@@ -2023,439 +2008,26 @@ async function readRawBody(request, limit = 64 * 1024) {
 
 // ===== 本地中转 /api/relay =====
 //
-// 为什么需要它：BYOK 的"直连"是让浏览器自己去请求服务商，而浏览器会强制 CORS。
-// 大量中转站（自建 OneAPI、厂商内测网关、Ollama 之类）根本不发 Access-Control-Allow-Origin，
-// 预检 OPTIONS 甚至直接 405 —— 这时 fetch() 只会抛一句 "Failed to fetch"，
-// 看不出任何原因。而 ChatBox / Cherry Studio 这些原生客户端不受 CORS 约束，
-// 于是同一个 Key、同一个地址在它们那儿正常，在网页里就是连不上。
+// ★★ 2026-10：**实现搬到了 server/relay.mjs，电脑端与手机端共用一份**。
 //
-// 中转把请求搬到 Node 侧发出（Node 没有 CORS 这回事），前端只跟**同源**的 /api/relay 说话，
-// 连预检都不会触发。Key 只经过本机进程内存，不落盘、不发给任何第三方 —— 与 BYOK 一致。
-// 对话历史、语音 base64、图片 base64 都会走这条通道，给宽一点（和端侧数据同一个量级）。
-const RELAY_BODY_LIMIT = 32 * 1024 * 1024;
-const RELAY_TIMEOUT_MAX = 10 * 60 * 1000;
-// 超过这个大小的请求体不再解析内容（JSON.parse 一个 32MB 的图片请求要几百毫秒，
-// 平白给对话加延迟）。此时只记大小，不记消息。
-const RELAY_TRACE_PARSE_MAX = 16 * 1024 * 1024;
-// 这些地址是云厂商元数据服务，被中转当作跳板去读会泄露本机凭据，直接封掉。
-const RELAY_DENY_HOSTS = new Set(['169.254.169.254', 'metadata.google.internal', 'metadata.tencent.internal']);
-
-// ===== 对话追踪 =====
+//   为什么能共用：手机端内嵌的 Node 面对的是同一个问题 —— WebView 页面在
+//   https://localhost，而内嵌服务在 http://127.0.0.1:<随机端口>，天生跨源，
+//   和电脑版"浏览器直连被 CORS 挡住"是一模一样的处境。两边没有理由各写一套
+//   （否则"同一个 Key、同一个地址在电脑上通、在手机上不通"这类问题要查两遍）。
+//   原来那段"为什么需要它 / 追踪日志为什么埋在这一层"的说明也一起搬过去了。
 //
-// 为什么埋在中转这一层：`/api/relay` 是**所有对外 AI 请求的唯一出口**（三种对话格式、
-// 获取模型、语音、视觉全走它），在这一层埋点就能覆盖全部，前端一行都不用改。
-//
-// 主日志只留一行摘要（提问 / 回复各截一段），完整内容进 `<启动时刻>.trace.log`。
-// 旧日志只有「谁在什么时候调了哪个接口」—— 出问题时根本还原不出当时问了什么、答了什么、
-// 上游到底为什么拒，这正是这次要补上的。
-
-/** 把消息内容拍平成可读文本；图片等二进制只记大小，绝不记 base64（否则日志瞬间膨胀） */
-function flattenContent(content) {
-    if (typeof content === 'string') return content;
-    if (content === null || content === undefined) return '';
-    if (Array.isArray(content)) {
-        return content.map((part) => {
-            if (typeof part === 'string') return part;
-            if (!part || typeof part !== 'object') return '';
-            const type = String(part.type || '');
-            if (/image/i.test(type)) {
-                const data = String(part.image_url?.url || part.source?.data || part.data || '');
-                return data ? `[图片 约 ${Math.round(data.length * 3 / 4)} 字节]` : '[图片]';
-            }
-            if (part.text !== undefined) return String(part.text);
-            if (part.content !== undefined) return flattenContent(part.content);
-            return `[${type || '未知片段'}]`;
-        }).filter(Boolean).join('\n');
-    }
-    if (typeof content === 'object') {
-        if (content.text !== undefined) return String(content.text);
-        return JSON.stringify(content);
-    }
-    return String(content);
-}
-
-/** 从请求体里抽「模型 + 消息列表」，兼容三种对话格式；不是对话请求就返回 null */
-function summarizeChatRequest(json) {
-    if (!json || typeof json !== 'object') return null;
-    const messages = [];
-    // Anthropic 把系统提示放在顶层的 system 字段
-    if (json.system !== undefined) messages.push({ role: 'system', text: flattenContent(json.system) });
-    const list = Array.isArray(json.messages) ? json.messages
-        : (Array.isArray(json.input) ? json.input : null);   // OpenAI Responses 用 input[]
-    if (!list) return messages.length ? { model: String(json.model || ''), messages } : null;
-    for (const m of list) {
-        if (!m || typeof m !== 'object') continue;
-        messages.push({
-            role: String(m.role || (m.type === 'message' ? 'assistant' : 'user')),
-            text: flattenContent(m.content !== undefined ? m.content : m),
-        });
-    }
-    return { model: String(json.model || ''), messages };
-}
-
-/** 从响应体里抽回复正文（三种格式，含流式分片） */
-function extractReplyText(json) {
-    if (!json || typeof json !== 'object' || json.error) return '';
-    const choice = Array.isArray(json.choices) ? json.choices[0] : null;
-    if (choice) {
-        const text = flattenContent((choice.message || choice.delta || {}).content);
-        if (text) return text;
-    }
-    // Anthropic 流式：{"type":"content_block_delta","delta":{"type":"text_delta","text":"…"}}
-    if (json.delta && typeof json.delta === 'object' && typeof json.delta.text === 'string' && json.delta.text) {
-        return json.delta.text;
-    }
-    // OpenAI Responses 流式：{"type":"response.output_text.delta","delta":"…"}
-    if (typeof json.delta === 'string' && json.delta) return json.delta;
-    if (typeof json.output_text === 'string' && json.output_text) return json.output_text;
-    if (Array.isArray(json.output)) {
-        const parts = [];
-        for (const item of json.output) {
-            for (const c of (item && Array.isArray(item.content) ? item.content : [])) {
-                if (c && typeof c.text === 'string') parts.push(c.text);
-            }
-        }
-        if (parts.length) return parts.join('\n');
-    }
-    if (Array.isArray(json.content)) {
-        const parts = json.content.filter((c) => c && typeof c.text === 'string').map((c) => c.text);
-        if (parts.length) return parts.join('\n');
-    }
-    return '';
-}
-
-/** 抽错误原因。FastAPI 系网关会把真正的文案套在 detail.error.message 里，必须挖到底 */
-function extractErrorText(json, rawText) {
-    if (json && typeof json === 'object') {
-        const candidates = [
-            json.error?.message, json.error?.error?.message,
-            json.detail?.error?.message, json.detail?.message,
-            typeof json.detail === 'string' ? json.detail : '', json.message,
-        ];
-        for (const c of candidates) if (typeof c === 'string' && c.trim()) return c.trim();
-        if (json.error && typeof json.error === 'object') return JSON.stringify(json.error);
-    }
-    return String(rawText || '').trim();
-}
-
-const clip = (text, max, label) => (text.length > max ? `${text.slice(0, max)}…（${label}，共 ${text.length} 字）` : text);
-
-/** 从 SSE 文本里把分片拼回完整回复（流式对话的响应体不是 JSON，直接读会得到一坨 data: 行） */
-function parseSseReply(rawText) {
-    const parts = [];
-    for (const line of String(rawText).split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;    // event: / id: / 心跳注释行直接跳过
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        try {
-            const piece = extractReplyText(JSON.parse(payload));
-            if (piece) parts.push(piece);
-        } catch { /* 被截断的最后一行、或非 JSON 的心跳，忽略 */ }
-    }
-    return parts.join('');
-}
-
-/**
- * 流式响应里的报错，状态码常常是 200 —— 错在 `data:` 行里。
- * 这类"看起来成功、其实一个字都没回"的情况不特意挖一下，用户只会看到"AI 不回话"，
- * 而日志里一片祥和，完全无从下手。
- */
-function parseSseError(rawText) {
-    for (const line of String(rawText).split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        try {
-            const json = JSON.parse(payload);
-            if (json && (json.error || json.type === 'error')) return extractErrorText(json, payload);
-        } catch { /* 同上 */ }
-    }
-    return '';
-}
-
-/** 「问了什么」：请求全文进追踪日志，主日志只留最后一问（一眼看出这次聊了什么） */
-function traceRelayRequest({ method, target, reqJson, reqRaw }) {
-    const where = `${target.host}${target.pathname}`;
-    const summary = summarizeChatRequest(reqJson);
-    if (!summary || !summary.messages.length) return null;
-    const lines = [`===== 请求 ${method} ${where} =====`];
-    lines.push(`模型 ${summary.model || '(未指定)'} · ${summary.messages.length} 条消息 · ${Buffer.byteLength(String(reqRaw || ''))} 字节`);
-    summary.messages.forEach((m, i) => {
-        lines.push(`[${i + 1}/${summary.messages.length}] ${m.role}（${m.text.length} 字）\n`
-            + clip(m.text, TRACE_MSG_MAX, '本条已截断'));
-    });
-    traceLine(lines.join('\n'));
-    const lastUser = [...summary.messages].reverse().find((m) => m.role === 'user');
-    if (lastUser && lastUser.text.trim()) {
-        // ★ 合成消息（桌宠"主动搭话"等 mod 注入的系统提示）不是人打的话 ——
-        //   原样打印会把整段提示词+电脑状态快照灌进主日志，还长得像用户发了
-        //   一句怪话（用户实测困惑："这个日志是你干的吗"）。
-        //   识别特征：mod 们约定的开头「（系统提示：」。此时只记一行来源事实，
-        //   提示词全文仍完整保留在追踪日志（上面逐条已记）。
-        if (/^（系统提示：/.test(lastUser.text.trim())) {
-            console.log('[chat] 提问来自自动功能（mod 注入的系统提示，全文见追踪日志）');
-        } else {
-            console.log('[chat] 提问：' + clip(lastUser.text.replace(/\s+/g, ' ').trim(), 200, '已截断'));
-        }
-    }
-    return summary;
-}
-
-/**
- * 一次中转的完整记录：请求 + 响应。
- *
- * 主日志留一行（谁、哪家、什么状态、多久、为什么失败），追踪日志留全文。
- * 这是这次日志改造的核心 —— 旧日志只有「什么地址在什么时间调用了什么 API」，
- * 出问题时还原不出当时问了什么、答了什么、上游到底为什么拒。
- */
-function traceRelayExchange({ method, target, reqJson, reqRaw, status, ms, respJson, respRaw }) {
-    const where = `${target.host}${target.pathname}`;
-    const isChat = /\/chat\/completions|\/responses|\/messages/i.test(target.pathname);
-    const summary = traceRelayRequest({ method, target, reqJson, reqRaw });
-    const raw = String(respRaw || '');
-    const tail = `${method} ${where} -> ${status} 上游 ${ms}ms`;
-
-    // 请求体没能解析（超大 / 非 JSON）时至少留个大小，
-    // 否则追踪日志里会出现"只有响应、没有请求"，反而更难读
-    if (!summary && isChat) {
-        traceLine(`===== 请求 ${method} ${where} =====\n（请求体未解析或为空，${Buffer.byteLength(String(reqRaw || ''))} 字节）`);
-    }
-
-    // ① 上游报错：完整报错进追踪日志，主日志那一行直接带上原因，不用再翻文件
-    if (status >= 400) {
-        traceLine(`===== 响应 ${status} · ${ms}ms（上游报错）=====\n`
-            + clip(raw || '(空响应)', TRACE_BODY_MAX, '响应过大已截断'));
-        const reason = extractErrorText(respJson, raw) || '(上游没有给出原因)';
-        console.error(`[relay] ${tail} << 上游报错：` + clip(reason.replace(/\s+/g, ' '), 400, '已截断'));
-        return;
-    }
-
-    // ② 回复正文：非流式直接读 JSON，流式把 data: 分片拼回去
-    let reply = extractReplyText(respJson);
-    if (!reply && raw) reply = parseSseReply(raw);
-    if (reply) {
-        traceLine(`===== 响应 ${status} · ${ms}ms =====\n` + clip(reply, TRACE_MSG_MAX, '回复已截断'));
-        console.log(`[relay] ${tail}`);
-        console.log('[chat] 回复：' + clip(reply.replace(/\s+/g, ' ').trim(), 200, '已截断'));
-        return;
-    }
-
-    // ③ 状态码 200、却一个字都没抽出来 —— 流式接口把报错塞在 data: 行里就是这种形态
-    const sseError = raw ? parseSseError(raw) : '';
-    if (sseError) {
-        traceLine(`===== 响应 ${status} · ${ms}ms（流式响应内报错）=====\n`
-            + clip(raw, TRACE_BODY_MAX, '响应过大已截断'));
-        console.error(`[relay] ${tail} << 响应内报错：` + clip(sseError.replace(/\s+/g, ' '), 400, '已截断'));
-        return;
-    }
-
-    // ④ 非对话接口（获取模型等）成功时不再把响应体倒进追踪日志，否则模型列表会把对话内容淹掉
-    if (raw && isChat) traceLine(`===== 响应 ${status} · ${ms}ms =====\n` + clip(raw, TRACE_BODY_MAX, '响应过大已截断'));
-    console.log(`[relay] ${tail}`);
-}
-
-async function handleRelay(request, response) {
-    let payload;
-    try { payload = await readJsonBody(request, RELAY_BODY_LIMIT); }
-    catch {
-        // 这些校验失败以前是完全静默的 —— 前端只会拿到一句中文提示，
-        // 日志里连"发生过这件事"都没有，用户报"对话发不出去"时无从查起。
-        console.warn('[relay] 请求体无效或过大，已拒绝');
-        return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转请求体无效或过大' });
-    }
-
-    let target;
-    try { target = new URL(String(payload?.url || '')); }
-    catch {
-        console.warn('[relay] 目标地址无效：' + String(payload?.url || '(空)').slice(0, 200));
-        return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转目标地址无效' });
-    }
-
-    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-        console.warn(`[relay] 不支持的协议 ${target.protocol}//${target.host}，只允许 http/https`);
-        return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转只支持 http/https' });
-    }
-    if (RELAY_DENY_HOSTS.has(target.hostname.toLowerCase())) {
-        console.warn(`[relay] 拒绝访问云元数据地址 ${target.host}（防本机凭据泄露）`);
-        return jsonResponse(response, 403, { ok: false, relayError: true, message: '该地址不允许通过中转访问' });
-    }
-    // 局域网设备不能把本机当中转跳板去打本机的其它服务（SSRF）。
-    // 本机自己发起的请求放行 —— Ollama 这类就住在 127.0.0.1。
-    if (!isLocalRequest(request) && isLoopbackHostname(target.hostname)) {
-        console.warn(`[relay] 拒绝非本机请求访问本机地址 ${target.host}（防 SSRF）`);
-        return jsonResponse(response, 403, { ok: false, relayError: true, message: '本机地址只能由本机发起中转' });
-    }
-    // 只拦字面回环主机名还不够：攻击者可以让自己的域名解析到 127.0.0.1（DNS rebinding），
-    // 或直接填局域网地址、或用 ::ffff:127.0.0.1 这类 IPv4-mapped IPv6 写法绕开前缀比较。
-    // 先解析成 IP 再判一遍 —— 解析不出来就放行（真连不上时 fetch 自己会报错）。
-    if (!isLocalRequest(request)) {
-        let targetIps = [];
-        try { targetIps = await dns.promises.lookup(target.hostname, { all: true }); } catch { /* DNS 失败交给 fetch 报错 */ }
-        const dangerous = targetIps.some(({ address }) => isInternalAddress(address));
-        if (dangerous) {
-            console.warn(`[relay] 拒绝非本机请求访问内网地址 ${target.host} -> ${targetIps.map(i => i.address).join(',')}（防 SSRF）`);
-            return jsonResponse(response, 403, { ok: false, relayError: true, message: '本机与内网地址只能由本机发起中转' });
-        }
-    }
-
-    const method = String(payload?.method || 'GET').toUpperCase();
-    if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-        console.warn(`[relay] 不支持的请求方法 ${method}`);
-        return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转不支持的请求方法' });
-    }
-
-    const headers = {};
-    const rawHeaders = payload?.headers;
-    if (rawHeaders && typeof rawHeaders === 'object') {
-        for (const [k, v] of Object.entries(rawHeaders)) {
-            const key = String(k);
-            // Host / Content-Length 交给 undici 自己算；Cookie、Origin 之类浏览器身份信息不该外发。
-            if (/^(host|content-length|cookie|origin|referer|connection|transfer-encoding)$/i.test(key)) continue;
-            if (v === null || v === undefined) continue;
-            headers[key] = String(v);
-        }
-    }
-    // 不让上游压缩：一是 SSE 要能逐块透传，二是省得再解一遍。
-    headers['accept-encoding'] = 'identity';
-
-    const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 120000, 1000), RELAY_TIMEOUT_MAX);
-    const controller = new AbortController();
-    // ★★ 2026-10 修「流式被自己的超时腰斩」：这里的超时必须是**空闲**超时，
-    //   不是从发起到结束的**总时长**。
-    //
-    //   旧实现是 `const timer = setTimeout(() => controller.abort(), timeoutMs)`
-    //   一直挂到整条响应体转发完才 clearTimeout —— 于是语义变成"这次请求总共
-    //   只能花 timeoutMs"，而这对流式**是错的**：
-    //     · 长回复（几千字）正常说完就要好几分钟；
-    //     · 高思考强度模型（thinkingEffort=high）首字节本身就常超过 120 秒。
-    //   实测现场（data/logs/2026-10-13_20-23-53.trace.log）：
-    //     `请求失败 POST …/messages — 超过 120 秒没有响应（120020ms）`
-    //     → 前端 `[Chat] anthropic 流式不可用，退回非流式`
-    //   用户看到的就是"AI 不能正常流式输出"：要么干等、要么整段蹦出来。
-    //
-    //   改成每收到一块数据就**续期**：只要上游还在吐数据就永不超时（流式长回复
-    //   因此可以正常走完），只有真正卡死（连接在、但一个字节都不来）才按
-    //   timeoutMs 砍。语义从"总共多久"变成"多久没动静"—— 这才是流式该有的超时。
-    //
-    //   ⚠️ 空闲续期必须配一条**总时长**硬顶，否则"上游一直发心跳、但永远不说正文"
-    //     就能把这条连接永远占住（转发是逐块透传，没有上限就等于免费长连接）。
-    //     硬顶取 RELAY_TIMEOUT_MAX（10 分钟）：正常对话（哪怕边想边说几分钟）
-    //     都在其内，占用也被封住。
-    const relayStartedAt = Date.now();
-    const hardDeadline = relayStartedAt + RELAY_TIMEOUT_MAX;
-    let timer = null;
-    const armIdleTimer = (ms) => {
-        if (timer) clearTimeout(timer);
-        const remaining = hardDeadline - Date.now();
-        if (remaining <= 0) { controller.abort(); return; }
-        timer = setTimeout(() => controller.abort(), Math.min(ms, remaining));
-    };
-    armIdleTimer(timeoutMs);   // 第一段：等响应头（TTFB）
-    let abortedByClient = false;
-    response.on('close', () => {
-        if (!response.writableEnded) { abortedByClient = true; controller.abort(); }
-    });
-
-    const sendBody = !(method === 'GET' || method === 'HEAD');
-    const bodyValue = typeof payload?.body === 'string'
-        ? payload.body
-        : (payload?.body === undefined || payload?.body === null ? undefined : JSON.stringify(payload.body));
-    const reqRaw = typeof bodyValue === 'string' ? bodyValue : '';
-    // 解析请求体**只为了记日志**。超大请求（图片 / 语音 base64）跳过：JSON.parse 一个几十 MB 的
-    // 对象要几百毫秒，为了日志给每次对话平白加延迟不划算 —— 那种情况只记大小。
-    let reqJson = null;
-    if (reqRaw && Buffer.byteLength(reqRaw) <= RELAY_TRACE_PARSE_MAX) {
-        try { reqJson = JSON.parse(reqRaw); } catch { reqJson = null; }
-    }
-
-    let upstream;
-    try {
-        upstream = await fetch(target, {
-            method,
-            headers,
-            body: sendBody ? bodyValue : undefined,
-            signal: controller.signal,
-            // 不跟随上游重定向：302 Location 是攻击者可控的，跟随它可以把"对公网 API 的请求"
-            // 重定向到本机/内网地址，绕过上面的 SSRF 校验。3xx 原样透传给前端自己处理。
-            redirect: 'manual',
-        });
-    } catch (err) {
-        clearTimeout(timer);
-        if (abortedByClient) return;                       // 客户端自己走了，不用回话
-        const cause = err?.cause;
-        // 这一句比浏览器那句 "Failed to fetch" 有用得多：能看出是 DNS、TLS 还是连接被拒。
-        // 带上 cause.code（ENOTFOUND / ECONNREFUSED / UND_ERR_CONNECT_TIMEOUT …），方便直接 grep。
-        const detail = err?.name === 'AbortError'
-            ? `超过 ${Math.round(timeoutMs / 1000)} 秒没有响应`
-            : String(cause?.message || err?.message || err) + (cause?.code ? ` [${cause.code}]` : '');
-        // 连不上时把**请求内容**也写进追踪日志：否则只看到"连接被拒"，
-        // 不知道当时问的是什么、模型名有没有写错 —— 而这恰恰是最常见的原因。
-        traceRelayRequest({ method, target, reqJson, reqRaw });
-        traceLine(`===== 请求失败 ${method} ${target.href} =====\n${detail}（${Date.now() - relayStartedAt}ms）`);
-        console.error(`[relay] 请求失败 ${method} ${target.href} -> ${detail} (${Date.now() - relayStartedAt}ms)`);
-        return jsonResponse(response, 502, { ok: false, relayError: true, message: `本地中转无法连接目标：${detail}` });
-    }
-
-    response.writeHead(upstream.status, {
-        'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
-        'Cache-Control': 'no-store',
-        'X-Content-Type-Options': 'nosniff',
-        // ★ SSE 必须**关掉缓冲**：否则中间层（Node 自己的 socket、以及某些
-        //   反向代理）会攒够一块才发，增量就变成了"一批一批蹦"。identity 编码
-        //   已在上面设过，这里再补一条代理侧的显式指令。
-        ...(/text\/event-stream/i.test(upstream.headers.get('content-type') || '')
-            ? { 'X-Accel-Buffering': 'no' } : {}),
-    });
-    // ★★ 立刻把头送出去。浏览器的 fetch() 是**收到响应头就 resolve**，之后才开始
-    //    读 body；不 flush 的话头可能和第一块数据一起才发出，前端"开始流式"的时间
-    //    就整体后移 —— 表现上就是"点发送后要愣一愣才开始出字"。
-    if (typeof response.flushHeaders === 'function') {
-        try { response.flushHeaders(); } catch { /* 已经发过头了 */ }
-    }
-    // 头已到 → 空闲计时器重新起算，进入"等正文"阶段（见上面 armIdleTimer 的说明）。
-    armIdleTimer(timeoutMs);
-
-    // 边透传边攒一份给日志用。攒到上限就停止记录（**继续透传**），
-    // 免得一个长回答把内存吃掉；流式的正文稍后由 parseSseReply 从 data: 行拼回来。
-    const traceChunks = [];
-    let traceBytes = 0;
-    if (upstream.body) {
-        try {
-            for await (const chunk of upstream.body) {
-                if (abortedByClient) break;
-                // ★ 每收到一块就续期：只要上游还在吐数据，长回复就永远不会被
-                //   自己的超时砍断；只有"连接还在但一个字节都不来"才会被 abort。
-                armIdleTimer(timeoutMs);
-                response.write(chunk);
-                if (traceBytes < TRACE_ACCUM_MAX) {
-                    traceChunks.push(chunk);
-                    traceBytes += chunk.length;
-                }
-            }
-        } catch (err) {
-            if (!abortedByClient) console.error('[relay] 透传响应中断:', String(err?.message || err));
-        }
-    }
-    clearTimeout(timer);
-    response.end();
-
-    if (abortedByClient) return;
-    // 每个中转请求留一条完整记录：目标是哪家、什么状态、耗时多少、问了什么、答了什么 / 为什么失败。
-    // 排查"偶发失败"时这是唯一能还原现场的东西 —— 旧日志只有一行状态码，看不出原因。
-    const respRaw = traceChunks.length ? Buffer.concat(traceChunks).toString('utf8') : '';
-    let respJson = null;
-    if (respRaw) {
-        try { respJson = JSON.parse(respRaw); } catch { respJson = null; }
-    }
-    traceRelayExchange({
-        method, target, reqJson, reqRaw,
-        status: upstream.status,
-        ms: Date.now() - relayStartedAt,
-        respJson, respRaw,
-    });
-}
+//   这里只剩接线：把它接到**本机这一侧**的能力上。
+//     · traceLine           追踪日志（本文件的 data/logs/<启动时刻>.trace.log）
+//     · 后面三个安全判定     本文件自己的实现 —— 这台机器在局域网里，有别的设备
+//                           能打进来，SSRF 那两道校验必须真的生效
+const relayHandler = createRelay({
+    traceLine,
+    isLocalRequest,
+    isLoopbackHostname,
+    isInternalAddress,
+});
+// 路由分发处用的还是这个名字，调用点不必改
+const handleRelay = relayHandler.handleRelay;
 
 async function handleLogin(request, response) {
     const ip = ipOf(request);
@@ -3259,7 +2831,7 @@ const requestHandler = async (request, response) => {
             }
         }
 
-        // API：AI Agent 文件操作（权限模式：app=仅应用文件夹；computer=允许操作电脑）
+        // API：AI Agent 文件/命令操作（权限档位：off=关闭 / strict=逐条确认 / auto=自动通过 / full=完全访问）
         //
         // ★ privileged = 本机（免密管理员）**或已登录的局域网设备**。
         //   放开局域网是本轮的刻意改动：登录之后的设备与本机同等能力（文件 + 命令）。
@@ -3271,9 +2843,14 @@ const requestHandler = async (request, response) => {
             // 把「桌面/文档/下载…到底在哪」告诉前端 —— 用户可以把桌面移动到任意位置，
             // 让 AI 按惯例猜 C:\Users\<用户名>\Desktop 是会猜错的（实测踩过）。
             const { roots } = resolveShellFolders();
-            // 三档都能访问任意路径，所以真实路径一律可见（只要已认证）。
+            // strict / auto / full 三档都能访问任意路径，所以真实路径一律可见（只要已认证）。
             // 旧模型下这里按 app/computer 区分可见性，那个区分已随两档模型一起消失。
-            const visible = privileged ? roots : roots.map(r => ({ ...r, path: undefined }));
+            //
+            // ★ `off` 档例外：整块关闭时"桌面在哪"也是**电脑信息**，一并隐去
+            //   （与未认证时的形状一致：只给标签，不给 path）。
+            const rootsAccess = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
+            const revealPaths = privileged && !accessDisabled(rootsAccess);
+            const visible = revealPaths ? roots : roots.map(r => ({ ...r, path: undefined }));
             return jsonResponse(response, 200, { ok: true, platform: process.platform, roots: visible });
         }
         if (pathname === '/api/agent/ls' && request.method === 'GET') {
@@ -3304,6 +2881,11 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/agent/activity' && request.method === 'GET') {
             if (!privileged) {
                 return jsonResponse(response, 403, { ok: false, message: '需要登录后才能读取电脑活动状态' });
+            }
+            // ★ `off` 档：这也是"电脑信息"（前台窗口标题 / 可见文本 / 进程列表），
+            //   整块关闭时一并拒掉 —— 否则"已关闭电脑操作"仍然能看到你在用什么软件。
+            if (accessDisabled(url.searchParams.get('access') || url.searchParams.get('permission'))) {
+                return agentDisabledResponse(response);
             }
             const force = url.searchParams.get('force') === '1';
             return jsonResponse(response, 200, activitySummaryCached(force));

@@ -29,8 +29,15 @@ dist/
 # ============================================================================
 #  插件（mod）与 Live2D 模型 —— 整个目录不入库（2026-10 用户要求：只推软件本体）
 #
-#  仓库只包含宿主程序。插件（含源码）与 Live2D 模型全部走 Releases 分发：
-#    node scripts/pack-assets.mjs   打包后到 GitHub Releases 上传。
+#  仓库只包含宿主程序。插件（含源码）已外置到**独立仓库** XYZ921746/web 托管：
+#    · 源码与资源  plugins/<id>/
+#    · 打包产物    store/packages/<id>-<version>.zip（应用内「市场」下载的就是它）
+#    · 商店索引    store/index.json
+#  本仓库的 mods/ 只是**本机入口**（跑检查 / 调试），不再是分发源 ——
+#  用 `npm run link:mods -- --src <web仓库>/plugins` 把它接过去。
+#  打包：node scripts/pack-assets.mjs --mods-dir <web>/plugins --out <web>/store/packages
+#        --index <web>/store/index.json --base-url https://<用户>.github.io/<仓库>/store/packages/
+#  ★ Live2D **模型**（mods/live2d-models/models/）仍是用户本机资源：不入库、打包时也被排除。
 #
 #  ★ 2026-10：插件目录从 `web/mods/` 搬到**项目根** `mods/`（与 data/ 平级）。
 #    搬移理由：`web/` 是静态文件根，"插件"与"应用自己的前端资源"混在同一棵树里
@@ -77,6 +84,27 @@ local.properties
 
 # AI 工作记录（不属于项目内容，只是本机的辅助笔记）
 .workbuddy-ai/
+# IDE / AI 助手的工程级笔记（同上，本机辅助内容，非项目源码）
+.trae/
+
+# ============================================================================
+#  宣传片工程 —— 整目录排除（2026-10）
+#
+#  为什么：`promo-video/` 实测 543 MB，其中
+#    · node_modules/ 275 MB（第三方依赖，npm ci 可还原）
+#    · bin/          156 MB（ffmpeg / ffprobe 二进制，随平台下载）
+#    · out/ + build/ + .probe/ + .hf-tmp/  约 76 MB（渲染中间产物，可重出）
+#  真正属于"源码"的只有 src/ + assets/（约 380 KB）。
+#
+#  这是**视频宣传**的独立工具链，与软件本体无关，也没有任何文档引用它；
+#  整包入库会让 clone 与历史体积失控（本仓库 .git 已因 fork 历史有 54 MB）。
+#  规则取整个目录而不是"只排除依赖"：它的产物目录会持续增长
+#  （每渲一版就多几十 MB），逐个排除迟早漏掉一个。
+#
+#  ⚠️ 如果以后确实要把这个工程随仓库分发，改成只排除产物（bin/、out/、
+#     build/、node_modules/、.probe/、.hf-tmp/），那时再单独评估体积。
+# ============================================================================
+promo-video/
 
 # 依赖、日志、系统垃圾
 node_modules/

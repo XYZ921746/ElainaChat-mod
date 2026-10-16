@@ -174,8 +174,27 @@ console.log('=== 1. 插槽与"注册即副作用"：源码约定 ===');
     const fe = readFrontend();
     // 判据同样改成"与位置无关"：只要真的收到了某个插件的源码文件即可。
     // （写死 `web/mods/…` 会在下次搬迁时又变成假失败 —— 这次搬迁就是例子。）
-    ok(/mods[\\/]galgame[\\/]index\.js/.test(fe),
-        '★ readFrontend() 真的包含 mod 源码（否则所有 mod 断言都是在空串上匹配）');
+    //
+    // ★★ 2026-10 二次修：这条**又一次**因为写死目录名而假失败 ——
+    //   上一版虽然嘴上说"与位置无关"，实现里却仍然钉着 `mods/galgame/index.js`，
+    //   而磁盘上的真实目录是 `galgame-1.0.0`（打包产物名带版本号，
+    //   server/mods.mjs 会把它归一化成 id=galgame、dir=galgame-1.0.0）。
+    //   于是这条断言在**任何**用带版本号目录安装的环境里都红，
+    //   而它想说的其实只是"readFrontend() 不是空串"。
+    //
+    //   这次真的按语义判：**从清单里取一个真实存在的插件目录**，
+    //   再确认它的 index.js 出现在 readFrontend() 的结果里。
+    //   这样无论目录叫 galgame 还是 galgame-1.0.0、无论将来怎么改名都不会假失败，
+    //   而"一个插件源码都没读到"这种真问题照样会被抓住。
+    let sampleEntry = null;
+    try {
+        for (const n of readdirSync(MODS)) {
+            if (existsSync(path.join(MODS, n, 'index.js'))) { sampleEntry = 'mods/' + n + '/index.js'; break; }
+        }
+    } catch { /* mods/ 不存在时留空，下面会红 */ }
+    ok(Boolean(sampleEntry) && fe.includes(sampleEntry),
+        '★ readFrontend() 真的包含 mod 源码（否则所有 mod 断言都是在空串上匹配）',
+        '按真实目录取样：' + String(sampleEntry));
 }
 
 // ============================================================ 2 & 3. 真服务 + 真浏览器

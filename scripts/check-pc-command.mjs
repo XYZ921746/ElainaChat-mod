@@ -214,6 +214,51 @@ try {
         const r = await post({ access: 'totally-bogus', command: 'dir' });
         ok(r.status === 403, '非法档位收敛到 strict（仍然要求授权）', `status=${r.status}`);
     }
+    // ---- ★ `off` 档：电脑操作整体关闭（读也不给，不只是"不问"）----
+    //
+    // 这是 2026-10 新增的一档：用户选了它，AI 就**没有**电脑能力可言。
+    // 与 strict/auto/full 的差别是"能力不存在"而不是"要不要问" —— 所以读取类
+    // （ls/read/roots）也必须被拒，这正是不再泄露电脑信息的落点。
+    {
+        const offPost = (body) => fetch(BASE + '/api/agent/exec', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) }));
+
+        // 命令：即使带 approved:true 也执行不了（档位比 approved 更靠前）
+        let r = await offPost({ access: 'off', command: 'dir' });
+        ok(r.status === 403, '★ off 档：电脑命令被拒（403）', `status=${r.status}`);
+        ok(r.json?.agentDisabled === true, '★ off 档：响应带 agentDisabled（前端据此给出准确提示）');
+        r = await offPost({ access: 'off', command: 'dir', approved: true });
+        ok(r.status === 403, '★ off 档：带 approved:true 也不放行（档位是权威）', `status=${r.status}`);
+
+        const offJson = async (p) => {
+            const res = await fetch(BASE + p);
+            return { status: res.status, json: await res.json().catch(() => null) };
+        };
+        // 读取：列目录 / 读文件 / 真实路径都不给
+        const ls = await offJson('/api/agent/ls?access=off&path=' + encodeURIComponent(ROOT));
+        ok(ls.status === 403 && ls.json?.agentDisabled === true, '★ off 档：列目录被拒（读取也不给）', `status=${ls.status}`);
+        const read = await offJson('/api/agent/read?access=off&path=' + encodeURIComponent(path.join(ROOT, 'README.md')));
+        ok(read.status === 403 && read.json?.agentDisabled === true, '★ off 档：读文件被拒', `status=${read.status}`);
+        const roots = await offJson('/api/agent/roots?access=off');
+        ok(roots.status === 200 && roots.json?.ok === true, '★ off 档：roots 仍返回结构（前端不崩）', `status=${roots.status}`);
+        ok((roots.json?.roots || []).every((x) => x.path === undefined),
+            '★ off 档：roots 隐去真实路径（"桌面在哪"也是电脑信息）',
+            JSON.stringify((roots.json?.roots || []).map((x) => x.path)));
+        // 写 / 删：也拒
+        const w = await fetch(BASE + '/api/agent/write', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ access: 'off', path: 'web/' + PROBE + '_off.txt', content: 'x', overwrite: true }),
+        });
+        ok(w.status === 403, '★ off 档：写入被拒（带 overwrite 也不行）', `status=${w.status}`);
+        const d = await fetch(BASE + '/api/agent/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ access: 'off', path: 'web/' + PROBE + '_off.txt', confirmed: true }),
+        });
+        ok(d.status === 403, '★ off 档：删除被拒（带 confirmed 也不行）', `status=${d.status}`);
+    }
     // ---- 空命令 / 超长命令 ----
     {
         const r = await post({ access: 'full', command: '' });
@@ -270,12 +315,16 @@ try {
         try { (await import('node:fs')).rmSync(outside, { force: true }); } catch { /* ignore */ }
     }
 
-    // ---- 覆盖闸门：三档语义不同（strict 要问 / auto 与 full 直接放行）----
+    // ---- 写入闸门：三档语义不同（strict 新建与覆盖都要问 / auto 与 full 直接放行）----
     //
     // ★★ 2026-10：旧模型下"两种模式都必须先经用户同意"；新模型下**只有 strict 问**。
     //    这是用户明确选的：「自动通过」的定义就是不再逐条确认。
     //    ⚠️ 已知代价（刻意接受）：auto 档只禁删除、不禁覆盖，
     //       所以 AI 能用"写入同名文件"绕过删除禁令。设置页里写明了这一点。
+    //
+    // ★★ 2026-10 修复：strict 档下**新建文件也必须先确认**（回 needCreate）。
+    //    早期实现只拦"覆盖已有文件"，于是最低档下 AI 仍能在桌面无声新建文件 ——
+    //    与设置页文案「写入……每一次都会问你」不符。下面的 ①/①b 钉住这条修复。
     {
         const fs = await import('node:fs');
         const ovNew = path.join(ROOT, 'web', PROBE + '_ov_new.txt');
@@ -289,9 +338,16 @@ try {
         try {
             fs.writeFileSync(ovExist, 'ORIGINAL', 'utf8');
 
-            // ① 新建不存在的文件 → 直接成功（别把"写入"这个功能本身修死）
+            // ① strict 档新建不存在的文件 → 403 + needCreate（最低档必须逐条确认）
             let r = await wpost({ path: 'web/' + PROBE + '_ov_new.txt', content: 'v1', access: 'strict' });
-            ok(r.status === 200, '覆盖闸门：新建文件直接成功（不误伤）', `status=${r.status}`);
+            ok(r.status === 403, '★ strict 档：新建文件需确认（403）', `status=${r.status} ${JSON.stringify(r.j)}`);
+            ok(r.j?.needCreate === true, '★ strict 档：新建回 needCreate（前端据此弹窗）');
+            ok(!fs.existsSync(ovNew), '★ strict 档：未确认时新建的文件没落盘');
+
+            // ①b strict + overwrite:true（= 用户已确认这次写入）→ 真的建出来
+            r = await wpost({ path: 'web/' + PROBE + '_ov_new.txt', content: 'v1', access: 'strict', overwrite: true });
+            ok(r.status === 200, '★ strict 档：新建确认后成功（200）', `status=${r.status}`);
+            ok(fs.readFileSync(ovNew, 'utf8') === 'v1', '★ strict 档：确认后内容确实写进去了');
 
             // ② strict 档覆盖 → 403 + needOverwrite，且磁盘内容原样
             r = await wpost({ path: 'web/' + PROBE + '_ov_exist.txt', content: 'CLOBBER', access: 'strict' });
@@ -315,9 +371,11 @@ try {
             ok(r.status === 200, 'full 档：覆盖直接放行', `status=${r.status}`);
             ok(fs.readFileSync(ovExist, 'utf8') === 'FULL-OK', 'full 档确实写进去了');
 
-            // ⑥ strict 档新建仍免问（新建不覆盖任何东西）
-            r = await wpost({ path: 'web/' + PROBE + '_ov_new2.txt', content: 'x', access: 'strict' });
-            ok(r.status === 200, 'strict 档：新建文件不打扰（无需确认）', `status=${r.status}`);
+            // ⑥ auto / full 档新建 → 直接放行（确认闸只在 strict）
+            for (const acc of ['auto', 'full']) {
+                r = await wpost({ path: 'web/' + PROBE + '_ov_new2.txt', content: 'x', access: acc });
+                ok(r.status === 200, `★ ${acc} 档：新建直接放行（不再询问）`, `status=${r.status}`);
+            }
         } finally {
             for (const f of [ovNew, ovExist, path.join(ROOT, 'web', PROBE + '_ov_new2.txt')]) {
                 try { fs.rmSync(f, { force: true }); } catch { /* ignore */ }
@@ -462,6 +520,27 @@ console.log('\n=== 4. 前端接线 ===');
     //   所以字面量 `overwrite: true` 并不存在 —— 旧断言会假失败。
     ok(/await send\(true\)/.test(agent) && /overwrite \}/.test(agent),
         '批准后重发时把 overwrite 置真');
+
+    // ---- ★★ 新建文件：strict 档同样要确认（2026-10 修复"只拦覆盖"的缺口）----
+    ok(/needCreate/.test(agent), '★ 前端识别服务端的 needCreate（最低档新建也要弹窗）');
+    ok(/function confirmAgentCreate/.test(agent), '★ 有新建确认函数');
+
+    // ---- ★★ `off` 档：电脑操作整体关闭（2026-10 新增）----
+    ok(/<input type="radio" name="agentAccess" value="off"/.test(html),
+        '★ 设置页有「关闭」选项（value="off"）');
+    ok(/function agentAccessDisabled/.test(agent), '★ 前端有 agentAccessDisabled 判据');
+    ok(/agentAccessDisabled\(\)\) \{ insertAgentResult\(AGENT_DISABLED_NOTE\)/.test(agent),
+        '★ 文件/命令入口在 off 档下直接拦下（不发无谓的请求）');
+    ok(/function agentDisabledSkillText/.test(agent), '★ off 档注入"电脑操作已关闭"的提示词说明');
+    // 提示词侧（app-02-data.js）必须：off 档不注入能力清单、改注入"已关闭"说明；
+    // 且迁移白名单要包含 'off'，否则老用户存下的 off 会被重置成 strict。
+    {
+        const dataJs = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'app-02-data.js'), 'utf8'));
+        ok(/agentDisabledSkillText\(\)/.test(dataJs) && /agentAccessDisabled\(\)/.test(dataJs),
+            '★ 提示词侧在 off 档下不注入能力清单，改注入"已关闭"说明');
+        ok(/\['off', 'strict', 'auto', 'full'\]/.test(dataJs),
+            '★ 档位迁移白名单包含 off（否则存下的 off 会被重置成 strict）');
+    }
 
     // ---- ★★ 删除：前端识别 needDelete 并问用户（2026-10 新增）----
     ok(/needDelete/.test(agent), '★ 前端识别服务端的 needDelete');

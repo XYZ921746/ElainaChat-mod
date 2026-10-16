@@ -55,10 +55,13 @@ console.log('\n=== 2. 默认主题不改变外观（关键语义）===');
     ok(/removeAttribute\('data-theme-template'\)/.test(js),
         '★ 默认主题走 removeAttribute（不设属性 → 覆盖规则一条都不生效）');
     ok(/tpl === 'elaina'/.test(js), '默认主题 elaina 被显式识别（不设 data-theme-template）');
-    // 5 套模板
+    // 内置模板（5 预设 + 自定义）
     const ids = [...js.matchAll(/\{\s*id:\s*'(\w+)',\s*name:/g)].map((m) => m[1]);
-    // 5 套预设 + 1 个 DIY「自定义」（颜色由用户定，变量在运行时注入）
-    ok(ids.length === 6, '定义了 6 套模板（5 预设 + 自定义），实得 ' + ids.length, ids.join(','));
+    // ★★ 2026-10：从 7 套回到 6 套 —— 「星屑之日」已随生日模块**移出宿主**，
+    //   改由插件 mods/birthday 在启用时用 `host.theme()` 注册（见 theme.js 的
+    //   MOD_TEMPLATES / registerTemplate）。所以它不再是"内置模板"：不装/不启用
+    //   那个插件时，主题选择器里就没有它。本次检查只数**内置**的那几套。
+    ok(ids.length === 6, '定义了 6 套内置模板（5 预设 + 自定义），实得 ' + ids.length, ids.join(','));
     for (const id of ['elaina', 'ios', 'claude', 'sage', 'sakura', 'custom']) {
         ok(ids.includes(id), '含模板 ' + id);
     }
@@ -189,6 +192,8 @@ console.log('\n=== 3. 覆盖权重（踩过的坑）===');
     }
 
     // ② 每套主题模板块也要覆盖"面"级变量（否则切主题后外壳仍是上个主题的白）
+    //   ★ 2026-10：`stardust` 已随生日插件移出宿主（见第 2 段的说明），
+    //     所以这里只查还留在 themes.css 里的这几套。
     for (const tpl of ['ios', 'claude', 'sage', 'sakura']) {
         const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
         ok(block.length > 0, `存在主题块 ${tpl}`);

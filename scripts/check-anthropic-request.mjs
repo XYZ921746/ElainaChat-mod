@@ -117,7 +117,7 @@ const ctx = new Function('window', `
     ${extractFn('mapThinkingEffort')}
     ${extractFn('detectThinkingVendor')}
     ${extractFn('buildThinkingParams')}
-    const THINKING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+    const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
     // CHAT_API_FORMATS 只是格式白名单表，这里按真实定义给一份骨架（**新增格式时要同步**）
     const CHAT_API_FORMATS = Object.freeze({ 'openai-compatible': {}, 'openai-responses': {}, anthropic: {} });
     ${extractFn('getChatApiFormat')}
@@ -296,7 +296,7 @@ check('DeepSeek 关思考 → 显式发 disabled（默认是开的，不发等�
     dsOff.body.thinking, { type: 'disabled' });
 const dsOn = await send({ thinking: true }, { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'openai-compatible');
 check('DeepSeek 开思考 → 发 enabled', dsOn.body.thinking, { type: 'enabled' });
-check('  medium 档不显式发 effort（用服务商默认）', 'reasoning_effort' in dsOn.body, false);
+check('  未指定档位时不发 effort（交给服务商默认）', 'reasoning_effort' in dsOn.body, false);
 const dsLow = await send({ thinking: true, thinkingEffort: 'low' },
     { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'openai-compatible');
 check('DeepSeek 低强度 → reasoning_effort: low', dsLow.body.reasoning_effort, 'low');

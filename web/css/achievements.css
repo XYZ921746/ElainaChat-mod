@@ -1,0 +1,79 @@
+/* ============================================================================
+ * 成就系统样式
+ *
+ * ── 为什么单独一个文件 ───────────────────────────────────────────────────
+ *   成就面板（web/js/achievements.js）是**宿主功能**，与主题无关、也与某个
+ *   插件无关；它需要自己的卡片/图标/纪念正文样式。原先这些样式挤在
+ *   `birthday.css` 里（那份文件同时装着生日彩蛋的样式）—— 生日模块
+ *   2026-10 变成插件后，这里把它**按归属拆出来**：成就是宿主的，留下；
+ *   彩蛋/面板/告别是插件的，随插件走（见 mods/birthday/style.css）。
+ *
+ *   规则一律走主题变量（--pixso-*），所以深浅色、各套主题下都一致；
+ *   深色下浅色底会变成"一块块白"，下面单列了几条覆盖。
+ * ========================================================================== */
+
+.ach-title-icon { font-size: 20px; line-height: 1; }
+.ach-count {
+    font-size: 11px;
+    color: var(--pixso-brown-soft);
+    padding: 2px 9px;
+    border-radius: 999px;
+    background: rgba(109, 106, 168, .12);
+}
+
+.ach-card {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    padding: 13px 15px;
+    border-radius: 13px;
+    border: 1px solid var(--pixso-line);
+    background: rgba(255, 255, 255, .45);
+    /* 未解锁：整体压暗，一眼能看出"还没拿到" */
+    opacity: .58;
+    transition: opacity .2s ease, transform .15s ease, border-color .2s ease;
+}
+.ach-card.is-unlocked { opacity: 1; border-color: rgba(184, 147, 74, .42); background: rgba(184, 147, 74, .09); }
+.ach-card.is-unlocked:hover { transform: translateY(-2px); }
+/* 纪念类成就：加一道暖金描边，与普通进度成就区分开 */
+.ach-card.is-memorial.is-unlocked {
+    border-color: rgba(184, 147, 74, .7);
+    box-shadow: 0 0 0 1px rgba(184, 147, 74, .2) inset;
+}
+
+.ach-icon { font-size: 24px; line-height: 1.1; flex: none; width: 30px; text-align: center; }
+.ach-body { min-width: 0; flex: 1; }
+.ach-name { font-size: 13px; font-weight: 700; color: var(--pixso-brown); }
+.ach-desc { font-size: 11.5px; line-height: 1.6; color: var(--pixso-brown-soft); margin-top: 2px; }
+.ach-detail {
+    margin-top: 8px;
+    padding: 9px 11px;
+    border-radius: 9px;
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--pixso-brown);
+    background: rgba(255, 255, 255, .6);
+    border-left: 2px solid rgba(184, 147, 74, .65);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.ach-when { margin-top: 6px; font-size: 10.5px; color: var(--pixso-brown-soft); opacity: .8; }
+
+/* ---- 深色模式：浅色底（rgba(255,255,255,.45)）会变成一块块白，逐条覆盖 ---- */
+html[data-theme="dark"] .ach-card {
+    background: rgba(255, 255, 255, .05);
+    border-color: rgba(255, 255, 255, .12);
+}
+html[data-theme="dark"] .ach-card.is-unlocked {
+    background: rgba(184, 147, 74, .14);
+    border-color: rgba(232, 196, 118, .38);
+}
+html[data-theme="dark"] .ach-detail {
+    background: rgba(255, 255, 255, .07);
+    border-left-color: rgba(232, 196, 118, .6);
+}
+html[data-theme="dark"] .ach-count { background: rgba(255, 255, 255, .1); }
+
+@media (max-width: 860px) {
+    .ach-icon { font-size: 21px; width: 26px; }
+}

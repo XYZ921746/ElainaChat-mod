@@ -71,7 +71,27 @@
         //   检查脚本应盯着这个清单……见 scripts/check-store-keys.mjs（新增）。
         'elaina_mods_top_order',
         // Live2D 模型列表的拖拽顺序（同上，纯 UI 偏好）。
-        'elaina_live2d_model_order'
+        'elaina_live2d_model_order',
+        // 插件市场：自定义商店源（留空 = 用内置的官方索引地址）。
+        // ★ 同样必须列在这里 —— 不列的话写入只进内存缓存、刷新即丢，
+        //   表现是"改了商店源、刷新后又说回默认"（见上面那条警告）。
+        'elaina_market_url',
+        // 成就系统（含生日纪念记录）。
+        // ★ 必须列在这里：不列的话解锁状态只进内存缓存 ——
+        //   表现是"解锁了、刷新又变回未解锁"，而且成就页会看起来一直是空的。
+        'elaina_achievements',
+        // ★ 2026-10：旧的 `elaina_birthday` 键**已随生日模块插件化退役** ——
+        //   生日状态（今天是否看过彩蛋、选了哪个分支…）现在住在插件的私有
+        //   命名空间里，见下面的 elaina_mod_storage。
+        // ★ 插件私有存储（host.storage）：`{ "<插件id>": { … } }` 一坨 JSON。
+        //   必须列在这里，否则插件的持久化写入只进内存缓存、刷新即丢
+        //   （本项目踩过三次的坑，见上面两条）。生日模块搬到插件后，
+        //   它的状态（今天是否已看过彩蛋、选了哪个分支…）就落在这个键里。
+        'elaina_mod_storage',
+        // 远程公告的已读 id（见 app-02-data.js 的公告源）。
+        // ★ 同样必须列在这里 —— 不列的话"看过的公告"只进内存缓存，
+        //   刷新后同一条又会弹出来（表现像"公告怎么关不掉"）。
+        'elaina_announce_read'
     ];
     var DATA_SET = {};
     for (var i = 0; i < DATA_KEYS.length; i++) DATA_SET[DATA_KEYS[i]] = true;

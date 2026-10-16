@@ -112,27 +112,175 @@ if (readFnMatch) {
     ok(missingRead.length === 0, '读取信息清单里列出了全部六项', '缺少: ' + missingRead.join('、'));
 }
 
-// ---------- 一之二、能力清单必须按实现方式区分 ----------
+// ---------- 一之二、能力清单按"实现方式 + 另一路是否可用"区分 ----------
 //
 // 无障碍后端**做不到**「手机打开」与「手机命令」（原生层明确回失败）。
 // 提示词把它俩写成通用能力，就会造成"说了却做不到" —— 模型反复尝试、用户看到一连串失败。
-// 这正是本次要避免的那类问题，所以必须锁住。
-console.log('\n— 按实现方式区分能力 —');
+// 这正是要避免的那类问题，所以必须锁住。
+//
+// ★★ 2026-10（用户要求：「模块」与「无障碍」互通、由 AI 看情况使用）：
+//   判据从"是不是无障碍档"升级成"**另一路是否也可用**" —— 原生侧现在会在
+//   首选做不到某个动作时自动换路（见 ElainaShellPlugin.accessibilityCannotDo /
+//   annotateBackendSwap），所以两路都在时能力面是**并集**：此时再写
+//   "⛔ 不支持"会让模型自我审查，明明能做却说做不到——那和原来的毛病一样严重。
+//   这里锁两件事：① 并集必须由"另一路 ready"推出（不能写死 true）；
+//                ② 另一路不可用时，边界说明必须仍然在。
+console.log('\n— 按实现方式与另一路可用性区分能力 —');
 ok(/const isAccessibility = backend === 'accessibility'/.test(skillFn),
     '能力清单按实现方式分支（无障碍 / 其它）');
 ok(/不支持\*\* \[操作:手机打开\]|不支持.*手机打开/.test(skillFn),
-    '无障碍档明确说明**不支持**「手机打开」（原生确实做不到）');
+    '另一路不可用时明确说明**不支持**「手机打开」（原生确实做不到）');
 ok(/手机命令/.test(skillFn) && /不支持|做不到/.test(skillFn),
-    '无障碍档明确说明不支持「手机命令」');
-// ★ 2026-10：后端收敛为「无障碍 + 模块」，所以这里断言的是"引导去换模块"。
+    '另一路不可用时明确说明不支持「手机命令」');
+// ★ 2026-10：后端收敛为「无障碍 + 模块」，两种措辞都要认：
+//   · 互通生效 → "系统会**自动改用「模块」**完成"（模型照常输出标签即可）
+//   · 互通不可用 → "换成「模块」方式 / 把「模块」方式配置好"（引导用户去配置）
 //   （旧断言写的是 `换成 Shizuku / Root / 模块` —— 那两个后端已删除。）
-ok(/换成「模块」方式|改用「模块」方式/.test(skillFn),
-    '无障碍档给出可行替代（换实现方式 / 点图标）');
+ok(/自动改用「模块」|换成「模块」方式|改用「模块」方式|把「模块」方式配置好/.test(skillFn),
+    '给出可行替代（自动换路，或引导去配置模块）');
 ok(/不要重复尝试/.test(skillFn),
     '明确要求模型遇到「不支持」时不要反复重试（否则会刷屏失败）');
-// 非无障碍档才承诺「手机打开 / 手机命令」
-ok(/else \{[\s\S]*手机打开 包名/.test(skillFn),
-    '非无障碍档才列出「手机打开 / 手机命令」');
+// 并集必须由"另一路 ready"决定 —— 写死成 true 就又回到"说了做不到"
+ok(/const otherId = isAccessibility \? 'module' : 'accessibility'/.test(skillFn),
+    '找得到"另一路"的判据（otherId）');
+ok(/otherReady = Boolean\(backendStatus\[otherId\][\s\S]*state === 'ready'/.test(skillFn),
+    '★ 并集判据读的是另一路的探测状态（backendStatus），不是写死的 true');
+ok(/if \(canOpenAndCommand\) \{[\s\S]*手机打开 包名/.test(skillFn),
+    '「手机打开 / 手机命令」只在能力面覆盖到时才列出（互通后是并集）');
+
+// ---------- 一之二之二、运行方式：前台（无障碍）/ 后台（模块）★ 2026-10 ----------
+//
+// 用户要求：AI 要操作手机时，若**两条路都可用**，应用要弹窗让用户选"前台运行"
+// （无障碍，看得见）还是"后台运行"（模块，静默不抢屏幕）。这几条锁住它的关键约定：
+console.log('\n— 运行方式弹窗 —');
+ok(/function pickPhoneRunMode\(/.test(html), '有 pickPhoneRunMode()（询问运行方式）');
+ok(/confirmText: '前台运行'/.test(html) && /altText: '后台运行'/.test(html),
+    '★ 弹窗给出「前台运行 / 后台运行」两个明确选项');
+// ★ 三键而不是两键：取消键还会被"点遮罩"触发，把"后台"塞进取消位
+//   等于用户手指一滑就默默用了后台。所以必须用第三个键承载它。
+ok(/altValue: 'module'/.test(html) && /customModalAltBtn/.test(html),
+    '★ 用第三个按钮承载「后台运行」（不能塞进取消键：取消还会被点遮罩触发）');
+ok(/phoneActionNeedsScreen\(parsed\.action\)/.test(html),
+    '只在"要动屏幕"的操作上问（读取信息 / 工作区文件 / 等待不问）');
+ok(/if \(!runModeDecision\) \{[\s\S]{0,400}pickPhoneRunMode\(\)/.test(html),
+    '★ 一轮只问一次（答案存在 runModeDecision 里，续跑不再问）');
+ok(/你没有选择运行方式[\s\S]{0,160}continueLoop: false/.test(html),
+    '★ 取消 = 这一步不做：如实回灌且不续跑（绝不替用户选一条）');
+ok(/backend: runModeDecision === 'module'/.test(html),
+    '本轮选定的运行方式经 exec 的 backend 参数下传（原生据此执行）');
+const modeResetFn = extractFn('resetAgentContinueBudget');
+ok(/runModeDecision = ''/.test(modeResetFn),
+    '★ 每条新用户消息重置运行方式选择（否则整会话只问一次）');
+ok(/没有任何可用的实现方式/.test(html),
+    '★ 入口闸改成"有没有一条路能用"，不再要求设置里预先选过（否则未预设的用户到不了弹窗）');
+ok(/refreshBackendStatus\(\)/.test(html),
+    '探测走 refreshBackendStatus（backendStatus 那份只有它会写）');
+ok(/系统会先请用户选择/.test(skillFn),
+    '★ 提示词明确告诉模型"系统会去问用户"，免得它自己反问或以为要先改设置');
+// ★★ 用户反馈"我选了前台，它还是走了模块" —— 根因是"互通自动换路"盖过了显式选择。
+ok(/strictBackend: runModeExplicit/.test(html),
+    '★ 用户显式选的运行方式要传 strictBackend（原生据此**不**自动换路）');
+ok(/前台运行时会直接失败并说明原因/.test(skillFn),
+    '★ 提示词改口：选了前台后无障碍做不到的动作会**直接失败**，不再承诺"自动改用模块"');
+// 并发：同一条回复里两个动屏操作会并发问两次，而 showCustomModal 是单例 ——
+// 第二次调用会覆盖按钮 onclick，第一个 Promise 永不 resolve、那个操作被静默吞掉。
+ok(/if \(runModePicker\) return runModePicker/.test(html) && /runModePicker = doPickPhoneRunMode\(\)/.test(html),
+    '★ 并发询问必须记忆化（否则第一个操作会永久挂起、静默不执行）');
+
+// ---------- 一之二之三、strict 必须在**原生侧**贯穿全部换路点 ★★ 2026-10 真机修复 ----------
+//
+// 真实故障（用户真机截图）：在「运行方式」里明确选了**前台运行（无障碍）**，
+// 结果回灌的是「启动失败（模块）：exit status 1」—— 走的是模块。
+//
+// 根因不是前端没传 strict（那条早就有断言，见上面），而是**原生侧 strict 的作用域太窄**：
+//   · 当时 `strict` 只写在 `ID_ACCESSIBILITY.equals(preferred)` 这一个分支里；
+//   · 而它后面还有**第二个换路点** —— `pickCommandExecutor(preferred)`：
+//     preferred 不是 "module" 时会**自动挑选**，而候选列表里只有模块。
+//   · 于是 preferred="accessibility" 时，无障碍整个被绕过、一定落到模块上。
+// 所以这几条断言盯的是**结构**：strict 必须在进入自动挑选**之前**就分流掉。
+//
+// ⚠️ 这类 bug 的可怕之处：前端 check 全绿、原生也能编译，只有真机上
+//    "用户选的和实际走的不一样"。静态断言是能拦住它的唯一低成本手段。
+console.log('\n— strict 语义（原生侧，防"选了前台却走模块"复发）—');
+const shellPluginPath = path.join(root, '..', 'android-app', 'android', 'app', 'src', 'main',
+    'java', 'com', 'elainachat', 'opensource', 'ElainaShellPlugin.java');
+const plugin = readFileSync(shellPluginPath, 'utf8');
+/** 抠出 `if (strict) { ... }` 那个块（按花括号配平，避免用正则切歪） */
+function extractStrictBlock(src) {
+    const start = src.indexOf('if (strict) {');
+    if (start < 0) return '';
+    let i = src.indexOf('{', start);
+    const bodyStart = i;
+    let depth = 0;
+    for (; i < src.length; i++) {
+        if (src[i] === '{') depth++;
+        else if (src[i] === '}') { depth--; if (depth === 0) { i++; break; } }
+    }
+    return src.slice(bodyStart, i);
+}
+const strictBlock = extractStrictBlock(plugin);
+ok(strictBlock.length > 200, '原生有 `if (strict) {…}` 显式分流块');
+// ★ 核心结构断言：分流必须在 pickCommandExecutor 之前 ——
+//   放在后面就等于没放（自动挑选已经把 preferred 吞掉了）。
+{
+    const strictAt = plugin.indexOf('if (strict) {');
+    const pickAt = plugin.indexOf('pickCommandExecutor(preferred)');
+    ok(strictAt > 0 && pickAt > 0 && strictAt < pickAt,
+        '★★ strict 分流在 pickCommandExecutor **之前**（否则 preferred=accessibility 会被自动挑选吞掉、落到模块）');
+}
+// strict + 无障碍：必须直接走无障碍（由它如实报"能力边界"），不得换路
+ok(/ID_ACCESSIBILITY\.equals\(preferred\)[\s\S]{0,400}return runOnAccessibility\(action, args, false\);/.test(strictBlock),
+    '★ strict + 无障碍 → 直接走无障碍（做不到就如实报，不换模块）');
+ok(!/runOnCommandBackend\(moduleExecutor/.test(strictBlock.split('ID_MODULE.equals(preferred)')[0]),
+    '★ strict + 无障碍的分支里**不得**出现 runOnCommandBackend(moduleExecutor)（那就是偷偷换路）');
+// strict + 模块：不可用时必须明确失败，且说明"不会改用无障碍"
+ok(/ID_MODULE\.equals\(preferred\)[\s\S]{0,500}return failure\(/.test(strictBlock),
+    '★ strict + 模块但不可用 → 明确失败（不静默回落无障碍）');
+ok(/不会\*\*改用无障碍|不会.*改用无障碍/.test(strictBlock),
+    '★ 失败文案说明"不会改用无障碍"（否则用户以为它在乱换路）');
+// strict + 未知值：不猜、不兜底
+ok(/运行方式参数无法识别/.test(strictBlock),
+    '★ strict + 无法识别的 preferred → 如实报错，不猜一个后端跑');
+// ★ 中文输入那条"按动作挑最优后端"也必须让位给显式选择 ——
+//   用户选了后台（模块），却被这条送去无障碍，同样是"选的和走的不一样"。
+//   （模块的 vd type 本来就支持中文，这个兜底对模块并不需要。）
+ok(/if \(!strict\s*[\s\S]{0,220}"手机输入"\.equals\(action\)/.test(plugin),
+    '★ 中文输入的"改走无障碍"兜底带 !strict（显式选了后台就不该被改到前台）');
+// 非 strict 路径的"互通自动换路"必须保留 —— 别为了修 strict 把它一起删了
+ok(/if \(accessibilityCannotDo\(action, args\) && moduleExecutor\.available/.test(plugin),
+    '★ 非 strict（没弹窗 / 只一条路可用）时的互通自动换路仍然保留');
+ok(/annotateBackendSwap\(/.test(plugin),
+    '★ 换路仍在结果里注明"本次已自动改用…"（可排查性）');
+
+// ---------- 一之二之四、「看画面」按钮的判据 ★★ 2026-10 真机修复 ----------
+//
+// 与上面那个原生 bug 叠加、把排查方向带偏的第二个问题：
+// 状态条上「看画面」的出现判据原来是 `currentBackendId() === 'module' || used === 'module'`。
+// 前者读的是**设置里持久化的默认方式**（用户临时选前台，它照样是 module），
+// 后者是**上一轮**用过的后端且从不重置（历史上走过一次模块，之后每轮都亮）。
+// 两个都往"显示模块"的方向错 → 用户明明选了前台却看到"看画面"，判定"它在偷偷走模块"。
+console.log('\n— 「看画面」按钮判据 —');
+{
+    // ⚠️ 必须**限定在 agentRuntime 的 IIFE 里**再抠 render()。
+    //   直接 extractFn('render', html) 会抓到 achievements.js 里那个同名的
+    //   render()（它在加载顺序上更靠前）—— 断言就会在一个毫不相干的函数上做匹配，
+    //   而且是"假失败"（我第一版就是这么写的，两条红）。
+    const rtStart = html.indexOf('const agentRuntime = (function ()');
+    const rtEnd = html.indexOf('window.agentRuntime = agentRuntime;');
+    const rtSrc = (rtStart >= 0 && rtEnd > rtStart) ? html.slice(rtStart, rtEnd) : '';
+    ok(rtSrc.length > 0, '找得到 agentRuntime 的 IIFE（抠 render 的范围）');
+    const renderFn = rtSrc ? extractFn('render', rtSrc) : '';
+    ok(renderFn.length > 100, '在 agentRuntime 里抠到 render()');
+    ok(/runModeDecision/.test(renderFn),
+        '★★ 「看画面」读的是**本轮**的 runModeDecision（不是持久化的默认方式）');
+    ok(!/currentBackendId\(\) === 'module'\)/.test(renderFn),
+        '★ 不再用 `currentBackendId() === module` 当判据（那会把默认方式当成当前方式）');
+    ok(/effective === 'module'/.test(renderFn),
+        '★ 最终判据收敛到一个 effective 值再比 module');
+    const resetFn2 = extractFn('resetAgentContinueBudget');
+    ok(/window\.__lastAgentBackend = ''/.test(resetFn2),
+        '★★ 每轮重置 __lastAgentBackend（否则上一轮走过模块会让这一轮一直显示"看画面"）');
+}
 
 // ---------- 一之三、读取信息受隐私开关控制（★ 2026-10 新增）----------
 //

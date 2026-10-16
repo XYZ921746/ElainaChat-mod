@@ -93,11 +93,30 @@ async function init() {
     try { if (window.ElainaTheme) window.ElainaTheme.applyStored(); } catch (e) { /* 忽略 */ }
     loadSettings();
     await loadApiSecrets();
+    // ★★ 2026-10：预热「实现方式」的可用性探测。
+    //   手机操作的能力注入（agentPhoneSkillText）与"运行方式"弹窗（pickPhoneRunMode）
+    //   都读 backendStatus —— 那份数据只有 detectBackend / refreshBackendStatus 会写。
+    //   不预热的话，用户没打开过设置面板之前它一直是空的：模型会被注入
+    //   "当前未启用、不要输出手机标签"（明明设备上无障碍是可用的），
+    //   运行方式弹窗也无从判断"两路是否都就绪"。
+    //   这是异步的，不阻塞后面的启动步骤。
+    void refreshBackendStatus();
     loadCharacterCard();
     loadConversations();
     loadFavorites();
     loadLikedQuotes();
     loadMemoryCore();
+    // ★★ 成就系统与「星屑之日」生日模式：必须排在 `Store.bootstrap()` **之后**
+    //   才 refresh（见它们各自的 ready 闸门说明）。
+    //
+    //   为什么不能靠脚本自己"在加载时就读"：那两个模块的脚本在 bootstrap
+    //   之前就求值了，那时 Store 缓存是空的 —— 读到的成就表必然是空的、
+    //   生日状态必然丢失。后果分别是"每次刷新成就都像没解锁过"与
+    //   "每次刷新都把开场彩蛋重演一遍"。
+    //
+    //   ★ 2026-10：生日模式已搬进插件（mods/birthday），**不再在这里 refresh** ——
+    //     它在 init() 末尾收到 `app-ready` 广播后自己读盘并启动看门狗（见文件末尾）。
+    try { if (window.ElainaAchievements) window.ElainaAchievements.refresh(); } catch (e) { /* 忽略 */ }
     // ★ 多设备实时同步：订阅服务端的 store 变更广播（SSE）。
     //
     //   场景：一个服务连电脑 + 手机 + 平板。手机改了设置或发了消息，
@@ -221,7 +240,18 @@ async function init() {
             if (!res.ok || !data || !data.ok) {
                 setHint('安装失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
             } else {
-                setHint('✅ ' + (data.message || '已安装') + '（到上面打开开关即可启用）', 'text-emerald-600');
+                // ★★ 2026-10 修：与**市场安装**那条路是完全同一个坑 ——
+                //   装完不重扫，新插件就不在注册表里，于是"到上面打开开关即可启用"
+                //   是句空话（那个开关点了也不生效）。见 mods.js 的 reload 说明。
+                let reloaded = false;
+                try {
+                    if (window.ElainaMods && typeof window.ElainaMods.reload === 'function') {
+                        await window.ElainaMods.reload();
+                        reloaded = true;
+                    }
+                } catch (err) { /* 加载失败不该把"安装成功"说成失败 */ }
+                setHint('✅ ' + (data.message || '已安装')
+                    + (reloaded ? '，已加载生效' : '（刷新页面后生效）'), 'text-emerald-600');
                 void refreshModsList();
             }
         } catch (err) {
@@ -711,12 +741,30 @@ async function init() {
     // 参考音频样本：文件框不触发自动保存（见 bindSettingsAutoSave），这里自己落盘
     document.getElementById('settingMimoTtsCloneSample')?.addEventListener('change', handleMimoTtsCloneSampleFileChange);
     document.getElementById('mimoTtsCloneSampleClear')?.addEventListener('click', clearMimoTtsCloneSample);
+    // ★ 2026-10：原生 file 控件已视觉隐藏（见 index.html 的 .tts-sample-input），
+    //   改由这个主题化按钮去点它；「内置样本」一键载入软件自带的那段伊蕾娜日语样本。
+    document.getElementById('mimoTtsCloneSamplePick')?.addEventListener('click', () => {
+        document.getElementById('settingMimoTtsCloneSample')?.click();
+    });
+    document.getElementById('mimoTtsCloneSampleBuiltin')?.addEventListener('click', () => {
+        void loadBuiltinMimoCloneSample();
+    });
     elements.testChatConnectionBtn.addEventListener('click', testChatConnection);
     elements.testTtsConnectionBtn.addEventListener('click', testTtsConnection);
     elements.clearApiKeysBtn.addEventListener('click', clearApiKeys);
     elements.announcementConfirmBtn.addEventListener('click', closeAnnouncement);
     elements.announcementOverlay.addEventListener('click', (event) => {
         if (event.target === elements.announcementOverlay) closeAnnouncement();
+    });
+    // 远程公告：点「知道啦」或遮罩关闭；点「去插件市场看看」先关公告再开市场
+    // （市场弹窗 z-index 低于公告层，不先关会被公告盖住）
+    elements.serverAnnounceClose.addEventListener('click', closeServerAnnouncement);
+    elements.serverAnnounceOverlay.addEventListener('click', (event) => {
+        if (event.target === elements.serverAnnounceOverlay) closeServerAnnouncement();
+    });
+    elements.serverAnnounceAction.addEventListener('click', () => {
+        closeServerAnnouncement();
+        try { window.ElainaMarket?.open?.(); } catch (e) { /* 忽略 */ }
     });
 
     document.querySelectorAll('input[name="asrProvider"]').forEach(r => {
@@ -869,15 +917,15 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
     // 思考开关与强度：现在住在「设置 → 模型」里，不在输入框的 ⊕ 菜单里。
     // 直接写进 state 并持久化 —— 这两个是**模型参数**，改了立刻对下一次请求生效，
     // 不需要点「保存设置」才生效（用户不会想到"改个开关还要再点保存"）。
-    elements.settingThinkingMode.addEventListener('change', () => {
-        state.settings.thinkingMode = elements.settingThinkingMode.checked;
-        updateThinkingModeHint();
-        persistSettings();
-    });
+    // 思考强度：UI 上只有一个四档下拉（off / low / high / max），
+    // off 就代表"不思考" —— 原来的独立勾选框已合并进来。
+    // `thinkingMode` 由档位**派生**（请求层与「思考」折叠栏仍读这个布尔量）。
     elements.settingThinkingEffort.addEventListener('change', () => {
-        state.settings.thinkingEffort = THINKING_EFFORTS.includes(elements.settingThinkingEffort.value)
+        const value = THINKING_EFFORTS.includes(elements.settingThinkingEffort.value)
             ? elements.settingThinkingEffort.value
-            : 'medium';
+            : 'off';
+        state.settings.thinkingEffort = value;
+        state.settings.thinkingMode = value !== 'off';
         updateThinkingModeHint();
         persistSettings();
     });
@@ -984,10 +1032,33 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         if (fav) jumpToOriginal(fav);
     });
 
+    // ★ 竖栏这个按钮 2026-10 从「管理分类」改成「成就」：
+    //   点它打开成就面板，分类弹窗改由面板内部的「管理分类」按钮打开
+    //   （见 web/js/achievements.js 与 index.html 里那段说明）。
     elements.manageCategoriesBtn.addEventListener('click', () => {
+        try {
+            if (window.ElainaAchievements) { window.ElainaAchievements.open(); return; }
+        } catch (e) { /* 成就模块异常时回落到分类弹窗，至少不是"点了没反应" */ }
         openCategoriesModal();
     });
     elements.memoryBtn.addEventListener('click', runManualMemorySummary);
+    // 设置 → 记忆：「立即整理记忆」按钮（与顶栏同一个动作）+ 轮数步进器（★ 2026-10）
+    elements.memoryNowBtn?.addEventListener('click', runManualMemorySummary);
+    const stepMemoryEvery = (delta) => {
+        const input = elements.settingMemoryEvery;
+        if (!input) return;
+        const cur = parseInt(input.value, 10) || 6;
+        const next = Math.max(3, Math.min(50, cur + delta));
+        if (next === cur) return;
+        input.value = String(next);
+        // ★ 设置面板的自动保存走**事件委托**（见 app-06-settings.js 的
+        //   bindSettingsAutoSave）：只改 value 不会保存，必须派发事件；而且
+        //   要派发在 input 上 —— 那条规则会显式跳过 button。
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    elements.memoryEveryMinus?.addEventListener('click', () => stepMemoryEvery(-1));
+    elements.memoryEveryPlus?.addEventListener('click', () => stepMemoryEvery(1));
     elements.categoriesModalClose.addEventListener('click', closeCategoriesModal);
     elements.categoriesModalOverlay.addEventListener('click', (e) => {
         if (e.target === elements.categoriesModalOverlay) closeCategoriesModal();
@@ -1034,6 +1105,21 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         toggleQuoteFavorite();
     });
 
+    // 顶栏「公告」按钮：点一下展开公告面板。收起三条路：✕ / 点面板外 / Esc
+    // —— 与其它弹窗同一套习惯。
+    elements.announceBtn?.addEventListener('click', () => toggleAnnouncePanel());
+    elements.announcePanelClose?.addEventListener('click', closeAnnouncePanel);
+    document.addEventListener('click', (e) => {
+        const panel = elements.announcePanel;
+        if (!panel || panel.classList.contains('hidden')) return;
+        if (panel.contains(e.target) || elements.announceBtn?.contains(e.target)) return;
+        closeAnnouncePanel();
+    });
+    document.addEventListener('keydown', (e) => {
+        const panel = elements.announcePanel;
+        if (e.key === 'Escape' && panel && !panel.classList.contains('hidden')) closeAnnouncePanel();
+    });
+
     elements.showSidebar.addEventListener('click', showSidebarFunc);
     elements.mobileSidebarClose.addEventListener('click', closeSidebarDrawer);
     elements.sidebarOverlay.addEventListener('click', closeSidebarDrawer);
@@ -1073,7 +1159,10 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
 
     if (mobileFirstScreen) {
         showInitialState();
-        loadAnnouncement().then(openAnnouncement);
+        const announcementPending = openAnnouncementDeferred();
+        startAnnouncements();
+        // 移动端这条路径提前 return —— 也要发 app-ready，否则插件永远等不到启动信号
+        try { window.ElainaMods?.markAppReady?.({ announcementPending }); } catch (e) { /* 忽略 */ }
         return;
     }
     const hasConversation = Boolean(state.currentConversationId);
@@ -1083,9 +1172,45 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
             loadConversation(conv.id);
         }
     }
-    loadAnnouncement().then(openAnnouncement);
+    const announcementPending = openAnnouncementDeferred();
+    // 公告：拉一次并刷新顶栏「每日金句 / 公告」合体胶囊（见 app-02-data.js）
+    startAnnouncements();
     // 启动 AI 定时任务调度（每 30s 检查到期任务）
     setInterval(checkScheduledTasks, 30000);
+    // ★ 通知插件系统：应用初始化完成（Store.bootstrap 已读完、界面已就绪）。
+    //   mod 在 DOMContentLoaded 就加载（早于本函数），拿不到这个信号就只能自己
+    //   猜时机 —— 这正是"插件在加载时读 Store 拿到空缓存"的成因。
+    //   `announcementPending` 一并带过去：晚注册的生日插件要据此把开场彩蛋推迟到
+    //   首次公告之后（见 mods.js 的 host.on 补调与上面的 openAnnouncementDeferred）。
+    try { window.ElainaMods?.markAppReady?.({ announcementPending }); } catch (e) { /* 插件系统异常不影响启动 */ }
+}
+
+/**
+ * 打开「欢迎使用独立开源版」公告。
+ *
+ * ★★ 2026-10 改（生日模块插件化之后）：这里**不再等生日彩蛋**。
+ *   旧实现让公告等 `ElainaBirthday.onEggDone()` 之后才弹 —— 那是宿主直接引用
+ *   生日模块。它搬进插件（mods/birthday）后宿主不能再引用它，于是改成**广播**：
+ *     ① 本函数先广播 `announcement-pending`（"公告将要出现"）；
+ *     ② 生日插件收到后把开场彩蛋**推迟**，等 `announcement-closed` 再演
+ *        （关闭广播在 app-02-data.js 的 closeAnnouncement 里发）。
+ *   这样两个弹层依旧不会打架，而宿主完全不知道生日插件的存在。
+ *
+ * ★★ 公告仍然**只在第一次弹**（用户要求："同意后即消失，后面都不再出现"）。
+ *
+ * @returns {boolean} 本次是否"将要弹公告"。调用方把它转给 markAppReady ——
+ *   晚注册的插件（loadAll 是异步的）也要能知道这件事，见 mods.js 的 host.on 补调。
+ */
+function openAnnouncementDeferred() {
+    // 已经同意过 → 不会再弹，连广播都不需要
+    try {
+        if (typeof hasAgreedAnnouncement === 'function' && hasAgreedAnnouncement()) return false;
+    } catch (e) { /* 判断出错时按"没同意过"处理，宁可多弹一次也不该永远不弹 */ }
+
+    // ★ 先广播"将要出现"：生日插件必须在**彩蛋演之前**知道，否则收到就晚了
+    try { window.ElainaMods?.emit?.('announcement-pending', {}); } catch (e) { /* 忽略 */ }
+    loadAnnouncement().then(openAnnouncement);
+    return true;
 }
 
 function showSidebarFunc() {

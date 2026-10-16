@@ -36,7 +36,21 @@ console.log('=== 1. 授权策略：三档 agentAccess ===');
     ok(!/name="agentApproval"/.test(html), '★ 旧的四档 agentApproval UI 已彻底移除');
     ok(!/name="agentPermission"/.test(html), '★ 旧的 agentPermission UI 已彻底移除');
     ok(/\['strict', 'auto', 'full'\]\.includes\(state\.settings\.agentAccess\)/.test(html)
-        || /\['strict', 'auto', 'full'\]/.test(html), '合法性校验包含三档');
+        || /\['strict', 'auto', 'full'\]/.test(html)
+        // ★ 2026-10 修：这条断言原来只认三档字面量 `['strict','auto','full']`，
+        //   而档位后来加了 `'off'`（整体关闭电脑操作）——
+        //   于是代码里的 `['off','strict','auto','full']` **匹配不上**，
+        //   这条断言就一直红着。红的原因是"清单多了一档"，不是"校验没了"，
+        //   属于判据过窄（钉死了字面量而不是钉住语义）。
+        //   这里放宽成"三档都在合法性清单里"，off 有它自己的断言（见下）。
+        || /\['off',\s*'strict',\s*'auto',\s*'full'\]/.test(html)
+        || /AGENT_ACCESS_LEVELS\s*=\s*\[[^\]]*'strict'[^\]]*'auto'[^\]]*'full'/.test(html),
+        '合法性校验包含三档');
+    // ★ 反过来钉住"off 也在清单里"：它是合法档位（关闭电脑操作），
+    //   但不能因此把三档的校验悄悄缩水成"只要不是空就行"。
+    ok(/\['off',\s*'strict',\s*'auto',\s*'full'\]/.test(html)
+        || /AGENT_ACCESS_LEVELS\s*=\s*\[[^\]]*'off'/.test(html),
+        '★ off 也是合法档位（整体关闭电脑操作）');
     // 迁移取向：用户选的是"向宽松倒"——旧 computer → full
     ok(/legacyPermission === 'computer'\) \? 'full' : 'strict'/.test(html),
         '★ 迁移：旧 computer → full（用户选择的向宽松倒）');

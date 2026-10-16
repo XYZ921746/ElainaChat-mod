@@ -248,25 +248,25 @@ if (liteMode || !manifestObj.models.length) {
     ok(fromData && !fromData.bundled, '同名时以数据目录里的为准（不带 bundled 标记）');
 }
 
-// ============================================================ 6. 引擎库必须随 APK 分发
+// ============================================================ 6. Live2D 引擎的归属
 //
-// ★★ 2026-10 新增。这一条防的是"**装了等于没装**"，而且它的失败**不会报错** ——
-//    只表现为"视频通话打不开、提示引擎脚本加载失败"。
+// ★★ 2026-10 改版：**这一节断言的"方向"反过来了**，先说清为什么，
+//    免得后面的人看到"断言 APK 里不该有引擎"以为是写反了。
 //
-// 背景：Live2D 引擎（live2dcubismcore + pixi-6 + pixi-live2d-display，约 770KB）
-//   有两个可能的位置：
-//     · 插件的 web/mods/live2d-models/vendor/  → 电脑版由 manifest 的
-//       server.static 映射到 /live2d/vendor/
-//     · 宿主的 web/vendor/                     → 插件缺失时的**回落**
-//   APK **没有服务端**，插件的静态路由不装配，所以 `/live2d/vendor/xxx.js`
-//   必然 404 —— 插件的 ensureEngine() 会回落到 `/vendor/`。
-//   于是"这三个文件在不在 APK 的 assets/public/vendor/ 里"直接决定
-//   APK 上 Live2D 能不能用。
+// 旧设计：引擎放在**宿主** web/vendor/ 里随 APK 分发；插件缺失时回落到 /vendor/。
+//   那时这一节断言的是"sync-web 显式同步了那三个文件"——
+//   删掉它们 = 装了也等于没装，而且**失败不报错**，只表现为"视频通话打不开"。
 //
-// 而它们进不进 APK 取决于 sync-web.mjs 的 filesToCopy **有没有显式列出**。
-//   （不是"自动收 mods/ 时顺带带上" —— APK 里根本没有 mods/，见上面的纯净版清理。）
-//   我就在这儿踩过：误以为"引擎已搬进插件"，把三行删了。
-console.log('\n=== 6. 引擎库随 APK 分发（插件缺失时的回落）===');
+// 新设计（现在的状态）：引擎是 **live2d-models 插件的一部分**，随插件包分发
+//   （pack-assets 只排除 models/，vendor/ 会进包，约 770KB）；APK 上插件经
+//   host.assetUrl('vendor/…') 从**自己目录**取 —— 因为 APK 没有服务端，
+//   插件的 /live2d/vendor/ 静态路由根本不存在，HEAD 探测必然 404。
+//   宿主那份已移除，并在 sync-web 里用 HOST_FILES_NOT_IN_APK **显式清掉残留**
+//   （源仓库里还留着它们给电脑版用，所以不能靠"源里没有 → 删"那条通用规则）。
+//
+// 于是现在要守的是**新的那一对**：插件包里有引擎 ＋ 插件会从自己目录取。
+//   任何一边断了，症状和旧的完全一样：APK 上视频通话打不开、提示引擎脚本加载失败。
+console.log('\n=== 6. Live2D 引擎：随插件包分发，宿主不再附带 ===');
 {
     const syncSrc = readFileSync(path.join(ROOT, 'scripts', 'sync-web.mjs'), 'utf8');
     const ENGINE_FILES = [
@@ -274,20 +274,38 @@ console.log('\n=== 6. 引擎库随 APK 分发（插件缺失时的回落）===')
         'pixi-6.min.js',
         'pixi-live2d-display-cubism4.min.js',
     ];
+
+    // ① 宿主侧必须**显式**把它们列入"不进 APK"的名单。
+    //    判据是显式名单而不是"源里没有"—— 源里一直有（电脑版要用）。
+    const notInApk = syncSrc.match(/const HOST_FILES_NOT_IN_APK = \[([\s\S]*?)\];/);
+    ok(Boolean(notInApk), 'sync-web.mjs 有 HOST_FILES_NOT_IN_APK 名单（宿主不再随 APK 带引擎）');
     for (const f of ENGINE_FILES) {
-        ok(syncSrc.includes(`['vendor/${f}', 'vendor/${f}']`),
-            `sync-web.mjs 显式同步了 vendor/${f}（APK 上引擎的唯一来源）`);
+        ok(Boolean(notInApk) && notInApk[1].includes(`'vendor/${f}'`),
+            `HOST_FILES_NOT_IN_APK 列了 vendor/${f}`);
     }
-    // 源仓库里必须真的存在（列了但文件没了会静默少拷）
+    // ② 反向：也不能又出现在"要同步进 APK"的清单里 —— 两边同时成立才叫"不带引擎"
+    for (const f of ENGINE_FILES) {
+        ok(!syncSrc.includes(`['vendor/${f}', 'vendor/${f}']`),
+            `filesToCopy 里没有 vendor/${f}（否则"不带引擎"名不副实）`);
+    }
+    // ③ 源仓库里必须真的存在：电脑版仍从宿主 /vendor/ 读（插件缺失时兜底）
     for (const f of ENGINE_FILES) {
         ok(existsSync(path.join(ROOT, 'web', 'vendor', f)),
-            `web/vendor/${f} 存在（列了但文件不在会静默少拷）`);
+            `web/vendor/${f} 存在（电脑版兜底要用；列了但文件不在会静默少拷）`);
     }
-    // 插件的回落基址必须是 /vendor/ —— 它和上面那三行是**一对**，改一边就断
+
+    // ④ 插件侧：引擎必须真的在插件包里，且必须会从**自己目录**取 —— 新的要害
     const modelsMod = readFileSync(path.join(ROOT, 'mods', 'live2d-models', 'index.js'), 'utf8');
+    for (const f of ENGINE_FILES) {
+        ok(existsSync(path.join(ROOT, 'mods', 'live2d-models', 'vendor', f)),
+            `插件包里带 vendor/${f}（pack-assets 只排除 models/，vendor/ 会进包）`);
+    }
+    ok(/hostRef\.assetUrl\('vendor\/' \+ f\)/.test(modelsMod),
+        "★ 插件 ensureEngine 在原生端用 hostRef.assetUrl('vendor/' + f) 取引擎（APK 上引擎的唯一来源）");
     ok(/return '\/vendor\/';/.test(modelsMod),
-        '★ 插件的 vendorFallbackBase() 仍指向 /vendor/（与上面三行是一对）');
-    // 反过来：不能"只留插件副本、指望 mods/ 一起进包" —— APK 里没有 mods/
+        '插件的 vendorFallbackBase() 仍指向 /vendor/（电脑版回落：插件缺失时兜底）');
+
+    // ⑤ 不能"只留插件副本、指望 mods/ 一起进包" —— APK 里没有 mods/，插件走应用内安装
     ok(/withMods/.test(syncSrc),
         'sync-web.mjs 仍区分 withMods（默认不打插件源码）');
 }

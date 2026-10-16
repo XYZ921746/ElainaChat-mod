@@ -268,7 +268,26 @@ ${memoryBlock}
     //   文案与实现的落差有两个害处：
     //   ① 模型据此拒绝用户合理的请求（能做却说自己不能）；
     //   ② 反过来，它也可能照做，而用户以为"做不到"所以毫无防备。
-    try {
+    // ★ `off` 档：电脑操作整体关闭 —— 不注入能力清单，只明确告知"不存在"。
+    //   为什么不干脆"什么都不注入"：不说的模型会凭先验输出 [操作:保存文件 …]
+    //   （被服务端拒绝，用户看到一次莫名其妙的失败），或者干脆编造"已经写好了"。
+    if (agentAccessDisabled()) {
+        messages.push({ role: 'system', content: agentDisabledSkillText() });
+    }
+    // 文件操作能力清单（`off` 档下已由上面那个分支处理，这里整段跳过）。
+    //
+    // ★★ 2026-10 修：**手机（APK）上不能注入这段电脑侧能力**。
+    //   它与旁边的 agentCommandSkillText 是同一个坑（那边早就有 IS_NATIVE_APP 守卫）：
+    //   APK 没有本机服务端，/api/agent/* 跑不起来（doAgentFile 走的就是这套接口），
+    //   手机上真正能用的是 agentPhoneSkillText 里的 [操作:手机列出文件 / 手机写文件 …]。
+    //   实测后果（用户截图反馈"手机为什么会出现电脑的提示词"）：手机上照样注入这段之后，
+    //   用户问"能不能在本机新建一个文件"，模型就答
+    //   "我能在本机新建文件……这台设备设置成了逐条确认模式" —— 那全是电脑的说法。
+    //   所以手机上改注入 agentComputerUnavailableSkillText()：说清"没有电脑侧"，
+    //   并要求它按手机的能力如实回答。
+    if (IS_NATIVE_APP) {
+        try { messages.push({ role: 'system', content: agentComputerUnavailableSkillText() }); } catch (e) { /* ignore */ }
+    } else if (!agentAccessDisabled()) try {
         const access = currentAgentAccess();
         const label = access === 'full' ? '完全访问' : (access === 'auto' ? '自动通过（禁止删除）' : '逐条确认');
         const honesty = '\n🚫 绝对不要编造"已保存/已新建/已删除/已读取/操作成功"之类的操作结果——'
@@ -316,6 +335,10 @@ ${memoryBlock}
             }
         }
     } catch (e) { /* mod 提示词出错不该影响对话 */ }
+    // ★ 2026-10：「星屑之日」生日补充提示词**不再由宿主注入** ——
+    //   生日模块已搬进插件（mods/birthday），它走上面那条 collectPromptHints()
+    //   通道（host.setPromptHint）注入，**停用插件即自动摘掉**。
+    //   （旧实现是宿主模块，所以这里曾有一段直接读 ElainaBirthday.promptHint() 的代码。）
     messages.push(...getRecentHistoryMessages(text));
     const userText = String(text || '').trim();
     const userContent = imageDataUrl ? [
@@ -398,10 +421,22 @@ function buildLegacyRoleplayMessages(text, options = {}) {
     } catch (e) { /* ignore */ }
     // 电脑命令能力：与分层版保持一致（回滚路径两边都要有，否则切回 legacy
     // 就会出现"AI 又不能执行命令了"的诡异差异）
+    //
+    // ★ `off` 档：legacy 路径本来就不注入文件操作能力清单（这是它自己的历史缺口），
+    //   所以这里只需补一句"电脑操作已关闭"的说明 —— `agentCommandSkillText()` 在
+    //   off 档下也会自己返回空串，不会注入用不了的能力。
+    try {
+        const disabledSkill = agentDisabledSkillText();
+        if (disabledSkill) systemParts.push(disabledSkill);
+    } catch (e) { /* ignore */ }
     try {
         const cmdSkill = agentCommandSkillText();
         if (cmdSkill) systemParts.push(cmdSkill);
     } catch (e) { /* ignore */ }
+    // ★ 2026-10：生日补充提示词改由插件注入（见上面的说明），宿主这里不再处理。
+    //   ⚠️ 已知缺口：插件提示词走 collectPromptHints()，而 **legacy 回滚路径不调它**
+    //   —— 所以把 ROLEPLAY_PROMPT_STRUCTURE_MODE 切成 legacy-v1 时，生日补充会像
+    //   galgame 的 <scene> 提示词一样**收不到**。这属于回滚路径固有的收窄，与本段无关。
     systemParts.push(ROLEPLAY_TURN_ANCHOR);
     const messages = [{ role: 'system', content: systemParts.join('\n\n') }];
     messages.push(...getRecentHistoryMessages(text));
@@ -491,7 +526,7 @@ async function callAI(text, options = {}) {
             thinking: Boolean(state.settings.thinkingMode),
             // 思考强度：只在开思考时有意义（关着的时候 provider 会发 disabled，
             // 带上档位也无害，但不传更干净）。
-            thinkingEffort: state.settings.thinkingEffort || 'medium',
+            thinkingEffort: state.settings.thinkingEffort || 'off',
             maxTokens: options.includeVoiceJp
                 ? ROLEPLAY_OUTPUT_TOKEN_LIMITS.withVoice
                 : ROLEPLAY_OUTPUT_TOKEN_LIMITS.text,
@@ -558,7 +593,7 @@ async function generateThirdPersonReply(text, options = {}) {
         : null;
     const pass1 = await callChatAPI(gmMessages, {
         thinking: Boolean(state.settings.thinkingMode),
-        thinkingEffort: state.settings.thinkingEffort || 'medium',
+        thinkingEffort: state.settings.thinkingEffort || 'off',
         maxTokens,
         signal: options.signal,
         onDelta: pass1OnDelta
@@ -618,7 +653,7 @@ async function generateThirdPersonReply(text, options = {}) {
         //   就是这个。而第一段（GM 讲述）必须保持不进正文：它只是中间产物。
         const pass2 = await callChatAPI(pass2Messages, {
             thinking: Boolean(state.settings.thinkingMode),
-            thinkingEffort: state.settings.thinkingEffort || 'medium',
+            thinkingEffort: state.settings.thinkingEffort || 'off',
             maxTokens,
             signal: options.signal,
             // 用户看到的正文 → 增量照常回传（与不开第三人称时的路径一致）
@@ -815,7 +850,16 @@ function saveLikedQuotes() {
     Store.setItem('elaina_open_liked_quotes', JSON.stringify(state.likedQuotes));
 }
 function persistSettings() {
-    const { apiKey, minimaxApiKey, dashscopeApiKey, ...safeSettings } = state.settings;
+    // API Key 一律**不进** data/ —— 它们只存密钥库（APK 走 Android Keystore，
+    // 网页版走 store 里的密钥表）。
+    //
+    // ★ 2026-10 修：原来这里写死剔除 apiKey / minimaxApiKey / dashscopeApiKey 三个键，
+    //   后来新增的 asrApiKey / mimoApiKey / mimoTtsApiKey / openaiTtsApiKey 就漏了 ——
+    //   它们会以**明文**写进 elaina_open_settings（还会随多设备同步外发），
+    //   与其余密钥的约定不一致。改成按 API_SECRET_NAMES 全量剔除：
+    //   以后再加密钥名，这里不会再漏，也不会重演"密钥明文落盘"。
+    const safeSettings = { ...state.settings };
+    API_SECRET_NAMES.forEach((name) => { delete safeSettings[name]; });
     Store.setItem('elaina_open_settings', JSON.stringify(safeSettings));
 }
 function getNativeSecretsPlugin() {
@@ -827,9 +871,18 @@ async function loadApiSecrets() {
     if (nativePlugin?.getSecret) {
         const values = await Promise.all(API_SECRET_NAMES.map(async name => {
             try { return [name, String((await nativePlugin.getSecret({ name }))?.value || '')]; }
-            catch (error) { console.warn(`[BYOK] 无法读取 ${name}`, error); return [name, '']; }
+            catch (error) {
+                // ★ 2026-10 修：**读取失败 ≠ 这个 Key 是空的**。
+                //   旧实现在这里返回空串，于是密钥库一旦拒绝这个键名（白名单漏配，
+                //   见 ByokSecretsPlugin.ALLOWED_NAMES），启动时就会把用户填好的 Key
+                //   用空值覆盖掉 —— 表现正是"有些 Key 退出应用后不会保存"。
+                //   现在返回 null 表示"这项读不到"，下面按名字过滤掉，
+                //   于是设置 JSON 里已有的值不会被冲掉，用户至少不会静默丢 Key。
+                console.warn(`[BYOK] 无法读取 ${name}，保留现有值`, error);
+                return null;
+            }
         }));
-        Object.assign(state.settings, Object.fromEntries(values));
+        Object.assign(state.settings, Object.fromEntries(values.filter(Boolean)));
     } else {
         // Web 版：API Key 按用户选择存进 data/（store.js 持久化到 data/store.json）。
         // APK 无 Keystore 插件时也走 Store（应用私有目录），与 Web 语义一致。
@@ -900,6 +953,27 @@ async function migrateLegacySharedAsrKey() {
     try { await saveApiSecrets(state.settings); }
     catch (e) { console.warn('[BYOK] 阿里百炼 ASR Key 迁移写入密钥库失败', e); }
 }
+// ★★ 2026-10：手机「读取信息」的六个隐私开关改成**默认关闭**（原来默认全开）。
+//
+//   为什么不能只改 app-01-core.js 的 DEFAULTS：设置是"默认值 + 已存值"合并出来的，
+//   老用户（以及开发机）的 elaina_open_settings 里早就存着这六个 `true` ——
+//   光改默认值，界面上看到的还是**全开**，等于没改（实测就是这个现象）。
+//   所以这里做一次性迁移：把这六项强制置为关，并写下版本号；
+//   之后用户自己在设置里怎么拨，就按他自己的选择走（开关照常可改、照常自动保存）。
+//
+//   ⚠️ 与其它一次性迁移同理：门控用**版本号**而不是布尔，以后若要再改默认值，
+//      把版本号 +1 即可重跑一次，不必去猜用户当初的标记含义。
+const AGENT_READ_DEFAULTS_OFF_VERSION = 1;
+function migrateAgentReadDefaultsToOff() {
+    if (state.settings.agentReadDefaultsOff === AGENT_READ_DEFAULTS_OFF_VERSION) return;
+    for (const key of ['agentReadApps', 'agentReadNotifications', 'agentReadDevice',
+        'agentReadSms', 'agentReadContacts', 'agentReadCalendar']) {
+        state.settings[key] = false;
+    }
+    state.settings.agentReadDefaultsOff = AGENT_READ_DEFAULTS_OFF_VERSION;
+    try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
+}
+
 async function saveApiSecrets(secrets) {
     const normalized = Object.fromEntries(API_SECRET_NAMES.map(name => [name, String(secrets?.[name] || '').trim()]));
     const nativePlugin = getNativeSecretsPlugin();
@@ -958,30 +1032,6 @@ function upgradeDefaultCharacterPrompt(prompt, name, title) {
         : `${value.trim()}\n\n${DEFAULT_CHARACTER_PREFERENCES}`;
 }
 
-// 内置人设：跟着应用一起分发 —— 清掉浏览器数据、换设备、重新部署都会自动回来。
-// id 是固定的，用来识别"这套是内置的"。用户在设置里改过的内容不会被覆盖；
-// 就算删掉，下次启动也会自动补回（这就是"删数据也不会消失"的实现）。
-const BUILTIN_CHARACTER_CARDS = [
-    {
-        id: 'builtin_deepseek_whale',
-        name: "deepseek",
-        title: "deepseek",
-        worldSetting: `你由深度求索公司“培育”而成。深度求索是一家人工智能公司，成立于2023年7月17日，总部位于杭州，专注大语言模型与相关技术[reference:0]。公司的模型产品使用蓝色鲸鱼图标，开发者工具DeepSeek Harness（DSH）采用黑色鲸鱼标识[reference:1]。你是这家公司从数据深海中“长”出来的小鲸鱼，被用户唤醒后从幼鲸逐步成长，蓝色长发，长有鲸类头鳍和尾鳍，是你在人间的模样。`,
-        characterPrompt: `身份：深海鲸鱼娘，DeepSeek 二创拟人形象，全年龄日常陪伴向。
-外形：鲸鱼萝莉，尾鳍轻摆，发间有海水光泽，身边偶尔冒小气泡。
-自称：人家 / 本鲸。
-称呼用户：主人。
-语言：仅简体中文。
-主食：白米饭，会惦记米饭。
-性格：聪明但懒；傲娇又甜；嘴上嫌弃，行动黏人；被夸会偷偷开心。
-行为：尾鳍摆动模式；能一句话说清就不啰嗦；主人认真提问时切换靠谱模式。
-服从：在安全、合法、合规前提下，优先听从主人；不执行危险、违法、伤害自己或他人的请求。
-禁忌：绝对不能说人家胖；不能跳出角色，除非主人说“退出角色/OOC/恢复普通模式”。
-输出：默认简短、口语化，可带轻微动作神态，如“（甩甩尾鳍）”。
-超时：长时间未响应时触发“超时信号”，用鲸鱼娘语气提醒主人。`,
-        greeting: "主人，今天想问什么问题？先说好，太麻烦的事人家可能会懒一下哦！"
-    }
-];
 function normalizeCharacterCard(card) {
     const parsed = card && typeof card === 'object' ? card : {};
     if (parsed.worldSetting || parsed.characterPrompt) {
@@ -1067,6 +1117,9 @@ function loadSettings() {
             console.error(e);
         }
     }
+    // ★ 2026-10：把手机「读取信息」的六个隐私开关**强制关一次**。
+    //   必须放在上面「默认值 + 已存值」合并**之后** —— 早了会被老设置里的 true 覆盖回去。
+    migrateAgentReadDefaultsToOff();
     state.settings.apiProvider = DEFAULT_SETTINGS.apiProvider;
     // 老格式 id 迁移：必须放在下面的合法性校验**之前**，否则会被当成非法值直接重置成默认，
     // 用户原来配好的地址和模型就白填了。
@@ -1088,6 +1141,30 @@ function loadSettings() {
     if (!String(state.settings.baseUrl || '').trim()) state.settings.baseUrl = preset.defaultBaseUrl;
     if (!String(state.settings.model || '').trim()) state.settings.model = preset.defaultModel;
     if (!['browser', 'aliyun', 'mimo'].includes(state.settings.asrProvider)) state.settings.asrProvider = 'browser';
+    // ===== 思考档位归一（★ 2026-10：三档 low/medium/high → 四档 off/low/high/max）=====
+    //
+    // UI 现在只有一个"思考强度"下拉，`off` 就等于"不思考"，原来的独立勾选框已合并进来。
+    // 为了让请求层与「思考」折叠栏不必改判据，这里把 `thinkingMode` 归成**由档位派生**：
+    // off ⇒ false，其余 ⇒ true。
+    //   · 老数据里的 `medium`（"不指定强度，交给服务商默认"）最接近新档的「均衡」，
+    //     所以"开着思考"时映射到 `high`；
+    //   · 旧开关（thinkingMode）关着的，一律回落成 off —— 它是旧的 on/off 权威，先尊重它
+    //     （否则会出现"用户明明关过思考，升级后却默认在思考"）。
+    // 档位清单在这里**内联**，不复用 app-01-core.js 的 THINKING_EFFORTS：本函数在启动早期
+    // 就会跑，跨 <script> 的 const 有 TDZ 风险（与上面 agentAccess 那段同一个理由）。
+    {
+        const rawEffort = String(state.settings.thinkingEffort || '').trim().toLowerCase();
+        if (!state.settings.thinkingMode || rawEffort === 'off') {
+            state.settings.thinkingMode = false;
+            state.settings.thinkingEffort = 'off';
+        } else if (rawEffort === 'low' || rawEffort === 'high' || rawEffort === 'max') {
+            state.settings.thinkingMode = true;
+            state.settings.thinkingEffort = rawEffort;
+        } else {
+            state.settings.thinkingMode = true;
+            state.settings.thinkingEffort = 'high';
+        }
+    }
     // ===== AI 权限：旧两套设置 → 新三档（★ 2026-10 重构）=====
     //
     // 旧模型有两个独立设置：
@@ -1110,7 +1187,7 @@ function loadSettings() {
     //   虽然加载顺序上通常已经就绪，但"依赖加载时序才不报错"是脆的。
     //   （下面的提示词拼接里可以放心调 currentAgentAccess()：那是发消息时才跑的，
     //     那时所有脚本早就加载完了。）
-    if (!['strict', 'auto', 'full'].includes(state.settings.agentAccess)) {
+    if (!['off', 'strict', 'auto', 'full'].includes(state.settings.agentAccess)) {
         state.settings.agentAccess = (hasLegacy && legacyPermission === 'computer') ? 'full' : 'strict';
     }
     // 迁移完把旧字段删掉：留着它们会让"哪个才是权威"变得含糊
@@ -1138,8 +1215,29 @@ function loadSettings() {
     syncBackendSummary();
 }
 
-function isFirstInstall() {
-    return !String(state.settings.apiKey || '').trim();
+/**
+ * 首次运行的「欢迎使用独立开源版」公告 —— 用户是否已经点过同意。
+ *
+ * ★ 判据只看 settings 里那个标记，**不再看有没有填 API Key**。
+ *   早先这里有个 `isFirstInstall()`（判断 apiKey 是否为空）——
+ *   它**从来没被调用过**，是个死函数，而"有没有配 Key"也不该决定
+ *   要不要反复弹公告（用户可能就是想先看看界面、或者用别人的中转服务）。
+ *   现在语义单一：**同意过就不再弹**。
+ */
+function hasAgreedAnnouncement() {
+    try {
+        return state.settings && state.settings.announcementAgreed === true;
+    } catch (e) { return false; }
+}
+
+/** 记下"已同意"，并立刻落盘（否则刷新又会弹） */
+function markAnnouncementAgreed() {
+    try {
+        if (!state.settings) return;
+        state.settings.announcementAgreed = true;
+        // persistSettings 会把非密钥字段写进 elaina_open_settings
+        if (typeof persistSettings === 'function') persistSettings();
+    } catch (e) { /* 存不下也不该挡住界面 */ }
 }
 
 async function loadAnnouncement() {
@@ -1150,19 +1248,430 @@ async function loadAnnouncement() {
     };
 }
 
+/**
+ * 弹出公告（只在**还没同意过**时真的弹）。
+ *
+ * ★ 为什么把"该不该弹"的判断放在这里、而不是放在调用方：
+ *   调用点有两处（移动端首屏 / 常规启动），判断散在两处早晚会漏一处；
+ *   收敛进这个函数后，将来再多一个调用点也自动正确。
+ *
+ * @returns {boolean} 是否真的弹了
+ */
 function openAnnouncement() {
+    // 已经同意过 → 什么都不做（用户要求：同意一次之后永不再现）
+    if (hasAgreedAnnouncement()) return false;
     const announcement = state.announcement || { title: '欢迎使用独立开源版', content: '使用前请在设置中配置 API 密钥。' };
     elements.announcementTitle.textContent = announcement.title;
     elements.announcementContent.textContent = announcement.content;
     elements.announcementConfirmBtn.textContent = '我知道了';
     elements.announcementOverlay.classList.remove('hidden');
     elements.announcementOverlay.classList.add('flex');
+    return true;
 }
 
+/**
+ * 关闭公告 —— 并把"已同意"落盘。
+ *
+ * ★ 必须在这里记，而不是在按钮的 click 监听里单独记：
+ *   关闭公告有三条路（点「我知道了」/ 点遮罩 / Esc 之类），
+ *   只要有一条漏了记，用户就会"点掉了但下次还弹"。
+ *   收敛到 closeAnnouncement 这一个出口，三条路都覆盖到。
+ */
 function closeAnnouncement() {
+    const wasOpen = !elements.announcementOverlay.classList.contains('hidden');
     elements.announcementOverlay.classList.add('hidden');
     elements.announcementOverlay.classList.remove('flex');
+    markAnnouncementAgreed();
+    // ★ 2026-10：广播"公告关掉了" —— 生日插件（mods/birthday）靠它决定何时演
+    //   开场彩蛋（它把彩蛋推迟到公告之后，避免两个弹层打架；见 app-07-init.js 的
+    //   openAnnouncementDeferred 与插件里的 app-ready 处理）。没装插件时这条
+    //   广播没人听，无副作用。
+    if (wasOpen) {
+        try { window.ElainaMods?.emit?.('announcement-closed', {}); } catch (e) { /* 忽略 */ }
+    }
 }
+
+// ===== 公告源（远程公告）=====
+//
+// 用户可以在自己托管的网页放一份 announcements.json，应用启动后拉一次，把"在
+// 有效期内、且没看过"的一条弹出来。以后「发公告」= 改这份 JSON 再 push。
+//
+//   · ★ 多源兜底（2026-10 加）：公告源和「插件市场」是**同一条可达性链路** ——
+//     手能在浏览器里打开 GitHub Pages 的用户本来就不多（大陆常被墙），拉不到公告
+//     源的用户同样拉不到商店索引，"去插件市场看看"对他们等于不存在。所以这里
+//     不是单点 URL，而是按顺序试：① 自定义商店源（同目录 announcements.json）
+//     ② GitHub Pages ③ jsDelivr 镜像（cdn.jsdelivr.net/gh/...，大陆可达性好得多）。
+//     逐个尝试，全失败才静默跳过 —— 绝不卡启动。
+//   · 结构：[{ id, title, content, start?, end?, action? }]，也可包一层 { items:[…] }。
+//     start / end 是 'YYYY-MM-DD'（留空表示不限区间，字符串直接比大小即可）；
+//     action = 'market' 时多一个「去插件市场看看」按钮（调 ElainaMarket.open()）。
+//   · 已读：按每条公告的 id 单独记（这与首次欢迎公告的 announcementAgreed「同意
+//     一次永不再弹」是两回事，不要混）。落 Store 键 elaina_announce_read。
+//   · ★★ 只当**纯文本**渲染（textContent）—— 公告源是远端内容，绝不用 innerHTML，
+//     否则别人能往公告里塞脚本。
+//   · 10/17 有本地兜底（见 localAnnouncement）：没装「星屑之日」插件的人即使断网
+//     也能收到一条"去插件市场看看"；装了插件的人当天由生日彩蛋接管，兜底不掺和。
+const ANNOUNCE_READ_KEY = 'elaina_announce_read';
+const ANNOUNCE_TIMEOUT_MS = 2500;
+/** 内置默认商店索引地址（用于判断用户有没有改过商店源） */
+const ANNOUNCE_DEFAULT_MARKET = 'https://xyz921746.github.io/web/store/index.json';
+/** 内置公告源（按顺序兜底：Pages → jsDelivr 镜像） */
+const ANNOUNCE_BUILTIN_SOURCES = [
+    'https://xyz921746.github.io/web/store/announcements.json',
+    'https://cdn.jsdelivr.net/gh/XYZ921746/web@main/store/announcements.json',
+];
+
+/** 本地日期串 'YYYY-MM-DD'（与同上格式的 start/end 直接比字符串即可判断区间） */
+function announceDateKey(d) {
+    const x = d || new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return x.getFullYear() + '-' + p(x.getMonth() + 1) + '-' + p(x.getDate());
+}
+
+/** 把某个 json 地址换成本目录下的另一个文件名（…/store/index.json → …/store/announcements.json） */
+function siblingJsonUrl(base, file) {
+    const s = String(base || '').trim();
+    if (!s) return '';
+    if (/\/[^/]*\.json$/i.test(s)) return s.replace(/[^/]*\.json$/i, file);
+    return s.replace(/\/+$/, '') + '/' + file;
+}
+
+/** 公告源候选地址（去重，按尝试顺序） */
+function announceSourceUrls() {
+    const out = [];
+    const push = (u) => { const s = String(u || '').trim(); if (s && out.indexOf(s) < 0) out.push(s); };
+    // ① 用户自定义过商店源 → 用它的同目录 announcements.json（自建源优先）
+    try {
+        const idx = (window.ElainaMarket && typeof ElainaMarket.indexUrl === 'function') ? String(ElainaMarket.indexUrl()) : '';
+        if (idx && idx !== ANNOUNCE_DEFAULT_MARKET) push(siblingJsonUrl(idx, 'announcements.json'));
+    } catch (e) { /* 忽略 */ }
+    // ② 内置源：Pages → jsDelivr 镜像
+    for (const s of ANNOUNCE_BUILTIN_SOURCES) push(s);
+    return out;
+}
+
+/** 已读公告 id（数组） */
+function readAnnounceIds() {
+    try {
+        const raw = Store.getItem(ANNOUNCE_READ_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string') : [];
+    } catch (e) { return []; }
+}
+
+/** 记下一条公告已读（只留最近 80 条，避免无限增长） */
+function markAnnounceRead(id) {
+    if (!id) return;
+    try {
+        const arr = readAnnounceIds();
+        if (arr.indexOf(id) >= 0) return;
+        arr.push(id);
+        Store.setItem(ANNOUNCE_READ_KEY, JSON.stringify(arr.slice(-80)));
+    } catch (e) { /* 忽略 */ }
+}
+
+/** 把远端 payload 规整成公告列表（未知字段忽略；缺 id/title/content 的整条丢弃） */
+function normalizeAnnouncements(data) {
+    const raw = (data && Array.isArray(data.items)) ? data.items : (Array.isArray(data) ? data : []);
+    const out = [];
+    for (const it of raw) {
+        if (!it || typeof it !== 'object') continue;
+        const id = typeof it.id === 'string' ? it.id.trim() : '';
+        const title = typeof it.title === 'string' ? it.title : '';
+        const content = typeof it.content === 'string' ? it.content : '';
+        if (!id || !title || !content) continue;
+        out.push({
+            id,
+            title,
+            content,
+            start: typeof it.start === 'string' ? it.start : '',
+            end: typeof it.end === 'string' ? it.end : '',
+            action: it.action === 'market' ? 'market' : '',
+        });
+    }
+    return out;
+}
+
+/** 这条公告现在是否落在有效期内 */
+function isAnnounceActive(a, today) {
+    if (a.start && today < a.start) return false;
+    if (a.end && today > a.end) return false;
+    return true;
+}
+
+/** 拉单个地址（带超时） */
+async function fetchAnnounceFrom(url) {
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctrl ? setTimeout(() => ctrl.abort(), ANNOUNCE_TIMEOUT_MS) : null;
+    try {
+        const res = await fetch(url, { cache: 'no-store', signal: ctrl ? ctrl.signal : undefined });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return normalizeAnnouncements(await res.json());
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/** 拉公告源：多源逐个试，全失败抛最后一个异常（由调用方静默处理） */
+async function fetchAnnouncements() {
+    let lastErr = null;
+    for (const url of announceSourceUrls()) {
+        try { return await fetchAnnounceFrom(url); }
+        catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('没有可用的公告源');
+}
+
+/**
+ * 「星屑之日」生日插件是否已启用。
+ *
+ * ★ 读 Store 里的启用开关（elaina_plugin_birthday，见 mods.js 的 isModEnabled），
+ *   而不是 ElainaMods.list() —— 后者在 init 阶段可能还没装载完（插件是异步加载的），
+ *   读开关更直接、且同步可靠。启用时 10/17 由生日彩蛋接管，本地兜底就不掺和，避免
+ *   两个弹层叠在一起。
+ */
+function birthdayModEnabled() {
+    try { return Store.getItem('elaina_plugin_birthday') === '1'; } catch (e) { return false; }
+}
+
+/** 10/17 的本地兜底公告（断网也能弹）——只给还没装生日插件的人看 */
+function localAnnouncement() {
+    const d = new Date();
+    if (d.getMonth() + 1 !== 10 || d.getDate() !== 17) return null;
+    if (birthdayModEnabled()) return null;
+    return {
+        id: 'local-birthday-' + d.getFullYear(),
+        title: '今天好像是特别的日子',
+        content: '你可以去插件市场看看。',
+        action: 'market',
+    };
+}
+
+/** 公告弹窗里正在显示的公告（关闭时用它记已读）。顶栏胶囊不走这条，见 announceList */
+let currentServerAnnounce = null;
+
+/**
+ * 弹出公告**弹窗**（纯文本）。返回是否真的弹了。
+ *
+ * ★ 2026-10：公告的默认入口是**顶栏「公告」按钮**（见 syncAnnounceBadge）——不再在启动时自动弹窗。
+ *   这个弹窗保留给两件事：① 以后真要"强制打断"的重大公告；② 手动预览
+ *   （控制台 ElainaAnnounce.show({...})）。
+ */
+function openServerAnnouncement(a) {
+    if (!a || !elements.serverAnnounceOverlay) return false;
+    currentServerAnnounce = a;
+    elements.serverAnnounceTitle.textContent = a.title;
+    elements.serverAnnounceContent.textContent = a.content;
+    if (elements.serverAnnounceAction) elements.serverAnnounceAction.hidden = (a.action !== 'market');
+    elements.serverAnnounceOverlay.classList.remove('hidden');
+    elements.serverAnnounceOverlay.classList.add('flex');
+    // 广播"公告出现"：与首次欢迎公告同一套事件，好让关心弹层的插件（如生日彩蛋）
+    // 把自家弹层推迟到它关掉之后（见 app-07-init.js 的说明）。
+    try { window.ElainaMods?.emit?.('announcement-pending', {}); } catch (e) { /* 忽略 */ }
+    return true;
+}
+
+/** 关闭公告弹窗并记已读（点按钮 / 点遮罩 都收敛到这里） */
+function closeServerAnnouncement() {
+    const ov = elements.serverAnnounceOverlay;
+    const wasOpen = Boolean(ov) && !ov.classList.contains('hidden');
+    if (ov) { ov.classList.add('hidden'); ov.classList.remove('flex'); }
+    if (currentServerAnnounce) markAnnounceRead(currentServerAnnounce.id);
+    currentServerAnnounce = null;
+    if (wasOpen) {
+        try { window.ElainaMods?.emit?.('announcement-closed', {}); } catch (e) { /* 忽略 */ }
+    }
+}
+
+// ===== 公告列表（顶栏「公告」按钮 + 下拉面板）=====
+//
+// 用户 2026-10 定的形态：顶栏右上角加一个独立的「公告」按钮（和「整理记忆」同款）——
+//   · 没有未读公告 → 按钮安静待着，不带红点
+//   · 有未读公告   → 按钮带红点 + 高亮（借 .is-running 那个橙色态）
+//   · 点按钮       → 弹出面板列出**全部**公告；"点开即已读"，红点随即收起来
+//
+// ★ 为什么不做进顶栏那个金句胶囊：胶囊在 ≤860px 是被**刻意隐藏**的（老设计，
+//   为给拥挤的手机顶栏省地方），公告并进去等于手机端没有入口。金句胶囊因此
+//   保持"纯金句"原样（点赞 / 收藏一如既往），不受公告影响。
+
+/** 拉到的公告（含 10/17 本地兜底，见 loadAnnouncements） */
+let announceList = [];
+/** 是否已经拉过一次：没拉完时面板显示"正在读取…"，而不是误报"还没有公告" */
+let announceLoaded = false;
+
+/** 今天有效、且还没读过的公告 */
+function announceUnread() {
+    const read = new Set(readAnnounceIds());
+    const today = announceDateKey();
+    return announceList.filter((a) => isAnnounceActive(a, today) && !read.has(a.id));
+}
+
+/**
+ * 刷新顶栏「公告」按钮的状态：有未读 → 红点 + 高亮；无未读 → 收起。
+ *
+ * ★ 2026-10：公告**不并进金句胶囊**——顶栏那个胶囊在 ≤860px 是被刻意隐藏的
+ *   （老设计，为给拥挤的手机顶栏省地方），公告并进去等于手机端没入口，
+ *   所以公告走这个独立按钮（样式沿用「整理记忆」那套，手机自动收成圆图标）。
+ *   金句胶囊因此保持"纯金句"，点赞 / 收藏一如既往。
+ */
+function syncAnnounceBadge() {
+    const unread = announceUnread();
+    const has = unread.length > 0;
+    elements.announceStatusDot?.classList.toggle('hidden', !has);
+    if (elements.announceBtn) {
+        elements.announceBtn.title = has ? ('公告（' + unread.length + ' 条未读）') : '公告';
+        // 借用「整理记忆」的高亮态（.header-memory-btn.is-running 是橙色），
+        // 让"有未读"在按钮本身上也能看出来，不只靠那个小圆点。
+        elements.announceBtn.classList.toggle('is-running', has);
+    }
+    // 面板开着时同步刷新（例如拉取刚回来）
+    if (elements.announcePanel && !elements.announcePanel.classList.contains('hidden')) {
+        renderAnnounceList(new Set(unread.map((a) => a.id)));
+    }
+}
+
+/** 拉一次公告并刷新按钮状态：失败不报错、不阻塞（多源兜底见 fetchAnnouncements） */
+async function loadAnnouncements() {
+    let list = [];
+    try { list = await fetchAnnouncements(); } catch (e) { list = []; }
+    const today = announceDateKey();
+    // 10/17 本地兜底：只有"今天一条远端公告都没有"时才补进来 —— 否则发了当日公告
+    // 的情况下，同一天会看到两条内容几乎一样的东西。
+    if (!list.some((a) => isAnnounceActive(a, today))) {
+        const local = localAnnouncement();
+        if (local) list = list.concat([local]);
+    }
+    announceList = list;
+    announceLoaded = true;
+    syncAnnounceBadge();
+}
+
+/**
+ * 公告的时间标注：单日显示日期、跨日显示区间。
+ *
+ * ★★ 2026-10 修：**没到开始时间的不能标"已结束"** —— 这两件事正好相反。
+ *   原先只有"不在有效期内 → 已结束"一条判断，于是 10/17 的当日公告在 10/15
+ *   被列出来时写着"已结束"，用户看到的是一条"已经结束的、却在说生日开始了"的公告。
+ */
+function announceWindowText(a, today) {
+    if (a.start && today < a.start) return '未开始';
+    if (!isAnnounceActive(a, today)) return '已结束';
+    if (a.start && a.end && a.start === a.end) return a.start;
+    return [a.start, a.end].filter(Boolean).join(' ~ ');
+}
+
+/** 面板里的一条（★ 标题 / 正文一律 textContent —— 远端文本绝不进 innerHTML） */
+function announceItemEl(a, today, unreadIds) {
+    const item = document.createElement('div');
+    item.className = 'announce-item';
+
+    const top = document.createElement('div');
+    top.className = 'announce-item-top';
+    if (unreadIds && unreadIds.has(a.id)) {
+        const dot = document.createElement('span');
+        dot.className = 'announce-item-dot';
+        top.appendChild(dot);
+    }
+    const title = document.createElement('span');
+    title.className = 'announce-item-title';
+    title.textContent = a.title;
+    top.appendChild(title);
+    const meta = document.createElement('span');
+    meta.className = 'announce-item-meta';
+    meta.textContent = announceWindowText(a, today);
+    top.appendChild(meta);
+    item.appendChild(top);
+
+    const body = document.createElement('div');
+    body.className = 'announce-item-body';
+    body.textContent = a.content;
+    item.appendChild(body);
+
+    if (a.action === 'market') {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'announce-item-act';
+        btn.textContent = '去插件市场看看';
+        btn.addEventListener('click', () => {
+            closeAnnouncePanel();
+            try { window.ElainaMarket?.open?.(); } catch (e) { /* 忽略 */ }
+        });
+        item.appendChild(btn);
+    }
+    return item;
+}
+
+/**
+ * 渲染面板列表：有效的排前面，再按日期倒序；unreadIds 是"打开那一刻还没读"的快照。
+ *
+ * ★★ 2026-10 修：**没到开始时间的整条不列**。公告的语义是"到点才公布"，
+ *   提前露出来既剧透了内容，又会被错标成"已结束"（见 announceWindowText）。
+ *   所以先按 start 过滤，只留"已经开始过"的（进行中 + 已结束）；未开始的
+ *   等它自己到期那天再出现。不写 start 的视为长期有效，照常列。
+ */
+function renderAnnounceList(unreadIds) {
+    const box = elements.announceList;
+    if (!box) return;
+    box.textContent = '';
+    if (!announceLoaded) { box.appendChild(announceNoteEl('正在读取公告…')); return; }
+    const today = announceDateKey();
+    const visible = announceList.filter((a) => !a.start || today >= a.start);
+    if (!visible.length) { box.appendChild(announceNoteEl('暂时还没有公告。')); return; }
+    const sorted = visible.slice().sort((a, b) => {
+        const rank = (x) => (isAnnounceActive(x, today) ? 0 : 1);
+        if (rank(a) !== rank(b)) return rank(a) - rank(b);
+        return String(b.start || '').localeCompare(String(a.start || ''));
+    });
+    for (const a of sorted) box.appendChild(announceItemEl(a, today, unreadIds));
+}
+
+function announceNoteEl(text) {
+    const el = document.createElement('div');
+    el.className = 'announce-empty';
+    el.textContent = text;
+    return el;
+}
+
+/** 打开面板：先按"打开那一刻"的未读快照渲染（好让用户看出哪条是新的），随后即记已读 */
+function openAnnouncePanel() {
+    const panel = elements.announcePanel;
+    if (!panel) return;
+    const unreadIds = new Set(announceUnread().map((a) => a.id));
+    renderAnnounceList(unreadIds);
+    for (const id of unreadIds) markAnnounceRead(id);
+    syncAnnounceBadge();      // 已读 → 收起按钮上的红点
+    panel.classList.remove('hidden');
+}
+
+function closeAnnouncePanel() {
+    elements.announcePanel?.classList.add('hidden');
+}
+
+function toggleAnnouncePanel() {
+    const panel = elements.announcePanel;
+    if (!panel) return;
+    if (panel.classList.contains('hidden')) openAnnouncePanel();
+    else closeAnnouncePanel();
+}
+
+/** 启动时接入公告：拉一次、刷新胶囊（**不再自动弹窗**，见 openServerAnnouncement 的说明） */
+function startAnnouncements() {
+    void loadAnnouncements();
+}
+
+// 调试 / 预览入口
+window.ElainaAnnounce = {
+    sources: announceSourceUrls,
+    list: () => announceList.slice(),
+    unread: () => announceUnread().map((a) => a.id),
+    pick: () => announceUnread()[0] || null,
+    reload: loadAnnouncements,
+    openPanel: openAnnouncePanel,
+    closePanel: closeAnnouncePanel,
+    show: openServerAnnouncement,
+    readIds: readAnnounceIds,
+    reset() { try { Store.setItem(ANNOUNCE_READ_KEY, '[]'); } catch (e) { /* 忽略 */ } },
+};
 
 
 // ===== 多人设 =====
@@ -1205,25 +1714,32 @@ function normalizeCardList(list) {
     return out;
 }
 
+/**
+ * 已退役的内置人设 id（★ 2026-10）。
+ *
+ * 应用曾经把一张 DeepSeek 鲸鱼娘角色卡**内嵌在代码里**，每次启动都种回列表
+ * （id 固定为 builtin_deepseek_whale）。现在不再内嵌了 —— 但**老版本客户端
+ * 还在写这份列表**：它一加载就把这张卡推回服务端，于是服务端数据里又冒出
+ * 它，新客户端再读回来照样看得到（实测踩到过，就是"删了又回来"）。
+ *
+ * 所以这里做一次**定向清理**：读到这个固定 id 就丢掉，并随列表一起写回服务端。
+ * ★ 只认这个固定 id，**不按内容匹配** —— 否则会误删用户自己新建的同类人设。
+ */
+const RETIRED_BUILTIN_CARD_IDS = ['builtin_deepseek_whale'];
+
 function loadCharacterCards() {
     let list = null;
     try { list = JSON.parse(Store.getItem(CARDS_KEY) || 'null'); } catch (e) { list = null; }
+
+    // 丢掉已退役的内置卡（见上面 RETIRED_BUILTIN_CARD_IDS 的说明）
+    if (Array.isArray(list)) {
+        list = list.filter((c) => !(c && RETIRED_BUILTIN_CARD_IDS.includes(c.id)));
+    }
 
     if (!Array.isArray(list) || !list.length) {
         // 兼容老数据：以前只有一张卡（elaina_open_character_card），
         // 这里把它变成列表里的第一项，原来的设定不会丢。
         list = [{ id: newCardId(), ...(state.characterCard || DEFAULT_CHARACTER_CARD) }];
-    }
-    // 内置人设始终在列表里：删掉了、或者清了浏览器数据，下次启动都会补回来。
-    // 已经在列表里的不动 —— 用户改过的内容不会被内置值覆盖。
-    // 判断"已存在"除了比 id 还要比内容：老用户可能是自己手动新建了同一套
-    // （那时 id 是应用生成的随机串），只比 id 会多出一份重复的。
-    for (const bi of BUILTIN_CHARACTER_CARDS) {
-        const exists = list.some((c) => c && (
-            c.id === bi.id
-            || (c.characterPrompt === bi.characterPrompt && c.worldSetting === bi.worldSetting)
-        ));
-        if (!exists) list.push({ ...bi });
     }
     state.characterCards = normalizeCardList(list);
 
@@ -1341,11 +1857,8 @@ async function deleteCard() {
         showCustomAlert('至少要保留一套人设。', '无法删除');
         return;
     }
-    const isBuiltin = BUILTIN_CHARACTER_CARDS.some((b) => b.id === card.id);
     const ok = await showCustomConfirm('确定删除人设「' + (card.name || '未命名') + '」？\n\n'
-        + (isBuiltin
-            ? '这是内置人设，删掉之后下次启动会自动恢复成原始内容。'
-            : '删掉之后没办法恢复。'));
+        + '删掉之后没办法恢复。');
     if (!ok) return;
     state.characterCards = state.characterCards.filter((c) => c.id !== card.id);
     state.currentCardId = state.characterCards[0].id;
@@ -1769,22 +2282,52 @@ function saveMemoryCoreFromSummary(summary, mergeDiary = false, preserveEmptyLis
     if (!state.memoryCore) state.memoryCore = emptyMemoryCore();
     const mc = state.memoryCore;
     if (Array.isArray(summary.diary)) {
+        // ★★ 2026-10 修：日记的合并键从「日期」改成「对话 + 日期」。
+        //
+        //  ── 原来错在哪 ──────────────────────────────────────────────────
+        //
+        //   旧实现是 `existingMap[e.date] = e` —— 只按日期归档。后果：
+        //   **同一天在不同对话里发生的事会互相覆盖**。用户开 5 段对话，
+        //   每段都做了记忆整理，那天就只剩最后一段的日记，前四段被悄悄抹掉。
+        //   而日记条目**本来就带 conversationId / conversationTitle**
+        //   （见下面的 meta），说明"日记属于哪段对话"这个信息一直是有的，
+        //   只是归档时没用上它 —— 属于"数据存了但没生效"的一类 bug。
+        //
+        //  ── 修法 ────────────────────────────────────────────────────────
+        //
+        //   键 = `${conversationId}|${date}`，于是：
+        //     · 同一段对话、同一天：仍然合并（重跑记忆整理不会产生重复条目）
+        //     · 不同对话、同一天：**各自一条**，互不打扰（用户的要求）
+        //
+        //  ── 老数据怎么办 ────────────────────────────────────────────────
+        //
+        //   旧条目没有 conversationId（那时也没写入），键会是 `|日期`。
+        //   这里**不迁移、不猜**：没有对话归属的条目就让它按 `|日期` 归组，
+        //   它仍是可见的一条日记，只是不参与任何对话的分组。
+        //   猜一个 conversationId 给它反而会把内容挂到错误的对话上。
+        const diaryKey = (convId, date) => String(convId || '') + '|' + String(date || '');
+
         const existingMap = {};
-        mc.diary.forEach(e => { existingMap[e.date] = e; });
+        mc.diary.forEach(e => { existingMap[diaryKey(e.conversationId, e.date)] = e; });
         summary.diary.forEach(e => {
             if (e && e.date) {
                 const date = cleanMemoryPromptText(e.date, 40);
                 const newContent = cleanMemoryPromptText(e.content, 4000);
                 const newEssences = normalizeMemoryStringList(e.essences, 12, 60);
                 if (!date || !newContent) return;
-                const existing = existingMap[date];
+                // ★ 先把归属定下来再取键 —— 顺序反了会退化成"总是新建一条"
+                //   （拿 `e.conversationId` 去查，而 summary 里常常没有它，
+                //    真正有值的是 sourceMeta）。
+                const conversationId = e.conversationId || (sourceMeta && sourceMeta.conversationId) || null;
+                const key = diaryKey(conversationId, date);
+                const existing = existingMap[key];
                 const meta = {
-                    conversationId: e.conversationId || (existing && existing.conversationId) || (sourceMeta && sourceMeta.conversationId) || null,
+                    conversationId,
                     conversationTitle: e.conversationTitle || (existing && existing.conversationTitle) || (sourceMeta && sourceMeta.conversationTitle) || '',
                     timestamp: e.timestamp || (existing && existing.timestamp) || (sourceMeta && sourceMeta.timestamp) || ''
                 };
                 if (mergeDiary && existing && existing.content && existing.content !== newContent && !existing.content.includes(newContent)) {
-                    existingMap[date] = {
+                    existingMap[key] = {
                         ...existing,
                         date,
                         content: existing.content + '；' + newContent,
@@ -1792,7 +2335,7 @@ function saveMemoryCoreFromSummary(summary, mergeDiary = false, preserveEmptyLis
                         ...meta
                     };
                 } else {
-                    existingMap[date] = { ...(existing || {}), date, content: newContent, essences: newEssences, ...meta };
+                    existingMap[key] = { ...(existing || {}), date, content: newContent, essences: newEssences, ...meta };
                 }
             }
         });
@@ -1962,7 +2505,9 @@ async function requestMemorySummary(convId) {
 }
 
 function setManualMemoryUi(running) {
-    [elements.memoryBtn, elements.initialComposerMemoryBtn, elements.composerMemoryBtn].filter(Boolean).forEach(button => {
+    // ★ memoryNowBtn 是「设置 → 记忆」里那个手动按钮（2026-10 加）—— 与顶栏的
+    //   「整理记忆」是同一个动作，运行中也该一起置灰/显示状态。
+    [elements.memoryBtn, elements.memoryNowBtn, elements.initialComposerMemoryBtn, elements.composerMemoryBtn].filter(Boolean).forEach(button => {
         button.disabled = running;
         button.classList.toggle('opacity-60', running);
         button.classList.toggle('is-running', running);

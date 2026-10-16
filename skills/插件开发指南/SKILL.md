@@ -115,10 +115,29 @@ mods/my-mod/
 
 ## 打包与安装
 
-- 装：电脑版把 `.zip` 丢进 `mods/` 后「重新扫描」自动解压；或应用内「上传安装」。手机只能应用内上传。
+- 装：应用内 **设置 → 插件 → 右上角「✦ 插件市场」** 一键装（从 [web 仓库](https://github.com/XYZ921746/web) 下载）；
+  电脑版也可把 `.zip` 丢进 `mods/` 后「重新扫描」自动解压，或应用内「上传安装」。
+  手机只能走应用内那两条。
 - 卸载：删插件目录 / 卡片上的删除按钮；装成功的 zip 会被自动清理（所以删目录是真卸载）。
-- 打包发别人：仓库根跑 `npm run pack:assets`（或 `node scripts/pack-assets.mjs galgame` 只打一个）→ `dist/assets/<id>-<version>.zip`。
-  约定：**插件 zip 的根目录直接是文件**（不带多余外层目录）；**模型 zip 的根目录必须是模型名那一层**。
+- **插件源码现在住在独立仓库** `XYZ921746/web`：源码在它的 `plugins/<id>/`，
+  打包产物在 `store/packages/`，商店索引是 `store/index.json`。
+  开发时用 `npm run link:mods -- --src <web仓库>/plugins` 把本机 `mods/` 接过去
+  （默认复制，不会删掉你本机装的 Live2D 模型）。
+- 打包发出去（在**应用仓库**根跑，源与产物都指向 web 仓库）：
+
+  ```bash
+  node scripts/pack-assets.mjs \
+       --mods-dir <web>/plugins \
+       --out      <web>/store/packages \
+       --index    <web>/store/index.json \
+       --base-url https://<用户名>.github.io/<仓库>/store/packages/
+  ```
+
+  `--index` 是合并写回：只刷新 `version/depends/sizeBytes/downloadUrl`，
+  你手写的 `name/description/kind` 原样保留。老用法（只打进 `dist/assets/`）不变：
+  `npm run pack:assets galgame`。
+- 约定：**插件 zip 的根目录直接是文件**（不带多余外层目录）；**模型 zip 的根目录必须是模型名那一层**。
+  打包**会排除插件里的 `models/`** —— 那是用户本机装的 Live2D 模型，不属于插件本体。
 
 ## 手机端（APK）限制
 

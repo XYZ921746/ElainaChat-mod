@@ -56,6 +56,24 @@ const modsSourceRoot = path.join(projectRoot, 'mods');
 // 不放在项目目录里，避免被误提交、也便于多个项目复用同一套。
 const androidAppRoot = path.join(projectRoot, '..', 'android-app');
 const androidWebRoot = path.join(androidAppRoot, 'www');
+// ★★ 2026-10：内嵌 Node 工程（手机端的"服务端那一半"，见 web/nodejs/）落在
+//   **assets/ 根下**，而不是 assets/public/ —— 两个理由：
+//     ① public/ 是 cap sync 的产物目录，而 cap sync 的复制是"只增不减"的：
+//        我们这边删掉的文件不会从它那里消失（工程里已经被这个坑咬过两次，
+//        见下面 LITE_CLEAN_ROOTS 的注释）；放在自己的目录里就能自己清干净。
+//     ② 它是服务端代码，没有理由暴露给 WebView 去 fetch。
+//   原生插件 ElainaNode 启动时把这一份复制到应用私有目录再执行 ——
+//   Node 只能跑真实路径上的脚本，assets/ 不是文件系统里的路径。
+const androidAssetsRoot = path.join(androidAppRoot, 'android', 'app', 'src', 'main', 'assets');
+const nodeHostDestRoot = path.join(androidAssetsRoot, 'nodejs');
+// ★★ 2026-10：内嵌 Node 要用的**与电脑端共用**的后端模块，从项目根的 server/ 复制进来
+//   （落到 assets/nodejs/server/，内嵌入口按 './server/xxx.mjs' 引用）。
+//
+//   为什么是显式清单、不整目录复制：server/ 下多数模块是**电脑端专用**的 ——
+//   pc-command 要命令行、auth-guard 是登录门、store/mods 走电脑的目录扫描与解压。
+//   整目录搬进 APK 只会白占体积，还会让人以为手机上也能用。
+//   共用哪个模块，由这里说了算；加一个就多一行。
+const SHARED_SERVER_MODULES = ['relay.mjs', 'http-util.mjs', 'net-guard.mjs'];
 const modelsSourceRoot = path.join(modsSourceRoot, 'live2d-models', 'models');
 // ★ APK 里的落地路径**不变**：仍是 www/live2d/models/。
 //   为什么不变：模型 URL（`/live2d/models/<名>/…`）是前端与 AI 提示词里都在用的约定，
@@ -71,36 +89,40 @@ const filesToCopy = [
     ['index.html', 'index.html'],
     ['diag-live2d.html', 'diag-live2d.html'],
     ['diag-asr.html', 'diag-asr.html'],
+    // 内嵌 Node（手机端的服务端那一半）的诊断页：只在这里用得到，
+    // 电脑版是 serve.mjs 真身，不需要这一页。
+    ['diag-node.html', 'diag-node.html'],
     // Live2D 视频通话已搬成插件（web/mods/live2d/）：整棵 mods/ 由下面那段自动收走，
     // 不需要在这里逐条列出。
     ['vendor/tailwind.js', 'vendor/tailwind.js'],
-    // ★★ Live2D 引擎**必须显式列出**（2026-10 补回来，附原因）。
+    // ★★ 2026-10（用户决定，覆盖上一版）：**Live2D 引擎不进 APK**。
     //
-    //   这三行曾经被删掉，理由是"引擎已搬进 live2d-models 插件，不再需要宿主副本"。
-    //   那个理由**只对电脑版成立**：
-    //     · 电脑版：插件的 manifest 声明 `server.static` → mod-server.mjs 把
-    //       `/live2d/vendor/` 映射到插件目录，引擎从那儿取。
-    //     · **APK：没有服务端**，`server` 那半边根本不装配 —— 插件的静态路由
-    //       不存在，`/live2d/vendor/xxx.js` 必然 404。
-    //   插件的 ensureEngine() 对这种情况有兜底：主基址探测失败就回落到
-    //   `/vendor/`（见 web/mods/live2d-models/index.js 的 vendorFallbackBase）。
-    //   而 `/vendor/` 在 APK 上就是 `assets/public/vendor/` —— **只有这里列了，
-    //   cap sync 才会把它放进 APK**。
+    //   上一版把这三个库列在这里，理由是"APK 没有服务端，/live2d/vendor/ 必然 404，
+    //   插件会回落到宿主 /vendor/，所以宿主得带一份"。现在改成：引擎是
+    //   **live2d-models 插件的一部分**，随插件包分发（pack-assets 只排除 models/，
+    //   vendor/ 会打进 zip），装好插件就由插件自己那份引擎工作。
     //
-    //   所以这三行是"APK 上 Live2D 能不能用"的开关。删掉它们的后果不是报错，
-    //   而是视频通话打不开、只报"引擎脚本加载失败" —— 正是本项目最忌讳的
-    //   "装了等于没装"。README 也写着"Live2D 引擎库保留在 web/vendor/
-    //   （软件本体的组成部分），插件缺失时回落可用"。
+    //   ⚠️ 于是 APK 上跑视频通话的**前提**变成两条，缺一不可：
+    //      ① 已安装 live2d-models 插件；
+    //      ② 插件的 ensureEngine() 能从**插件自己目录**取引擎，而不是只认宿主
+    //         /vendor/（那份已经不在了）—— 见 mods/live2d-models/index.js 的
+    //         vendorFallbackBase 与注入循环里的 native 回落分支。
+    //      两边是**一套改动**，别只改一边，否则视频通话只会报"引擎脚本加载失败"。
     //
-    //   ⚠️ 这也说明**插件可拆装**不等于"宿主不需要这些库"：插件带走的是
-    //      "模型管理界面 + 模型资源"，引擎本身是软件本体的一部分。
-    ['vendor/live2dcubismcore.min.js', 'vendor/live2dcubismcore.min.js'],
-    ['vendor/pixi-6.min.js', 'vendor/pixi-6.min.js'],
-    ['vendor/pixi-live2d-display-cubism4.min.js', 'vendor/pixi-live2d-display-cubism4.min.js'],
+    //   这三个文件在源仓库里当然还留着（电脑版要用），所以下面那套"源里没有 → 删"
+    //   的过期清理抓不到它们 —— 必须显式清（见 HOST_FILES_NOT_IN_APK）。
     // Markdown + LaTeX 渲染（消息里的 **加粗**、列表、表格与 $公式$ 靠它们）
     ['vendor/marked/marked.min.js', 'vendor/marked/marked.min.js'],
     ['vendor/katex/katex.min.js', 'vendor/katex/katex.min.js'],
     ['vendor/katex/katex.min.css', 'vendor/katex/katex.min.css'],
+];
+
+// ★ 不再随 APK 分发、但要**从安卓工程里清掉**的宿主文件（引擎归 live2d-models 插件，
+//   见上面那段说明）。源仓库里还留着它们（电脑版要用），所以不能靠"源里没有 → 删"。
+const HOST_FILES_NOT_IN_APK = [
+    'vendor/live2dcubismcore.min.js',
+    'vendor/pixi-6.min.js',
+    'vendor/pixi-live2d-display-cubism4.min.js',
 ];
 
 // katex 字体：**必须一起同步**，否则公式会退化成方框/默认字体。
@@ -231,6 +253,38 @@ for (const rel of cssFiles) {
     filesToCopy.push(['css/' + rel, 'css/' + rel]);
 }
 
+// 自带音频（web/audio/ 下）—— 与 js/、css/ 同理自动发现。
+//
+// ★★ 2026-10 补：漏了这里，手机端的 MiMo TTS「内置样本」直接失效。
+//   软件自带的伊蕾娜日语参考样本是 `web/audio/mimo-elaina-jp.m4a`（454KB），
+//   前端从 `/audio/mimo-elaina-jp.m4a` 直接 fetch（见 app-06-settings.js 的
+//   loadBuiltinMimoCloneSample）。电脑端有 serve.mjs 把 URL 映射到 web/audio/，
+//   手机端没有服务端 —— 文件必须在 www/ 里，否则 fetch 404 →
+//   「内置样本加载失败，请手动选择参考音频」，且切到 voiceclone 时的自动补样也失效。
+//   只在装机后才暴露（电脑端一切正常），所以同样不能写死清单、得自动收全。
+//
+// ★--lite 也**不**跳过它：这是程序本体的一部分（与模型/图片那类扩展包资源不同），
+//   体积只有几百 KB。
+async function collectAudioFiles(dir, prefix = '') {
+    const out = [];
+    let entries = [];
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return out; }
+    for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const rel = prefix ? prefix + '/' + entry.name : entry.name;
+        if (entry.isDirectory()) {
+            out.push(...await collectAudioFiles(path.join(dir, entry.name), rel));
+        } else if (entry.isFile()) {
+            out.push(rel);
+        }
+    }
+    return out;
+}
+const audioFiles = (await collectAudioFiles(path.join(sourceRoot, 'audio'))).sort();
+for (const rel of audioFiles) {
+    filesToCopy.push(['audio/' + rel, 'audio/' + rel]);
+}
+
 // 插件源码：默认**不**打进 APK（与电脑版 fresh clone 一致，见顶部 `withMods` 的说明）。
 // `--with-mods` 时仍收集（旧行为），`--lite` 时资源已被 collectModFiles 自己跳过。
 const modFiles = withMods ? (await collectModFiles(modsSourceRoot, '', lite)).sort() : [];
@@ -302,11 +356,92 @@ if (!withMods) {
     }
 }
 
+// ★★ 2026-10：把"不再随 APK 分发"的宿主文件从安卓工程里清掉（正常与纯净模式都清）。
+//   判据不是"源仓库里没有"（这几个文件在 web/vendor 里还在，电脑版要用），
+//   而是一张**显式名单** —— 引擎已归 live2d-models 插件。不清的话，上一次同步留下的
+//   旧副本会被 cap sync 继续打进 APK，"不带引擎"就名不副实。
+{
+    let removed = 0;
+    for (const root of LITE_CLEAN_ROOTS) {
+        for (const rel of HOST_FILES_NOT_IN_APK) {
+            const p = path.join(root, rel);
+            try { await stat(p); } catch { continue; }
+            await rm(p, { force: true });
+            removed++;
+        }
+    }
+    if (removed) {
+        console.log(`  已从安卓工程移除 ${removed} 个不再随 APK 分发的引擎文件（改由 live2d-models 插件提供）`);
+    }
+}
+
 await mkdir(path.join(androidWebRoot, 'vendor'), { recursive: true });
 for (const [src, dest] of filesToCopy) {
     const destPath = path.join(androidWebRoot, dest);
     await mkdir(path.dirname(destPath), { recursive: true });
     await copyFile(path.join(sourceRoot, src), destPath);
+}
+
+// ==================== 内嵌 Node 工程（复制到 assets/nodejs/）====================
+//
+// 落地目录是**我们的**（不是 cap sync 的），所以这里可以放心地把过期文件删掉 ——
+// 这也是把它放在 assets/ 根下、而不是 assets/public/ 的原因（见文件顶部常量处的说明）。
+{
+    const sourceDir = path.join(sourceRoot, 'nodejs');
+    /** 收整棵目录，不限扩展名：以后可能有 .json、证书、静态资源等 */
+    async function collectNodeHostFiles(dir, prefix = '') {
+        const out = [];
+        let entries = [];
+        try { entries = await readdir(dir, { withFileTypes: true }); } catch { return out; }
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) continue;
+            const rel = prefix ? prefix + '/' + entry.name : entry.name;
+            if (entry.isDirectory()) out.push(...await collectNodeHostFiles(path.join(dir, entry.name), rel));
+            else if (entry.isFile()) out.push(rel);
+        }
+        return out;
+    }
+
+    // ★★ 2026-10：与 app/build.gradle 的 buildNodeRuntime 是**同一个开关**（环境变量）。
+    //   默认关：什么都不复制，并且让下面的"过期清理"把上次留下的整个 assets/nodejs
+    //   清干净 —— 否则旧副本会被 cap sync 继续打进 APK，"摘掉 Node"就名不副实
+    //   （而且是白占体积的死文件）。
+    //   打开：设 ELAINA_NODE_RUNTIME=1 再同步（gradle 侧读的是同一个变量）。
+    const nodeRuntime = String(process.env.ELAINA_NODE_RUNTIME || '') === '1';
+
+    // 计划表：[源绝对路径, 目标相对路径]。关掉时留空 —— 空计划 = 只清理、不复制。
+    const plan = [];
+    if (nodeRuntime) {
+        for (const rel of (await collectNodeHostFiles(sourceDir)).sort()) {
+            plan.push([path.join(sourceDir, rel), rel]);
+        }
+        // 与电脑端共用的后端模块（见顶部 SHARED_SERVER_MODULES 的说明）。
+        // 文件不存在时 copyFile 会直接抛错 → 同步失败 —— 这正是想要的：
+        // 模块改名/搬走却忘了改这里，必须当场炸，而不是安静地让 APK 少一个文件。
+        for (const name of SHARED_SERVER_MODULES) {
+            plan.push([path.join(projectRoot, 'server', name), 'server/' + name]);
+        }
+    }
+
+    // 清掉这次不再要的文件：既包含"源里删了的"，也包含"开关关掉后的整个目录"
+    const desired = new Set(plan.map(([, dest]) => dest));
+    let staleRemoved = 0;
+    for (const rel of await collectNodeHostFiles(nodeHostDestRoot).catch(() => [])) {
+        if (desired.has(rel)) continue;
+        await rm(path.join(nodeHostDestRoot, rel), { force: true });
+        staleRemoved++;
+    }
+
+    for (const [srcPath, dest] of plan) {
+        const destPath = path.join(nodeHostDestRoot, dest);
+        await mkdir(path.dirname(destPath), { recursive: true });
+        await copyFile(srcPath, destPath);
+    }
+    console.log(nodeRuntime
+        ? `  内嵌 Node 工程：${plan.length} 个文件 → assets/nodejs/（含 ${SHARED_SERVER_MODULES.length} 个与电脑端共用的后端模块）`
+            + (staleRemoved ? `，顺带清掉 ${staleRemoved} 个过期文件` : '')
+        : `  内嵌 Node 工程：未打包（默认关闭；要打开就设 ELAINA_NODE_RUNTIME=1）`
+            + (staleRemoved ? `，已清掉工程里残留的 ${staleRemoved} 个文件` : ''));
 }
 
 // ★★ 清掉"宿主已删、安卓工程里还留着"的旧文件（2026-10 新增）。
@@ -357,6 +492,7 @@ console.log(`Synced ${filesToCopy.length} files (customized Web UI incl. Live2D)
 if (jsFiles.length) console.log(`  frontend scripts: ${jsFiles.map((f) => 'js/' + f).join(', ')}`);
 if (modFiles.length) console.log(`  mods: ${modFiles.length} files`);
 if (cssFiles.length) console.log(`  css: ${cssFiles.map((f) => 'css/' + f).join(', ')}`);
+if (audioFiles.length) console.log(`  audio: ${audioFiles.map((f) => 'audio/' + f).join(', ')}`);
 
 // ==================== 内置 Live2D 模型 ====================
 // 仓库里 web/mods/live2d-models/models/ 下的模型随 APK 分发：复制进安卓工程的 www/live2d/models/，

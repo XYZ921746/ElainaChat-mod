@@ -235,17 +235,39 @@ function exitNotesMode() {
 }
 
 function setRailActive(action) {
-    if (action !== 'categories' && !elements.categoriesModalOverlay.classList.contains('hidden')) {
-        elements.categoriesModalOverlay.classList.add('hidden');
-        elements.categoriesModalOverlay.classList.remove('flex');
+    // ★ 2026-10：竖栏那个按钮从「管理分类」改成了「成就」（data-rail-action
+    //   由 categories 改成 achievements），而分类弹窗改由**成就面板内部**的
+    //   按钮打开。所以这里把两者当成**同一组**处理：
+    //     · 打开分类弹窗时高亮的是那个成就按钮（它们是同一个入口）
+    //     · 切到别的动作时，两个浮层都要收起来
+    //   不这么写的话，点开分类弹窗后竖栏会没有任何按钮是高亮的
+    //   （看起来像"点了没反应"）。
+    const ACH = 'achievements';
+    const isAchGroup = (a) => a === ACH || a === 'categories';
+
+    if (!isAchGroup(action)) {
+        if (!elements.categoriesModalOverlay.classList.contains('hidden')) {
+            elements.categoriesModalOverlay.classList.add('hidden');
+            elements.categoriesModalOverlay.classList.remove('flex');
+        }
+        try {
+            if (window.ElainaAchievements && window.ElainaAchievements.isOpen()) {
+                window.ElainaAchievements.close();
+            }
+        } catch (e) { /* 成就模块不在时忽略 */ }
     }
+    // 分类弹窗开着时，高亮的仍是成就按钮（它们共用一个入口）
+    const want = action === 'categories' ? ACH : action;
     document.querySelectorAll('.sidebar-rail-btn[data-rail-action]').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.railAction === action);
+        btn.classList.toggle('active', btn.dataset.railAction === want);
     });
     const memoryUnavailable = state.notesMode || state.diaryMode;
     elements.memoryBtn.classList.toggle('page-mode-hidden', memoryUnavailable);
     elements.memoryBtn.setAttribute('aria-hidden', memoryUnavailable ? 'true' : 'false');
     elements.memoryBtn.tabIndex = memoryUnavailable ? -1 : 0;
+    // ★ 2026-10：顶栏「公告」按钮和「整理记忆」同进退（同一排按钮，笔记 / 日记模式下
+    //   一起收起）—— 它俩共用 .header-memory-btn 的样式，行为也该一致。
+    elements.announceBtn?.classList.toggle('page-mode-hidden', memoryUnavailable);
     syncMainHeaderVisibility();
 }
 
@@ -274,46 +296,248 @@ function diaryDisplayDate(entry) {
     return `${base} · ${new Date(parsed).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+/**
+ * 旅行日记页 —— **按对话分组**渲染。
+ *
+ * ── 为什么要分组（2026-10 用户要求）─────────────────────────────────────
+ *
+ *   "日记这个地方进行分类，比如我开了 5 段对话那 5 个对话有不同的日记，
+ *    不互相打扰。"
+ *
+ *   日记条目本来就带 conversationId / conversationTitle，但旧实现把它们
+ *   平铺在一个网格里、按时间倒序，看起来就是**一锅粥** ——
+ *   分不清哪条属于哪段故事。更要紧的是数据侧也在按"日期"合并，
+ *   同一天的两段对话会互相覆盖（那部分已在 app-02-data.js 里修掉）。
+ *
+ * ── 分组的几个取舍 ─────────────────────────────────────────────────────
+ *
+ *   · **组的顺序按"该组最新一条"倒序** —— 最近聊过的对话排在最前，
+ *     符合"我最近在关心什么"的直觉。
+ *   · **组内仍按时间倒序**。
+ *   · 没有 conversationId 的老条目归到「未归属」组，**不猜**它属于谁
+ *     （猜错会把内容挂到错误的对话上，比不分组更糟）。
+ *   · 对话已被删除时，用条目自己存的 conversationTitle 兜底，
+ *     标成「已删除的对话」而不是让它消失 —— 日记是回忆，不该因为
+ *     删了对话就看不见。
+ */
 function renderDiaryPage() {
     const diary = Array.isArray(state.memoryCore?.diary) ? [...state.memoryCore.diary] : [];
     diary.sort((a, b) => diaryTimestamp(b) - diaryTimestamp(a));
-    elements.diaryCount.textContent = `${diary.length} 条记录`;
-    elements.diaryEmpty.classList.toggle('hidden', diary.length > 0);
+
+    // ★★ 2026-10：支持"点侧栏对话 → 只看这段对话的日记"。
+    //   state.diaryFilterConvId 由 focusDiaryGroup() 设置（空 = 显示全部）。
+    //   ★ 筛选放在**数据层**而不是 CSS 隐藏：被筛掉的组不生成 DOM，
+    //     长日记（几十上百条）时省掉大量无谓节点 —— 这对手机端尤其重要。
+    const filterId = state.diaryFilterConvId || '';
+    const shown = filterId ? diary.filter((e) => (e.conversationId || '') === filterId) : diary;
+
+    elements.diaryCount.textContent = filterId
+        ? `${shown.length} / ${diary.length} 条记录`
+        : `${diary.length} 条记录`;
+    elements.diaryEmpty.classList.toggle('hidden', shown.length > 0);
     elements.diaryGrid.innerHTML = '';
-    diary.forEach(entry => {
-        const sourceConv = entry.conversationId ? state.conversations.find(c => c.id === entry.conversationId) : null;
-        const card = document.createElement('article');
-        card.className = 'diary-card animate-fade-in-up';
-        if (sourceConv) {
-            card.title = '打开来源对话';
-            card.tabIndex = 0;
-            card.addEventListener('click', () => {
-                exitDiaryMode();
-                switchConversation(sourceConv.id);
-            });
-            card.addEventListener('keydown', event => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    exitDiaryMode();
-                    switchConversation(sourceConv.id);
-                }
-            });
-        }
-        const title = entry.conversationTitle || (sourceConv && sourceConv.title) || '旅途片段';
-        const essences = Array.isArray(entry.essences) ? entry.essences.filter(Boolean).slice(0, 6) : [];
-        card.innerHTML = `
-            <div class="diary-card-date">${escapeHtml(diaryDisplayDate(entry))}</div>
-            <div class="diary-card-title">${escapeHtml(title)}</div>
-            <div class="diary-card-text">${escapeHtml(entry.content || '')}</div>
-            ${essences.length ? `<div class="diary-essences">${essences.map(tag => `<span class="diary-essence">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+
+    // ★★ 2026-10（用户要求）：**不再**在日记页顶部放「只看：xxx　显示全部」筛选条 ——
+    //   那个分类/筛选的职责**已经交给左边的对话记录**了
+    //   （点侧栏那段对话 = 只看它的日记，再点一次取消）。
+    //   两处都能筛选只会让人困惑"到底该点哪儿"。
+    //   被筛掉时的"当前在看哪一段"提示改由计数体现（见上面的 `1 / 2 条记录`）。
+
+    // ---- 分组 ----
+    const groups = new Map();   // key -> { id, title, conv, entries: [] }
+    for (const entry of shown) {
+        const id = entry.conversationId || '';
+        const conv = id ? state.conversations.find(c => c.id === id) : null;
+        let title;
+        if (conv) title = conv.title || '未命名对话';
+        else if (entry.conversationTitle) title = entry.conversationTitle;
+        else title = id ? '已删除的对话' : '未归属的片段';
+        const key = id || '__none__';
+        if (!groups.has(key)) groups.set(key, { id, title, conv: conv || null, entries: [] });
+        groups.get(key).entries.push(entry);
+    }
+    // 组按"最新一条"倒序 —— diary 已排好序，所以每组第一次出现的位置就是它的最新时间
+    const ordered = [...groups.values()];
+
+    for (const g of ordered) {
+        // ---- 组标题（横跨整行）----
+        const head = document.createElement('div');
+        head.className = 'diary-group-head';
+        // ★ 当前被筛选的那一组加高亮（筛选条已移除，需要一个视觉落点告诉用户
+        //   "点中了、现在看的就是这一段"）。
+        if (filterId && g.id === filterId) head.classList.add('is-focused');
+        // ★ 用 conversationId 作为锚点 id：focusDiaryGroup() 靠它滚动定位。
+        //   用 data 属性而不是 id 拼字符串，避免 id 里出现非法字符（对话 id 来自生成器）。
+        if (g.id) head.dataset.diaryGroupId = g.id;
+        const jumpable = Boolean(g.conv);
+        if (jumpable) head.classList.add('is-jumpable');
+        // ★ 组头不再"点了就跳去聊天"（那是用户明确要去掉的行为）。
+        //   改成：点组头 = 在**本页内**只看这段对话（等价于点侧栏那条）。
+        //   想真的进对话，用组头右侧的「进入对话」按钮 —— 保留了入口，
+        //   但不会误触（用户点标题多半只是想看日记）。
+        head.tabIndex = 0;
+        head.title = '只看这段对话的日记';
+        head.innerHTML = `
+            <span class="diary-group-dot" aria-hidden="true"></span>
+            <span class="diary-group-title">${escapeHtml(g.title)}</span>
+            <span class="diary-group-count">${g.entries.length} 条</span>
+            ${jumpable ? '<button type="button" class="diary-group-enter" data-diary-enter="1" title="进入这段对话">进入对话</button>' : ''}
         `;
-        elements.diaryGrid.appendChild(card);
+        const focusThis = () => {
+            if (g.id) focusDiaryGroup(g.id);
+        };
+        head.addEventListener('click', (event) => {
+            // 点「进入对话」按钮 → 真的切过去
+            if (event.target.closest('[data-diary-enter]')) {
+                event.stopPropagation();
+                exitDiaryMode();
+                switchConversation(g.conv.id);
+                return;
+            }
+            focusThis();
+        });
+        head.addEventListener('keydown', event => {
+            if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); focusThis(); }
+        });
+        elements.diaryGrid.appendChild(head);
+
+        // ---- 该组下的日记卡片 ----
+        for (const entry of g.entries) {
+            const card = document.createElement('article');
+            card.className = 'diary-card animate-fade-in-up';
+            const essences = Array.isArray(entry.essences) ? entry.essences.filter(Boolean).slice(0, 6) : [];
+            // ★ 标题已在组头上，卡片里不再重复显示对话名 ——
+            //   否则同一屏里同一个名字会出现 N 遍，反而更乱。
+            card.innerHTML = `
+                <div class="diary-card-date">${escapeHtml(diaryDisplayDate(entry))}</div>
+                <div class="diary-card-text">${escapeHtml(entry.content || '')}</div>
+                ${essences.length ? `<div class="diary-essences">${essences.map(tag => `<span class="diary-essence">${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+            `;
+            // ★★ 2026-10（用户要求）：点卡片**弹窗看全文**。
+            //   原来正文被 `-webkit-line-clamp: 4` 截成 4 行，而且**没有任何展开入口**
+            //   （旧实现卡片上的点击是"跳到原对话"，不是看全文）——
+            //   所以长日记永远读不全。现在点一下弹窗看完整内容。
+            card.tabIndex = 0;
+            card.title = '查看完整内容';
+            const openDetail = () => openDiaryDetail(entry, g.title);
+            card.addEventListener('click', openDetail);
+            card.addEventListener('keydown', event => {
+                if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDetail(); }
+            });
+            elements.diaryGrid.appendChild(card);
+        }
+    }
+}
+
+/**
+ * 在日记页里"只看某段对话"。
+ *
+ * ★ 这就是用户要的"聊天记录本身就是一种分类"：
+ *   点侧栏的对话不再跳去聊天，而是把日记筛到那一段。
+ *   再点同一段（或点提示条上的「显示全部」）取消筛选。
+ *
+ * @param {string} convId 对话 id
+ */
+function focusDiaryGroup(convId) {
+    if (!convId) return;
+    // 点同一段 → 取消筛选（像开关一样，避免"筛进去了出不来"）
+    state.diaryFilterConvId = (state.diaryFilterConvId === convId) ? '' : convId;
+    renderDiaryPage();
+    // ★★ 必须同时重绘侧栏：条目高亮是在 createConversationItem 里按
+    //   "当前看的是哪一段"算出来的，不重绘的话点了对话侧栏仍然没有选中特效
+    //   （用户报的"日记系统中选中没有对应特效"就是这个）。
+    if (typeof renderFolderList === 'function') renderFolderList();
+    // 滚动到该组标题（筛选后它就在最上面，但用户可能刚滚到别处）
+    requestAnimationFrame(() => {
+        const head = elements.diaryGrid.querySelector('[data-diary-group-id]');
+        if (head && head.scrollIntoView) {
+            try { head.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { /* 老浏览器 */ }
+        }
     });
+}
+
+// ★ 已删除：renderDiaryFilterBar()。
+//   它曾在日记网格顶部画一条「只看：xxx　显示全部」筛选条 ——
+//   用户 2026-10 要求把分类/筛选**统一交给左边的对话记录**
+//   （点侧栏那段对话即筛选，再点一次取消），所以日记页里不再放第二套筛选入口。
+//   当前筛选状态仍由计数体现（`N / M 条记录`）。
+
+/**
+ * 日记详情弹窗（看全文）。
+ *
+ * ★ 为什么用弹窗而不是"就地展开"：日记正文可以很长（记忆提取器最多写 4000 字），
+ *   就地展开会把网格铺得七零八落、后面的卡片被推到很远。
+ *   弹窗能完整显示、又不影响列表布局。
+ *
+ * ★ 复用宿主的弹窗样式（.modal-overlay / .modal-panel），与设置、语笺详情一致 ——
+ *   自己写一套样式会和主题/深色模式对不上。
+ */
+let diaryDetailEl = null;
+
+function openDiaryDetail(entry, fallbackTitle) {
+    if (!diaryDetailEl) {
+        diaryDetailEl = document.createElement('div');
+        diaryDetailEl.id = 'diaryDetailOverlay';
+        diaryDetailEl.className = 'fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay';
+        diaryDetailEl.innerHTML =
+            '<div class="modal-panel w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">'
+              + '<div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">'
+                + '<div class="text-base font-bold text-indigo-950">日记</div>'
+                + '<span id="diaryDetailMeta" class="diary-detail-meta"></span>'
+                + '<button id="diaryDetailClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" aria-label="关闭">'
+                  + '<svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
+                + '</button>'
+              + '</div>'
+              + '<div id="diaryDetailBody" class="flex-1 overflow-y-auto scroll-soft px-6 py-4"></div>'
+            + '</div>';
+        document.body.appendChild(diaryDetailEl);
+        diaryDetailEl.querySelector('#diaryDetailClose').addEventListener('click', closeDiaryDetail);
+        diaryDetailEl.addEventListener('click', (e) => {
+            if (e.target === diaryDetailEl) closeDiaryDetail();
+        });
+    }
+    const convId = entry.conversationId || '';
+    const conv = convId ? state.conversations.find(c => c.id === convId) : null;
+    const title = (conv && conv.title) || entry.conversationTitle || fallbackTitle || '';
+    const essences = Array.isArray(entry.essences) ? entry.essences.filter(Boolean) : [];
+
+    diaryDetailEl.querySelector('#diaryDetailMeta').textContent =
+        (convId ? (title ? title + ' · ' : '') : '') + diaryDisplayDate(entry);
+    // ★ 正文用 textContent（下面逐个 append），不用 innerHTML ——
+    //   日记正文来自模型输出，可能含 < > 之类字符；插进 innerHTML 会有注入面。
+    const body = diaryDetailEl.querySelector('#diaryDetailBody');
+    body.innerHTML = '';
+    const p = document.createElement('div');
+    p.className = 'diary-detail-text';
+    p.textContent = entry.content || '';
+    body.appendChild(p);
+    if (essences.length) {
+        const tags = document.createElement('div');
+        tags.className = 'diary-essences';
+        for (const t of essences) {
+            const s = document.createElement('span');
+            s.className = 'diary-essence';
+            s.textContent = t;
+            tags.appendChild(s);
+        }
+        body.appendChild(tags);
+    }
+    diaryDetailEl.classList.remove('hidden');
+    diaryDetailEl.classList.add('flex');
+}
+
+function closeDiaryDetail() {
+    if (!diaryDetailEl) return;
+    diaryDetailEl.classList.add('hidden');
+    diaryDetailEl.classList.remove('flex');
 }
 
 function enterDiaryMode() {
     state.diaryMode = true;
     state.notesMode = false;
+    // ★ 每次进入都从"显示全部"开始：筛选是**当次浏览**的临时状态，
+    //   不该跨次留存（否则用户下次打开日记会以为只剩那一段）。
+    state.diaryFilterConvId = '';
     elements.initialState.classList.add('hidden');
     elements.conversationHistory.classList.add('hidden');
     elements.inputBar.classList.add('hidden');
@@ -327,6 +551,10 @@ function enterDiaryMode() {
 
 function exitDiaryMode() {
     state.diaryMode = false;
+    // ★ 离开日记页时清掉筛选与详情弹窗 —— 不然下次进来会莫名只显示一部分，
+    //   或者详情弹窗还挂在别的页面上面（它挂在 body 上，不随页面隐藏）。
+    state.diaryFilterConvId = '';
+    closeDiaryDetail();
     elements.diaryPage.classList.add('hidden');
     const conv = state.conversations.find(c => c.id === state.currentConversationId);
     if (conv) {
@@ -336,6 +564,9 @@ function exitDiaryMode() {
     } else {
         showInitialState();
     }
+    // ★ 重绘侧栏：离开日记页后高亮要从"筛选那段"切回"当前对话那段"
+    //   （两个状态来源不同，见 createConversationItem 里的说明）。
+    if (typeof renderFolderList === 'function') renderFolderList();
     syncRailActive();
 }
 
@@ -374,7 +605,12 @@ function showInitialState() {
 
 function showCustomModal(opts) {
     return new Promise(resolve => {
-        const { title = '提示', message = '', input = false, defaultValue = '', placeholder = '', confirmText = '确定', cancelText = '取消', showCancel = true } = opts;
+        const { title = '提示', message = '', input = false, defaultValue = '', placeholder = '', confirmText = '确定', cancelText = '取消', showCancel = true,
+            // ★ 2026-10：可选第三键。altText 非空就显示；点了 **resolve 成 altValue**。
+            //   为什么需要它：手机操作的「运行方式」是三选一（前台 / 后台 / 取消），
+            //   而取消键还会被"点遮罩 / 关弹窗"触发 —— 把"后台"绑到取消上，
+            //   用户手指一滑点到遮罩就等于默默用了后台。
+            altText = '', altValue = 'alt' } = opts;
         elements.customModalTitle.textContent = title;
         elements.customModalMessage.textContent = message;
         elements.customModalMessage.classList.toggle('hidden', !message);
@@ -386,6 +622,8 @@ function showCustomModal(opts) {
         elements.customModalCancelBtn.textContent = cancelText;
         elements.customModalConfirmBtn.textContent = confirmText;
         elements.customModalCancelBtn.classList.toggle('hidden', !showCancel);
+        elements.customModalAltBtn.textContent = altText;
+        elements.customModalAltBtn.classList.toggle('hidden', !altText);
 
         elements.customModal.classList.remove('hidden');
         elements.customModal.classList.add('flex');
@@ -401,12 +639,14 @@ function showCustomModal(opts) {
             elements.customModal.classList.add('hidden');
             elements.customModal.classList.remove('flex');
             elements.customModalCancelBtn.onclick = null;
+            elements.customModalAltBtn.onclick = null;
             elements.customModalConfirmBtn.onclick = null;
             elements.customModalInput.onkeydown = null;
             resolve(value);
         };
 
         elements.customModalCancelBtn.onclick = () => done(input ? null : false);
+        elements.customModalAltBtn.onclick = () => done(altValue);
         elements.customModalConfirmBtn.onclick = () => {
             if (input) {
                 const val = elements.customModalInput.value;
@@ -521,15 +761,68 @@ async function renameConversation(convId) {
     }
 }
 
+/**
+ * 删除对话时，把"依附于这段对话的数据"一并清掉。
+ *
+ * ── 为什么要抽成一个函数（2026-10）──────────────────────────────────────
+ *
+ *   用户报："删除对话时会删除日记但是不会删除收藏的句子"。
+ *   实际查下来是**两处删除入口各自只做了一半**：
+ *     · deleteConversation()  删了收藏，**没删日记**
+ *     · catDeleteSelected()   删了收藏，**也没删日记**
+ *   于是"日记属于哪段对话"全靠 conversationId —— 对话没了，
+ *   那些日记就成了没人认领的孤儿，在日记页里挂着一个删不掉的
+ *   「已删除的对话」分组（用户看到的就是这个）。
+ *
+ *   抽成一处之后，将来再加"依附数据"（比如某段对话的定时任务）
+ *   只需要改这里一个地方，不会再出现"某个入口漏了一种"。
+ *
+ * @param {Set<string>|Array<string>} ids 被删除的对话 id
+ * @returns {{diary:number, favorites:number}} 各清掉多少条（供提示/调试）
+ */
+function purgeConversationDependents(ids) {
+    const set = ids instanceof Set ? ids : new Set(ids || []);
+    if (!set.size) return { diary: 0, favorites: 0 };
+
+    // ---- 日记 ----
+    let diaryRemoved = 0;
+    try {
+        const mc = state.memoryCore;
+        if (mc && Array.isArray(mc.diary)) {
+            const before = mc.diary.length;
+            mc.diary = mc.diary.filter(e => !set.has(e.conversationId));
+            diaryRemoved = before - mc.diary.length;
+            if (diaryRemoved) {
+                if (typeof saveMemoryCore === 'function') saveMemoryCore();
+                // 记忆变了 → 相关缓存/提示也要跟着失效（能调就调，缺了不影响）
+                try { if (typeof updateNotesBadge === 'function') updateNotesBadge(); } catch (e) { /* 忽略 */ }
+            }
+        }
+    } catch (e) { /* 记忆不可用时不该挡住删除对话 */ }
+
+    // ---- 收藏（"语笺"里的句子）----
+    let favRemoved = 0;
+    try {
+        if (Array.isArray(state.favorites)) {
+            const before = state.favorites.length;
+            state.favorites = state.favorites.filter(f => !set.has(f.conversationId));
+            favRemoved = before - state.favorites.length;
+            if (favRemoved && typeof saveFavorites === 'function') saveFavorites();
+        }
+    } catch (e) { /* 忽略 */ }
+
+    return { diary: diaryRemoved, favorites: favRemoved };
+}
+
 async function deleteConversation(convId) {
     const confirmed = await showCustomConfirm('确认删除这个对话？');
     if (!confirmed) return;
     const idx = state.conversations.findIndex(c => c.id === convId);
     if (idx < 0) return;
     state.conversations.splice(idx, 1);
-    state.favorites = state.favorites.filter(f => f.conversationId !== convId);
+    // ★ 日记 + 收藏一起清（见 purgeConversationDependents 的说明）
+    purgeConversationDependents([convId]);
     saveConversations();
-    saveFavorites();
     updateNotesBadge();
     if (state.currentConversationId === convId) {
         state.currentConversationId = null;
@@ -540,6 +833,9 @@ async function deleteConversation(convId) {
         elements.currentConversationTitle.textContent = '伊蕾娜';
     }
     renderFolderList();
+    // ★ 正开着日记页时也要跟着刷新 —— 否则被删掉的那组还留在屏幕上，
+    //   点进去是一片空（用户会以为删除没生效）。
+    if (state.diaryMode) renderDiaryPage();
 }
 
 function togglePin(convId) {
@@ -870,7 +1166,17 @@ function renderMessageText(text) {
 
 function createConversationItem(conv) {
     const div = document.createElement('div');
-    const isActive = conv.id === state.currentConversationId;
+    // ★★ 2026-10：日记页里"选中"的是**筛选中的那段对话**。
+    //
+    //   背景：用户要求"在日记页点对话只筛选、不跳转"，于是
+    //   `state.currentConversationId` **不会**变 —— 而这一行原先只看它，
+    //   结果就是用户在日记页点了对话，侧栏**没有任何高亮**
+    //   （看起来像没点中），必须回聊天页才正常。
+    //   修法：日记页时把 diaryFilterConvId 也算作"当前项"。
+    //   两个状态各管各的语义，但**视觉上都是"你正在看这一段"**，
+    //   所以共用同一个高亮样式（用户报的就是"没有对应特效"）。
+    const activeId = state.diaryMode ? (state.diaryFilterConvId || '') : state.currentConversationId;
+    const isActive = conv.id === activeId;
     div.className = `conversation-item group flex items-center gap-2 px-2.5 py-2 rounded-xl cursor-pointer transition-all text-sm ${isActive ? 'sidebar-item-active' : 'hover:bg-white/50'}`;
     div.draggable = !isMobileConversationLayout();
     div.dataset.convId = conv.id;
@@ -882,6 +1188,18 @@ function createConversationItem(conv) {
             return;
         }
         closeConversationContextMenu();
+        // ★★ 2026-10（用户要求）：**在日记页时**点侧栏的对话，不再跳去聊天，
+        //   而是把这本日记**筛选/滚动到那段对话的分组** ——
+        //   "以后点击聊天记录不会再跳转到聊天，聊天记录本身就是一种分类"。
+        //
+        //   为什么用"筛选"而不是"跳走"：用户此时正在看日记，
+        //   点一下只是想"看这段对话的日记"，把他踢去聊天页等于打断当前意图。
+        //   而在**非**日记页时行为完全不变（照旧进对话）—— 这是关键，
+        //   否则日常切换对话会被弄坏（那是最常用的操作）。
+        if (state.diaryMode && typeof focusDiaryGroup === 'function') {
+            focusDiaryGroup(conv.id);
+            return;
+        }
         switchConversation(conv.id);
     });
     div.addEventListener('dragstart', (e) => {
@@ -1185,9 +1503,10 @@ async function catDeleteSelected() {
     const confirmed = await showCustomConfirm(`确认删除选中的 ${catSelected.size} 个对话？`);
     if (!confirmed) return;
     state.conversations = state.conversations.filter(c => !catSelected.has(c.id));
-    state.favorites = state.favorites.filter(f => !catSelected.has(f.conversationId));
+    // ★ 批量删除同样要清日记 + 收藏（与 deleteConversation 共用同一个函数，
+    //   免得两个入口再次各自只做一半 —— 那正是用户报的那个 bug 的成因）。
+    purgeConversationDependents(catSelected);
     saveConversations();
-    saveFavorites();
     updateNotesBadge();
     if (catSelected.has(state.currentConversationId)) {
         state.currentConversationId = null;
@@ -1201,6 +1520,7 @@ async function catDeleteSelected() {
     renderCategoriesModalList();
     renderCatBatchBar();
     renderFolderList();
+    if (state.diaryMode) renderDiaryPage();
 }
 
 

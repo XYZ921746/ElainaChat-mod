@@ -195,12 +195,40 @@ console.log('\n=== 9. 副屏监视窗（模块后端的"看画面"） ===');
         '有打开/关闭函数');
     ok(/SCREEN_WATCH_INTERVAL/.test(html), '有自动刷新间隔常量');
 
-    // 入口只在「模块」后端时出现 —— 无障碍/Shizuku 在物理屏上操作，用户本来就看得见
+    // 入口只在「模块」后端时出现 —— 无障碍在物理屏上操作，用户本来就看得见
+    //
+    // ⚠️ 这里的 slice 起点是 `html.indexOf('function render()')` —— 那是**第一个**
+    //    render()，而 achievements.js 里也有一个同名函数、且加载顺序更靠前。
+    //    所以这段切片比"agentRuntime 的 render"宽得多（横跨到 beginBatch）。
+    //    旧断言只匹配标识符名字（useModule），宽一点也凑合能过；
+    //    但下面这几条要断言**真实的判据表达式**，必须在 agentRuntime 区间内取，
+    //    否则会匹配到别的文件里的同名片段，变成假通过。
+    const rtStart = html.indexOf('const agentRuntime = (function ()');
+    const rtEnd = html.indexOf('window.agentRuntime = agentRuntime;');
+    const agentRenderFn = (rtStart >= 0 && rtEnd > rtStart)
+        ? html.slice(rtStart, rtEnd).slice(html.slice(rtStart, rtEnd).indexOf('function render()'))
+        : '';
     const renderFn = html.slice(html.indexOf('function render()'), html.indexOf('function beginBatch()'));
     ok(/agentWatchBtn/.test(renderFn), '运行状态条里的「看画面」按钮由 render 控制');
-    ok(/__lastAgentBackend/.test(renderFn), '按**实际**用过的后端决定是否显示（"自动"模式下也要能判断）');
-    ok(/useModule/.test(renderFn), '只在模块后端时才显示');
-    ok(/running && useModule/.test(renderFn), '任务结束后按钮要收起来');
+    ok(/__lastAgentBackend/.test(agentRenderFn), '按**实际**用过的后端决定是否显示（"自动"模式下也要能判断）');
+    // ★★ 2026-10 修（真机反馈"我选了前台，界面却在走模块"）：旧判据是
+    //   `currentBackendId()==='module' || used==='module'` —— 前者读**持久化的默认方式**、
+    //   后者是**上一轮**用过的后端且从不重置，两个都往"显示模块"的方向错。
+    //   现在必须读**本轮**的 runModeDecision，并收敛成一个 effective 值再比较。
+    //
+    // ⚠️ 断言不能用 `/runModeDecision/` 去匹配整段 —— 那段**注释里**就写着
+    //    "runModeDecision" 等字样，注释会让断言永远通过（变异测试抓到过这个假阳性：
+    //    把判据改回旧写法后，这条依然 PASS）。所以先把注释剥掉，
+    //    只在**真实代码**上做匹配。判据用"必须出现 mode/effective 的赋值形态"来钉结构。
+    const codeOnly = agentRenderFn
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/[^\n]*/g, '');
+    ok(/const mode = /.test(codeOnly) && /runModeDecision/.test(codeOnly),
+        '★ 只用**本轮**的选择（runModeDecision）判断，不拿持久化默认值当当前方式');
+    ok(!/\|\|\s*used === 'module'/.test(codeOnly),
+        '★ 不再把"上一轮用过的后端"当成本轮的判据（used 只能作为兜底，不能与 mode 并列取或）');
+    ok(/effective === 'module'/.test(codeOnly), '只在模块后端时才显示');
+    ok(/running && effective === 'module'/.test(codeOnly), '任务结束后按钮要收起来');
 
     // 生命周期：定时器必须能被停掉，否则关掉窗口后还在每 1.5 秒打原生层
     const closeFn = html.slice(html.indexOf('function closeScreenWatch()'), html.indexOf('// ==================== 日志设置'));

@@ -126,7 +126,7 @@ function extractFnForThinking(name) {
     return html.slice(start, i);
 }
 const buildThinkingParamsReal = new Function('isDeepSeekOfficial', `
-    const THINKING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+    const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
     ${extractFnForThinking('mapThinkingEffort')}
     ${extractFnForThinking('detectThinkingVendor')}
     ${extractFnForThinking('buildThinkingParams')}

@@ -1070,47 +1070,42 @@ function toggleComposerToolsMenu(button, menu) {
 }
 
 /**
- * 把「设置 → 模型」里的思考开关与强度同步成当前设置值。
+ * 把「设置 → 模型」里的思考强度与第三人称同步成当前设置值。
  *
- * 以前这里同步的是输入框旁边那个 ⊕ 菜单里的勾选框。开关搬走之后，
- * 仍然保留这个函数：设置面板每次打开都要按 state 回填，
- * 而回填逻辑只该有一处 —— 散在各处必然有一天忘记同步新加的档位。
+ * ★ 2026-10：思考开关已**合并进"思考强度"档位**（off 就是不思考），
+ *   所以这里只回填那个四档下拉，不再有单独的勾选框。
+ *   保留这个统一函数的原因不变：设置面板每次打开都要按 state 回填，
+ *   而回填逻辑只该有一处 —— 散在各处必然有一天忘记同步新增的档位。
  */
 function syncThinkingModeControls() {
-    const toggle = elements.settingThinkingMode;
-    if (toggle) toggle.checked = Boolean(state.settings.thinkingMode);
     const effort = elements.settingThinkingEffort;
     if (effort) effort.value = THINKING_EFFORTS.includes(state.settings.thinkingEffort)
         ? state.settings.thinkingEffort
-        : 'medium';
-    // 第三人称（两段式生成）：与思考开关同属「对话优化」块，一并回填。
+        : 'off';
+    // 第三人称（两段式生成）：与思考强度同属「对话优化」块，一并回填。
     const thirdPerson = elements.settingThirdPerson;
     if (thirdPerson) thirdPerson.checked = Boolean(state.settings.thirdPerson);
     updateThinkingModeHint();
 }
 
 /**
- * 思考强度的说明文案：告诉用户**当前这个模型实际会收到什么**。
+ * 思考强度的说明文案：告诉用户**当前这个档位实际会变成什么请求**。
  *
  * 为什么要动态生成而不是写死一句：三种协议、四家厂商对"强度"的支持完全不同
- * （DeepSeek 只有 low/high/max，OpenAI 的 Responses 根本没有"关闭"这个取值，
- * Anthropic 的 reasoning.effort 又是另一套名字）。用户选了「中」却发现没有任何
- * 变化时，会以为功能坏了 —— 把"这一档对当前服务商意味着什么"直接写出来，
- * 比事后解释省事得多。
+ * （DeepSeek 只认 low/high/max；OpenAI 的 Responses 根本没有"关闭"这个取值；
+ * OpenAI 的 reasoning_effort 又没有 max）。用户选了一档却发现没变化时，
+ * 会以为功能坏了 —— 把"这一档对服务商意味着什么"直接写出来，比事后解释省事。
  */
 function updateThinkingModeHint() {
     const hint = elements.thinkingModeHint;
     if (!hint) return;
-    if (!state.settings.thinkingMode) {
-        hint.textContent = '当前已关闭：请求会显式告诉服务商不要思考（DeepSeek 服务端默认是开启的，所以必须显式关闭）。';
+    const effort = THINKING_EFFORTS.includes(state.settings.thinkingEffort) ? state.settings.thinkingEffort : 'off';
+    if (effort === 'off') {
+        hint.textContent = '已关闭思考：请求会显式告诉服务商「不要思考」（DeepSeek 服务端默认是开的，所以必须显式关闭）。';
         return;
     }
-    const effort = THINKING_EFFORTS.includes(state.settings.thinkingEffort) ? state.settings.thinkingEffort : 'medium';
-    if (effort === 'medium') {
-        hint.textContent = '「中」= 不指定强度，由服务商自己决定（DeepSeek 默认 high，OpenAI 默认 medium）。想固定行为就选低或高。';
-        return;
-    }
-    hint.textContent = `当前会向服务商请求「${effort === 'low' ? '低' : '高'}」强度；不支持该档位的服务商会忽略它。思考过程不影响工具调用记录，两者都会显示。`;
+    const label = { low: '低（快速）', high: '高（均衡）', max: '极高（深度）' }[effort] || effort;
+    hint.textContent = `当前向服务商请求「${label}」强度；不认这一档的服务商会忽略它（OpenAI 没有 max，「极高」会自动降到 high）。`;
 }
 
 // ========================================================================
@@ -1760,12 +1755,25 @@ function getAudioContext() {
     return _audioContext;
 }
 
-const TTS_CACHE_DB_NAME = 'elaina_open_tts_cache_v1';
-const TTS_CACHE_STORE = 'pcm_audio';
-const TTS_CACHE_LIMIT = 80;
-let ttsCacheDbPromise = null;
+// ── TTS 音频缓存：**纯内存 LRU，上限 5 条**（2026-10 起）─────────────────
+//
+// 之前是 IndexedDB（硬盘）缓存 80 条。改为内存缓存的两个理由：
+//   · 语音聊天音频属于"听过就没用"的一次性数据，没理由常驻硬盘；
+//     且 IndexedDB 挂在浏览器 profile 上，"删除 data/ 清数据"根本清不到它。
+//   · 上限 5 条足以覆盖"重听最近几条消息"的场景；被挤出缓存的音频
+//     下次播放时走未命中路径重新调用 TTS API 生成（speakTextXxx 里的既有逻辑）。
+//
+// LRU 语义：命中/写入都把 key 移到 Map 末尾（Map 迭代按插入序），
+// 超限时从头部淘汰最久未使用的条目。
+const TTS_MEMORY_LIMIT = 5;
 const activeTtsTasks = new Map();
 const ttsMemoryCache = new Map();
+
+// 一次性清理：老版本留在 IndexedDB 里的缓存库已废弃，删掉释放硬盘空间。
+// deleteDatabase 对不存在的库是空操作，重复执行无害（幂等）。
+try {
+    if ('indexedDB' in window) indexedDB.deleteDatabase('elaina_open_tts_cache_v1');
+} catch { /* 清不掉也不影响新缓存工作 */ }
 
 function hashTtsText(text) {
     let hash = 2166136261;
@@ -1824,82 +1832,32 @@ function buildMessageTtsCacheKey(message, spokenText, conversationId = state.cur
     ].join(':');
 }
 
-function openTtsCacheDb() {
-    if (!('indexedDB' in window)) return Promise.resolve(null);
-    if (ttsCacheDbPromise) return ttsCacheDbPromise;
-    ttsCacheDbPromise = new Promise(resolve => {
-        const request = indexedDB.open(TTS_CACHE_DB_NAME, 1);
-        request.onupgradeneeded = () => {
-            const db = request.result;
-            if (!db.objectStoreNames.contains(TTS_CACHE_STORE)) {
-                const store = db.createObjectStore(TTS_CACHE_STORE, { keyPath: 'key' });
-                store.createIndex('createdAt', 'createdAt');
-            }
-        };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => {
-            console.warn('[TTS Cache] IndexedDB 打开失败:', request.error);
-            resolve(null);
-        };
-    });
-    return ttsCacheDbPromise;
+function ttsCacheTouch(key) {
+    if (!ttsMemoryCache.has(key)) return;
+    const value = ttsMemoryCache.get(key);
+    ttsMemoryCache.delete(key);
+    ttsMemoryCache.set(key, value);
 }
 
 async function getCachedTtsAudio(key) {
     if (!key) return null;
-    if (ttsMemoryCache.has(key)) return ttsMemoryCache.get(key);
-    const db = await openTtsCacheDb();
-    if (!db) return null;
-    return new Promise(resolve => {
-        const request = db.transaction(TTS_CACHE_STORE, 'readonly').objectStore(TTS_CACHE_STORE).get(key);
-        request.onsuccess = () => {
-            const record = request.result || null;
-            if (record) ttsMemoryCache.set(key, record);
-            resolve(record);
-        };
-        request.onerror = () => resolve(null);
-    });
-}
-
-async function pruneTtsCache() {
-    const db = await openTtsCacheDb();
-    if (!db) return;
-    const transaction = db.transaction(TTS_CACHE_STORE, 'readwrite');
-    const store = transaction.objectStore(TTS_CACHE_STORE);
-    const countRequest = store.count();
-    countRequest.onsuccess = () => {
-        let removeCount = Math.max(0, countRequest.result - TTS_CACHE_LIMIT);
-        if (!removeCount) return;
-        const cursorRequest = store.index('createdAt').openCursor();
-        cursorRequest.onsuccess = event => {
-            const cursor = event.target.result;
-            if (!cursor || removeCount <= 0) return;
-            store.delete(cursor.primaryKey);
-            removeCount -= 1;
-            cursor.continue();
-        };
-    };
+    if (ttsMemoryCache.has(key)) {
+        ttsCacheTouch(key);   // 命中即"最近使用"，移到 LRU 末尾
+        return ttsMemoryCache.get(key);
+    }
+    return null;
 }
 
 async function saveCachedTtsAudio(key, pcmBuffer, sampleRate, format = 'pcm') {
     if (!key || !pcmBuffer || !pcmBuffer.byteLength) return;
     const record = { key, pcm: pcmBuffer, sampleRate, format, createdAt: Date.now() };
+    // 同 key 重写：先删再插，保证它在 Map 尾部（最新）
+    ttsMemoryCache.delete(key);
     ttsMemoryCache.set(key, record);
-    while (ttsMemoryCache.size > TTS_CACHE_LIMIT) {
-        ttsMemoryCache.delete(ttsMemoryCache.keys().next().value);
+    while (ttsMemoryCache.size > TTS_MEMORY_LIMIT) {
+        const oldest = ttsMemoryCache.keys().next().value;
+        ttsMemoryCache.delete(oldest);
     }
-    const db = await openTtsCacheDb();
-    if (!db) return;
-    await new Promise(resolve => {
-        const transaction = db.transaction(TTS_CACHE_STORE, 'readwrite');
-        transaction.objectStore(TTS_CACHE_STORE).put(record);
-        transaction.oncomplete = resolve;
-        transaction.onerror = () => {
-            console.warn('[TTS Cache] 写入失败:', transaction.error);
-            resolve();
-        };
-    });
-    pruneTtsCache().catch(() => {});
 }
 
 function mergePcmChunks(chunks) {
@@ -2065,6 +2023,15 @@ async function generateMimoTtsAudio(text, settings = state.settings) {
     if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写小米 MiMo TTS API Key');
     const baseUrl = String(settings.mimoTtsBaseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
     const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim() || 'mimo-v2.5-tts';
+    // ★ 2026-10：voiceclone 但还没有样本时，先试着补上**软件自带**的那段伊蕾娜日语样本
+    //   —— 用户可能压根没打开过设置页，直接在输入框按朗读也会走到这里。
+    //   settings 有可能是设置页的**草稿对象**（见 testTtsConnection），补完要同步过去，
+    //   否则本次请求读到的仍是空样本。
+    if (model === 'mimo-v2.5-tts-voiceclone' && !String(settings.mimoTtsCloneSample || '').trim()) {
+        await ensureBuiltinMimoCloneSample();
+        settings.mimoTtsCloneSample = state.settings.mimoTtsCloneSample;
+        settings.mimoTtsCloneSampleName = state.settings.mimoTtsCloneSampleName;
+    }
     // ★ 要朗读的文本必须放在 assistant 角色里
     const assistantMessage = { role: 'assistant', content: text };
     const audio = { format: 'wav' };
@@ -2127,7 +2094,7 @@ async function speakTextMimo(text, onStart, options = {}) {
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
-            console.log('[TTS Cache] 首次 MiMo 音频已写入 IndexedDB');
+            console.log('[TTS Cache] 首次 MiMo 音频已写入内存缓存（上限 5 条）');
         }
         await playCachedPcm({ pcm: bytes, format }, onStart, onEnd, session);
         if (!isVoiceSessionActive(session)) return { cancelled: true };
@@ -2203,7 +2170,7 @@ async function speakTextOpenaiTts(text, onStart, options = {}) {
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
-            console.log('[TTS Cache] 首次 OpenAI TTS 音频已写入 IndexedDB');
+            console.log('[TTS Cache] 首次 OpenAI TTS 音频已写入内存缓存（上限 5 条）');
         }
         await playCachedPcm({ pcm: bytes, format }, onStart, onEnd, session);
         if (!isVoiceSessionActive(session)) return { cancelled: true };
@@ -2271,7 +2238,7 @@ async function speakTextMinimax(text, onStart, options = {}) {
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, mp3, 24000, 'mp3');
-            console.log('[TTS Cache] 首次 MP3 音频已写入 IndexedDB');
+            console.log('[TTS Cache] 首次 MP3 音频已写入内存缓存（上限 5 条）');
         }
         await playCachedPcm({ pcm: mp3, format: 'mp3' }, onStart, onEnd, session);
         if (!isVoiceSessionActive(session)) return { cancelled: true };
@@ -2340,7 +2307,7 @@ async function speakTextDashscope(text, onStart, options = {}) {
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
-            console.log('[TTS Cache] 首次千问音频已写入 IndexedDB');
+            console.log('[TTS Cache] 首次千问音频已写入内存缓存（上限 5 条）');
         }
         await playCachedPcm({ pcm: bytes, format }, onStart, onEnd, session);
         if (!isVoiceSessionActive(session)) return { cancelled: true };

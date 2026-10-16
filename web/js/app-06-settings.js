@@ -694,8 +694,10 @@ const AGENT_READ_TOGGLES = [
 function fillAgentReadToggles() {
     for (const t of AGENT_READ_TOGGLES) {
         const el = document.getElementById(t.id);
-        // 默认 true：老用户升级后这些能力是可用的（他们的设置里没有这些字段）
-        if (el) el.checked = state.settings[t.key] !== false;
+        // ★ 2026-10：默认**关**（与 app-01-core.js 的 DEFAULTS 保持一致）。
+        //   老设置里已有值的照旧尊重用户选择，只有"从没设过"的才落到关 ——
+        //   这些是隐私数据，不能因为用户没表态就当同意。
+        if (el) el.checked = state.settings[t.key] === true;
     }
 }
 
@@ -1075,7 +1077,28 @@ async function refreshModsList() {
         el.addEventListener('change', async () => {
             const id = el.getAttribute('data-mod-id');
             // setEnabled 是 async 的：必须 await 之后再刷新，否则读到旧 state
-            if (window.ElainaMods) await window.ElainaMods.setEnabled(id, el.checked);
+            if (window.ElainaMods) {
+                // ★★ 2026-10 修（用户实测："按启动按钮没反应，点了像启动了又关掉"）：
+                //   setEnabled 对**不在注册表里**的插件会直接 `return false` —— 而注册表
+                //   只在页面启动时建立。于是刚装好、还没被扫到的插件：开关设上了、紧接着
+                //   列表重绘又按状态把它拨回去，看上去就是"点了没反应 / 弹回原位"。
+                //   这里的处理：先重扫一次再重试；仍失败就**如实说**并把开关拨回去 ——
+                //   绝不再显示"已启用（立即生效）"这种假状态。
+                let ok = await window.ElainaMods.setEnabled(id, el.checked);
+                if (ok === false && typeof window.ElainaMods.reload === 'function') {
+                    try { await window.ElainaMods.reload(); } catch (e) { /* 下面照常汇报 */ }
+                    ok = await window.ElainaMods.setEnabled(id, el.checked);
+                }
+                if (ok === false) {
+                    if (hint) {
+                        hint.textContent = '这个插件当前没能启用（加载器没认到它）。刷新页面后再试一次。';
+                        hint.className = 'text-[11px] text-red-500';
+                    }
+                    el.checked = !el.checked;   // 把开关拨回去，别留一个假状态
+                    void refreshModsList();
+                    return;
+                }
+            }
             if (hint) {
                 hint.textContent = '已' + (el.checked ? '启用' : '停用') + ' ' + id + '（立即生效）';
                 hint.className = 'text-[11px] text-indigo-500';
@@ -1271,29 +1294,92 @@ function updateMimoTtsModelUI() {
     document.getElementById('mimoTtsVoiceFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts');
     document.getElementById('mimoTtsVoiceDesignFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts-voicedesign');
     document.getElementById('mimoTtsVoiceCloneFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts-voiceclone');
+    // ★ 2026-10：切到 voiceclone 且还没有样本时，自动把**软件自带**的伊蕾娜日语
+    //   样本补上（见 loadBuiltinMimoCloneSample 的说明）—— 这样开箱即用，不必让
+    //   用户自己去找一段日语样本。
+    if (model === 'mimo-v2.5-tts-voiceclone') void ensureBuiltinMimoCloneSample();
 }
 
 // 参考音频样本上限：官方示例只需数秒的 mp3/wav，本应用为免设置文件膨胀设 5 MB 硬上限
 const MIMO_TTS_CLONE_SAMPLE_MAX_BYTES = 5 * 1024 * 1024;
+
+// ===== 内置参考音频样本（★ 2026-10）=====
+//
+// 软件自带一段伊蕾娜的日语样本：`web/audio/mimo-elaina-jp.m4a`（随应用一起分发，
+// APK 同步 web/ 时也会带上）。选到 voiceclone 模型而手上还没有样本时，自动把它
+// **转码成 wav 并填入** —— 走的是与"用户自己上传"完全同一条路径
+// （transcodeAudioBufferToWavDataUrl → data URL → 也是服务端拆到 data/voice-samples
+// 的那套），所以没有任何特例分支。
+//
+// ★ 这段样本的原始文件名叫 `202610131732.mp3`，但**真实字节是 m4a（ftypisom）容器**，
+//   只是被手机/工具错误命名成了 .mp3 —— 项目里早踩过这个坑（见下面关于"按文件头
+//   嗅探格式"的注释）。这里落地成 .m4a 是对的名字；反正前端一律先解码再转 wav，
+//   扩展名不影响可用性，但别再让下一个人误以为它是 mp3。
+//
+// ★ 为什么不做"每次启动都塞一遍"：转码后的 wav 有数 MB，写进 data/ 是实打实的体积；
+//   而且用户一旦自己上传或主动清除，就该尊重他的选择。所以：
+//     · 只在"当前是 voiceclone 且没有样本"时补，且**每个页面会话最多补一次**
+//     · 用户点过「清除样本」后本会话不再自动补（要恢复就点「内置样本」按钮）
+const BUILTIN_MIMO_CLONE_SAMPLE_URL = '/audio/mimo-elaina-jp.m4a';
+const BUILTIN_MIMO_CLONE_SAMPLE_NAME = '伊蕾娜·日语参考（内置）';
+let builtinCloneLoading = null;
+let builtinCloneTriedThisSession = false;
+
+/** 载入内置样本（fetch → 转码 wav → 落盘）。并发调用复用同一个 Promise */
+function loadBuiltinMimoCloneSample() {
+    if (builtinCloneLoading) return builtinCloneLoading;
+    builtinCloneLoading = (async () => {
+        try {
+            const res = await fetch(BUILTIN_MIMO_CLONE_SAMPLE_URL, { cache: 'force-cache' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const dataUrl = await transcodeAudioBufferToWavDataUrl(await res.arrayBuffer());
+            if (dataUrl.length > MIMO_TTS_CLONE_SAMPLE_MAX_BYTES * 1.5) throw new Error('内置样本转码后超过上限');
+            state.settings.mimoTtsCloneSample = dataUrl;
+            state.settings.mimoTtsCloneSampleName = BUILTIN_MIMO_CLONE_SAMPLE_NAME;
+            persistSettings();
+            updateMimoTtsCloneSampleStatusDisplay();
+            return true;
+        } catch (e) {
+            console.warn('[MiMo TTS] 内置参考样本不可用（可手动上传）：', e);
+            updateMimoTtsCloneSampleStatusDisplay('内置样本加载失败，请手动选择参考音频。', true);
+            return false;
+        } finally {
+            builtinCloneLoading = null;
+        }
+    })();
+    return builtinCloneLoading;
+}
+
+/** 自动补内置样本：仅当"当前选的是 voiceclone + 还没有样本 + 本会话还没试过"时动手 */
+function ensureBuiltinMimoCloneSample() {
+    const model = document.getElementById('settingMimoTtsModel')?.value || state.settings.mimoTtsModel || '';
+    if (model !== 'mimo-v2.5-tts-voiceclone') return Promise.resolve(false);
+    if (String(state.settings.mimoTtsCloneSample || '').trim()) return Promise.resolve(false);
+    if (builtinCloneTriedThisSession) return Promise.resolve(false);
+    builtinCloneTriedThisSession = true;
+    return loadBuiltinMimoCloneSample();
+}
 
 // 展示已保存样本的文件名（文件框无法回填，只能靠状态里的文件名）；传 message 则临时覆盖文案。
 // 拆成两个：Display 只渲染（转码完成的回调也用它，避免与 repair 相互触发）。
 function updateMimoTtsCloneSampleStatusDisplay(message, isError) {
     const el = document.getElementById('mimoTtsCloneSampleStatus');
     if (!el) return;
+    // ★ 2026-10：改挂 .tts-sample-status 这套类（颜色走主题变量，见 index.html），
+    //   不再用写死的 Tailwind 色（text-emerald-400 / text-red-400 / text-indigo-300）。
     if (message) {
         el.textContent = message;
-        el.className = 'text-[11px] leading-relaxed mt-1 ' + (isError ? 'text-red-400' : 'text-emerald-400');
+        el.className = 'tts-sample-status ' + (isError ? 'is-error' : 'is-ok');
         return;
     }
     const name = String(state.settings.mimoTtsCloneSampleName || '').trim();
     const hasSample = Boolean(String(state.settings.mimoTtsCloneSample || '').trim());
     if (hasSample) {
         el.textContent = `已选择：${name || '(未命名)'}`;
-        el.className = 'text-[11px] text-emerald-400 leading-relaxed mt-1';
+        el.className = 'tts-sample-status is-ok';
     } else {
         el.textContent = '未选择样本';
-        el.className = 'text-[11px] text-indigo-300 leading-relaxed mt-1';
+        el.className = 'tts-sample-status';
     }
 }
 function updateMimoTtsCloneSampleStatus(message, isError) {
@@ -1433,6 +1519,9 @@ async function handleMimoTtsCloneSampleFileChange(event) {
 function clearMimoTtsCloneSample() {
     state.settings.mimoTtsCloneSample = '';
     state.settings.mimoTtsCloneSampleName = '';
+    // ★ 2026-10：清掉之后本会话别再自动补内置样本 —— 用户是主动清的，
+    //   不该马上又被塞回来。想恢复就点旁边的「内置样本」按钮。
+    builtinCloneTriedThisSession = true;
     const input = document.getElementById('settingMimoTtsCloneSample');
     if (input) input.value = '';
     persistSettings();
@@ -1523,10 +1612,18 @@ async function withSettingsTestButton(button, runningText, callback) {
 async function testChatConnection() {
     await withSettingsTestButton(elements.testChatConnectionBtn, '测试中…', async () => {
         const draft = readProviderSettingsForm();
+        // ★★ 2026-10 修：原先是 maxTokens: 8 —— 对**思考型模型**是个坑。
+        //   实测（AMD Radeon 中转 + MiMo-V2.6-Flash）：8 个 token 全被模型花在
+        //   `reasoning` 上（日志里能看到 reasoning:"The user asked me to only…"），
+        //   然后 finish_reason=length → 正文一个 token 都没剩 → 报"模型只返回了思考
+        //   内容"。而且这个网关**不认** `thinking` 字段（它要求用 `reasoning_effort`），
+        //   应用只能剥离后重试，模型于是走自己的默认（照样先思考）。
+        //   给 256 个 token：思考完还能留下可见的 "OK"，测试不再假红。
+        //   代价可忽略（一次测试最多几十~几百 token）。
         const reply = await callChatAPI([
             { role: 'system', content: '这是连接测试。' },
             { role: 'user', content: '只回复 OK' }
-        ], { maxTokens: 8, temperature: 0 }, draft);
+        ], { maxTokens: 256, temperature: 0 }, draft);
         if (!reply.trim()) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '对话接口返回了空内容');
         showCustomAlert(`连接成功，模型返回：${reply.trim()}`, '对话连接正常');
     });
@@ -1662,15 +1759,17 @@ async function saveSettings(opts) {
         agentAccess: nextAccess,
         agentPhoneEnabled: document.getElementById('settingAgentPhoneEnabled')?.checked !== false,
         ...readAgentReadToggles(),
-        // 思考模式：以设置面板当前状态为准。
-        // 注意这两个控件是"改了立刻生效 + 立刻持久化"的（见 app-07-init.js），
-        // 这里再读一次是为了覆盖"用户改了控件但没点保存、又点了保存"的路径 ——
-        // 两条路径都要落到同一个值，否则会出现"保存后又变回旧值"。
-        thinkingMode: elements.settingThinkingMode.checked,
+        // 思考：UI 上只有一个"思考强度"四档下拉（off 就是"不思考"）。
+        // `thinkingMode` 由它**派生** —— 请求层与「思考」折叠栏仍读这个布尔量，
+        // 所以两处都要落到同一个来源，绝不能让它和档位脱节（见 app-01-core.js 的说明）。
+        // 注意这个控件是"改了立刻生效 + 立刻持久化"的（见 app-07-init.js），
+        // 这里再读一次是为了覆盖"用户改了控件但没点保存、又点了保存"的路径。
+        thinkingMode: elements.settingThinkingEffort.value !== 'off'
+            && THINKING_EFFORTS.includes(elements.settingThinkingEffort.value),
         thinkingEffort: THINKING_EFFORTS.includes(elements.settingThinkingEffort.value)
             ? elements.settingThinkingEffort.value
-            : 'medium',
-        // 对话优化：第三人称两段式开关。与上面两个控件一样"改了立刻生效 + 立刻持久化"，
+            : 'off',
+        // 对话优化：第三人称两段式开关。与上面一样"改了立刻生效 + 立刻持久化"，
         // 这里再读一次是为了覆盖"改了控件但没点保存、又点了保存"的路径。
         thirdPerson: elements.settingThirdPerson.checked
     };

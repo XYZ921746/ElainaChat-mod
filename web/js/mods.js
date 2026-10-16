@@ -209,6 +209,60 @@
      * @param {object} manifest 清单条目
      * @param {string} [regName] 插件脚本里 register() 用的名字（缺省 = manifest.id）
      */
+    // ---- 插件私有存储（host.storage 的实现）★ 2026-10 ----
+    //
+    //  存在宿主的一个 Store 键里：`{ "<插件id>": { … } }`，按 id 分区。
+    //  为什么给插件开这个口子：插件要"跨刷新/跨重启记住状态"，却拿不到宿主
+    //  私有的 Store 内部键；让它自己写 localStorage 又进不了 data/（不跨设备、
+    //  不进备份）。生日模块的状态（今天看过彩蛋没有、用户选了哪个分支、
+    //  生日前的主题）正需要这个。
+    //  ★ 这个键必须列在 store.js 的 DATA_KEYS 白名单里，否则写入只进内存
+    //    缓存、刷新即丢（本项目踩过三次的坑）。
+    const MOD_STORAGE_KEY = 'elaina_mod_storage';
+
+    function readModStorage() {
+        try {
+            const raw = Store.getItem(MOD_STORAGE_KEY);
+            const o = raw ? JSON.parse(raw) : null;
+            return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+        } catch (e) { return {}; }
+    }
+    function writeModStorage(all) {
+        try { Store.setItem(MOD_STORAGE_KEY, JSON.stringify(all)); } catch (e) { /* 忽略 */ }
+    }
+    /** 造一块"带插件命名空间"的存储（值须 JSON 可序列化；读回来是原值） */
+    function createModStorage(modId) {
+        const mine = () => {
+            const v = readModStorage()[modId];
+            return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
+        };
+        return {
+            get(key, fallback) {
+                const o = mine();
+                return Object.prototype.hasOwnProperty.call(o, String(key))
+                    ? o[String(key)]
+                    : (fallback === undefined ? null : fallback);
+            },
+            set(key, value) {
+                const all = readModStorage();
+                const cur = (all[modId] && typeof all[modId] === 'object' && !Array.isArray(all[modId])) ? all[modId] : {};
+                cur[String(key)] = value;
+                all[modId] = cur;
+                writeModStorage(all);
+                return value;
+            },
+            remove(key) {
+                const all = readModStorage();
+                const cur = (all[modId] && typeof all[modId] === 'object' && !Array.isArray(all[modId])) ? all[modId] : {};
+                delete cur[String(key)];
+                all[modId] = cur;
+                writeModStorage(all);
+            },
+            keys() { return Object.keys(mine()); },
+            all() { return { ...mine() }; },
+        };
+    }
+
     function createHostApi(manifest, regName) {
         // 日志前缀用**注册名**（插件自己认得的名字），便于对上它的源码
         const name = regName || manifest.id;
@@ -464,6 +518,88 @@
                 return bindFlatDragSort(container, onDone);
             },
 
+            // ---- 插件私有持久化（跨刷新 / 跨重启 / 跨设备同步）★ 2026-10 ----
+            /**
+             * `host.storage`：一块**带插件命名空间**的存储，落宿主 data/。
+             *
+             *   const s = host.storage;
+             *   s.set('seen', '2026-10-17');   // 存（值须 JSON 可序列化）
+             *   s.get('seen', '');              // 读；不存在返回第二个参数
+             *   s.remove('seen'); s.keys(); s.all();
+             *
+             * ★ 为什么由宿主提供：插件拿不到宿主的 Store 内部键，而自己写
+             *   localStorage 又进不了 data/（不跨设备、不进备份）。宿主把所有
+             *   插件的存储收在 `elaina_mod_storage` 一个键里、按 id 分区，
+             *   互不干扰。
+             * ★ 停用插件**不会**清掉它的数据 —— 那是"关掉功能"，不是"抹掉记录"。
+             */
+            storage: createModStorage(manifest.id),
+
+            // ---- 注册一个主题模板（插件主题）★ 2026-10 ----
+            /**
+             * `host.theme({ id, name, dots, vars })` —— 把一套配色注册进
+             * 「设置 → 外观」的主题选择器，用 vars（CSS 变量表）落成样式。
+             *
+             *   host.theme({
+             *     id: 'stardust', name: '星屑之日',
+             *     dots: ['#ded8e8', '#b8934a', '#fbf7ef'],
+             *     vars: { '--pixso-canvas': '#ded8e8', '--pixso-green': '#6d6aa8', … },
+             *   });
+             *
+             * ★ 启用时注册、停用/卸载时**自动摘除**（走与插槽同一套贡献回收）：
+             *   停用后那套配色从选择器里消失；用户正停在它上面时会回落默认主题。
+             * ★ 只给"浅色"var：深色由宿主的深色块统一覆盖（见 theme.js 的说明）。
+             * @returns {{ok:boolean, id:string}}
+             */
+            theme(spec) {
+                const t = { ...(spec || {}) };
+                if (!t.id) { log('warn', 'host.theme 需要 id'); return { ok: false, id: '' }; }
+                const apply = () => {
+                    try {
+                        if (window.ElainaTheme && typeof window.ElainaTheme.registerTemplate === 'function') {
+                            return window.ElainaTheme.registerTemplate(t) !== false;
+                        }
+                    } catch (e) { /* 忽略 */ }
+                    return false;
+                };
+                const undo = () => {
+                    try {
+                        if (window.ElainaTheme && typeof window.ElainaTheme.unregisterTemplate === 'function') {
+                            window.ElainaTheme.unregisterTemplate(t.id);
+                        }
+                    } catch (e) { /* 忽略 */ }
+                };
+                addContribution(manifest.id, { activate: apply, deactivate: undo, dispose: undo });
+                return {
+                    ok: true,
+                    id: String(t.id),
+                    /** 临时切到这套主题（记住切换前的那套，供 restore() 还原） */
+                    use() {
+                        try { return window.ElainaTheme?.useTemplate?.(t.id); } catch (e) { return null; }
+                    },
+                    /** 还原到 use() 之前用户用的那套主题 */
+                    restore() {
+                        try { return window.ElainaTheme?.restoreTemplate?.(); } catch (e) { return null; }
+                    },
+                };
+            },
+
+            // ---- 触发达成一条成就（成就在宿主侧，插件只当触发器）★ 2026-10 ----
+            /**
+             * `host.unlock(id, detail)` —— 解锁一条**宿主已定义**的成就。
+             *
+             * 成就是宿主的功能（面板、持久化、判定都在宿主），插件只负责
+             * "在合适的时机上报"：例如生日插件在用户选完开场分支时上报
+             * `stardust_remembered`。日后再加这种"事件型成就"的插件同理。
+             *
+             * @returns {boolean} 是否成功（id 不在宿主清单里返回 false）
+             */
+            unlock(id, detail) {
+                try {
+                    return Boolean(window.ElainaAchievements && window.ElainaAchievements.unlock(id, detail));
+                } catch (e) { return false; }
+            },
+
             // ---- 宿主插槽：向宿主挖好的命名扩展点里注册 ----
             /**
              * 往宿主插槽里注册一项。设置分栏 / 顶部按钮都是插槽实例。
@@ -526,6 +662,13 @@
                 const attach = () => {
                     if (!bus.has(event)) bus.set(event, new Set());
                     bus.get(event).add(h);
+                    // ★ 'app-ready' 是"一次性、且可能已经发生过"的事件：mod 在
+                    //   DOMContentLoaded 就加载，而初始化完成可能早于某个 mod 的
+                    //   注册（loadAll 异步）→ 慢加载的 mod 会永远等不到这个信号。
+                    //   所以订阅时若它已经发生过，立刻补调一次。
+                    if (event === 'app-ready' && appReadyFired) {
+                        try { h(); } catch (e) { log('error', 'app-ready 处理失败', e); }
+                    }
                 };
                 const detach = () => {
                     const set = bus.get(event);
@@ -590,6 +733,15 @@
 
     /** 简易事件总线（宿主 ↔ 插件、插件 ↔ 插件） */
     const bus = new Map();
+
+    /**
+     * 'app-ready' 是否已经发生过。
+     *
+     * 由 `ElainaMods.markAppReady()` 置位（app-07-init.js 在 init() 末尾调用）。
+     * 单独存这个状态而不是只依赖事件：mod 加载是异步的，晚注册的 mod 会
+     * 错过一次性事件（见 host.on 里的补调）。
+     */
+    let appReadyFired = false;
 
     // ========================================================================
     //  宿主插槽（named slots）+「注册即副作用」
@@ -1949,6 +2101,23 @@
             }));
         },
         setEnabled,
+        /**
+         * 重新扫描并加载插件（幂等，可重复调用）。
+         *
+         * ★★ 2026-10 修（用户实测报障："插件市场里下载成功、装上了，就是用不了"）：
+         *   **插件的注册表只在页面启动时由 loadAll() 建立一次**。
+         *   市场装完新插件后不重新扫描，那个插件就不在注册表里，于是：
+         *     · 插件栏的开关点了也不生效 —— setEnabled 开头 `registry.get(id)`
+         *       取不到就直接 `return false`，用户看着开关在那儿其实按不动；
+         *     · 而市场装完的提示当时写的是"到插件栏打开它的开关即可生效"，
+         *       那是句**不成立的话**（开关默认就是开的，且对新装的插件无效）。
+         *   暴露这个入口给市场：装完立刻调一次，新插件当场加载，
+         *   之前因缺前置被拒的插件也会在这一轮里**重新评估**依赖（前置补齐即生效）。
+         *
+         *   为什么重复调用安全：loadAll 全程幂等 —— loadOne 有"脚本已注入过"闸门
+         *   （见那里的说明），本函数本身也被启动与多设备同步两条路径重复调用过。
+         */
+        reload: loadAll,
         /** 删插件时调用：清掉启用状态与已加载记录（避免重装后被自动启用） */
         forget: forgetMod,
         isEnabled: (id) => {
@@ -1983,6 +2152,17 @@
         collectPromptHints,
         /** 宿主用它广播事件给插件（如"AI 回复完成"、语音音量） */
         emit,
+        /**
+         * 宿主在 init() 末尾调一次：通知插件"应用已初始化完成"。
+         *
+         * 会广播 `app-ready` 并记下"已发生" —— 之后才注册的 mod 订阅时会被
+         * 立刻补调（见 host.on 的说明），所以慢加载也不会漏掉这个信号。
+         */
+        markAppReady() {
+            if (appReadyFired) return;
+            appReadyFired = true;
+            emit('app-ready', {});
+        },
         on(event, handler) {
             if (!bus.has(event)) bus.set(event, new Set());
             bus.get(event).add(handler);

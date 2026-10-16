@@ -42,6 +42,10 @@ const providers = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js')
 const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
 const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'app-02-data.js'), 'utf8');
 const serveSrc = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
+// ★★ 2026-10：本地中继（含它那套流式超时/透传行为）搬进了 server/relay.mjs，
+//   成为电脑端与手机端**共用**的一份实现。所以下面第 6c 节要在新文件里找，
+//   而不是在 serve.mjs 里 —— 搬走之后留了一份转发壳，细节全在那边。
+const relaySrc = readFileSync(path.join(ROOT, 'server', 'relay.mjs'), 'utf8');
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -102,7 +106,7 @@ function extractFn(name, src = core) {
     return src.slice(start, i);
 }
 const buildThinkingParams = new Function('isDeepSeekOfficial', `
-    const THINKING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+    const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
     ${extractFn('mapThinkingEffort')}
     ${extractFn('detectThinkingVendor')}
     ${extractFn('buildThinkingParams')}
@@ -120,8 +124,8 @@ ok(JSON.stringify(ds(true)) === JSON.stringify({ thinking: { type: 'enabled' } }
 ok(ds(true, 'low').reasoning_effort === 'low', 'DeepSeek 低强度 → reasoning_effort=low');
 ok(ds(true, 'high').reasoning_effort === 'high', 'DeepSeek 高强度 → reasoning_effort=high');
 ok(!('reasoning_effort' in ds(true, 'medium')),
-    'DeepSeek medium = 不指定强度（交给服务商默认，不替用户决定花多少 token）');
-// DeepSeek 只认 low/high/max：medium 不能硬塞成 high，否则用户以为选了中间档
+    '已废弃的老档位 medium 不再被识别（不会静默变成 high）');
+// DeepSeek 只认 low/high/max：老档位 medium 不能硬塞成 high，否则用户以为选了中间档
 ok(!('reasoning_effort' in ds(true, 'medium')), '★ medium 不被静默改成 high');
 
 // Anthropic：用 reasoning.effort，绝不能用 thinking 字段
@@ -576,14 +580,16 @@ console.log('\n=== 6b. 流式可达性（第三人称两段式 / 同步模式 TT
 //      → `[Chat] anthropic 流式不可用，退回非流式`
 console.log('\n=== 6c. 中转超时语义（空闲续期，不是总时长）===');
 {
-    ok(/const armIdleTimer = \(ms\) =>/.test(serveSrc),
+    // ★ 2026-10：这几条判的是**中继实现**，它已随中继搬到 server/relay.mjs（两端共用），
+    //   所以改看 relaySrc —— 继续盯 serve.mjs 只会在搬家后误报"行为没了"。
+    ok(/const armIdleTimer = \(ms\) =>/.test(relaySrc),
         '★ 中转用 armIdleTimer 续期（每收到一块就重置计时）');
-    ok(/armIdleTimer\(timeoutMs\)/.test(serveSrc), '转发循环里对每块数据续期');
-    ok(/hardDeadline/.test(serveSrc),
+    ok(/armIdleTimer\(timeoutMs\)/.test(relaySrc), '转发循环里对每块数据续期');
+    ok(/hardDeadline/.test(relaySrc),
         '★ 空闲续期之外还有总时长硬顶（防"一直发心跳不说正文"占住连接）');
-    ok(/flushHeaders/.test(serveSrc),
+    ok(/flushHeaders/.test(relaySrc),
         '★ 响应头立刻 flush（否则前端要等第一块数据才知道流已经开始）');
-    ok(/X-Accel-Buffering/.test(serveSrc),
+    ok(/X-Accel-Buffering/.test(relaySrc),
         '★ SSE 关闭中间层缓冲（X-Accel-Buffering: no）');
     // 客户端的超时预算：思考模式要放宽，否则首字节还没来就被本地掐断
     ok(/CHAT_TIMEOUT_THINKING_MS/.test(core) && /CHAT_TIMEOUT_DEFAULT_MS/.test(core),
@@ -595,14 +601,17 @@ console.log('\n=== 6c. 中转超时语义（空闲续期，不是总时长）===
 }
 
 // ============================================================ 7. 设置界面
-console.log('\n=== 7. 思考开关已移到「设置 → 对话」===');
-ok(/id="settingThinkingMode"/.test(indexHtml), '设置里有思考开关');
-ok(/id="settingThinkingEffort"/.test(indexHtml), '设置里有思考强度');
-for (const v of ['low', 'medium', 'high']) {
+console.log('\n=== 7. 思考强度（四档下拉，独立开关已合并）===');
+ok(!/id="settingThinkingMode"/.test(indexHtml),
+    '★ 独立的思考勾选框已移除（开关合并进档位，避免"开关关着、档位却是 max"）');
+ok(/id="settingThinkingEffort"/.test(indexHtml), '设置里有思考强度下拉');
+for (const v of ['off', 'low', 'high', 'max']) {
     ok(new RegExp(`<option value="${v}">`).test(indexHtml), `强度档位含 ${v}`);
 }
 ok(/THINKING_EFFORTS/.test(core) && /THINKING_EFFORTS/.test(settings),
     'THINKING_EFFORTS 白名单被设置读写两侧共用');
+ok(/THINKING_EFFORTS = Object\.freeze\(\['off', 'low', 'high', 'max'\]\)/.test(core),
+    '★★ 档位白名单是 off/low/high/max 四档（off = 不思考，与 UI 选项一致）');
 // ★ 从输入框菜单里彻底移走（否则同一个设置有两个入口，会互相不同步）
 ok(!/id="composerThinkingToggle"/.test(indexHtml), '★ 输入框菜单里的思考开关已移除');
 ok(!/id="initialComposerThinkingToggle"/.test(indexHtml), '★ 首屏菜单里的思考开关也已移除');
@@ -610,20 +619,22 @@ ok(!/syncComposerThinkingToggles/.test(core + voice + init),
     '★ 旧的菜单同步函数已删除（没有残留调用）');
 ok(!/MiniMax 请求，默认关闭/.test(indexHtml), '★ 旧的错误提示文案（"MiniMax 请求"）已删除');
 // 设置读写接线
-ok(/settingThinkingMode: document\.getElementById\('settingThinkingMode'\)/.test(core),
-    'elements 映射里有 settingThinkingMode');
+ok(!/settingThinkingMode: document\.getElementById/.test(core),
+    '★ elements 映射里不再有 settingThinkingMode（控件已合并）');
 ok(/settingThinkingEffort: document\.getElementById\('settingThinkingEffort'\)/.test(core),
     'elements 映射里有 settingThinkingEffort');
-ok(/thinkingMode: elements\.settingThinkingMode\.checked/.test(settings),
-    'saveSettings 落盘思考开关');
+ok(/thinkingMode: elements\.settingThinkingEffort\.value !== 'off'/.test(settings),
+    '★★ saveSettings 由档位派生 thinkingMode（off ⇒ false）');
 ok(/thinkingEffort: THINKING_EFFORTS\.includes\(elements\.settingThinkingEffort\.value\)/.test(settings),
     'saveSettings 落盘思考强度（并做白名单校验）');
-ok(/thinkingEffort: 'medium'/.test(core), 'DEFAULT_SETTINGS 有 thinkingEffort 默认值');
+ok(/thinkingEffort: 'off'/.test(core), 'DEFAULT_SETTINGS 的思考档位默认 off（不思考）');
 ok(/syncThinkingModeControls\(\)/.test(settings), 'fillSettingsForm 回填思考控件');
-ok(/elements\.settingThinkingMode\.addEventListener\('change'/.test(init),
-    '思考开关改动即持久化');
+ok(!/elements\.settingThinkingMode/.test(init),
+    '★ init 里不再有独立思考开关的绑定（控件已合并）');
 ok(/elements\.settingThinkingEffort\.addEventListener\('change'/.test(init),
     '思考强度改动即持久化');
+ok(/state\.settings\.thinkingMode = value !== 'off'/.test(init),
+    '★★ 档位变更时同步派生 thinkingMode（请求层判据一致）');
 ok(/updateThinkingModeHint/.test(voice) && /id="thinkingModeHint"/.test(indexHtml),
     '有动态说明（告诉用户当前档位对当前服务商意味着什么）');
 // 请求侧接线

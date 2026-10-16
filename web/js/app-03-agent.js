@@ -19,19 +19,22 @@
 
 // ===== AI Agent 操作入口：LLM 回复中的 [操作:xxx] 标签触发 =====
 
-// ===== 三档 AI 权限（★ 2026-10 新增，电脑与手机共用一套）=====
+// ===== AI 权限档位（★ 2026-10 新增 `off`，此前为三档）=====
 //
 // 一个设置 `state.settings.agentAccess` 同时管两件事：
 //   ① 能碰哪里 —— 三档**都能访问任意路径**（旧模型的 app/computer 路径边界已取消）
 //   ② 要不要问 —— 以及允不允许删除
 //
+//   off    关闭     · 电脑操作**整体关闭**：不读、不写、不删、不执行命令，
+//                     连"桌面在哪"这类电脑信息也不再注入提示词（2026-10 新增）
 //   strict 逐条确认 · 会改动电脑的操作（写入/覆盖/删除/命令）每次都问；读取不问
 //   auto   自动通过 · 改动类直接放行，但**禁止删除**
 //   full   完全访问 · 含删除在内全部放行
 //
-// 手机侧复用同一档位，但语义按手机的能力映射（见 phoneTierAllows）：
-// 手机没有"删除文件"这个动作，所以三档在手机上只区分"要不要问"。
-const AGENT_ACCESS_LEVELS = ['strict', 'auto', 'full'];
+// 手机侧复用同一档位，但语义按手机的能力映射（见 phoneTierAllows）。
+// ★ `off` 只关**电脑侧**：手机有它自己的总开关（设置里的「允许 AI 操作手机」），
+//   两者是独立的两件事，别把一个档位当成"关掉全部 Agent"的万能开关。
+const AGENT_ACCESS_LEVELS = ['off', 'strict', 'auto', 'full'];
 const AGENT_ACCESS_DEFAULT = 'strict';
 
 /** 当前档位（非法值一律按最严的 strict 处理，与服务的收敛规则一致） */
@@ -39,6 +42,19 @@ function currentAgentAccess() {
     const v = String(state.settings.agentAccess || '').trim();
     return AGENT_ACCESS_LEVELS.includes(v) ? v : AGENT_ACCESS_DEFAULT;
 }
+
+/** 当前是不是"电脑操作整体关闭"档。比"要不要问"更靠前的一层。 */
+function agentAccessDisabled() {
+    return currentAgentAccess() === 'off';
+}
+
+/**
+ * `off` 档下给用户/模型看的一句说明。
+ * 集中一处：前端拦截、提示词注入、失败解释都可能用到，口径必须一致。
+ */
+const AGENT_DISABLED_NOTE = 'AI 的电脑操作已在设置里关闭（AI 权限 → 关闭）：'
+    + '不能读取、写入或修改电脑上的任何文件，也不能执行电脑命令。'
+    + '需要时请在「设置 → 能力 → AI 权限」里改回来。';
 
 /** 这一档允不允许删除（电脑侧）。只有 full 允许。 */
 function agentAccessAllowsDelete() {
@@ -81,6 +97,9 @@ window.agentActions = {
     setLive2dBackground(v) { if (window.Live2DCall) window.Live2DCall.setBackground(v); },
     // 文件操作：解析 [操作:列出文件/查看文件/保存文件/删除文件 …] 并执行（权限档位见上）
     agentFileOperation(raw) {
+        // ★ `off` 档：电脑操作整体关闭 —— 连服务端都不必问，直接回一句明确说明。
+        //   为什么不直接静默忽略：用户/AI 都需要知道"这是被关掉的"，而不是看起来像坏了。
+        if (agentAccessDisabled()) { insertAgentResult(AGENT_DISABLED_NOTE); return; }
         const access = currentAgentAccess();
         const text = String(raw || '').trim();
         let action = 'ls';
@@ -134,8 +153,10 @@ window.agentActions = {
         void runAgentPhoneOperation(raw);
     },
     // 电脑命令：[操作:电脑命令 dir] 等。
-    // 三档都可执行，区别只在"要不要问"（见 doAgentCommand 与 server 的 agentExec）。
+    // strict/auto/full 三档都可执行，区别只在"要不要问"（见 doAgentCommand 与 server 的 agentExec）。
     agentCommandOperation(raw) {
+        // ★ `off` 档：命令执行也整体关闭。
+        if (agentAccessDisabled()) { insertAgentResult(AGENT_DISABLED_NOTE); return; }
         const text = String(raw || '').trim();
         // 剥掉触发前缀，剩下的就是命令原文
         const command = text.replace(/^(?:电脑命令|执行命令|运行命令|电脑执行)\s*/, '').trim();
@@ -226,16 +247,34 @@ const agentRuntime = (function () {
         if (s) s.textContent = running ? ('第 ' + step + ' 步' + (currentAction ? ' · ' + currentAction : '')) : '';
         const btn = stopBtnEl();
         if (btn) { btn.disabled = stopRequested; btn.textContent = stopRequested ? '停止中' : '停止'; }
-        // 「看画面」只在**任务进行中且用模块后端**时出现 ——
+        // 「看画面」只在**这一轮真的在走模块后端**时出现 ——
         // 模块的价值就是独立副屏，只有那条路才有"画面"可看；
         // 无障碍是在物理屏上操作，用户本来就看得见。
+        //
+        // ★★ 2026-10 修（真机反馈"我选了前台，界面却在走模块"）：
+        //   原来的判据是 `currentBackendId() === 'module' || used === 'module'`，
+        //   两个都有问题，而且**都会往"显示模块"的方向错**：
+        //     · currentBackendId() 读的是设置里**持久化的默认方式**，
+        //       用户在「运行方式」弹窗里临时选了前台，它照样是 module；
+        //     · __lastAgentBackend 是**上一轮**用过的后端，且从来不重置 ——
+        //       只要历史上走过一次模块，之后每一轮都会亮着这个按钮。
+        //   结果：用户明明选了前台，却看到"看画面"，于是判断"它在偷偷走模块"。
+        //   这跟原生的那次真 bug 叠加在一起，把排查方向彻底带偏了。
+        //
+        //   现在的优先级（**本轮的选择 > 实际用过的 > 设置里的默认**）：
+        //   本轮的选择最权威，它正是用户刚刚亲手点的那一下。
         const watch = document.getElementById('agentWatchBtn');
         if (watch) {
-            // lastUsedBackendId 定义在 IIFE 外（手机操作执行层里），用 window 桥接读
+            // runModeDecision / lastUsedBackendId 都是本文件顶层变量（IIFE 外），
+            // 这里直接闭包读取；用 typeof 兜住"还没轮到那段代码执行"的极早期调用。
+            const mode = (typeof runModeDecision === 'string') ? runModeDecision : '';
             const used = String(window.__lastAgentBackend || '');
-            const useModule = (typeof currentBackendId === 'function' && currentBackendId() === 'module')
-                || used === 'module';
-            watch.classList.toggle('hidden', !(running && useModule));
+            const fallbackDefault = (typeof currentBackendId === 'function') ? currentBackendId() : '';
+            // '' = 本轮还没问过（只有一条路可用，不弹窗）→ 才回落到实际/默认
+            const effective = (mode === 'module' || mode === 'accessibility')
+                ? mode
+                : (used || fallbackDefault);
+            watch.classList.toggle('hidden', !(running && effective === 'module'));
         }
     }
 
@@ -480,6 +519,9 @@ const agentRuntime = (function () {
         try { void plugin.updateOverlay({ text: label }); } catch (e) { /* 浮层没了就忽略 */ }
     }
 
+    // 浮层的副标题统一由 setStep → updateOverlayStep 驱动。
+    // 不为它另开一个"直接写文案"的入口：两处写同一行字只会互相覆盖
+    // （实测踩到：续跑时先写"正在思考下一步…"，紧接着 setStep 又把它盖成"第 N 步 · …"）。
     function hideOverlay() {
         const plugin = nativeBridge();
         if (!plugin || typeof plugin.hideOverlay !== 'function') return;
@@ -544,6 +586,135 @@ const AGENT_PHONE_OPS = [
 
 let phoneOpsInFlight = 0;
 let phoneRunEndTimer = null;
+let overlayHideTimer = null;
+
+/**
+ * 悬浮窗的收起交给这里 —— 而不是"每批操作一结束就收起"。
+ *
+ * ★★ 2026-10 修（用户反馈"不要因为一点问题一直在闪"）：
+ *   一次任务通常由很多步组成，而**步与步之间隔着一次模型调用（数秒）**。
+ *   原来的写法是"这批操作做完就 hide、下一步再 show" —— 窗口被反复
+ *   removeView/addView，用户看到的就是"一直在闪"。
+ *   现在只在**确实没有后续**时才收：
+ *     · 还有操作在飞（phoneOpsInFlight > 0）→ 不收；
+ *     · 续跑已排上（agentContinueTimer 还在）→ 不收，下一步马上就来；
+ *     · 否则等一小段冷静期再收（覆盖"最后一步失败、不会再有续跑"这种情况）。
+ *   续跑开始时会清掉这个定时器（见 continueAgentLoop）—— 那段时间浮层要留着，
+ *   并换成"正在思考下一步…"，这样用户切到别的 App 也看得到 AI 在干什么。
+ */
+// 「这一轮还在跑吗」——状态条与悬浮窗只在**不忙**时才允许收起。
+//
+// ★★ 2026-10 修（用户反馈"在后台时悬浮窗老是消失"）：
+//   原来两处的守卫分开写，漏掉了**模型调用进行中**这一段：
+//   续跑定时器一触发就把自己清成 null（见 scheduleAgentContinue 的回调），
+//   而 callAI 要跑好几秒。于是 600ms 排下的收起定时器在 ~1.8s 检查时，
+//   phoneOpsInFlight 和 agentContinueTimer 全是"不忙" →
+//   **正好在"思考下一步"那几秒里把浮层收掉**，下一步操作再 show 回来。
+//   用户切到别的 App、正盯着这个浮层看，看到的就是"消失好几秒又冒出来"。
+//   现在统一用 agentPipelineBusy() 判：续跑待发 / 模型在想 / 还有操作在飞 —— 任一为真就不收。
+let agentContinueBusy = false;
+function agentPipelineBusy() {
+    return Boolean(agentContinueTimer) || agentContinueBusy || phoneOpsInFlight > 0;
+}
+
+function scheduleOverlayHide(delay = 1200) {
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = setTimeout(() => {
+        overlayHideTimer = null;
+        if (agentPipelineBusy()) return;   // 还在忙：不收（模型还在想 / 下一步马上来）
+        const rt = window.agentRuntime;
+        if (rt && rt.hideOverlay) rt.hideOverlay();
+    }, delay);
+}
+
+// ===== 运行方式：前台（无障碍）/ 后台（模块）★ 2026-10 用户要求 =====
+//
+// 无障碍 = **前台**：在你正用的那块屏幕上操作 —— 看得见 AI 点在哪儿、随时能停，
+//                     代价是它占着屏幕，这期间你没法用手机做别的事。
+// 模块   = **后台**：在独立副屏上静默操作 —— 不抢屏幕，你可以继续用手机，
+//                     代价是实现方式由模块提供（要刷 KernelSU 模块）。
+//
+// 两条路都可用时，"走哪条"不该由设置里的预设替用户决定：同一个任务，
+// 有时你想盯着它做（前台），有时你想让它悄悄做完（后台）。所以：AI 真要操作
+// 屏幕时**问一次**，答案管本轮。
+//
+// 三条规矩：
+//   1. **一轮只问一次**：答案存在 runModeDecision，整轮（含续跑）都用它。
+//      重置点在 resetAgentContinueBudget（用户每发一条消息 = 一轮）——
+//      不能挂在 endRun() 上：那个每批操作结束都会调，会退化成"每步问一次"。
+//   2. **只对"要动屏幕"的动作问**：读取信息 / 工作区文件 / 手机等待都不需要选。
+//   3. **取消 = 本轮这一步不做**：如实回灌且不续跑，绝不替用户选一条。
+//      （也不能把"后台"塞进弹窗的取消键 —— 取消还会被点遮罩触发，
+//        那等于用户没选就默默用了后台。见 showCustomModal 的 altText。）
+let runModeDecision = '';   // '' = 本轮还没问过 | 'accessibility' | 'module' | 'cancelled'
+// 这次决定是不是"用户在弹窗里明确选的" —— 是的话原生必须**严格照办**，不许自动换路。
+// 单路能用时（没弹窗）保持 false：那种情况"做不到就换另一条"本来就是唯一出路。
+let runModeExplicit = false;
+let runModePicker = null;   // 进行中的询问 Promise（记忆化，见 pickPhoneRunMode）
+
+/** 这个动作要不要"动屏幕"（只有这类才值得问前台/后台） */
+function phoneActionNeedsScreen(action) {
+    return ['手机查看界面', '手机截图', '手机点击', '手机滑动', '手机输入',
+        '手机按键', '手机打开', '手机命令'].includes(action);
+}
+
+/**
+ * 问用户这一轮走前台还是后台。
+ *
+ * @returns 'accessibility' | 'module' | 'none'（两条路都不就绪）| ''（用户取消）
+ *
+ * 只有**两条路都就绪**时才弹窗；只有一条能用时直接返回它 ——
+ * 拿一个没得选的弹窗去烦用户，只是多余的点击。
+ */
+async function pickPhoneRunMode() {
+    // ★★ 2026-10：同一条回复里可能有两个"动屏"操作 → 会并发问两次。
+    //   而 showCustomModal 是**单例**：第二次调用会覆盖按钮的 onclick，
+    //   第一个 Promise 就永远不 resolve、那个操作被静默吞掉（不报错、也不执行）。
+    //   所以进行中的询问必须记忆化 —— 两个操作共用同一个答案。
+    //   （写法同 app-06-settings.js 里内置样本的 builtinCloneLoading。）
+    if (runModePicker) return runModePicker;
+    runModePicker = doPickPhoneRunMode().finally(() => { runModePicker = null; });
+    return runModePicker;
+}
+
+/** 真去问一次（外层 pickPhoneRunMode 负责记忆化与去重） */
+async function doPickPhoneRunMode() {
+    // 弹窗期间先作废排队中的收起：此刻没有操作在飞、也没有续跑，冷不丁把浮层收掉
+    // 再弹一个应用内弹窗，用户会以为软件出了两次毛病。
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
+    // 真探一次。⚠️ 两步不能省、也不能混：
+    //   · fetchDeviceStatus(true) 刷新的是**原生状态缓存**；
+    //   · backendStatus 那份（设置页显示、上面这些判据读的）只有 detectBackend 会写。
+    //     只调前者的话，这里读到的还是旧值。
+    await fetchDeviceStatus(true);
+    backendStatus.accessibility = await detectBackend('accessibility');
+    backendStatus.module = await detectBackend('module');
+    const accReady = backendStatus.accessibility && backendStatus.accessibility.state === 'ready';
+    const modReady = backendStatus.module && backendStatus.module.state === 'ready';
+    if (!accReady && !modReady) return 'none';
+    if (!(accReady && modReady)) return accReady ? 'accessibility' : 'module';
+    // 走到这里说明弹了窗 → 下面这个决定是**用户显式选的**，原生那边要严格照办
+    // （不许"互通自动换路"把它悄悄改掉，见 ElainaShellPlugin 的 strict）。
+    runModeExplicit = true;
+    const chosen = await showCustomModal({
+        title: '选择运行方式',
+        message: 'AI 要操作这台手机，两种方式都可用：\n\n'
+            + '· 前台运行（无障碍）—— 在你正在用的屏幕上操作。\n'
+            + '  你能看见 AI 点在哪儿、随时点悬浮窗上的「停止」；\n'
+            + '  代价是它占着屏幕，这期间你没法用手机做别的事。\n\n'
+            + '· 后台运行（模块）—— 在独立副屏上操作，不抢你的屏幕，\n'
+            + '  你可以继续用手机；代价是看不到它点了什么（仍可点「停止」）。\n\n'
+            + '（本次任务只问这一次。默认方式可在「设置 → 能力 → 手机操作」里改。）',
+        confirmText: '前台运行',
+        altText: '后台运行',
+        altValue: 'module',
+        cancelText: '取消',
+    }).catch(() => false);
+    if (chosen === 'module') return 'module';
+    if (chosen === true) return 'accessibility';
+    return '';
+}
 // 最近一次手机操作**实际**用的后端（原生在结果里回报）。
 // 运行状态条的「看画面」按钮靠它判断该不该出现 —— 只有模块后端有副屏画面。
 let lastUsedBackendId = '';
@@ -617,9 +788,17 @@ async function execPhoneOperation(parsed) {
         action: parsed.action,
         // 文件类操作的路径要做一层翻译（见 phoneFilePath 的说明）
         args: phoneArgsForNative(parsed),
-        // 把用户选的实现方式带下去。原生侧优先用它；它不可用时明确报错，
-        // 而不是偷偷换成另一种 —— 否则用户以为在走模块，实际走的是无障碍，没法排查。
-        backend: currentBackendId()
+        // 带下去的实现方式：**本轮选定的运行方式优先**（前台/后台弹窗的选择，
+        // 见 runModeDecision），没选过才回落到设置里的默认方式。
+        // 原生侧优先用它；它不可用时明确报错，而不是偷偷换成另一种 ——
+        // 否则用户以为在走模块，实际走的是无障碍，没法排查。
+        backend: runModeDecision === 'module' || runModeDecision === 'accessibility'
+            ? runModeDecision
+            : currentBackendId(),
+        // ★★ 2026-10（用户反馈"我选了前台，它还是走了模块"）：用户**在弹窗里显式选**的时候，
+        //   原生必须严格照办 —— 不许"互通自动换路"把他的选择悄悄改掉。
+        //   （之前选了前台、动作是「手机打开」这种无障碍做不到的，会被静默改到副屏。）
+        strictBackend: runModeExplicit
     });
     let text = (res && (res.text || res.message)) || (parsed.action + ' 完成');
     // 记下**实际**用的后端（原生会回报 res.backend）。
@@ -727,15 +906,27 @@ async function runAgentPhoneOperation(raw) {
         insertAgentResult(blocked);
         return;
     }
-    // 还没选实现方式 → 手机操作不可用（与「设置 → 能力 → 手机操作」里的状态提示一致）
-    if (!currentBackendId()) {
-        insertAgentResult('已跳过：还没有选择「实现方式」，AI 现在不能操作手机。'
-            + '请到「设置 → 能力 → 手机操作」点「选择实现方式」选一种。');
-        return;
-    }
-    // 总开关关掉时直接拒绝（设置 → 能力 → 手机操作）
+    // 总开关关掉时直接拒绝（设置 → 能力 → 手机操作）。
+    // 放在探测之前：开关关着就不必去 ping 原生，而且这个理由对用户最直接。
     if (state.settings.agentPhoneEnabled === false) {
         insertAgentResult('已跳过：手机操作总开关是关闭的。需要时请在 设置 → 能力 → 手机操作 里打开「允许 AI 操作手机」。');
+        return;
+    }
+    // 没有任何可用的实现方式 → 手机操作不可用（与「设置 → 能力 → 手机操作」里的提示一致）。
+    //
+    // ★★ 2026-10（运行方式弹窗）：判据从"设置里有没有选过"改成"**有没有一条路能用**"。
+    //   不能再看 currentBackendId() —— 那会把"还没设默认方式"的用户挡在**弹窗之前**，
+    //   而弹窗机制恰恰是为这种状态准备的（两路都就绪时问用户走前台还是后台）。
+    //   缓存说"没有可用方式"时真探一次：用户可能刚在系统里把无障碍/模块配好，
+    //   而缓存还停在旧结果。只在疑似不可用时才探，不会每步都探测。
+    let anyReady = AGENT_BACKENDS.some((b) => backendStatus[b.id] && backendStatus[b.id].state === 'ready');
+    if (!anyReady) {
+        await refreshBackendStatus();
+        anyReady = AGENT_BACKENDS.some((b) => backendStatus[b.id] && backendStatus[b.id].state === 'ready');
+    }
+    if (!anyReady) {
+        insertAgentResult('已跳过：这台设备上没有任何可用的实现方式，AI 现在不能操作手机。'
+            + '请到「设置 → 能力 → 手机操作」点「选择实现方式」配置一种（无障碍门槛最低）。');
         return;
     }
     // 本批次已被用户停止：不再执行任何动作。这是「停止」能拦住后续步骤的关键——
@@ -743,6 +934,29 @@ async function runAgentPhoneOperation(raw) {
     if (rt.isHalted && rt.isHalted()) {
         insertAgentResult('已停止：用户中止了本次操作，这一步（' + parsed.action + '）没有执行。');
         return;
+    }
+    // ★ 运行方式：两路都可用时，本轮第一次"要动屏幕"的操作先问用户一次
+    //   （见 runModeDecision 的说明）。只有一条路可用时直接用它，不弹窗。
+    if (phoneActionNeedsScreen(parsed.action)) {
+        if (!runModeDecision) {
+            const picked = await pickPhoneRunMode();
+            if (picked === 'none') {
+                // 两条路都不就绪 —— 不在这里报错，交给上面那道"没有任何可用方式"的闸去引导
+                // （这里保留空分支是刻意的：不把 runModeDecision 写死，下一轮换了设备/配置还会重问）
+            } else if (picked) {
+                runModeDecision = picked;
+                // 顺手记成默认方式：设置页的「实现方式」照旧可以随时改，下次以它为准
+                state.settings.agentBackend = picked;
+                persistSettings();
+            } else {
+                runModeDecision = 'cancelled';
+            }
+        }
+        if (runModeDecision === 'cancelled') {
+            insertAgentResult('已跳过「' + parsed.action + '」：你没有选择运行方式（前台 / 后台）。'
+                + '要我做的话跟我说一声，我会再问一次。', { continueLoop: false });
+            return;
+        }
     }
     phoneOpsInFlight += 1;
     clearTimeout(phoneRunEndTimer);
@@ -830,11 +1044,13 @@ async function runAgentPhoneOperation(raw) {
             clearTimeout(phoneRunEndTimer);
             // 一批操作处理完再收起状态条；若紧接着又来新操作会重新计时
             phoneRunEndTimer = setTimeout(() => {
-                if (phoneOpsInFlight <= 0) {
-                    rt.endRun();
-                    // 悬浮窗与状态条同进退：操作结束就收起，别留在屏幕上碍事
-                    if (rt.hideOverlay) rt.hideOverlay();
-                }
+                // ★★ 2026-10 修：这一批做完**不等于整轮结束** —— 续跑马上要发起下一次
+                //   模型调用。管道还忙时不只不收浮层，**状态条也不 endRun**：
+                //   否则"正在思考下一步"那几秒状态条与浮层会一起消失，用户以为软件坏了
+                //   （这正是他反馈的"在后台时老是消失"）。
+                if (agentPipelineBusy()) return;
+                rt.endRun();
+                scheduleOverlayHide();
             }, 600);
         }
     }
@@ -926,9 +1142,21 @@ function backendNameOf(id) {
  */
 function agentPhoneSkillText() {
     if (!deviceBridge()) return '';
-    const backend = currentBackendId();
     const enabled = state.settings.agentPhoneEnabled !== false;
-    if (!backend || !enabled) {
+    // ★★ 2026-10（运行方式弹窗）：**不再要求设置里预先选好实现方式**。
+    //   现在只要总开关开着、且**至少一条路就绪**，这一轮就可能操作手机 ——
+    //   两路都就绪时会先弹窗问用户"前台还是后台"（见 pickPhoneRunMode）。
+    //   旧逻辑在 backend 为空时注入"未启用、不要输出标签"，会让模型在"还没选默认方式"
+    //   时彻底不试，而弹窗机制恰恰是为这种状态准备的。
+    const accReady = backendStatus.accessibility && backendStatus.accessibility.state === 'ready';
+    const modReady = backendStatus.module && backendStatus.module.state === 'ready';
+    const chosen = currentBackendId();
+    const effective = (chosen === 'accessibility' && accReady) ? 'accessibility'
+        : (chosen === 'module' && modReady) ? 'module'
+            : (accReady ? 'accessibility' : (modReady ? 'module' : ''));
+    const backend = effective;
+    const bothReady = accReady && modReady;
+    if (!enabled || !backend) {
         return '# Agent Skill：手机操作（当前未启用）\n'
             + '这台设备支持手机操作，但用户还没有在「设置 → 能力 → 手机操作」里选好「实现方式」'
             + (enabled ? '' : '，或「允许 AI 操作手机」总开关是关闭的') + '。\n'
@@ -939,11 +1167,24 @@ function agentPhoneSkillText() {
     // 能力清单必须按实现方式区分：无障碍**做不到**「手机打开」与「手机命令」
     // （原生层会明确回失败）。提示词里把它俩写成通用能力，就会造成"说了却做不到"，
     // 模型反复尝试、用户看到一连串失败 —— 这正是本次要避免的那类问题。
+    //
+    // ★ 2026-10（用户要求：「模块」与「无障碍」互通、由 AI 看情况使用）：
+    //   现在只要**另一种方式也可用**，能力面就是两者的**并集** —— 原生侧会在
+    //   "首选做不到这个动作"时自动换路并在结果里注明
+    //   （见 ElainaShellPlugin 的 accessibilityCannotDo / annotateBackendSwap）。
+    //   所以这里不能再写"⛔ 不支持手机打开/手机命令"：那会让模型**自我审查**，
+    //   明明能做到的事却回用户一句"我做不到"。只有另一路确实不可用时才保留边界说明。
     const isAccessibility = backend === 'accessibility';
+    // backendStatus 是 detectBackend 的探测结果（ready / unavailable / pending / checking）。
+    // 还在 checking 时按"不可用"处理 —— 宁可保守，等探测完再放开能力面。
+    const otherId = isAccessibility ? 'module' : 'accessibility';
+    const otherReady = Boolean(backendStatus[otherId] && backendStatus[otherId].state === 'ready');
+    const canOpenAndCommand = !isAccessibility || otherReady;
     const lines = [
-        '# Agent Skill：手机操作（当前方式：' + backendNameOf(backend) + '）',
-        '你可以操作这台安卓手机：读取界面、点击、滑动、输入文字、按键'
-            + (isAccessibility ? '、截图' : '、打开应用、截图、执行命令') + '。',
+        '# Agent Skill：手机操作（当前方式：'
+            + (bothReady ? '无障碍 / 模块（每次操作前由用户选）' : backendNameOf(backend)) + '）',
+        '你可以操作这台安卓手机：读取界面、点击、滑动、输入文字、按键、截图'
+            + (canOpenAndCommand ? '、打开应用、执行命令' : '') + '。',
         '可用标签（写在回复正文里，标签不会显示给用户）：',
         '· [操作:手机状态] —— 查询设备与当前后端状态',
         '· [操作:手机查看界面] —— 读取当前屏幕的控件树（含控件文字与可点击坐标）',
@@ -954,18 +1195,34 @@ function agentPhoneSkillText() {
         '· [操作:手机按键 返回|主页|回车|菜单|音量上|音量下] —— 按系统键',
         '· [操作:手机等待 毫秒] —— 等界面加载完再继续',
     ];
-    if (isAccessibility) {
-        // 无障碍的能力边界：启动应用与任意命令都做不到。
-        // 明说边界，模型才会去用"点击桌面图标"这类可行路径，而不是反复撞墙。
-        lines.push('· ⛔ 当前方式**不支持** [操作:手机打开]（启动应用）与 [操作:手机命令]（任意命令）'
-            + ' —— 无障碍方式做不到这两件事。');
-        lines.push('  要启动某个应用，请先用 [操作:手机查看界面] 找到它的图标，再点击图标坐标；'
-            + '或请用户到「设置 → 能力 → 手机操作」换成「模块」方式。');
-        lines.push('· 按键也只支持「返回 / 主页 / 最近任务」三个，其它按键需要换实现方式。');
-    } else {
+    if (canOpenAndCommand) {
         lines.push('· [操作:手机打开 包名] —— 启动应用，例如 [操作:手机打开 com.tencent.mm]');
-        lines.push('· [操作:手机命令 命令] —— 执行系统命令（⚠️ 模块后端下这是 root shell，**不会**询问用户，'
+        lines.push('· [操作:手机命令 命令] —— 执行系统命令（⚠️ 走「模块」后端时这是 root shell，**不会**询问用户，'
             + '所以执行前你自己要确认命令是对的）');
+        if (isAccessibility) {
+            // ★★ 2026-10 改口：用户在「运行方式」弹窗里选了前台时，原生**不再自动换路**
+            //   （选了就该按选的走，见 ElainaShellPlugin 的 strict）。所以这里不能再承诺
+            //   "会自动改用模块" —— 那会让模型以为输出了就一定能成，然后白撞一次失败。
+            lines.push('  （无障碍**做不到**这两件事：前台运行时会直接失败并说明原因 —— '
+                + '要启动应用就先用 [操作:手机查看界面] 找到图标再点坐标，'
+                + '或请用户改选「后台运行（模块）」；用户已经选了后台时，你照常输出标签即可。）');
+        }
+    } else {
+        // 边界说明只在"另一路也确实不可用"时才给 —— 见上面那段说明。
+        lines.push('· ⛔ 当前**不能**用 [操作:手机打开]（启动应用）与 [操作:手机命令]（任意命令）'
+            + ' —— 无障碍方式做不到这两件事，而「模块」方式现在也没就绪。');
+        lines.push('  要启动某个应用，请先用 [操作:手机查看界面] 找到它的图标，再点击图标坐标；'
+            + '或请用户到「设置 → 能力 → 手机操作」把「模块」方式配置好（两种方式会自动互通）。');
+        lines.push('· 按键也只支持「返回 / 主页 / 最近任务」三个，其它按键需要「模块」方式。');
+    }
+    if (bothReady) {
+        // ★ 2026-10：两路都就绪 → 系统会在**真正操作屏幕前**弹窗让用户选前台/后台。
+        //   必须把这件事告诉模型：否则它可能自己反问用户"你想用哪种方式"，
+        //   或以为得先回设置里选 —— 那都是多余的，系统会处理。
+        lines.push('· ⚙️ 这台设备**两种方式都可用**：每次要操作屏幕前，系统会先请用户选择'
+            + '「前台运行（无障碍·看得见 AI 操作）」还是「后台运行（模块·静默不抢屏幕）」。'
+            + '你照常输出标签即可 —— 不用自己选，也不要问用户这件事。'
+            + '（读取信息、工作区文件、等待不需要选。）');
     }
     lines.push(
         '',
@@ -1025,6 +1282,37 @@ function phoneReadSkillLines() {
 }
 
 /**
+ * 手机（APK）上给模型的「电脑侧不存在」说明 —— 用来**替代**电脑的文件/命令能力清单。
+ *
+ * ★ 为什么必须在手机上显式说"没有电脑侧"：
+ *   与 agentCommandSkillText 是同一个坑的两个方向 —— 那边是"注入了也做不到"，
+ *   这里是"不说清它就乱答应"。
+ *   实测（2026-10，用户截图反馈"手机为什么会出现电脑的提示词"）：
+ *   手机上仍注入了电脑的文件能力（"你可以读写**这台电脑**上的任意路径"），
+ *   用户问"能不能在本机新建一个文件"，模型答
+ *   "我能在本机新建文件……这台设备设置成了逐条确认模式" ——
+ *   那全是**电脑**的说法，手机上根本没有 /api/agent/* 这套后端，做不到。
+ *   手机能做的文件操作是 [操作:手机…] 那一套（Agent 工作区 / 用户已授权的文件夹），
+ *   由 agentPhoneSkillText 按实现方式与开关状态注入 —— 这里只负责把"电脑那套"关掉，
+ *   并明确告诉模型"别把电脑的说法拿来答手机的问题"。
+ */
+function agentComputerUnavailableSkillText() {
+    return '# 电脑操作：本设备没有这一侧（当前在安卓手机 App 里运行）\n'
+        + '你现在运行在**手机**上，**没有**"电脑"这一侧的能力：\n'
+        + '· 不能读写电脑上的文件、不能查看电脑目录（[操作:列出文件/查看文件/保存文件] 会被直接拒绝）；\n'
+        + '· 不能执行 PowerShell / cmd 命令（[操作:电脑命令] 会被直接拒绝）；\n'
+        + '· 也**不要**提桌面、文档、下载这类电脑路径。\n'
+        // ⚠️ 这里**不要**把手机那四个文件标签逐个列出来 ——
+        //   手机操作没启用时，agentPhoneSkillText 是刻意"连标签名都不给"的
+        //   （避免模型去试一个会被直接拒绝的能力）。这里列出来就会自相矛盾。
+        + '手机上的文件操作走的是另一套 [操作:手机…] 标签 —— '
+        + '**能不能用，以上面「手机操作」那一段为准**（它没给出写文件标签，就说明现在用不了）。\n'
+        + '⚠️ 用户问"能不能在本机 / 这台设备上新建文件"这类问题时，按**手机**的能力如实回答：'
+        + '上面「手机操作」那段给出了写文件标签就照它说，没给出就如实说明现在做不到，'
+        + '**绝不**承诺"能读写这台电脑上的任意路径"。';
+}
+
+/**
  * 注入系统提示词的「电脑命令」能力说明。
  *
  * 为什么必须有这一段：和手机操作同一个坑 —— 执行链路早就通了，
@@ -1041,6 +1329,8 @@ function agentCommandSkillText() {
     // 必须用 IS_NATIVE_APP 而不是看协议 —— Capacitor 的 androidScheme 是 https，
     // 按协议判断会把 APK 当成网页版，于是注入一个用不了的能力（模型反复失败）。
     if (IS_NATIVE_APP) return '';
+    // `off` 档：电脑操作整体关闭 —— 连能力都不该让模型看到（由 agentDisabledSkillText 说明）。
+    if (agentAccessDisabled()) return '';
     const access = currentAgentAccess();
     const accessLabel = access === 'full' ? '完全访问' : (access === 'auto' ? '自动通过（禁止删除）' : '逐条确认');
     const confirmLine = access === 'full'
@@ -1074,6 +1364,25 @@ function agentCommandSkillText() {
             + '删除**不进回收站、无法恢复**，所以删之前务必确认路径正确。');
     }
     return lines.join('\n');
+}
+
+/**
+ * `off` 档注入给模型的说明：电脑操作已关闭。
+ *
+ * ★ 为什么必须显式注入、而不是"不注入能力就等于没有能力"：
+ *   模型被用户直接要求"帮我写个文件"时，若提示词里没有任何关于电脑操作的说明，
+ *   它既可能凭训练先验输出 [操作:保存文件 …]（然后被服务端拒绝，用户看到一次
+ *   莫名其妙的失败），也可能反过来编造"我已经帮你写好了"。两种都要避免 ——
+ *   所以明确告诉它"这个能力已被用户关闭"，并要求它如实说明、不要输出标签、不要编造。
+ */
+function agentDisabledSkillText() {
+    if (!agentAccessDisabled()) return '';
+    return '# 电脑操作：已关闭（用户的选择）\n'
+        + '用户已在「设置 → 能力 → AI 权限」里选择「关闭」——你**不能**读取、写入或修改这台电脑上的任何文件，'
+        + '不能查看目录或真实路径，也不能执行电脑命令（这些标签会被系统直接拒绝）。\n'
+        + '用户提出这类要求时，如实说明"电脑操作已在设置里关闭，可在 设置 → 能力 → AI 权限 里打开"，'
+        + '不要输出任何 [操作:…] 文件/命令标签，也**绝不要**把做不到的事说成已经做了。\n'
+        + '（应用内操作如视频通话、整理记忆、水印、背景等不受影响，照常可用。）';
 }
 
 /**
@@ -1397,30 +1706,140 @@ document.getElementById('agentFolderClearBtn')?.addEventListener('click', async 
     await showCustomAlert('已取消文件夹授权。AI 现在只能读写 Agent 工作区。', '文件夹授权');
 });
 
-// ===== 系统权限申请（读取信息那一块的第二道闸）=====
+// ===== 系统权限现状（读取信息那一块的第二道闸）=====
 //
 // 应用层开关（设置里的隐私开关）管"让不让 AI 知道"；
 // 这里管"应用能不能拿到" —— 短信/通讯录/日历是 Android 危险权限，
-// 必须由用户在系统弹框里同意。**刻意不在启动时索取**：
-// 用户还没用到那功能时弹一堆权限框只会让人一律拒绝，那时再想申请就难了。
-async function refreshAgentReadPermStatus() {
-    const el = document.getElementById('agentReadPermStatus');
+// 必须由用户在系统里同意。**刻意不在启动时索取**：
+// 用户还没用到那功能时弹一堆权限框只会让人一律拒绝。
+//
+// ★★ 2026-10（用户要求）：这块改成**纯状态展示** ——
+//   每行右侧的小徽标（#agentPermBadge*，见 index.html）显示该项权限在系统里的现状，
+//   申请/关闭一律去系统的权限页。因此原来的两个按钮（#agentReadPermBtn /
+//   #agentNotifPermBtn）与其监听、以及那行汇总文字（#agentReadPermStatus）**都删掉了**，
+//   这个函数现在只负责刷新徽标（顺带刷工作区文件数）。
+//   ⚠️ 别在这里再引用那三个已删的 id —— check-dom-refs 会报"HTML 里没有这个 id"。
+const AGENT_PERM_BADGE_IDS = [
+    'agentPermBadgeApps',
+    'agentPermBadgeNotifications',
+    'agentPermBadgeDevice',
+    'agentPermBadgeSms',
+    'agentPermBadgeContacts',
+    'agentPermBadgeCalendar',
+];
+
+// ★ 2026-10（B 方案）：**徽标可点** —— 点一下就去把这项权限申请下来。
+//
+//   为什么做成"点徽标"而不是再加一排按钮：这块要保持"只显示状态"的观感
+//   （用户明确要求"只显示权限授权状态"），而徽标本身就是最自然的入口 ——
+//   看到一个"未授权"，顺手点它就该去授权。
+//   · 短信 / 通讯录 / 日历 → requestReadPermission（弹系统授权框）
+//   · 通知读取 → openNotificationSettings（它不是运行时权限，只能跳系统的「通知使用权」页）
+//   · 应用列表（安装期授权）/ 设备状态（不需要权限）没有可做的事，保持纯展示
+const AGENT_PERM_BADGE_ACTIONS = {
+    agentPermBadgeSms: { kind: 'sms' },
+    agentPermBadgeContacts: { kind: 'contacts' },
+    agentPermBadgeCalendar: { kind: 'calendar' },
+    agentPermBadgeNotifications: { settingsPage: true },
+};
+
+/** 写一个徽标（kind: 'ok' | 'no' | 空） */
+function setAgentPermBadge(id, text, kind) {
+    const el = document.getElementById(id);
     if (!el) return;
+    el.textContent = text;
+    // is-actionable 必须一起写进 className —— 这行是**整体覆盖**，
+    // 只 classList.add 的话刷新一次就没了（白名单最初就是这么丢的）。
+    el.className = 'agent-perm-badge'
+        + (kind ? ' is-' + kind : '')
+        + (AGENT_PERM_BADGE_ACTIONS[id] ? ' is-actionable' : '');
+}
+
+/** 六个徽标一起写成同一句话（用于"仅安卓版"/"读取失败"这种整体状态） */
+function setAllAgentPermBadges(text, kind) {
+    AGENT_PERM_BADGE_IDS.forEach((id) => setAgentPermBadge(id, text, kind));
+}
+
+/**
+ * 点徽标 = 去把这项权限申请下来。
+ *
+ * 已经授权时不做特殊分支：`requestReadPermission` 对已授权的权限会立刻返回（不弹框），
+ * 而通知那一条本来就是"跳到设置页"——那个页面既能开也能关，
+ * 正好对上说明里"不想让它读就去系统里关掉"。
+ */
+async function handleAgentPermBadgeAction(id) {
+    const cfg = AGENT_PERM_BADGE_ACTIONS[id];
+    if (!cfg) return;
+    const dev = deviceBridge();
+    if (!dev) {
+        await showCustomAlert('系统权限只能在安卓版 App 里设置。', '不可用');
+        return;
+    }
+    if (cfg.settingsPage) {
+        // 通知读取：跳到系统的「通知使用权」页。
+        // ★ 成功时**不弹任何提示** —— 用户点一下就是要去那一页，页面自己会打开，
+        //   再弹一个"已打开设置页"纯属多余（用户要求：不授权成功就自然结束，别加提示）。
+        //   只有"打不开"才必须弹：那种情况得告诉用户手动怎么走。
+        if (typeof dev.openNotificationSettings !== 'function') return;
+        try {
+            await dev.openNotificationSettings();
+        } catch (err) {
+            await showCustomAlert('打不开通知设置页：' + ((err && err.message) || err), '通知读取');
+        }
+        return;
+    }
+    if (typeof dev.requestReadPermission !== 'function') return;
+    try {
+        await dev.requestReadPermission({ kind: cfg.kind });
+    } catch (e) {
+        console.warn('[Agent] 申请权限失败：' + cfg.kind, e);
+    }
+    await refreshAgentReadPermStatus();
+}
+
+// 绑定一次即可（徽标是 index.html 里的静态元素）。
+// 键盘可达：HTML 上写了 role="button" + tabindex="0"，所以回车/空格也要能触发。
+for (const badgeId of Object.keys(AGENT_PERM_BADGE_ACTIONS)) {
+    const el = document.getElementById(badgeId);
+    if (!el) continue;
+    el.addEventListener('click', () => { void handleAgentPermBadgeAction(badgeId); });
+    el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            void handleAgentPermBadgeAction(badgeId);
+        }
+    });
+}
+
+/**
+ * 按原生返回的权限表刷新六个徽标。
+ *
+ * 文案刻意区分三种情况——「未授权」和「压根不需要权限」是两回事，
+ * 后者写成"未授权"会让用户白找一圈设置：
+ *   · 应用列表 → 安装期授权（QUERY_ALL_PACKAGES，装的时候就定了，关不掉）
+ *   · 设备状态 → 无需权限（电量/网络/前台应用都不是权限）
+ */
+function renderAgentPermBadges(permissions) {
+    const p = permissions || {};
+    const yesNo = (id, ok) => setAgentPermBadge(id, ok ? '已授权' : '未授权', ok ? 'ok' : 'no');
+    setAgentPermBadge('agentPermBadgeApps', p.apps === false ? '未授权' : '安装期授权', p.apps === false ? 'no' : 'ok');
+    setAgentPermBadge('agentPermBadgeDevice', '无需权限');
+    yesNo('agentPermBadgeNotifications', Boolean(p.notifications));
+    yesNo('agentPermBadgeSms', Boolean(p.sms));
+    yesNo('agentPermBadgeContacts', Boolean(p.contacts));
+    yesNo('agentPermBadgeCalendar', Boolean(p.calendar));
+}
+
+async function refreshAgentReadPermStatus() {
     const dev = deviceBridge();
     if (!dev || typeof dev.readPermissionStatus !== 'function') {
-        el.textContent = '系统权限：只在安卓版 App 里可用。';
+        // 网页版没有原生层 —— 这套权限只存在于安卓版 App
+        setAllAgentPermBadges('仅安卓版');
         return;
     }
     try {
         const res = await dev.readPermissionStatus();
-        const p = (res && res.permissions) || {};
-        const mark = (ok) => (ok ? '✅' : '❌');
-        el.textContent = '系统权限：'
-            + mark(p.apps !== false) + ' 应用列表　'
-            + mark(p.notifications) + ' 通知　'
-            + mark(p.sms) + ' 短信　'
-            + mark(p.contacts) + ' 通讯录　'
-            + mark(p.calendar) + ' 日历';
+        renderAgentPermBadges((res && res.permissions) || {});
         // 工作区文件数也顺带刷一下，用户能看到"AI 到底存了东西没有"
         const files = Number(res && res.workspaceFiles);
         if (Number.isFinite(files)) {
@@ -1431,41 +1850,9 @@ async function refreshAgentReadPermStatus() {
             }
         }
     } catch (e) {
-        el.textContent = '系统权限：读取失败（' + ((e && e.message) || e) + '）';
+        setAllAgentPermBadges('读取失败', 'no');
     }
 }
-
-document.getElementById('agentReadPermBtn')?.addEventListener('click', async () => {
-    const dev = deviceBridge();
-    if (!dev || typeof dev.requestReadPermission !== 'function') {
-        await showCustomAlert('权限申请只在安卓版 App 里可用。', '不可用');
-        return;
-    }
-    // 逐个申请：Android 一次请求多个权限时，用户拒绝其中一个会整批失败，
-    // 分开申请能让用户按需给（例如只给通讯录、不给短信）。
-    for (const kind of ['sms', 'contacts', 'calendar']) {
-        try {
-            await dev.requestReadPermission({ kind });
-        } catch (e) {
-            console.warn('[Agent] 申请权限失败：' + kind, e);
-        }
-    }
-    await refreshAgentReadPermStatus();
-});
-
-document.getElementById('agentNotifPermBtn')?.addEventListener('click', async () => {
-    const dev = deviceBridge();
-    if (!dev || typeof dev.openNotificationSettings !== 'function') {
-        await showCustomAlert('通知读取只在安卓版 App 里可用。', '不可用');
-        return;
-    }
-    try {
-        const res = await dev.openNotificationSettings();
-        await showCustomAlert((res && res.text) || '已打开通知设置页。', '通知读取');
-    } catch (err) {
-        await showCustomAlert('打不开通知设置页：' + ((err && err.message) || err), '通知读取');
-    }
-});
 
 // ===== 不可逆操作的确认（三档模型，2026-10 重构）=====
 //
@@ -1514,6 +1901,28 @@ async function confirmAgentOverwrite(path) {
     let ok = false;
     try {
         ok = await agentRuntime.requestApproval('覆盖已有文件', detail, { forceAsk: true });
+    } catch { ok = false; }
+    return ok;
+}
+
+/**
+ * 新建文件的确认（服务端回 needCreate 后由前端问一次）。
+ *
+ * ★ 为什么新建也要问：设置页里「逐条确认」这一档写明了"写入、覆盖已有文件、
+ *   删除、执行命令 —— 每一次都会问你"。早期实现只对覆盖要确认，于是最低档下
+ *   AI 仍能在桌面无声新建文件（2026-10 修复的真实故障：用户选了最低权限，
+ *   AI 未经同意写入桌面且没有任何弹窗）。
+ *
+ * ★ 服务端只在 strict 档回 needCreate，所以这个函数实际上只会在 strict 档被调用到。
+ */
+async function confirmAgentCreate(path) {
+    const target = String(path || '').trim();
+    const detail = 'AI 想在你的电脑上**新建一个文件**：\n\n' + (target || '（未提供路径）')
+        + '\n\n文件目前还不存在，确认后才会写入。'
+        + '\n（想少打扰：设置 → 能力 → AI 权限，切到「自动通过」或「完全访问」。）';
+    let ok = false;
+    try {
+        ok = await agentRuntime.requestApproval('新建文件', detail, { forceAsk: true });
     } catch { ok = false; }
     return ok;
 }
@@ -1607,6 +2016,18 @@ async function doAgentFile(action, { path, content } = {}, access) {
                     insertAgentResult('已取消写入：目标文件已存在，而你没有允许覆盖它。\n'
                         + '目标：' + (path || '（未提供路径）')
                         + '\n（想保留原文件的话，可以让 AI 换一个新文件名保存。）');
+                    return;
+                }
+                result = await send(true);
+            } else if (result.needCreate) {
+                // ★ 2026-10 修复：strict 档下**新建文件同样要确认**。
+                //   早期实现只拦覆盖，于是最低档下 AI 能在桌面无声新建文件
+                //   （用户选了「逐条确认」却没有任何弹窗）。服务端现在对新建
+                //   也回 needCreate，这里补上这条确认分支。
+                if (!await confirmAgentCreate(path)) {
+                    updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许新建这个文件' });
+                    insertAgentResult('已取消写入：你没有允许新建这个文件。\n'
+                        + '目标：' + (path || '（未提供路径）'));
                     return;
                 }
                 result = await send(true);
@@ -1808,7 +2229,14 @@ function insertAgentResult(text, options = {}) {
     conv.messages.push(msg);
     saveConversations();
     if (state.currentConversationId === conv.id) renderMessage(msg);
-    if (options.continueLoop === true) scheduleAgentContinue();
+    // 熔断计数：只有"真的做成了一件事"（唯一会传 continueLoop: true 的场景）才算进展，
+    // 其余结果都记作"这一步没有进展" —— 见 AGENT_STALL_FUSE 的说明。
+    if (options.continueLoop === true) {
+        agentStalledSteps = 0;
+        scheduleAgentContinue();
+    } else {
+        agentStalledSteps += 1;
+    }
 }
 
 
@@ -1824,12 +2252,24 @@ function insertAgentResult(text, options = {}) {
 // **user**（用户手动打的"继续"），而不是由操作结果触发的续跑。
 //
 // 三条硬约束：
-//   1. **有预算**：否则"读文件 → 续跑 → 再读 → 再续跑"会烧光额度。
-//      （失败路径早就因为同样的理由加了 AGENT_FAILURE_MAX_RETRY。）
+//   1. **有熔断**：否则"被拒绝 → 续跑 → 又被拒绝"会无限刷下去，白烧额度与电量。
+//      ★★ 2026-10（用户要求"取消 8 步限制改为无限制"）：**步数上限取消**，
+//      只保留"连续无进展"熔断 —— 见 AGENT_STALL_FUSE。
+//      原来那个 8 步硬上限会把一件正常的长任务腰斩（做到一半就停），
+//      而它想防的"死循环"其实用"有没有进展"判断更准。
 //   2. **用户停止后不再续跑**：停止的意义就是让 AI 停下，续跑必须让位。
 //   3. **合并触发**：一条回复里可能有多个操作标签，结果会连着插进来 ——
 //      用防抖合成一次续跑，否则会并发打出好几个请求。
-const AGENT_CONTINUE_MAX_STEPS = 8;
+//
+// AGENT_STALL_FUSE：**连续**多少步没做成任何事就熔断并如实报告。
+//   判据是 insertAgentResult 的 continueLoop 选项 —— 只有"真的做成了一件事"才传 true，
+//   其余（被拒 / 失败 / 未启用 / 未识别）都算"这一步没有进展"。
+//   任何一次成功、或用户新发一条消息，计数清零。
+//   为什么不是"步数上限"：一件正常的长任务可能几十步，步数到就停是误伤；
+//   而连续几步全都做不成，继续下去也只是重复失败 —— 那种情况也正是悬浮窗
+//   "一直在闪"的温床（每步 show/hide 一次）。
+const AGENT_STALL_FUSE = 3;
+let agentStalledSteps = 0;
 const AGENT_CONTINUE_PROMPT = '（系统内部通知：你刚才发起的操作已经执行完，结果已作为'
     + '「【AI 操作结果】」放进对话。请根据结果继续推进用户交代的任务。）\n'
     + '规则：\n'
@@ -1843,6 +2283,17 @@ let agentContinueTimer = null;
 /** 每来一条新的用户消息就重置预算（一次用户请求 = 一个预算） */
 function resetAgentContinueBudget() {
     agentContinueUsed = 0;
+    agentStalledSteps = 0;   // 新的一轮用户请求 → 熔断计数也清零
+    // 新的一轮用户请求 = 新的一轮运行：运行方式要**重新问**（上次选了后台，
+    // 这次可能想盯着看）。续跑不重置它 —— 那正是"一轮只问一次"的关键。
+    runModeDecision = '';
+    runModeExplicit = false;
+    // ★★ 2026-10 修：上一轮**实际用过的后端**也要清掉。
+    //   它驱动运行状态条的「看画面」按钮（见 agentRuntime.render），
+    //   如果留着上一轮的值，用户这轮选了前台、上一轮走过模块，按钮照样亮着 ——
+    //   看起来就像"它又在走模块"。跨轮复用同一个显示状态本身就是错的：
+    //   它记录的是"刚才走了哪条路"，不该被当成"现在正在走哪条路"。
+    window.__lastAgentBackend = '';
     if (agentContinueTimer) { clearTimeout(agentContinueTimer); agentContinueTimer = null; }
 }
 
@@ -1859,15 +2310,23 @@ async function continueAgentLoop() {
     if (!rt) return;
     // 用户按了停止 → 绝不再自动往下走（否则"停止"会被续跑顶掉）
     if (typeof rt.isHalted === 'function' && rt.isHalted()) return;
-    if (agentContinueUsed >= AGENT_CONTINUE_MAX_STEPS) {
-        console.warn('[Agent] 自动续跑达到上限，停下等待用户');
-        // continueLoop: false —— 这句是系统说明，不是操作结果。
-        // 若它也触发续跑，就会"到上限 → 插提示 → 又调度 → 再到上限"无限循环。
-        insertAgentResult('（已连续自动执行 ' + AGENT_CONTINUE_MAX_STEPS + ' 步，先停在这里。'
-            + '如果还需要继续，跟我说一声就行。）', { continueLoop: false });
+    // ★ 步数上限已取消（用户要求"无限制"），只留"连续无进展"熔断。
+    //   这句说明**必须** continueLoop: false —— 否则"熔断 → 插提示 → 又调度 → 又熔断"
+    //   会自己转起来（原上限分支踩过同一个坑）。
+    if (agentStalledSteps >= AGENT_STALL_FUSE) {
+        console.warn('[Agent] 连续 ' + agentStalledSteps + ' 步没有取得任何进展，熔断停下');
+        insertAgentResult('（连续 ' + agentStalledSteps + ' 步都没能真正做成任何一步，先停下来。'
+            + '如果某一步一直失败，先把那个问题解决掉；要我接着做就跟我说一声。）', { continueLoop: false });
+        scheduleOverlayHide(0);
         rt.endRun();
         return;
     }
+    // 续跑开始 → 悬浮窗要**留着**（别让上一批排下的收起定时器把它收掉）。
+    //   这一刻没有任何操作在跑，但用户切到别的 App 时仍然要看得见 AI 还在动
+    //   （用户明确要求："ai 没有操作时起码可以看到 ai 在干什么"）——
+    //   所以下面 setStep 的动作名写成「正在思考下一步」，它同时驱动浮层与状态条。
+    clearTimeout(overlayHideTimer);
+    overlayHideTimer = null;
     const conv = getCurrentConversation();
     if (!conv) return;
     agentContinueUsed += 1;
@@ -1875,22 +2334,94 @@ async function continueAgentLoop() {
     // 无条件调用会让「同一次运行内允许过就不再问」这条策略在每次续跑时失效
     // （用户点了允许，下一步又问一遍）。runAgentPhoneOperation 也是这么写的。
     if (!rt.isRunning()) rt.beginRun();
-    rt.setStep(rt.getStep() + 1, '继续处理');
-    console.log('[Agent] 自动续跑第 ' + agentContinueUsed + '/' + AGENT_CONTINUE_MAX_STEPS + ' 步');
+    rt.setStep(rt.getStep() + 1, '正在思考下一步');
+    console.log('[Agent] 自动续跑第 ' + agentContinueUsed + ' 步（连续无进展 '
+        + agentStalledSteps + '/' + AGENT_STALL_FUSE + '）');
+    // ★★ 2026-10：「思考期」就是**这段模型调用**。
+    //   标记"管道忙"，让排队中的收起作废、并让 phoneRunEndTimer 提前的 endRun 跳过 ——
+    //   用户切到别的 App 时，浮层与状态条必须整段都在（那才是他看得到的"AI 还在动"）。
+    //   只罩这一段是够的：callAI 一返回，要么有后续操作（drive → 操作在飞 / 续跑已排上，
+    //   守卫自然成立），要么就是收尾 —— 那时**本来就应该**收。
+    agentContinueBusy = true;
     let raw;
+    // ★★ 2026-10 修（用户真机反馈："退到桌面后悬浮窗跑了一下就消失，之后再没动静、也没报错"）：
+    //   续跑请求**失败**必须与"AI 认为任务完成"区分开 —— 这两件事原来走了同一条路。
+    //
+    //   原来的写法（三段合起来就是 bug）：
+    //     ① catch 里把任何非 EMPTY 的失败都 `raw = ''`；
+    //     ② 下面那句"回复里有没有操作标签"的正则因此匹配不到，判为"没有更多操作"；
+    //     ③ 于是走收尾分支 scheduleOverlayHide(0) + rt.endRun()。
+    //     —— 即"请求失败"被当成了"AI 认为任务完成"。
+    //   ⚠️ 这里刻意**不写出那句正则的字面量**：它是断言要定位的真实代码，
+    //      在注释里复述会让"失败分支是否在它之前"这类断言匹配到注释而失真
+    //      （本项目已两次踩到这个坑：check-agent-overlay 的 runModeDecision、
+    //        check-agent-continue 的 hasMoreOps）。注释只描述、不复制代码。
+    //   实测复现（探针注入一个必定失败的 callAI）：
+    //     overlayCalls: ["endRun","hideOverlay"]、对话里**零条**提示、熔断计数也没涨。
+    //   于是任何一次续跑失败（网络抖动 / 超时 / 限流 429 / 5xx）都会让任务
+    //   **悄悄中断**：浮层消失，用户以为"它做完了"或"它卡住了"，完全无从判断 ——
+    //   而失败原因（往往是额度或网络）恰恰是他唯一需要知道的东西。
+    //
+    //   现在：失败先**自动重试一次**（后台网络抖动/限流很常见，且这是最省事的恢复），
+    //   仍失败才记进 continueError，由下面的分支"如实告知 + 保持可继续"。
+    let continueError = null;
     try {
         raw = await callAI(AGENT_CONTINUE_PROMPT);
     } catch (e) {
-        // 思考型模型在"系统内部通知"这种元提示上偶尔只回思考内容（EMPTY_MODEL_OUTPUT），
-        // 与 explainAgentFailure 同样处理：原样重试一次，再失败就安静收尾。
-        if (e instanceof ClientApiError && e.code === 'EMPTY_MODEL_OUTPUT') {
-            try { raw = await callAI(AGENT_CONTINUE_PROMPT); } catch { raw = ''; }
-        } else {
+        // EMPTY_MODEL_OUTPUT 是**模型输出形态**问题（思考型模型在"系统内部通知"
+        // 这种元提示上尤其容易只回思考内容），不是链路故障，原样重试一次通常就好。
+        // （与 explainAgentFailure 的处理保持一致。）
+        // 其它错误也重试一次：这个场景下最可能的失败原因是后台网络抖动 / 限流，
+        // 一次重试就能救回来，比让用户手动说"继续"划算得多。
+        // ★ 只重试一次、且不在这里 endRun —— 见下面 continueError 分支的说明。
+        const isEmptyOutput = e instanceof ClientApiError && e.code === 'EMPTY_MODEL_OUTPUT';
+        console.warn('[Agent] 续跑请求失败（' + (isEmptyOutput ? 'EMPTY_MODEL_OUTPUT' : (e && e.code) || '未知')
+            + '），1 次重试…', e);
+        // 稍等一下再重试：立刻重试往往撞上同一个瞬时故障（连接还没恢复/仍在限流窗口）
+        await new Promise((r) => setTimeout(r, 800));
+        // 用户在这 800ms 里按了停止 → 不再白试一次（停止优先于一切）
+        if (typeof rt.isHalted === 'function' && rt.isHalted()) return;
+        try {
+            raw = await callAI(AGENT_CONTINUE_PROMPT);
+        } catch (e2) {
+            continueError = e2;
             raw = '';
         }
+    } finally {
+        agentContinueBusy = false;
     }
-    // 续跑途中用户按了停止 → 不渲染这半截回复
+    // 续跑途中用户按了停止 → 不渲染这半截回复（停止优先于一切，包括报错）
     if (typeof rt.isHalted === 'function' && rt.isHalted()) return;
+    // ★★ 续跑请求**连重试都失败**：如实告知 + 保持可继续，绝不静默收工。
+    //
+    //   为什么不静默 endRun（原来的 bug）：
+    //     任务其实**没有结束** —— 只是这一步的模型调用没成功。用户往往就在等结果，
+    //     把浮层收掉等于告诉他"做完了"，而真正该知道的失败原因（额度/网络）被彻底掩盖。
+    //   为什么不无限自动重试：
+    //     上面已经重试过一次。若仍失败，多半不是抖动而是**持续性**原因
+    //     （额度用尽 / Key 失效 / 服务商故障）—— 闷头重试只会白烧额度、让界面一直闪，
+    //     而这类原因用户必须自己处理，重试一百次也一样。
+    //   为什么这里 endRun（把浮层收掉）：
+    //     这一刻**确实没有任何东西在跑**了，留着一个"AI 正在操作"的浮层是假信息。
+    //     收掉它 + 在对话里写明"任务没完成、说声『继续』我就接着走"才是诚实的表达。
+    //     （用户说「继续」= 一条新消息 → 重置预算 → 带着完整上下文继续推进。）
+    //   这里**不**动 agentStalledSteps：熔断计数只服务于"自动续跑链"，
+    //     而这条路径已经停下等用户发话；用户下一条消息就会把它清零，递增无意义。
+    if (continueError) {
+        const reason = String((continueError && continueError.message) || continueError || '未知原因');
+        console.error('[Agent] 续跑请求重试后仍失败，任务暂停（未静默结束）:', continueError);
+        insertAgentResult(
+            '续跑失败：这一步没能继续（' + reason.slice(0, 300) + '）。\n'
+            + '⚠️ 任务**没有**完成，我也不会当作做完了 —— 刚才那一步的结果还在，你处理完这个问题后'
+            + '跟我说一声「继续」，我就接着往下走。\n'
+            + '（常见原因：网络不稳 / 服务商限流或额度用尽 / API Key 或地址失效。）',
+            { continueLoop: false }
+        );
+        // 收起浮层（理由见上：这一刻真的没东西在跑，留着是假信息）
+        scheduleOverlayHide(1200);
+        rt.endRun();
+        return;
+    }
     const text = window.ElainaTags ? window.ElainaTags.strip(raw || '') : (raw || '');
     if (text) {
         const aiMessage = { id: generateId(), role: 'ai', text, timestamp: new Date().toLocaleTimeString() };
@@ -1922,7 +2453,8 @@ async function continueAgentLoop() {
         window.ElainaTags.drive(raw || '');
         return;   // 后续由新一轮 insertAgentResult 接力
     }
-    // 没有操作标签 → AI 认为任务完成，结束本次运行（收起状态条）
+    // 没有操作标签 → AI 认为任务完成：状态条与悬浮窗一起收起
+    scheduleOverlayHide(0);
     rt.endRun();
 }
 

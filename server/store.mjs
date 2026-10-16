@@ -55,6 +55,22 @@ const CHARACTERS_DIR = 'characters';
 const CONVERSATIONS_DIR = 'conversations';
 const MEMORY_DIR = 'memory';
 
+// 参考音频：整段 base64 不许再住在 store.json 里（2026-10 起）。
+//
+// MiMo 音色复刻的参考样本是一整段 base64 data URL，原先随 elaina_open_settings
+// 整体落盘 —— 用户换一次样本，store.json 就背上几 MB 与"设置"无关的音频字符串
+// （实测 3.67MB，占整个文件 99.8%）。与"人设卡一卡一文件"同一思路：
+//   data/voice-samples/<槽位>.json   元数据（mime / 字节数）
+//   data/voice-samples/<槽位>.wav    音频原始字节
+// 设置里只留 `file:<槽位>` 引用，读盘时拼回完整 data URL —— 前端看到的
+// 永远是全量（发上来全量、读下去全量），对它完全透明。
+const VOICE_SAMPLES_DIR = 'voice-samples';
+/** 设置 JSON 里"音频字段 → 槽位 id"的映射；槽位 id 就是 voice-samples/ 下的文件名 */
+const VOICE_SAMPLE_SLOTS = { mimoTtsCloneSample: 'mimo-clone' };
+const SETTINGS_KEY = 'elaina_open_settings';
+/** voice-samples/ 下合法文件名（slot.wav / slot.mp3 / slot.bin / slot.json），防路径穿越 */
+const VOICE_SAMPLE_FILE_RE = /^(mimo-clone)\.(wav|mp3|bin|json)$/;
+
 /** 合法的 id（防止路径穿越：id 直接当文件名用） */
 const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
@@ -91,6 +107,14 @@ export function createStore({ dataDir, log = () => {} }) {
         } catch {
             return null;   // 不存在 / 损坏 → 由调用方决定怎么兜底
         }
+    }
+
+    /** 二进制版原子写：参考音频等非 JSON 内容用 */
+    async function writeFileAtomicBin(file, buffer) {
+        await mkdir(path.dirname(file), { recursive: true });
+        const tmp = file + '.tmp';
+        await writeFile(tmp, buffer);
+        await rename(tmp, file);
     }
 
     /** 与旧实现一致的收敛：只收字符串值，限制键长与单键体积 */
@@ -272,10 +296,111 @@ export function createStore({ dataDir, log = () => {} }) {
             if (out[k] === undefined) out[k] = v;
         }
 
+        // ⑤ 参考音频：`file:<槽位>` 引用拼回完整 data URL（前端拿到的永远是全量）
+        await joinVoiceSamples(out);
+
         cache = out;
         // 记下"这份缓存对应哪个磁盘状态" —— 目录不存在时记 -1（空目录状态）
         cacheStamp = await dataDirStamp();
         return cache;
+    }
+
+    // ---------------------------------------------------- 参考音频：拆出 store.json
+    /**
+     * 把设置对象里 VOICE_SAMPLE_SLOTS 列出的音频字段落成独立文件，
+     * 设置里替换成 `file:<槽位>` 引用。原地修改传入的 obj。
+     *
+     * 数据来源有两种：
+     *   · data URL（"data:audio/…;base64,…",  "file:mimo-clone"）—— 上面注释已述
+     *   · 裸 base64 —— 老版本前端发过这种，同样收下
+     * 写盘是"先全量清理再写"：设置里没有的字段（用户清除了样本）对应文件也删掉，
+     * 不留幽灵文件占空间。
+     */
+    async function splitVoiceSamples(obj) {
+        const settings = obj && typeof obj === 'object' ? obj[SETTINGS_KEY] : null;
+        if (typeof settings !== 'string') return;
+        let parsed;
+        try { parsed = JSON.parse(settings); } catch { return; }   // 非法 JSON：原样保留，不碰
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+
+        const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+        await mkdir(sampleDir, { recursive: true });
+
+        let changed = false;
+        for (const [field, slot] of Object.entries(VOICE_SAMPLE_SLOTS)) {
+            const value = typeof parsed[field] === 'string' ? parsed[field] : '';
+            if (value.startsWith('file:')) continue;   // 已经是引用，无需处理
+
+            if (!value) {
+                // 清空：设置里删字段，磁盘上删文件（包括 wav 旧扩展名，往前兼容）
+                if (field in parsed) { delete parsed[field]; changed = true; }
+                for (const ext of ['.wav', '.bin', '.json']) {
+                    await rm(path.join(sampleDir, slot + ext), { force: true });
+                }
+                continue;
+            }
+
+            // data:audio/xxx;base64,AAAA | 裸 base64 AAAA
+            const comma = value.indexOf(',');
+            const isDataUrl = /^data:[\w.+-]+\/[\w.+-]+;base64,/.test(value.slice(0, comma + 1));
+            const b64 = isDataUrl ? value.slice(comma + 1) : value;
+            let bytes;
+            try { bytes = Buffer.from(b64, 'base64'); } catch { continue; }   // 解不出就别动原值
+            if (!bytes || !bytes.length) continue;
+
+            const mime = isDataUrl ? value.slice(5, comma).replace(/;base64$/, '') : 'audio/wav';
+            const ext = /mp3/i.test(mime) ? '.mp3' : '.wav';
+            await writeJsonAtomic(path.join(sampleDir, slot + '.json'), { version: 1, mime, bytes: bytes.length });
+            // 音频本体用**二进制直写**（不是 JSON）：几 MB 的 base64 转 JSON 会再翻一倍体积
+            await writeFileAtomicBin(path.join(sampleDir, slot + ext), bytes);
+            // 兼容：换格式后旧扩展名文件清掉（比如上次是 .wav 这次转成了 .mp3）
+            for (const other of ['.wav', '.mp3', '.bin']) {
+                if (other !== ext) await rm(path.join(sampleDir, slot + other), { force: true });
+            }
+            parsed[field] = `file:${slot}`;
+            changed = true;
+        }
+
+        if (changed) obj[SETTINGS_KEY] = JSON.stringify(parsed);
+    }
+
+    /**
+     * 把 `file:<槽位>` 引用拼回完整 data URL（loadStore 专用）。
+     * 文件丢了/坏了就删掉这个字段 —— 前端会当成"没设置样本"，重新上传即可。
+     */
+    async function joinVoiceSamples(obj) {
+        const settings = obj && typeof obj === 'object' ? obj[SETTINGS_KEY] : null;
+        if (typeof settings !== 'string') return;
+        let parsed;
+        try { parsed = JSON.parse(settings); } catch { return; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+
+        let changed = false;
+        for (const [field, slot] of Object.entries(VOICE_SAMPLE_SLOTS)) {
+            const value = typeof parsed[field] === 'string' ? parsed[field] : '';
+            if (!value.startsWith('file:')) continue;
+            if (value !== `file:${slot}`) { delete parsed[field]; changed = true; continue; }   // 未知槽位，丢弃
+
+            const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+            let bytes = null;
+            let meta = null;
+            for (const ext of ['.wav', '.mp3', '.bin']) {
+                meta = meta || await readJson(path.join(sampleDir, slot + '.json'));
+                if (!meta) break;
+                try { bytes = await readFile(path.join(sampleDir, slot + ext)); } catch { bytes = null; continue; }
+                break;
+            }
+            if (!bytes || !bytes.length) {
+                delete parsed[field];   // 引用悬空：文件被手动删了
+                changed = true;
+                continue;
+            }
+            const mime = (meta && meta.mime) || 'audio/wav';
+            parsed[field] = `data:${mime};base64,${bytes.toString('base64')}`;
+            changed = true;
+        }
+
+        if (changed) obj[SETTINGS_KEY] = JSON.stringify(parsed);
     }
 
     /** data/ 目录的 mtime（毫秒）；目录不存在返回 -1（表示"没有数据"） */
@@ -335,6 +460,8 @@ export function createStore({ dataDir, log = () => {} }) {
                 if (Object.values(CHARACTER_KEYS).includes(k)) continue;
                 misc[k] = v;
             }
+            // 参考音频先拆出去：misc 里的设置只留 `file:<槽位>` 引用
+            await splitVoiceSamples(misc);
             await writeJsonAtomic(STORE_FILE, misc);
             // 应用自己写完盘后，把缓存对应的磁盘状态**更新为刚写出来的样子** ——
             // 否则下一次 loadStore 会因为 mtime 变了而白白重读一遍全部文件。
@@ -365,6 +492,31 @@ export function createStore({ dataDir, log = () => {} }) {
         const legacySingleConv = await readJson(path.join(dataDir, 'conversations.json'));
         // v2 中期把记忆放在单个 memory.json 里，现在要拆成 memory/<类目>.json
         const legacySingleMem = await readJson(path.join(dataDir, 'memory.json'));
+
+        // 参考音频迁移：store.json 的设置里还带着整段 base64 就拆到 voice-samples/。
+        // 与分类键不同，它**不要求** moved 里出现"voice-samples"才动手 ——
+        // 上面的分类迁移可能早已跑过（moved 为空直接 return），而音频是之后才引入的拆分，
+        // 必须独立判断。放在 return 之前处理完再走原流程。
+        {
+            const probe = { [SETTINGS_KEY]: typeof legacy[SETTINGS_KEY] === 'string' ? legacy[SETTINGS_KEY] : null };
+            if (probe[SETTINGS_KEY]) {
+                await splitVoiceSamples(probe);
+                if (probe[SETTINGS_KEY] !== legacy[SETTINGS_KEY]) {
+                    // 设置内容变了（音频拆出去了）：写回 store.json，并同步进 cache
+                    await writeJsonAtomic(STORE_FILE, (() => {
+                        const misc = {};
+                        for (const [k, v] of Object.entries(legacy)) {
+                            if (k === MEMORY_KEY || k === CONVERSATION_KEY) continue;
+                            if (Object.values(CHARACTER_KEYS).includes(k)) continue;
+                            misc[k] = v;
+                        }
+                        misc[SETTINGS_KEY] = probe[SETTINGS_KEY];
+                        return misc;
+                    })());
+                    log('info', '[store] 参考音频已拆分到 voice-samples/（store.json 只留引用）');
+                }
+            }
+        }
 
         if (!hasMemKey && !hasCharKey && !hasConvKey && !legacySingleConv && !legacySingleMem) return moved;
 
@@ -531,6 +683,16 @@ export function createStore({ dataDir, log = () => {} }) {
             }
         } catch { /* 没有记忆目录就跳过 */ }
 
+        // 参考音频：音频本体 + 元数据（与磁盘结构一致，解压后能直接听）
+        try {
+            const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+            for (const name of (await readdir(sampleDir)).sort()) {
+                if (!VOICE_SAMPLE_FILE_RE.test(name)) continue;
+                const raw = await readFile(path.join(sampleDir, name));
+                if (raw && raw.length) entries.push({ name: `${VOICE_SAMPLES_DIR}/${name}`, data: raw });
+            }
+        } catch { /* 没有参考音频就跳过 */ }
+
         return createZip(entries);
     }
 
@@ -645,6 +807,18 @@ export function createStore({ dataDir, log = () => {} }) {
                         if (rec && typeof rec.value === 'string') data[MEMORY_KEY] = rec.value;
                     } catch { /* 忽略 */ }
                 }
+            }
+
+            // 参考音频：备份里的音频文件落回 voice-samples/，
+            // 设置里对应的 `file:<槽位>` 引用才能成立。
+            const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+            for (const f of files) {
+                const base = f.name.replace(/\\/g, '/');
+                if (!base.startsWith(VOICE_SAMPLES_DIR + '/')) continue;
+                if (!VOICE_SAMPLE_FILE_RE.test(base.slice(VOICE_SAMPLES_DIR.length + 1))) continue;
+                try {
+                    await writeFileAtomicBin(path.join(sampleDir, base.slice(VOICE_SAMPLES_DIR.length + 1)), f.data);
+                } catch { /* 单个文件失败不挡整包导入 */ }
             }
 
             return { source: 'zip', data };

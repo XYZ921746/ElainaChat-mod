@@ -107,7 +107,7 @@ const rawCtxFactory = new Function('window', `
     ${extractFn('mapThinkingEffort')}
     ${extractFn('detectThinkingVendor')}
     ${extractFn('buildThinkingParams')}
-    const THINKING_EFFORTS = Object.freeze(['low', 'medium', 'high']);
+    const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
     // anthropicContentBlocks / convertOpenAIToAnthropicMessages / callAnthropicChat
     // 已迁到 web/js/chat-providers.js（见开发文档 8.33）—— 不再从 index.html 抠，
     // 改为在下面直接加载那个真模块（测的就是线上跑的那份）。

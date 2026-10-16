@@ -106,27 +106,53 @@ ok(!/已跳过[^)]*continueLoop: true/.test(html), '「已跳过」类结果不�
 ok(!/已取消写入[^)]*continueLoop: true/.test(html), '「已取消写入」不续跑');
 ok(!/操作失败[^)]*continueLoop: true/.test(html), '失败说明不续跑');
 
-// ---------- 二、死循环防护 ----------
+// ---------- 二、死循环防护（★ 2026-10 由"步数上限"改成"连续无进展熔断"）----------
 //
-// 最关键的回归项：达到上限时插入的提示**不能**再触发续跑。
-console.log('\n— 死循环防护 —');
+// ★★ 用户要求"取消 8 步限制改为无限制"，于是把硬性步数上限**删掉**，
+//   换成"连续 N 步没做成任何事就熔断"。这是同一件事的两个判据：
+//     · 步数上限   → 一件正常的长任务会被腰斩（几十步本来就是正常的）；
+//     · 无进展熔断 → 只钉住"反复失败"这种情况（继续下去也只是重复失败）。
+//   最关键的回归项仍然是：熔断时插入的提示**不能**再触发续跑。
+console.log('\n— 死循环防护（无进展熔断）—');
 const loopFn = extractFn('continueAgentLoop');
-ok(/AGENT_CONTINUE_MAX_STEPS/.test(loopFn), '续跑有步数上限');
-// 默认就是"不续跑"，所以上限提示无需显式传参也不会递归 ——
-// 但仍要确认上限分支里没有误开续跑。
-const capBlock = loopFn.match(/if \(agentContinueUsed >= AGENT_CONTINUE_MAX_STEPS\)[\s\S]*?\n {8}\}/);
-ok(!!capBlock, '找得到上限分支');
+ok(!/AGENT_CONTINUE_MAX_STEPS/.test(html), '★ 旧的 8 步硬上限已彻底移除（用户要求无限制）');
+ok(/AGENT_STALL_FUSE/.test(loopFn), '续跑有"连续无进展"熔断');
+// 默认就是"不续跑"，所以熔断提示无需显式传参也不会递归 ——
+// 但仍要确认熔断分支里没有误开续跑。
+const capBlock = loopFn.match(/if \(agentStalledSteps >= AGENT_STALL_FUSE\)[\s\S]*?\n {8}\}/);
+ok(!!capBlock, '找得到熔断分支');
 ok(!!capBlock && !/continueLoop: true/.test(capBlock[0]),
-    '达到上限时的提示不开启续跑（否则"到上限→插提示→又调度→再到上限"无限循环）');
+    '熔断时的提示不开启续跑（否则"熔断→插提示→又调度→又熔断"无限循环）');
 ok(!!capBlock && /\breturn;/.test(capBlock[0]),
-    '达到上限后立即 return（不再发起请求）');
+    '熔断后立即 return（不再发起请求）');
 ok(!!capBlock && /rt\.endRun\(\)/.test(capBlock[0]),
-    '达到上限时收起运行状态条（否则状态条会一直挂着）');
+    '熔断时收起运行状态条（否则状态条会一直挂着）');
+// 计数必须按"有没有进展"记 —— 若改成按步数累加，就等于把上限又装回去了
+// （insertFn 已在上面第 61 行取过，这里直接复用，别再声明一次）
+ok(/agentStalledSteps = 0/.test(insertFn) && /agentStalledSteps \+= 1/.test(insertFn),
+    '★ 熔断计数按"有没有进展"记：成功清零、其余累加（判据是 continueLoop）');
+
+// ---------- 二之二、"思考期"不许收起悬浮窗（★ 2026-10 回归）----------
+//
+// 用户反馈"在后台时悬浮窗老是消失" —— 根因是续跑定时器一触发就把自己清成 null，
+// 而 callAI 要跑好几秒；600ms 排下的收起定时器在 ~1.8s 检查时守卫全失守，
+// 于是**整段思考期**浮层被收掉、下一步又 show 回来（用户看到的就是"消失几秒又冒出来"）。
+console.log('\n— 思考期不收起悬浮窗 —');
+ok(/agentContinueBusy = true/.test(loopFn),
+    '★ 模型调用前标记"管道忙"（思考期不许收起）');
+ok(/finally \{[\s\S]{0,60}agentContinueBusy = false/.test(loopFn),
+    '★ 用 finally 清标志（任何出口都不会漏，否则会永久挂着不收）');
+ok(/function agentPipelineBusy\(\)/.test(html) && /agentContinueTimer\) \|\| agentContinueBusy/.test(html),
+    '★ 统一的"忙"判据：续跑待发 / 模型在想 / 还有操作在飞');
+const hideFn = extractFn('scheduleOverlayHide');
+ok(/agentPipelineBusy\(\)/.test(hideFn) && !/phoneOpsInFlight > 0/.test(hideFn),
+    '★ 收起悬浮窗前统一判 agentPipelineBusy（不再各处自己写一份漏项的判据）');
 
 // ---------- 三、预算必须按"用户请求"重置 ----------
 console.log('\n— 预算重置 —');
 const resetFn = extractFn('resetAgentContinueBudget');
 ok(/agentContinueUsed = 0/.test(resetFn), '重置函数把已用步数归零');
+ok(/agentStalledSteps = 0/.test(resetFn), '重置函数把"连续无进展"计数也清零（否则熔断会跨请求累计）');
 ok(/clearTimeout\(agentContinueTimer\)/.test(resetFn), '重置时也清掉待触发的续跑定时器');
 // 调用点必须在 handleUserInput 里
 const handleFn = extractFn('handleUserInput');
@@ -142,6 +168,64 @@ ok(/if \(hasMoreOps[\s\S]{0,300}?drive\(raw \|\| ''\);[\s\S]{0,80}?return;/.test
     '有后续操作时 return，交给下一轮 insertAgentResult 接力');
 ok(/rt\.endRun\(\);\s*\n\s*\}/.test(loopFn),
     '没有操作标签时才 endRun（AI 认为任务完成）');
+
+// ---------- 四之二、续跑**请求失败**绝不能被当成"任务完成" ★★ 2026-10 真机修复 ----------
+//
+// 用户反馈："退到桌面后悬浮窗运行了一下然后消失，之后再没动静、也没报错。"
+//
+// 根因：续跑请求失败时 `raw` 被吞成空串，而空串在下面被当成"没有更多操作标签"
+// → 走 `scheduleOverlayHide(0); rt.endRun()`，即"AI 认为任务完成"。
+// **"请求失败"和"任务做完了"被合并成了同一条路径**：
+//   · 浮层收起（用户以为它做完了，或以为它卡住了）；
+//   · 对话里零条提示（真正该知道的失败原因——额度/网络——被彻底掩盖）；
+//   · 熔断计数也不涨，所以连"连续无进展"这条兜底都触发不了。
+// 实测复现（探针注入必定失败的 callAI）：overlayCalls=["endRun","hideOverlay"]、
+// 新消息 0 条、hasErrorNotice=false。修复后同一探针：callAI 调用 2 次（自动重试）、
+// 对话里出现明确的"任务没有完成"说明。
+//
+// 这几条盯住的关键约定：失败必须与"完成"分开，且必须让用户看见。
+console.log('\n— 续跑失败 ≠ 任务完成（防"悬浮窗消失后没动静"复发）—');
+ok(/let continueError = null;/.test(loopFn),
+    '★ 用独立的 continueError 记录续跑失败（不再把失败吞成空串混进"完成"分支）');
+ok(/continueError = e/.test(loopFn) || /continueError = e2/.test(loopFn),
+    '★ 捕获到的失败真的被记进 continueError');
+// ★ 核心：失败分支必须在 hasMoreOps **真实判定**之前 return 掉，
+//   否则它仍会掉进"没有操作标签 → endRun"的完成路径。
+//
+// ⚠️ 必须先剥掉注释再找位置 —— 失败分支的注释块里**引用了** `const hasMoreOps`
+//    来对照旧写法（"原来的写法：… const hasMoreOps = …"）。
+//    直接 indexOf 会命中注释里那次出现（比真实判定早 4000 字符），
+//    于是这条断言**恒为假**、永远红 —— 我第一次就是这么写的。
+//    同一个坑在本项目已踩过第二次（见 check-agent-overlay 的 runModeDecision），
+//    所以这里显式剥注释，并在断言名里写明判据是"真实代码位置"。
+{
+    const codeOnly = loopFn
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/\/\/[^\n]*/g, '');
+    const errAt = codeOnly.indexOf('if (continueError) {');
+    const moreAt = codeOnly.indexOf('const hasMoreOps');
+    ok(errAt > 0 && moreAt > 0 && errAt < moreAt,
+        '★★ 失败分支在 hasMoreOps 判定**之前**（否则仍会被当成"任务完成"静默收工）',
+        `err@${errAt} hasMoreOps@${moreAt}（已剥注释）`);
+}
+// 自动重试一次：后台网络抖动/限流是最常见的失败原因，一次重试就能救回来
+{
+    const calls = (loopFn.match(/callAI\(AGENT_CONTINUE_PROMPT\)/g) || []).length;
+    ok(calls >= 2, '★ 续跑失败会**自动重试一次**（抖动/限流能自愈）', `callAI 调用点 ${calls} 处`);
+    ok(/await new Promise\(\(r\) => setTimeout\(r, \d+\)\)/.test(loopFn),
+        '★ 重试前先等一会儿（立刻重试往往撞上同一个瞬时故障）');
+}
+// 失败必须让用户**看得见**：明确说"任务没有完成"
+ok(/续跑失败/.test(loopFn) && /没有\*\*完成|没有完成/.test(loopFn),
+    '★★ 失败时如实告知（明确写"任务没有完成"，不让用户以为做完了）');
+ok(/\{ continueLoop: false \}/.test(loopFn.split('if (continueError) {')[1]?.slice(0, 1200) || ''),
+    '★ 失败说明不触发续跑（否则会绕过它自己的重试预算、变成反复失败刷屏）');
+// 停止优先：重试前也要检查，别在用户按了停止之后还白试一次
+{
+    const errBlock = loopFn.slice(loopFn.indexOf('let continueError = null;'), loopFn.indexOf('if (continueError) {'));
+    const haltInBlock = (errBlock.match(/isHalted\(\)\) return;/g) || []).length;
+    ok(haltInBlock >= 1, '★ 重试前后也检查 isHalted（用户按停止后不再白试）', `块内检查 ${haltInBlock} 次`);
+}
 
 // ---------- 五、停止必须能拦住续跑 ----------
 console.log('\n— 停止优先 —');

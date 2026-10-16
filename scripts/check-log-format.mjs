@@ -218,9 +218,17 @@ const infoLines = headLines.filter((l) => l.includes('[INFO]'));
 ok(infoLines.length > 0 && infoLines.every((l) => !l.includes('[v')), 'INFO 不带版本号（不制造噪音）');
 
 // ---- 来源行号：必须是真的调用点，不能全指到包装函数自己 ----
-const locs = [...main.matchAll(/\[(serve):(\d+)\]/g)].map((m) => Number(m[2]));
-ok(locs.length === headLines.length, '每条记录首行都带来源位置',
-    `${locs.length} 个位置 vs ${headLines.length} 个首行`);
+//
+// ★★ 2026-10：判据从"必须是 serve"放宽到"必须是某个真实文件里的行号"。
+//   起因：本地中继搬进了 server/relay.mjs（电脑端与手机端共用），那里的日志
+//   来源现在**诚实地**报成 relay:N —— 这是对的（来源就该指真实文件），
+//   但写死 `serve` 会把合法来源当成缺失，实测 19/33。
+//   仍然保留下面那条"不能全指向包装层"：只要大量重复同一个行号就说明失效了。
+const srcLoc = /\[([A-Za-z0-9_.-]+):(\d+)\]/;
+const located = headLines.filter((l) => srcLoc.test(l));
+ok(located.length === headLines.length, '每条记录首行都带来源位置',
+    `${located.length} 个位置 vs ${headLines.length} 个首行`);
+const locs = located.map((l) => Number(l.match(srcLoc)[2]));
 ok(new Set(locs).size > 3, '来源行号能区分不同调用点（不是全指向包装层）', `去重后只有 ${new Set(locs).size} 个位置`);
 
 // ---- 脱敏 ----

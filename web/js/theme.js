@@ -248,9 +248,102 @@
         { id: 'claude', name: '陶土橙', dots: ['#d97757', '#eab38f', '#f6f2ed'] },
         { id: 'sage', name: '鼠尾草', dots: ['#4f9d7d', '#9cc9b4', '#eef3ee'] },
         { id: 'sakura', name: '樱花桃', dots: ['#d97b93', '#f0b6c4', '#f8f1f3'] },
+        // ★★ 2026-10：「星屑之日」（生日配色）**已从这份内置清单里移出** ——
+        //   生日模块搬进了插件（mods/birthday），那套配色由插件在启用时通过
+        //   `host.theme({ id:'stardust', vars:{…} })` 注册（见下面的 MOD_TEMPLATES）。
+        //   所以它不再是内置主题：不装 / 不启用那个插件时，主题选择器里就没有它。
         // DIY：颜色由用户定，色点也按用户选的实际颜色显示（renderPicker 里特殊处理）
         { id: 'custom', name: '自定义', dots: null },
     ];
+
+    // ========================================================================
+    //  插件注册的主题（host.theme）★ 2026-10 新增
+    //
+    //  ── 为什么需要 ────────────────────────────────────────────────────────
+    //  主题过去只认 TEMPLATES 里写死的这几套：`currentTemplate()` 会拿属性值去
+    //  清单里校验，不在清单里的 id 一律回落 elaina。于是"插件想加一套配色"
+    //  根本无从下手（设了没反应）。插件化的生日模块（「星屑之日」）是第一个
+    //  需要这个能力的用户 —— 它原来靠把 stardust 写进 TEMPLATES 才成立。
+    //
+    //  ── 变量从哪来 ────────────────────────────────────────────────────────
+    //  宿主模板的颜色写在 themes.css 里；插件主题的颜色由
+    //  `host.theme({ id, name, dots, vars })` 在运行时给。这里把 vars 落成
+    //  一条注入样式：
+    //      html[data-theme-template="<id>"]:not([data-theme="dark"]) { --x: y; }
+    //  ★ 那个 `:not([data-theme="dark"])` 是关键：注入样式比 themes.css 晚，
+    //    若不带这个守卫，同权重下它会**盖掉深色块** —— 表现为"深色模式下
+    //    插件主题仍是浅色的"。加上守卫后，深色时它不匹配，深色块照常生效。
+    //    （内置模板靠"写在 themes.css 前半段、深色块在后"达到同样效果。）
+    //
+    //  ── 生命周期 ──────────────────────────────────────────────────────────
+    //  registerTemplate / unregisterTemplate 由 mods.js 的 host.theme 在插件
+    //  启用/停用时调用；unregister 时若用户正停在那套配色上，会回落默认主题 ——
+    //  否则会停在一套"变量已经被摘掉"的配色上（看起来像界面坏了）。
+    // ========================================================================
+    const MOD_TEMPLATES = [];
+    /** 全部可选模板 = 内置 + 插件注册的（顺序即选择器里的显示顺序） */
+    function allTemplates() { return TEMPLATES.concat(MOD_TEMPLATES); }
+
+    /** 插件主题那条注入样式的元素（按 id 精确定位，便于摘除） */
+    function modThemeStyle(id) { return document.getElementById('elainaModTheme-' + id); }
+
+    /**
+     * 注册一个插件主题模板。
+     * @param {{id:string,name?:string,dots?:string[],vars?:object}} tpl
+     * @returns {boolean} 是否注册成功（id 非法 / 重复时 false）
+     */
+    function registerTemplate(tpl) {
+        try {
+            const id = String(tpl && tpl.id || '').trim();
+            if (!id || id === 'elaina' || id === 'custom') return false;
+            if (allTemplates().some((t) => t.id === id)) return false;
+            MOD_TEMPLATES.push({
+                id,
+                name: String(tpl.name || id),
+                dots: Array.isArray(tpl.dots) ? tpl.dots : null,
+                mod: true,
+            });
+            const vars = (tpl.vars && typeof tpl.vars === 'object' && !Array.isArray(tpl.vars)) ? tpl.vars : {};
+            let el = modThemeStyle(id);
+            if (!el) {
+                el = document.createElement('style');
+                el.id = 'elainaModTheme-' + id;
+                document.head.appendChild(el);
+            }
+            const body = Object.keys(vars).map((k) => '  ' + k + ': ' + vars[k] + ';').join('\n');
+            el.textContent = 'html[data-theme-template="' + id + '"]:not([data-theme="dark"]) {\n' + body + '\n}\n';
+            refreshPicker();
+            return true;
+        } catch (e) { return false; }
+    }
+
+    /** 摘掉一个插件主题模板（插件停用/卸载时由 host.theme 的回调调） */
+    function unregisterTemplate(id) {
+        try {
+            const i = MOD_TEMPLATES.findIndex((t) => t.id === id);
+            if (i < 0) return false;
+            MOD_TEMPLATES.splice(i, 1);
+            const el = modThemeStyle(id);
+            if (el) el.remove();
+            // 正停在这套配色上 → 回落默认，避免停在"变量已失效"的主题上
+            if (currentTemplate() === id) setTemplate('elaina');
+            refreshPicker();
+            return true;
+        } catch (e) { return false; }
+    }
+
+    /**
+     * 重建主题选择器。
+     * 模板清单变了（插件注册/摘除）时要重建；选择器只在设置面板里，
+     * 没渲染过就跳过 —— 下次打开设置时 renderPicker 会用新清单渲染。
+     */
+    function refreshPicker() {
+        const box = document.getElementById('themePickerBox');
+        if (!box) return;
+        box.dataset.filled = '';
+        box.innerHTML = '';
+        renderPicker();
+    }
 
     // ========================================================================
     //  应用 / 读取
@@ -260,12 +353,12 @@
         try {
             const v = document.documentElement.getAttribute('data-theme-template')
                 || Store.getItem(TPL_KEY) || 'elaina';
-            return TEMPLATES.some((t) => t.id === v) ? v : 'elaina';
+            return allTemplates().some((t) => t.id === v) ? v : 'elaina';
         } catch (e) { return 'elaina'; }
     }
 
     function setTemplate(id) {
-        const tpl = TEMPLATES.some((t) => t.id === id) ? id : 'elaina';
+        const tpl = allTemplates().some((t) => t.id === id) ? id : 'elaina';
         try {
             // elaina 是默认主题，**不设属性** —— 这样"没选过主题"与"选了粉紫"
             // 走的是同一条路径，不会因为属性存在与否产生细微差异
@@ -277,6 +370,32 @@
         applyCustomTheme();
         markPicker();
         return tpl;
+    }
+
+    /**
+     * 临时把主题切到 id，并记住"切换前那套"。
+     *
+     * ★ 与 setTemplate 的区别：setTemplate 是"**用户**选了这套"（会持久化，
+     *   这就是新的偏好）；useTemplate 是"某个功能临时占用一下界面"—— 例如生日
+     *   当天的星屑配色。之后必须能一键回到用户原来的选择，所以这里把"切换前"
+     *   记在一个槽里，restoreTemplate() 用它还原。
+     *   （旧版生日模块自己把 prevTheme 存进它自己的 Store 键；现在由主题系统自己
+     *    记 —— 插件就不必碰用户的主题偏好，少一处"哪份才是权威"的可能。）
+     */
+    let preUseTemplate = '';
+
+    function useTemplate(id) {
+        const cur = currentTemplate();
+        if (cur === id) return id;
+        if (!preUseTemplate) preUseTemplate = cur;
+        return setTemplate(id);
+    }
+
+    /** 还原到 useTemplate 之前那套主题（没有记录则回落默认主题） */
+    function restoreTemplate() {
+        const back = preUseTemplate || 'elaina';
+        preUseTemplate = '';
+        return setTemplate(back);
     }
 
     function isDark() {
@@ -369,7 +488,7 @@
             // 深色：走统一入口（含"跟随系统"的判定）
             applyDarkMode(darkMode());
             const tpl = Store.getItem(TPL_KEY);
-            if (tpl && tpl !== 'elaina' && TEMPLATES.some((t) => t.id === tpl)) {
+            if (tpl && tpl !== 'elaina' && allTemplates().some((t) => t.id === tpl)) {
                 document.documentElement.setAttribute('data-theme-template', tpl);
             }
             // DIY 主题的变量要在启动时就注入，否则会先闪一下预设配色
@@ -429,7 +548,7 @@
                 + '</button>';
         };
 
-        box.innerHTML = TEMPLATES.map(card).join('');
+        box.innerHTML = allTemplates().map(card).join('');
         box.querySelectorAll('.theme-tpl-card').forEach((el) => {
             el.addEventListener('click', () => setTemplate(el.getAttribute('data-tpl')));
         });
@@ -522,7 +641,15 @@
 
     window.ElainaTheme = {
         TEMPLATES,
-        templates: () => TEMPLATES.slice(),
+        // 内置清单（不含插件注册的）；`templates()` 给的是**全部**
+        templates: () => allTemplates(),
+        allTemplates,
+        // ★ 插件主题注册：由 mods.js 的 host.theme 在启用/停用时调用
+        registerTemplate,
+        unregisterTemplate,
+        // ★ 临时切换 / 还原（供插件"占用一下界面再还回来"，见它们的说明）
+        useTemplate,
+        restoreTemplate,
         current: currentTemplate,
         set: setTemplate,
         isDark,

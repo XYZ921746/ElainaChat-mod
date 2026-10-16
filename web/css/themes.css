@@ -272,6 +272,17 @@ html[data-theme-template="sakura"] {
     --ink: #402a34;
 }
 
+/* ==================== 「星屑之日」（生日配色）已移出宿主 ====================
+ *
+ *  ★ 2026-10：那套配色（灰紫 / 夜空蓝 / 暖金 / 奶油白）原先写在这里，是内置
+ *    模板 `stardust`。生日模块搬进插件（mods/birthday）之后，它改由插件在启用时
+ *    通过 `host.theme({ id:'stardust', vars:{…} })` 注册 —— 变量就写在插件里
+ *    （见 mods/birthday/index.js），停用插件即从主题选择器里消失。
+ *    所以这里不再保留它的变量块，免得同一套配色出现两份定义（还得分清哪份赢）。
+ *    取色理由（灰紫=canvas、夜空蓝=brown、暖金=orange、灰紫偏蓝=green）随变量
+ *    一起去插件那边了。
+ */
+
 /* ==================== 自定义（DIY）====================
  *
  * 用户选的 3 个关键色存在 localStorage，其余变量由 theme.js 的
@@ -503,7 +514,10 @@ html[data-theme="dark"] #sidebar::before {
 html[data-theme="dark"] #sidebar .sidebar-rail-btn { color: #9aa6b8 !important; }
 html[data-theme="dark"] #sidebar .sidebar-rail-btn:hover {
     color: #eef2f7 !important;
-    background: rgba(10, 132, 255, 0.18) !important;
+    /* ★ 2026-10 修：原来写死 iOS 蓝 rgba(10,132,255,.18)；这条带 #sidebar，
+       优先级比下面那条同类规则更高，所以必须**在这里**改，否则悬停高亮
+       永远泛蓝、不跟模板。 */
+    background: var(--tpl-tint) !important;
 }
 html[data-theme="dark"] #sidebar .sidebar-rail-btn.active {
     color: #fff !important;
@@ -569,13 +583,142 @@ html[data-theme="dark"] {
     --ink: #eef2f7;
 }
 
+/* ★★ 2026-10：深色模式下**每套模板仍要认得出自己**。
+ *
+ * 症状（用户实测）："深色下默认是 iOS 蓝，切其它模板完全没用"。
+ * 根因就在上面那个深色变量块 —— 它把品牌变量写死成 iOS 蓝（#0a84ff / #4f7cf0），
+ * 而它与 `html[data-theme-template="…"]` 的**特异性相同**（都是 `0,1,1`），
+ * 又排在那些模板块**后面** → 同名的变量全被它盖掉，四套模板看起来一模一样。
+ *
+ * 修法：给每套模板补一组"深色版"变量，选择器带上两个属性
+ * `html[data-theme="dark"][data-theme-template="x"]`（特异性 `0,2,1` > `0,1,1`，稳赢）。
+ * ★ 只覆盖**品牌色 + 深浅底色**：文字 / 警示 / 阴影那些沿用上面那套深色值 ——
+ *   深色的对比度是专门调过的（见 --pixso-warn 那几条注释），不该跟着模板跑。
+ * ★ ios 那组与默认深色**取值相同**，写出来只是为了让"每套模板自带完整定义"，
+ *   将来改默认深色时不必再回头补它。
+ */
+html[data-theme="dark"][data-theme-template="ios"] {
+    --lg-primary: #0a84ff;
+    --lg-primary-deep: #0a6fd8;
+    --lg-primary-soft: rgba(10, 132, 255, 0.16);
+    --lg-bg: #101318;
+    --pixso-canvas: #0d1015;
+    --pixso-cream: #232833;
+    --pixso-surface: #151a21;
+    --pixso-panel: #1a2029;
+    --pixso-panel-soft: #222833;
+    --pixso-orange: #0a84ff;
+    --pixso-green: #4f7cf0;
+    --pixso-green-dark: #3d6ae0;
+    --pixso-line: #2c3542;
+    --tpl-primary: #0a84ff;
+    --tpl-primary-deep: #0a6fd8;
+    --tpl-primary-soft: #4f7cf0;
+    --tpl-tint: rgba(10, 132, 255, 0.16);
+}
+html[data-theme="dark"][data-theme-template="claude"] {
+    --lg-primary: #e08a6a;
+    --lg-primary-deep: #c96f4d;
+    --lg-primary-soft: rgba(224, 138, 106, 0.16);
+    --lg-bg: #17120d;
+    --pixso-canvas: #14100c;
+    --pixso-cream: #2e241e;
+    --pixso-surface: #1d1713;
+    --pixso-panel: #241b16;
+    --pixso-panel-soft: #2d221c;
+    --pixso-orange: #e08a6a;
+    --pixso-green: #e08a6a;
+    --pixso-green-dark: #c96f4d;
+    --pixso-line: #3b2e26;
+    --tpl-primary: #e08a6a;
+    --tpl-primary-deep: #c96f4d;
+    --tpl-primary-soft: #e8a288;
+    --tpl-tint: rgba(224, 138, 106, 0.16);
+}
+html[data-theme="dark"][data-theme-template="sage"] {
+    --lg-primary: #4cc296;
+    --lg-primary-deep: #35916d;
+    --lg-primary-soft: rgba(76, 194, 150, 0.16);
+    --lg-bg: #0f1511;
+    --pixso-canvas: #0c120e;
+    --pixso-cream: #202c22;
+    --pixso-surface: #131a15;
+    --pixso-panel: #18211a;
+    --pixso-panel-soft: #1f2b21;
+    --pixso-orange: #4cc296;
+    --pixso-green: #4cc296;
+    --pixso-green-dark: #35916d;
+    --pixso-line: #29392e;
+    --tpl-primary: #4cc296;
+    --tpl-primary-deep: #35916d;
+    --tpl-primary-soft: #78d3b2;
+    --tpl-tint: rgba(76, 194, 150, 0.16);
+}
+html[data-theme="dark"][data-theme-template="sakura"] {
+    --lg-primary: #e58ba1;
+    --lg-primary-deep: #cf6c87;
+    --lg-primary-soft: rgba(229, 139, 161, 0.16);
+    --lg-bg: #161013;
+    --pixso-canvas: #130e11;
+    --pixso-cream: #2d2228;
+    --pixso-surface: #1c1518;
+    --pixso-panel: #231a1f;
+    --pixso-panel-soft: #2c2126;
+    --pixso-orange: #e58ba1;
+    --pixso-green: #e58ba1;
+    --pixso-green-dark: #cf6c87;
+    --pixso-line: #3a2b33;
+    --tpl-primary: #e58ba1;
+    --tpl-primary-deep: #cf6c87;
+    --tpl-primary-soft: #eda6b7;
+    --tpl-tint: rgba(229, 139, 161, 0.16);
+}
+
+/* 默认主题「暖米绿」（elaina）的深色版。
+ *
+ * ★ 为什么必须单独写：默认主题是**不设** `data-theme-template` 属性来表达的
+ *   （见 theme.js 的 setTemplate：「elaina 是默认主题，不设属性」）。所以上面
+ *   那四条 `[data-theme-template="x"]` 都盖不到它 —— 它会落回基础深色块，
+ *   而那块是 iOS 蓝的一套。结果就是用户报的"深色下暖米绿和 iOS 蓝是同一种颜色"。
+ *   这里用 `:not([data-theme-template])` 精确命中"深色 + 没有选模板"这一种情况
+ *   （插件主题会设属性，因此天然排除在外）。特异性 `0,2,1`，同样稳赢基础块。
+ *
+ * 取色思路：浅色下这套是"暖米绿"（canvas #a8b974、主色 #a7bb6c / #738746、
+ * 暖橙 #ff7d4d、暖褐文字）。深色版把底压成**带绿调的暖炭灰**，主色沿用同一
+ * 族但略压深（保证白字按钮还读得出来）。 */
+html[data-theme="dark"]:not([data-theme-template]) {
+    --lg-primary: #9db167;
+    --lg-primary-deep: #74873f;
+    --lg-primary-soft: rgba(157, 177, 103, 0.16);
+    --lg-bg: #121712;
+    --pixso-canvas: #10140f;
+    --pixso-cream: #252c23;
+    --pixso-surface: #171c15;
+    --pixso-panel: #1c221b;
+    --pixso-panel-soft: #242b22;
+    --pixso-orange: #ff7d4d;
+    --pixso-green: #9db167;
+    --pixso-green-dark: #74873f;
+    --pixso-line: #2f3a2e;
+    --tpl-primary: #9db167;
+    --tpl-primary-deep: #74873f;
+    --tpl-primary-soft: #bccd8f;
+    --tpl-tint: rgba(157, 177, 103, 0.16);
+}
+
 /* 深色：页面与聊天区 */
 html[data-theme="dark"] body { background: var(--pixso-canvas) !important; }
+/* ★★ 2026-10 修：这里的蓝色光斑与三段底色原来是**写死的**（rgba(10,132,255,…)、
+   #101318 / #151a21）—— 于是不管选哪套模板，聊天区都泛着一层 iOS 蓝；而外壳、
+   卡片、输入框已经跟着模板变量走了，两者之间就出现了用户说的"过渡奇怪"。
+   改成走变量：光斑用 --tpl-tint（每套模板自己的色），底色用 --lg-bg / --pixso-surface。
+   ios 那套的变量值与原来的写死值等价（--lg-bg=#101318、--pixso-surface=#151a21），
+   所以 ios 的观感不变；其余模板从此各自成一套。 */
 html[data-theme="dark"] #mainContent {
     background:
         radial-gradient(1100px 640px at 6% -6%, rgba(255, 255, 255, 0.06), transparent 56%),
-        radial-gradient(900px 640px at 104% 8%, rgba(10, 132, 255, 0.10), transparent 60%),
-        linear-gradient(135deg, #101318 0%, #151a21 48%, #101318 100%) !important;
+        radial-gradient(900px 640px at 104% 8%, var(--tpl-tint), transparent 60%),
+        linear-gradient(135deg, var(--lg-bg) 0%, var(--pixso-surface) 48%, var(--lg-bg) 100%) !important;
 }
 
 /* 深色：面板 / 输入框 / 气泡（照抄上游值） */
@@ -620,13 +763,18 @@ html[data-theme="dark"] #sidebar {
     border-color: rgba(255, 255, 255, 0.10) !important;
 }
 html[data-theme="dark"] .sidebar-rail-btn { color: #9aa6b8 !important; }
-html[data-theme="dark"] .sidebar-rail-btn:hover { color: #eef2f7 !important; background: rgba(10, 132, 255, 0.18) !important; }
+html[data-theme="dark"] .sidebar-rail-btn:hover { color: #eef2f7 !important; background: var(--tpl-tint) !important; }
 html[data-theme="dark"] .sidebar-item-active {
     background: rgba(255, 255, 255, 0.08) !important;
-    border-color: rgba(10, 132, 255, 0.4) !important;
+    border-color: color-mix(in srgb, var(--pixso-green) 45%, transparent) !important;
 }
+/* ★ 2026-10 修：聚焦高亮原来写死 iOS 蓝（项目"已知问题"里记的就是这条：
+   "深色模式下输入框聚焦高亮色被硬编码为蓝色，与部分主题配色不匹配"）。
+   改成主题主色 —— 各套模板的输入框聚焦才跟自己的配色一致。 */
 html[data-theme="dark"] .modal-input:focus,
-html[data-theme="dark"] .modal-textarea:focus { border-color: rgba(10, 132, 255, 0.6) !important; }
+html[data-theme="dark"] .modal-textarea:focus {
+    border-color: color-mix(in srgb, var(--pixso-green) 65%, transparent) !important;
+}
 
 /* 深色：文字色阶（照抄上游的具体值，不是"统一提亮"）
    上游是**分档**的：越重要的越亮，次要的逐级降。
@@ -819,12 +967,12 @@ html[data-theme="dark"] #settingsPanel select {
  *   （这也是为什么不能只写一条 —— 两层保险。） */
 html[data-theme="dark"] #settingsPanel select option,
 html[data-theme="dark"] #settingsPanel select optgroup {
-    background-color: #1a2029 !important;   /* = 深色主题的 --pixso-panel */
-    color: #dfe6f0 !important;              /* = 深色主题的 --pixso-brown */
+    background-color: var(--pixso-panel) !important;
+    color: var(--pixso-brown) !important;
 }
 html[data-theme="dark"] #settingsPanel select option:checked,
 html[data-theme="dark"] #settingsPanel select option:hover {
-    background-color: #2c3542 !important;   /* = 深色主题的 --pixso-line，比底色亮一档 */
+    background-color: var(--pixso-line) !important;   /* 比底色亮一档 */
     color: #ffffff !important;
 }
 /* 浅色主题下也要显式给一份 —— 否则"跟随系统深色"时，浏览器可能按系统偏好
@@ -841,8 +989,8 @@ html:not([data-theme="dark"]) #settingsPanel select option:checked {
 /* ★ 设置面板之外的 select（例如移动会话的"移动到…"）同样处理。
    用同一个变量体系，不重复写死颜色。 */
 html[data-theme="dark"] select option {
-    background-color: #1a2029 !important;
-    color: #dfe6f0 !important;
+    background-color: var(--pixso-panel) !important;
+    color: var(--pixso-brown) !important;
 }
 /* 设置里的选项卡片（主题卡片等） */
 html[data-theme="dark"] .theme-tpl-card {
@@ -869,11 +1017,15 @@ html[data-theme="dark"] body .bg-white\/80 {
     background-color: rgba(255, 255, 255, 0.07) !important;
 }
 
-/* 深色：主按钮用更亮的蓝渐变（照抄上游） */
+/* 深色：主按钮改走**主题主色**渐变。
+   ★ 2026-10 修：原来是照抄上游的"更亮的蓝渐变"（#2a96ff→#0a84ff→#0a74e8），
+   于是深色下无论选哪套模板，主按钮都是 iOS 蓝 —— 和渲染在外壳/卡片上的模板色
+   打架。改成绿色变量后：ios 仍是蓝（#4f7cf0/#3d6ae0，与原来同族），
+   其余模板各自成一套。 */
 html[data-theme="dark"] #sidebar .btn-primary,
 html[data-theme="dark"] .modal-panel .btn-primary {
-    background: linear-gradient(180deg, #2a96ff 0%, #0a84ff 55%, #0a74e8 100%) !important;
-    box-shadow: 0 10px 26px rgba(10, 132, 255, 0.30), 0 2px 6px rgba(0, 0, 0, 0.4) !important;
+    background: linear-gradient(180deg, var(--pixso-green) 0%, var(--pixso-green-dark) 100%) !important;
+    box-shadow: 0 10px 26px color-mix(in srgb, var(--pixso-green) 30%, transparent), 0 2px 6px rgba(0, 0, 0, 0.4) !important;
 }
 
 /* 深色：光斑收敛，否则刺眼 */

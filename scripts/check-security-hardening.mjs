@@ -30,6 +30,13 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SERVE = path.join(ROOT, 'web', 'serve.mjs');
 const src = readFileSync(SERVE, 'utf8');
+// ★★ 2026-10：内网判定那一组函数搬到了 server/net-guard.mjs —— 本地中继要在
+//   电脑端与手机端**共用同一份判定**，而且手机端另写一份的话，下面这些
+//   "IPv4-mapped IPv6 绕过"的细节必然走样。第 2 节的函数级断言改从这个文件取源码：
+//   取的仍然是**同一段真实代码**，只是换了文件；真正的防线验证（第 3/4 节端到端
+//   打真实服务的 /api/relay）一点没变。
+const NET_GUARD = path.join(ROOT, 'server', 'net-guard.mjs');
+const netGuardSrc = readFileSync(NET_GUARD, 'utf8');
 const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elainachat-sec-'));
 const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'elainachat-sec-data-'));
 
@@ -145,14 +152,14 @@ console.log('=== 1. 写入黑名单：扩展名判定必须看"最终落盘名" 
 console.log('\n=== 2. 中转内网判定：必须覆盖 IPv4-mapped IPv6 ===');
 {
     const fns = ['isPrivateIPv4', 'mappedIPv4', 'isInternalAddress'];
-    const missing = fns.filter((n) => !extractFn(src, n));
-    ok(missing.length === 0, 'serve.mjs 里能找到 isPrivateIPv4 / mappedIPv4 / isInternalAddress',
+    const missing = fns.filter((n) => !extractFn(netGuardSrc, n));
+    ok(missing.length === 0, 'server/net-guard.mjs 里能找到 isPrivateIPv4 / mappedIPv4 / isInternalAddress',
         missing.length ? '缺少：' + missing.join(', ') : '');
 
     if (!missing.length) {
         const ctx = vm.createContext({ console });
         vm.runInContext(
-            fns.map((n) => extractFn(src, n)).join('\n')
+            fns.map((n) => extractFn(netGuardSrc, n)).join('\n')
             + '\nthis.__internal = isInternalAddress;',
             ctx
         );
@@ -216,7 +223,10 @@ try {
             const r = await fetch(`http://127.0.0.1:${PORT}/api/agent/write`, {
                 method: 'POST',
                 headers: { 'content-type': 'application/json' },
-                body: JSON.stringify({ path: rel, content: '<script>document.title="PWNED"</script>', permission: 'app' }),
+                // ★ overwrite:true = "用户已确认这次写入"。permission:'app' 会被收敛到
+                //   最严的 strict，而 strict 档下**新建文件也要先确认**（2026-10 修复），
+                //   所以这里带上确认令牌，专测"黑名单拦截 / 正常文本可写"，不混入授权门。
+                body: JSON.stringify({ path: rel, content: '<script>document.title="PWNED"</script>', permission: 'app', overwrite: true }),
             });
             return r.status;
         };
@@ -441,8 +451,11 @@ console.log('\n=== 4. 端到端：从局域网地址发起，SSRF 拦截必须�
 
                 // ③ 反向断言：**已登录**的局域网设备现在**可以**操作电脑（本轮刻意的放开）。
                 //    钉住它是刻意的，别被后来的人"顺手改回去"而不知道那是需求。
+                //    ★ overwrite:true 是"用户已确认这次写入"的令牌：permission:'computer'
+                //      收敛到 strict，而 strict 档下新建文件也要确认（2026-10 修复）——
+                //      这里断言的是"认证通过后电脑操作能力可用"，确认门另行覆盖。
                 const authed = await escalate({
-                    path: outsideTarget, content: 'LAN-AUTHED', permission: 'computer',
+                    path: outsideTarget, content: 'LAN-AUTHED', permission: 'computer', overwrite: true,
                 }, true);
                 ok(authed.status === 200,
                     '★ 已登录的局域网设备可以操作电脑（本轮刻意的放开）', `status=${authed.status}`);
