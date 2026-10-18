@@ -18,7 +18,7 @@
 //    data/conversations/<id>.json   每个对话（可单独分享）
 //    data/memory/<类目>.json        记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
 //
-//  ★ 关键设计：前端一行都不用改
+//  关键设计：前端一行都不用改
 //  ----------------------------
 //  前端仍然走"键值同步"（localStorage 包装 → POST /api/store）。
 //  这一层负责把整块键值**拆成文件**（写入时）和**拼回键值**（读取时）。
@@ -55,10 +55,10 @@ const CHARACTERS_DIR = 'characters';
 const CONVERSATIONS_DIR = 'conversations';
 const MEMORY_DIR = 'memory';
 
-// 参考音频：整段 base64 不许再住在 store.json 里（2026-10 起）。
+// 参考音频：整段 base64 不许再住在 store.json 里。
 //
-// MiMo 音色复刻的参考样本是一整段 base64 data URL，原先随 elaina_open_settings
-// 整体落盘 —— 用户换一次样本，store.json 就背上几 MB 与"设置"无关的音频字符串
+// MiMo 音色复刻的参考样本是一整段 base64 data URL，若随 elaina_open_settings
+// 整体落盘，用户换一次样本 store.json 就背上几 MB 与"设置"无关的音频字符串
 // （实测 3.67MB，占整个文件 99.8%）。与"人设卡一卡一文件"同一思路：
 //   data/voice-samples/<槽位>.json   元数据（mime / 字节数）
 //   data/voice-samples/<槽位>.wav    音频原始字节
@@ -255,7 +255,7 @@ export function createStore({ dataDir, log = () => {} }) {
      * 顺序很重要：先读分类文件，再读 store.json —— 这样迁移期两者都有时，
      * store.json 里的旧值不会覆盖已经分出去的新值（迁移逻辑会清掉旧键）。
      *
-     * ★ 缓存必须能感知"磁盘上的数据被删了"（2026-09 修，用户实测）。
+     * 缓存必须能感知"磁盘上的数据被删了"。
      *
      *   用户报"删除 data/ 后数据还在"。根因就在这里：`if (cache) return cache`
      *   让缓存**永不失效** —— 删掉整个 data/ 目录后，内存里那份数据照旧返回，
@@ -488,9 +488,11 @@ export function createStore({ dataDir, log = () => {} }) {
         const hasMemKey = typeof legacy[MEMORY_KEY] === 'string';
         const hasCharKey = typeof legacy[CHARACTER_KEYS.list] === 'string';
         const hasConvKey = typeof legacy[CONVERSATION_KEY] === 'string';
-        // 旧版（v1）把聊天记录放在单个 conversations.json 里，现在要拆成一对话一文件
+        // 早期版本把聊天记录放在单个 conversations.json 里（一对话一文件是不同的键），
+        // 这里读它只为了迁移 — 读到就说明是待迁移的老数据。
         const legacySingleConv = await readJson(path.join(dataDir, 'conversations.json'));
-        // v2 中期把记忆放在单个 memory.json 里，现在要拆成 memory/<类目>.json
+        // 更早的版本把记忆放在单个 memory.json 里（类目文件是不同的键），
+        // 同样只为了迁移而读。
         const legacySingleMem = await readJson(path.join(dataDir, 'memory.json'));
 
         // 参考音频迁移：store.json 的设置里还带着整段 base64 就拆到 voice-samples/。
@@ -579,11 +581,11 @@ export function createStore({ dataDir, log = () => {} }) {
 
         // 清掉旧的单文件。
         //
-        // **这一步必须在 `if (moved.length)` 之外** —— 曾经放在里面，于是出现这个残留：
-        // 上一次迁移已经把对话拆进 conversations/ 了（所以这次 alreadySplit 为真、
-        // moved 为空），但旧的 conversations.json 因为某种原因没被删掉，
-        // 结果它**永久留在磁盘上**：不会被读取（loadStore 只认 conversations/），
-        // 也不会被清理，白占空间还让用户困惑"到底哪个才是我的数据"。
+        // **这一步必须在 `if (moved.length)` 之外**：上次迁移已把对话拆进
+        // conversations/（所以这次 alreadySplit 为真、moved 为空），但旧的
+        // conversations.json 若没被删掉，它会**永久留在磁盘上** ——
+        // 不被读取（loadStore 只认 conversations/）也不被清理，
+        // 白占空间还让用户困惑"到底哪个才是我的数据"。
         //
         // 判据：只要新位置有内容（说明数据已经安全落位），旧文件就是冗余的，可以删。
         // 没内容时**不删** —— 那是唯一的数据来源。
@@ -824,7 +826,7 @@ export function createStore({ dataDir, log = () => {} }) {
             return { source: 'zip', data };
         }
 
-        // 旧版单 JSON 备份
+        // 单 JSON 形式的备份（不是 zip）：早期导出就是这个形状，仍需能导入。
         let parsed;
         try {
             parsed = JSON.parse(buf.toString('utf8'));

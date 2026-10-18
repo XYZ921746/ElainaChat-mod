@@ -1,6 +1,7 @@
 // 本地中转 /api/relay —— **电脑端与手机端共用**的这一份实现。
 //
-// ★★ 2026-10 从 web/serve.mjs 抽成模块（手机端补后端的第一段）。
+// 从 web/serve.mjs 抽成独立模块：serve.mjs 太长了，而这段逻辑与路由表无关，
+// 单独成文件才好读、好测。
 //
 //   为什么抽：这台"中转"是把请求搬到 Node 侧发出（Node 没有 CORS 这回事），
 //   而两端**都需要它** —— 电脑版是 BYOK 直连被 CORS 挡住时的唯一出路，
@@ -186,7 +187,7 @@ export function parseSseError(rawText) {
  * @param {(hostname: string) => boolean} deps.isLoopbackHostname
  * @param {(address: string) => boolean} deps.isInternalAddress
  *
- * ★ 后三个刻意**不设默认值**：漏传等于把"非本机请求"一律当成"本机请求"放行，
+ * 后三个刻意**不设默认值**：漏传等于把"非本机请求"一律当成"本机请求"放行，
  *   那不是"少一层可选优化"，而是把 SSRF 防护静默关掉。宁可在构造时就报出来。
  *   手机端只绑回环、这三条分支走不到，也要**显式**写出等价实现（见
  *   web/nodejs/bootstrap.mjs）—— 显式写出来，将来谁改了监听地址就会立刻看见问题。
@@ -211,7 +212,7 @@ export function createRelay(deps) {
         traceLine(lines.join('\n'));
         const lastUser = [...summary.messages].reverse().find((m) => m.role === 'user');
         if (lastUser && lastUser.text.trim()) {
-            // ★ 合成消息（桌宠"主动搭话"等 mod 注入的系统提示）不是人打的话 ——
+            // 合成消息（桌宠"主动搭话"等 mod 注入的系统提示）不是人打的话 ——
             //   原样打印会把整段提示词+电脑状态快照灌进主日志，还长得像用户发了
             //   一句怪话（用户实测困惑："这个日志是你干的吗"）。
             //   识别特征：mod 们约定的开头「（系统提示：」。此时只记一行来源事实，
@@ -282,7 +283,7 @@ export function createRelay(deps) {
         let payload;
         try { payload = await readJsonBody(request, RELAY_BODY_LIMIT); }
         catch {
-            // 这些校验失败以前是完全静默的 —— 前端只会拿到一句中文提示，
+            // 校验失败必须留一条日志：静默拒绝的话，前端只拿到一句中文提示，
             // 日志里连"发生过这件事"都没有，用户报"对话发不出去"时无从查起。
             console.warn('[relay] 请求体无效或过大，已拒绝');
             return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转请求体无效或过大' });
@@ -344,17 +345,14 @@ export function createRelay(deps) {
 
         const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 120000, 1000), RELAY_TIMEOUT_MAX);
         const controller = new AbortController();
-        // ★★ 2026-10 修「流式被自己的超时腰斩」：这里的超时必须是**空闲**超时，
-        //   不是从发起到结束的**总时长**。
+        // 这里的超时必须是**空闲**超时，不是从发起到结束的**总时长**。
         //
-        //   旧实现是 `const timer = setTimeout(() => controller.abort(), timeoutMs)`
-        //   一直挂到整条响应体转发完才 clearTimeout —— 于是语义变成"这次请求总共
-        //   只能花 timeoutMs"，而这对流式**是错的**：
+        //   用 `setTimeout(() => controller.abort(), timeoutMs)` 一直挂到整条响应体
+        //   转发完才 clearTimeout 的话，语义就变成"这次请求总共只能花 timeoutMs"，
+        //   而这对流式**是错的**：
         //     · 长回复（几千字）正常说完就要好几分钟；
-        //     · 高思考强度模型（thinkingEffort=high）首字节本身就常超过 120 秒。
-        //   实测现场（data/logs/2026-10-13_20-23-53.trace.log）：
-        //     `请求失败 POST …/messages — 超过 120 秒没有响应（120020ms）`
-        //     → 前端 `[Chat] anthropic 流式不可用，退回非流式`
+        //     · 高思考强度模型的首字节本身就常超过 120 秒。
+        //   表现是一句 `超过 120 秒没有响应（120020ms）` 之后前端退回非流式。
         //   用户看到的就是"AI 不能正常流式输出"：要么干等、要么整段蹦出来。
         //
         //   改成每收到一块数据就**续期**：只要上游还在吐数据就永不超时（流式长回复
@@ -424,13 +422,13 @@ export function createRelay(deps) {
             'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
-            // ★ SSE 必须**关掉缓冲**：否则中间层（Node 自己的 socket、以及某些
+            // SSE 必须**关掉缓冲**：否则中间层（Node 自己的 socket、以及某些
             //   反向代理）会攒够一块才发，增量就变成了"一批一批蹦"。identity 编码
             //   已在上面设过，这里再补一条代理侧的显式指令。
             ...(/text\/event-stream/i.test(upstream.headers.get('content-type') || '')
                 ? { 'X-Accel-Buffering': 'no' } : {}),
         });
-        // ★★ 立刻把头送出去。浏览器的 fetch() 是**收到响应头就 resolve**，之后才开始
+        // 立刻把头送出去。浏览器的 fetch() 是**收到响应头就 resolve**，之后才开始
         //    读 body；不 flush 的话头可能和第一块数据一起才发出，前端"开始流式"的时间
         //    就整体后移 —— 表现上就是"点发送后要愣一愣才开始出字"。
         if (typeof response.flushHeaders === 'function') {
@@ -447,7 +445,7 @@ export function createRelay(deps) {
             try {
                 for await (const chunk of upstream.body) {
                     if (abortedByClient) break;
-                    // ★ 每收到一块就续期：只要上游还在吐数据，长回复就永远不会被
+                    // 每收到一块就续期：只要上游还在吐数据，长回复就永远不会被
                     //   自己的超时砍断；只有"连接还在但一个字节都不来"才会被 abort。
                     armIdleTimer(timeoutMs);
                     response.write(chunk);

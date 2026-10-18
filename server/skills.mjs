@@ -18,7 +18,7 @@
 //   ② **插件随附技能**：插件在自己的 manifest.json 里声明 `"skills": ["skills/<name>"]`，
 //      实际文件就**住在那个插件目录内**（`mods/<插件>/skills/<name>/SKILL.md`）。
 //
-//      ★ 为什么让随附技能住在插件目录里（而不是安装时拷进 skills/）：
+//      为什么让随附技能住在插件目录里（而不是安装时拷进 skills/）：
 //        这样"卸载插件"就等于"删掉它的技能" —— **不需要任何额外清理逻辑**，
 //        删目录那一刀就把两者一起带走了。反过来（拷进 skills/）会留下孤儿技能：
 //        插件删了、技能还在 skills/ 里列着，用户完全不知道它从哪来、该怎么删。
@@ -43,7 +43,7 @@ import path from 'node:path';
  * id 是身份：要进 URL（`/api/skills/<id>/content`）、要拼磁盘路径，所以收得紧
  * （纯 ASCII、无空格）。上传安装时 id 来自 zip 文件名，必须过这一关。
  *
- * ★ 注意它与**扫描时**接受的目录名不同：用户手工放进 skills/ 的目录是可以叫
+ * 注意它与**扫描时**接受的目录名不同：用户手工放进 skills/ 的目录是可以叫
  *   「插件开发指南」这种中文名的（见 isSafeSkillDirName），那类目录照样要被扫出来 ——
  *   否则"我放了个中文名的技能，列表里却没有"就成了无从排查的问题。
  */
@@ -180,7 +180,7 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
             const dir = path.join(skillsDir, e.name);
             const md = path.join(dir, 'SKILL.md');
             const info = await stat(md).catch(() => null);
-            // ★ 没有 SKILL.md 的目录**不是**技能：skills/ 里可能有 users 随手建的杂物
+            // 没有 SKILL.md 的目录**不是**技能：skills/ 里可能有 users 随手建的杂物
             //   （图片、笔记），不该被当成技能列出来。
             if (!info || !info.isFile()) continue;
             const fm = parseFrontmatter(await readSkillMd(dir));
@@ -259,7 +259,8 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
         const { files } = unzip(buf, { allowScripts: true });
 
         const targetDir = path.join(skillsDir, id);
-        // 先清空旧目录（重装场景：避免残留上一版的文件）
+        // 先清空旧目录：重装时不清会留下上一次安装残留的文件，那些文件没有清单条目、
+        // 「删技能」也删不到它们。
         await rm(targetDir, { recursive: true, force: true });
         await mkdir(targetDir, { recursive: true });
 
@@ -300,7 +301,7 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
             await rm(targetDir, { recursive: true, force: true }).catch(() => {});
             throw new Error('zip 内没有可用文件');
         }
-        // ★ 装完必须真的含 SKILL.md，否则这不是一个技能。
+        // 装完必须真的含 SKILL.md，否则这不是一个技能。
         //   为什么要在这里拦、而不是"装完等扫描时自然忽略"：后者会在 skills/ 里留下
         //   一个**空壳目录**（扫描器认不出它），而用户看到的是"安装成功、但列表里没有" ——
         //   正是本项目最忌讳的"装了等于没装"。这里明确报错并回滚，让用户当场就知道包不对。
@@ -315,14 +316,14 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
     /**
      * 卸载**本地**技能：删除 skills/<id> 目录**以及对应的安装包**。
      *
-     * ★ 为什么连 zip 一起删：与插件同理，目录里那份 `xxx.zip` 是"待安装"的源，
+     * 为什么连 zip 一起删：与插件同理，目录里那份 `xxx.zip` 是"待安装"的源，
      *   只删目录的话下一次扫描会立刻把它装回来（"卸载了又出现"）。
      *
-     * ★ 为什么**只允许本地技能**：插件随附的技能住在插件目录里（mods/<插件>/skills/…），
+     * 为什么**只允许本地技能**：插件随附的技能住在插件目录里（mods/<插件>/skills/…），
      *   它们**没有独立的生命周期** —— 想单独删掉它就得去动插件目录，而那是插件的卸载路径。
      *   所以这里明确拒绝并告诉用户"要随插件一起卸"，而不是给一个点了也删不掉的按钮。
      *
-     * ★ 为什么用 scan() 反查 id 而不是直接拼路径：技能 id 可能是**中文目录名**
+     * 为什么用 scan() 反查 id 而不是直接拼路径：技能 id 可能是**中文目录名**
      *   （用户手工放的），用 SKILL_ID_RE（严格 ASCII）会把它误挡 —— 于是"我放的中文技能
      *   能看见却卸载不了"。反查则天然覆盖两种来源，并且天然挡住"删一个不存在/越界的 id"。
      */

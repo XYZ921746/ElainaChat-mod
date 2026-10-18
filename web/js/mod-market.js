@@ -9,7 +9,7 @@
  *
  * 为什么分开：两者的**数据源与动作完全不同**（本地磁盘 vs 远程仓库），
  * 混在一屏会让"这个插件到底装没装"变得难以判断。这与"技能不混进插件列表"、
- * "插件设置独立成窗"是同一条取舍（见 app-06-settings.js 与 host-slots.js 的注释）。
+ * "插件设置独立成窗"是同一条取舍（见 settings.js 与 host-slots.js 的注释）。
  *
  * ── 数据源 ────────────────────────────────────────────────────────────
  *
@@ -17,15 +17,15 @@
  *   { baseUrl, plugins: [ { id, name, version, kind, description, depends,
  *                          sizeBytes, downloadUrl } ] }
  * 包地址就是 baseUrl 下的 `<id>-<version>.zip`。Pages 返回
- * `Access-Control-Allow-Origin: *`，所以前端可以直接 fetch（实测确认）。
+ * `Access-Control-Allow-Origin: *`，所以前端可以直接 fetch。
  * 索引地址可用设置里的「商店源」覆盖（Store 键 elaina_market_url）。
  *
  * ── 安装走的是**原有协议**，两端通用 ──────────────────────────────────
  *
  * 「上传安装」那条路：POST /api/plugins/install?name=<zip名>，请求体就是
- * zip 的原始字节（见 app-07-init.js）。这里只是把"用户在文件选择器里选的
+ * zip 的原始字节（见 init.js）。这里只是把"用户在文件选择器里选的
  * 文件"换成"从商店下载到的 Blob"，其余**一个字都不用改**。
- * 安卓侧更省事：app-01-core.js 改写过 window.fetch，会把这个请求拦到
+ * 安卓侧更省事：core.js 改写过 window.fetch，会把这个请求拦到
  * nativeInstallPlugin —— 所以同一段代码在电脑与手机上都能装。
  * ========================================================================== */
 
@@ -82,8 +82,8 @@
     /**
      * 商店源候选（按顺序尝试）：自定义源 → Pages → jsDelivr 镜像。
      *
-     * ★ 2026-10 加：与公告源（app-02-data.js 的 announceSourceUrls）是同一条可达性
-     *   思路。原先只有单点 URL，源够不到的用户"整个市场都用不了"—— 多给一条镜像，
+     * 与公告源（data.js 的 announceSourceUrls）是同一条可达性
+     *   思路：只给单点 URL 的话，源够不到的用户"整个市场都用不了"—— 多给一条镜像，
      *   大陆环境下能救回一大片。全失败才报错。
      */
     function marketIndexUrls() {
@@ -320,8 +320,8 @@
             if (!res.ok || !data || !data.ok) {
                 throw new Error((data && data.message) || ('HTTP ' + res.status));
             }
-            // ★★ 2026-10 修（用户实测报障："下载成功、装上了，就是用不了"）：
-            //   装完必须**重新扫描加载**（ElainaMods.reload → mods.js 的 loadAll）。
+            // 装完必须**重新扫描加载**（ElainaMods.reload → mods.js 的 loadAll）。
+            //   不重扫的症状是"下载成功、装上了，就是用不了"：
             //   插件的注册表只在页面启动时建立一次；不重扫的话这个新插件不在注册表里，
             //   插件栏的开关点了也不生效（setEnabled 取不到 entry 直接 return false），
             //   用户就会看到"装成功了但没有任何变化"。重扫还会**重新评估依赖**：
@@ -392,7 +392,7 @@
         });
 
         // 安装按钮：**事件委托**，卡片是整批 innerHTML 重写的，
-        // 逐个绑定会在每次刷新后失效（这一点与插件列表同一套路，见 app-06-settings.js）
+        // 逐个绑定会在每次刷新后失效（这一点与插件列表同一套路，见 settings.js）
         $('marketList')?.addEventListener('click', function (ev) {
             var btn = ev.target && ev.target.closest ? ev.target.closest('.market-install-btn') : null;
             if (!btn || btn.disabled) return;
@@ -416,7 +416,7 @@
             });
         }
 
-        // ★ 启动时**不**预拉：市场是"想装东西时才点开"的地方，启动就多打一次网络没意义。
+        // 启动时**不**预拉：市场是"想装东西时才点开"的地方，启动就多打一次网络没意义。
         //   打开时拉（见 openMarket），每次都是新鲜数据。
     }
 

@@ -25,11 +25,9 @@
  *
  *   elaina   —— **默认主题：暖米色 + 棕 + 橄榄绿**（就是 index.html 的 `:root`，
  *               不设 data-theme-template 属性时生效；详见 TEMPLATES 里那段说明。
- *               ★ 它曾叫"粉紫"—— 那是很久以前的配色，早已换成橄榄绿，
- *                 名字与色点在 2026-10 才跟着改过来）
+ *               内部名 `elaina` 与"粉紫"无关，别按名字去猜配色）
  *   ios      —— 液态玻璃 · iOS 蓝（上游主视觉）
  *   claude   —— 液态玻璃 · 陶土橙
- *   sage     —— 液态玻璃 · 鼠尾草
  *   sakura   —— 液态玻璃 · 樱花桃
  *
  * 深色模式是**正交**的第二个维度：data-theme="dark" 叠在任意模板上。
@@ -221,7 +219,7 @@
         try { Store.setItem(CUSTOM_KEY, JSON.stringify(next)); } catch (e) { /* 忽略 */ }
         if (currentTemplate() !== 'custom') setTemplate('custom');
         else applyCustomTheme();
-        // ★ 必须同步编辑区：否则改了颜色后，对比度提示还是旧的 ——
+        // 必须同步编辑区：否则改了颜色后，对比度提示还是旧的 ——
         //   那正好让"字不清晰"的防线失效（提示说清晰、实际已配坏）。
         syncCustomEditor();
         return next;
@@ -229,48 +227,45 @@
 
     /** 可选模板（顺序即设置里的显示顺序） */
     const TEMPLATES = [
-        // ★★ 2026-10 改名与改色点：这一项原来叫「粉紫（默认）」、色点是
-        //    ['#ec4899','#8b5cf6','#fdf2f8']（粉/紫/近白），**与应用实际渲染的配色完全不符**。
+        // 「elaina」是**默认主题**，名字与色点必须与应用实际渲染的配色一致。
         //
-        //    为什么会不符：`elaina` 这个 id 是**默认主题**，theme.js 对它的处理是
+        //    为什么容易不一致：`elaina` 这个 id 的处理方式是
         //    「不设 data-theme-template 属性」（见 setTemplate 的说明），
-        //    于是它落到 index.html 的 `:root` 上 —— 而那是**暖米色 + 棕 + 橄榄绿**
+        //    于是它落到 index.html 的 `:root` 上 —— 那是**暖米色 + 棕 + 橄榄绿**
         //    （--pixso-canvas #a8b974 / --pixso-green #a7bb6c / --pixso-brown #4c3123）。
-        //    名字和色点是很久以前（还是粉紫配色时）定的，后来 `:root` 换成了橄榄绿，
-        //    **theme.js 这边没跟着改** —— 于是主题选择器里显示"粉紫"，
-        //    点进去却是绿的。用户反馈的"设置页面与对话主题对不上"就是这个。
+        //    名字或色点一旦按别的配色去写，主题选择器里显示的颜色就会与
+        //    点进去看到的界面不符（"设置页面与对话主题对不上"）。
         //
-        //    ★ 取色口径：直接用 `:root` 里的真实值（画布 / 主色 / 卡片底），
-        //      与 themes.css 里其它四套模板"色点=该模板真值"的写法保持一致。
+        //    取色口径：直接用 `:root` 里的真实值（画布 / 主色 / 卡片底），
+        //      与 themes.css 里其它三套模板"色点=该模板真值"的写法保持一致。
         //      改 `:root` 配色时必须同步改这里，否则又会不一致（check-theme 有断言钉住）。
         { id: 'elaina', name: '暖米绿（默认）', dots: ['#a8b974', '#a7bb6c', '#f8f5f2'] },
         { id: 'ios', name: 'iOS 蓝', dots: ['#007aff', '#8ab4ff', '#eef1f5'] },
         { id: 'claude', name: '陶土橙', dots: ['#d97757', '#eab38f', '#f6f2ed'] },
-        { id: 'sage', name: '鼠尾草', dots: ['#4f9d7d', '#9cc9b4', '#eef3ee'] },
         { id: 'sakura', name: '樱花桃', dots: ['#d97b93', '#f0b6c4', '#f8f1f3'] },
-        // ★★ 2026-10：「星屑之日」（生日配色）**已从这份内置清单里移出** ——
-        //   生日模块搬进了插件（mods/birthday），那套配色由插件在启用时通过
+        // 「星屑之日」（生日配色）**不在这份内置清单里** ——
+        //   生日模块是插件（mods/birthday），那套配色由插件在启用时通过
         //   `host.theme({ id:'stardust', vars:{…} })` 注册（见下面的 MOD_TEMPLATES）。
-        //   所以它不再是内置主题：不装 / 不启用那个插件时，主题选择器里就没有它。
+        //   所以它不是内置主题：不装 / 不启用那个插件时，主题选择器里就没有它。
         // DIY：颜色由用户定，色点也按用户选的实际颜色显示（renderPicker 里特殊处理）
         { id: 'custom', name: '自定义', dots: null },
     ];
 
     // ========================================================================
-    //  插件注册的主题（host.theme）★ 2026-10 新增
+    //  插件注册的主题（host.theme）
     //
     //  ── 为什么需要 ────────────────────────────────────────────────────────
-    //  主题过去只认 TEMPLATES 里写死的这几套：`currentTemplate()` 会拿属性值去
+    //  主题只认 TEMPLATES 里写死的这几套时，`currentTemplate()` 会拿属性值去
     //  清单里校验，不在清单里的 id 一律回落 elaina。于是"插件想加一套配色"
-    //  根本无从下手（设了没反应）。插件化的生日模块（「星屑之日」）是第一个
-    //  需要这个能力的用户 —— 它原来靠把 stardust 写进 TEMPLATES 才成立。
+    //  根本无从下手（设了没反应）。插件化的生日模块（「星屑之日」）就是
+    //  需要这个能力的典型用户 —— 它不能靠往 TEMPLATES 里塞 id 来实现。
     //
     //  ── 变量从哪来 ────────────────────────────────────────────────────────
     //  宿主模板的颜色写在 themes.css 里；插件主题的颜色由
     //  `host.theme({ id, name, dots, vars })` 在运行时给。这里把 vars 落成
     //  一条注入样式：
     //      html[data-theme-template="<id>"]:not([data-theme="dark"]) { --x: y; }
-    //  ★ 那个 `:not([data-theme="dark"])` 是关键：注入样式比 themes.css 晚，
+    //  那个 `:not([data-theme="dark"])` 是关键：注入样式比 themes.css 晚，
     //    若不带这个守卫，同权重下它会**盖掉深色块** —— 表现为"深色模式下
     //    插件主题仍是浅色的"。加上守卫后，深色时它不匹配，深色块照常生效。
     //    （内置模板靠"写在 themes.css 前半段、深色块在后"达到同样效果。）
@@ -322,11 +317,13 @@
         try {
             const i = MOD_TEMPLATES.findIndex((t) => t.id === id);
             if (i < 0) return false;
+            // "是否正停在这套配色上"必须在**摘除之前**判定：摘完之后 currentTemplate()
+            // 已经拿不到它，条件恒为 false，用户就会停在"变量已失效"的那套主题上。
+            const wasCurrent = currentTemplate() === id;
             MOD_TEMPLATES.splice(i, 1);
             const el = modThemeStyle(id);
             if (el) el.remove();
-            // 正停在这套配色上 → 回落默认，避免停在"变量已失效"的主题上
-            if (currentTemplate() === id) setTemplate('elaina');
+            if (wasCurrent) setTemplate('elaina');
             refreshPicker();
             return true;
         } catch (e) { return false; }
@@ -375,12 +372,12 @@
     /**
      * 临时把主题切到 id，并记住"切换前那套"。
      *
-     * ★ 与 setTemplate 的区别：setTemplate 是"**用户**选了这套"（会持久化，
+     * 与 setTemplate 的区别：setTemplate 是"**用户**选了这套"（会持久化，
      *   这就是新的偏好）；useTemplate 是"某个功能临时占用一下界面"—— 例如生日
-     *   当天的星屑配色。之后必须能一键回到用户原来的选择，所以这里把"切换前"
+     *   当天的星屑配色。之后必须能一键回到用户先前选的那套，所以这里把"切换前"
      *   记在一个槽里，restoreTemplate() 用它还原。
-     *   （旧版生日模块自己把 prevTheme 存进它自己的 Store 键；现在由主题系统自己
-     *    记 —— 插件就不必碰用户的主题偏好，少一处"哪份才是权威"的可能。）
+     *   （这个槽由主题系统自己持有，插件不必把 prevTheme 存进自己的 Store 键 ——
+     *    少一处"哪份才是权威"的可能。）
      */
     let preUseTemplate = '';
 
@@ -410,8 +407,8 @@
     /**
      * 读取深色模式设置（三态）。
      *
-     * 兼容旧值：以前只存 'dark' / 'light' 两种，现在多了 'system'。
-     * 读不到或值非法时回落到 'light'（与旧行为一致，不会突然变深）。
+     * 兼容旧值：老安装里只存 'dark' / 'light' 两种，现在还有 'system'。
+     * 读不到或值非法时回落到 'light' —— 不会因为读失败就突然变深。
      */
     function darkMode() {
         try {
@@ -435,7 +432,7 @@
         try {
             if (dark) document.documentElement.setAttribute('data-theme', 'dark');
             else document.documentElement.removeAttribute('data-theme');
-            // ★★ 2026-10 必须**同时**设 CSS `color-scheme` —— 这是"深色下原生控件仍是白的"的根因。
+            // 必须**同时**设 CSS `color-scheme` —— 这是"深色下原生控件仍是白的"的根因。
             //
             //   症状（用户截图）：「设置 → 模型」 里点开「模型名」下面那个下拉，
             //   弹出来的候选列表是**白底黑字**，与深色界面割裂。
@@ -454,10 +451,10 @@
             //   用户的系统偏好可能仍是深色 —— 显式写 light 才能压住它。
             document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
         } catch (e) { /* 忽略 */ }
-        // ★ 2026-10：这里原本同步「外观 → 深色模式」下拉（#themeDarkMode）与它的提示
-        //   （#themeDarkHint）。那两个元素已随"深色切换到顶栏"被删除 —— 留着
-        //   getElementById 会变成**悬空引用**（check-dom-refs 报"HTML 里没有这个 id"）。
-        //   顶栏那个三段开关由 app-07-init.js 的 markThemeSeg 同步：它监听
+        // 不要在这里同步「外观 → 深色模式」下拉（#themeDarkMode）与它的提示
+        //   （#themeDarkHint）：深色切换在顶栏，这两个元素不存在，
+        //   对它们 getElementById 会变成**悬空引用**（check-dom-refs 报"HTML 里没有这个 id"）。
+        //   顶栏那个三段开关由 init.js 的 markThemeSeg 同步：它监听
         //   documentElement 的 data-theme 变化，applyDarkMode 一落 DOM 它就跑，
         //   所以"跟随设备"时系统切换、以及别处改主题，选中态都能自动跟上。
         return dark;
@@ -505,11 +502,11 @@
         document.querySelectorAll('.theme-tpl-card').forEach((c) => {
             const on = c.getAttribute('data-tpl') === cur;
             c.classList.toggle('is-active', on);
-            // ★ 2026-10 修：选中态描边原来用的是 `--color-primary`（= #ec4899 粉），
-            //   而应用真实配色走的是 `--pixso-*`（默认主题下是橄榄绿 #a7bb6c）。
-            //   后果：主题卡片被选中时描边是**粉的**，与整个界面（以及卡片自己的色点）
-            //   都不搭 —— 属于"设置页与对话界面对不上"的一处。
-            //   改用 --pixso-green（与其它选中态、开关、按钮同一套色）。
+            // 选中态描边用 `--pixso-green`，不要用 `--color-primary`（= #ec4899 粉）：
+            //   应用真实配色走的是 `--pixso-*`（默认主题下是橄榄绿 #a7bb6c），
+            //   用 `--color-primary` 会让被选中的主题卡片描边是**粉的**，
+            //   与整个界面（以及卡片自己的色点）都不搭 —— 属于"设置页与对话界面
+            //   对不上"的一处。`--pixso-green` 与其它选中态、开关、按钮同一套色。
             c.style.borderColor = on ? 'var(--pixso-green)' : 'transparent';
         });
         // DIY 编辑区只在选中「自定义」时显示 —— 不选它却摆一堆取色器会让人困惑
@@ -644,10 +641,10 @@
         // 内置清单（不含插件注册的）；`templates()` 给的是**全部**
         templates: () => allTemplates(),
         allTemplates,
-        // ★ 插件主题注册：由 mods.js 的 host.theme 在启用/停用时调用
+        // 插件主题注册：由 mods.js 的 host.theme 在启用/停用时调用
         registerTemplate,
         unregisterTemplate,
-        // ★ 临时切换 / 还原（供插件"占用一下界面再还回来"，见它们的说明）
+        // 临时切换 / 还原（供插件"占用一下界面再还回来"，见它们的说明）
         useTemplate,
         restoreTemplate,
         current: currentTemplate,

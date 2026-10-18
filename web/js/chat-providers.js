@@ -12,7 +12,7 @@
 //    · 新增一种格式时，只该动这个文件 + 往下面的 PROVIDERS 表加一行，
 //      不该再去改 index.html 里的分发逻辑（改漏一处就是"某格式静默失效"）。
 //
-//  ★ 依赖注入而不是 import
+//  依赖注入而不是 import
 //  ----------------------
 //  这是普通 <script>（不是 ES module），文件之间作用域独立 —— 拆出去后直接调用
 //  index.html 里的 getChatBaseUrl() 会拿到 undefined。
@@ -32,7 +32,7 @@
     /**
      * 从 400 响应里判断"网关拒绝的是哪个**思考参数**"。
      *
-     * ★ 只认 thinking / reasoning_effort（2026-09 修）：剥离逻辑只能解决这两类
+     * 只认 thinking / reasoning_effort：剥离逻辑只能解决这两类
      *   冲突。若网关拒的是别的参数（如 param:"image"、param:"tools"），剥思考
      *   字段毫无用处，重试只会白白多打几次请求 —— 那种 400 必须原样抛错，
      *   让用户看到真正的原因。
@@ -143,9 +143,9 @@
                 signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
             }, 'openai-compatible');
 
-        // ★ 严格网关兼容：400 + 报错点名某参数 → 剥掉它重试（2026-09，实测 AMD Radeon 端点）。
+        // 严格网关兼容：400 + 报错点名某参数 → 剥掉它重试。
         //
-        //   背景（GitHub 调研结论，2026-09）：`thinking` 不是 OpenAI Chat Completions
+        //   背景：`thinking` 不是 OpenAI Chat Completions
         //   标准字段（只有 DeepSeek 系认），`reasoning_effort` 也有网关不认（如 OpenAI
         //   Responses 系模型报"moved to reasoning.effort"）；甚至有的网关报
         //   "cannot specify both 'thinking' and 'reasoning_effort'"。**没有一个字段
@@ -261,13 +261,13 @@
             system: payload.system || undefined,
             messages: payload.messages,
             max_tokens: maxTokens,
-            // ★ 开了思考就**不能**带 temperature：Anthropic 官方明确禁止
+            // 开了思考就**不能**带 temperature：Anthropic 官方明确禁止
             //   （"temperature may only be set to 1 when thinking is enabled"），
             //   带了会直接 400。宁可让用户少一个采样参数，也不能让请求失败。
             //   DeepSeek 那边同样是"思考模式不支持 temperature"（发了不报错但也不生效）。
             ...(opts.temperature !== undefined && !opts.thinking && { temperature: opts.temperature }),
             // 思考开关：Anthropic 侧走 reasoning.effort（none = 关闭）。
-            // ★ 这里**不用** `thinking` 字段：那是 Claude 官方 extended thinking 的
+            // 这里**不用** `thinking` 字段：那是 Claude 官方 extended thinking 的
             //   {type, budget_tokens} 结构，和这里的开关同名不同义，发错会 400。
             ...buildThinkingParams(opts.thinking, opts.thinkingEffort, 'anthropic', settings)
         }, { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, {

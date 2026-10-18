@@ -3,11 +3,11 @@
  *
  * ── 为什么需要这个文件 ──────────────────────────────────────────────────
  *
- * 这套东西原先**整个长在 web/live2d-video.js 里**：`stripTags()` 与
+ * 这套东西**绝不能长在 web/live2d-video.js 里**（那里是 `stripTags()` 与
  * `drive()` → `handleAgentOperation()`。调用点在宿主各处：
  *
- *   app-05-voice.js   正常回复：drive(response) + stripTags(response)
- *   app-03-agent.js   续跑 / 失败解释 / 定时任务：drive(raw) + stripTags(raw)
+ *   voice.js   正常回复：drive(response) + stripTags(response)
+ *   agent.js   续跑 / 失败解释 / 定时任务：drive(raw) + stripTags(raw)
  *
  * 问题在于 `handleAgentOperation` 是**全部 [操作:…] 标签的唯一分发器** ——
  * 包括文件操作、电脑命令、手机操作、整理记忆。而宿主调用它时带着
@@ -26,7 +26,7 @@
  *   live2d-video.js（可选）      只负责"表现"：表情/动作/情绪/位置/大小/背景
  *                                以及 Live2D 独有的 水印 / 静音 两个操作
  *
- * ★ 关键：`[操作:…]` 的分发**不再**经过 Live2D。Live2D 只能通过
+ * 关键：`[操作:…]` 的分发**不再**经过 Live2D。Live2D 只能通过
  *   `registerOperationHandler` 往分发链里**追加**自己的两个操作，
  *   而不是拥有整条链。
  *
@@ -100,7 +100,7 @@
     /**
      * 分发**一个**操作标签的内容。
      *
-     * ★ 分支顺序是有讲究的，改动前先读这段：
+     * 分支顺序是有讲究的，改动前先读这段：
      *   · `^电脑命令` 必须排在文件操作**之前** —— 命令正文里可能含
      *     「查看文件」这类词（`[操作:电脑命令 git status]`），
      *     文件分支的判据很宽泛，排在前面会把命令正文吃掉。

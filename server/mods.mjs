@@ -8,7 +8,8 @@
 //
 // 这里走 ②：把 `xxx.zip` 丢进 mods/ 就会被自动解压、写进清单，
 // 前端只管读清单。这样"装一个 mod"真的就是"丢个 zip 进去"。
-//   ★ 2026-10：这个目录是**项目根**的 mods/（原为 web/mods/，已搬迁）。
+//   插件目录在**项目根**的 mods/（与 data/ 平级），不在 web/ 静态根里 ——
+//  插件是运行期内容，与随仓库分发的前端资源不是一类东西。
 //
 // ── 安全（这是 mod 系统最大的风险面）──────────────────────────────────────
 //
@@ -37,13 +38,13 @@ import path from 'node:path';
 /**
  * 插件 **id** 的合法性：只允许字母数字、连字符、下划线、点（且不能是 . / ..）。
  *
- * ★ id 与目录名的约束**不同**，别混用（2026-09 踩过）：
+ * id 与目录名的约束**不同**，别混用：
  *   · id 是**身份**：要进 localStorage 键名、要拼资源 URL、要做依赖匹配，
  *     所以收得紧（纯 ASCII、无空格）—— 中文 id 会让 `/mods/<id>/…` 这种
  *     URL 与 localStorage 键都变得难处理。
  *   · 目录名是**磁盘位置**：用户完全可能把它改成中文（"桌宠"）或带空格
  *     （"my pet"）。这类目录**必须照样能识别** —— 它只要是个安全的目录名即可。
- *   旧实现两者共用这一个正则，于是把插件目录改成中文后**直接扫不到**
+ *   两者共用同一个正则的话，把插件目录改成中文就会**直接扫不到**
  *   （连 manifest 都不读），表现为"改个名字插件就消失了"。
  */
 const MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -72,7 +73,7 @@ function isSafeModDirName(name) {
 /**
  * 把 zip 文件名归一化成插件 id：剥掉尾部的版本号。
  *
- * ★ 这是修「资源包装了等于没装」的核心（2026-09 实测踩到）：
+ * 这是修「资源包装了等于没装」的核心：
  *
  *   pack-assets.mjs 的产物名带版本号（`elaina-avatar-1.0.0.zip`），
  *   而旧逻辑直接拿 zip 文件名当插件 id —— 于是插件装进了
@@ -94,7 +95,7 @@ function isSafeModDirName(name) {
  *   既够用、又不会伤到用户自建的插件。
  *   若剥完不合法（比如剥成空串）则原样返回，交由调用方的白名单报错。
  */
-function normalizeModId(rawName) {
+export function normalizeModId(rawName) {
     const base = String(rawName || '').replace(/\.zip$/i, '');
     // 至少两段数字才算版本号：-1.0 / -1.0.0 / -2.1.3
     const stripped = base.replace(/-[0-9]+\.[0-9]+(\.[0-9]+)*$/, '');
@@ -114,7 +115,7 @@ const MOD_MAX_BYTES = 64 * 1024 * 1024;
  * 插件管理器。
  *
  * @param {object} opts
- * @param {string} opts.modsDir  插件根目录（2026-10 起是项目根的 mods/）
+ * @param {string} opts.modsDir  插件根目录
  * @param {Function} opts.unzip     解压函数（复用 serve.mjs 里那份，已含体积/类型校验）
  * @param {Function} opts.isUnsafeEntryName 条目名安全检查（同上）
  * @param {Function} opts.effectiveExt 取"最终落盘名"的扩展名（含 ADS/尾随点防护）
@@ -141,18 +142,16 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
     /**
      * 读插件目录里的 manifest.json（优先）或从目录名推断。
      *
-     * ★ id 的权威来源是 **manifest.id**，不是目录名（2026-09 改）。
+     * id 的权威来源是 **manifest.id**，不是目录名。
      *
-     *   旧实现反过来（`{ id: fallbackId, ...m, id: fallbackId }` 用目录名覆盖
-     *   manifest 里写的 id），理由是"目录名是解压时定下的，避免 manifest 写错对不上"。
-     *   但那条理由成立的前提是"目录名一定对"—— 而 pack-assets 的产物名带版本号，
-     *   安装时曾把 `elaina-avatar-1.0.0` 当目录名，于是**目录名才是错的那个**：
-     *   插件内部写死的资源 URL 与依赖它的 `after` 全都对不上。
+     *   反过来用目录名覆盖 manifest.id 是不行的：那条思路的前提是"目录名一定对"，
+     *   而 pack-assets 的产物名带版本号 —— 把 `elaina-avatar-1.0.0` 当目录名安装时，
+     *   **目录名才是错的那个**，插件内部写死的资源 URL 与依赖它的 `after` 全都对不上。
      *
      *   现在改成：manifest.id 合法就用它（它是插件作者声明的身份，也是
      *   资源路径与依赖引用的基准），只有缺失/非法时才回落到目录名。
      *
-     * ★ 回落时还会对目录名做 normalizeModId（剥版本号尾），这样
+     * 回落时还会对目录名做 normalizeModId（剥版本号尾），这样
      *   "没写 id 的插件 + 带版本号的目录名"也能得到干净的 id。
      *   `MOD_ID_RE` 校验必须保留 —— manifest 是外部输入，不能直接信。
      */
@@ -211,14 +210,15 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
      * 把这段单独抽出来，是为了让"从文件装"和"从上传装"走**同一条安全路径**。
      */
     async function writePluginFiles(buf, id) {
-        // ★ allowScripts: true —— mod 的本质就是 JS。
+        // allowScripts: true —— mod 的本质就是 JS。
         //   默认的黑名单会把 .js/.mjs 拦掉（那是为 Live2D 模型设计的：模型不该带脚本），
         //   用它解 mod 包会得到"只有 manifest.json、插件跑不起来"的怪现象。
         //   开了这个选项后，路径穿越 / 绝对路径 / 体积上限 / .exe 等仍然全部拦截。
         const { files } = unzip(buf, { allowScripts: true });
 
         const targetDir = path.join(modsDir, id);
-        // 先清空旧目录（重装场景：避免残留上一版的文件）
+        // 先清空旧目录：重装时不清会留下上一次安装残留的文件，那些文件没有清单条目、
+        // 「删插件」也删不到它们。
         await rm(targetDir, { recursive: true, force: true });
         await mkdir(targetDir, { recursive: true });
 
@@ -287,9 +287,9 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         for (const e of entries) {
             if (e.name === 'index.json') continue;
             if (e.isDirectory()) {
-                // ★ 目录名用 isSafeModDirName（宽松，允许中文/空格），
+                // 目录名用 isSafeModDirName（宽松，允许中文/空格），
                 //   而不是 MOD_ID_RE（严格 ASCII）—— 用户把插件目录改成
-                //   「桌宠」是完全合理的，旧实现会**直接跳过**它。
+                //   「桌宠」是完全合理的目录名，用严格 ASCII 正则会直接扫不到它。
                 if (!isSafeModDirName(e.name)) {
                     log(`跳过目录 ${e.name}：名字含不安全字符或非法形式`);
                     continue;
@@ -302,7 +302,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
 
         // 解压待安装的 zip。id = zip 文件名去掉扩展名。
         //
-        // ★ 装成功后**删掉 zip**（一次性安装包）。
+        // 装成功后**删掉 zip**（一次性安装包）。
         //
         // 为什么必须删：zip 是"待安装"的源，只要它还在目录里，**每次扫描都会
         // 重新解压安装**。于是用户手动删掉插件目录后，下一次扫描（打开设置就会触发）
@@ -312,7 +312,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         // 删掉之后语义就清楚了：目录存在 = 已安装；要重装就再放一次 zip。
         // 这也让"删目录"变成真正有效的卸载方式。
         //
-        // ★ 装完的**结果要留住**，不能扫完就丢（2026-09 修）。
+        // 装完的**结果要留住**，不能扫完就丢。
         //
         //   为什么：安装结果（尤其"哪些文件被拦下了"）是给用户看的反馈。
         //   zip 装成功后会被删掉，所以下一次扫描时 zips 已经空了 ——
@@ -325,7 +325,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         //   留一个时间窗，期间任何一次读都能看到，过期自然失效。
         const installResults = [];
         for (const z of zips) {
-            // ★ id 要先过 normalizeModId 剥掉版本号 ——
+            // id 要先过 normalizeModId 剥掉版本号 ——
             //   pack-assets 的产物名是 `elaina-avatar-1.0.0.zip`，
             //   直接拿文件名当 id 会装进 elaina-avatar-1.0.0/，
             //   资源 URL 与 after 依赖同时失效（见 normalizeModId 的说明）。
@@ -335,7 +335,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
                 continue;
             }
             // 若归一化后的目录已存在（用户重复放了不同版本的包），明确报出来
-            // 而不是静默覆盖 —— 覆盖会把旧版本的用户设置一并带走。
+            // 而不是静默覆盖 —— 覆盖会把用户已有的设置一并带走。
             const targetDir = path.join(modsDir, id);
             const alreadyInstalled = installed.some((i) => i.id === id);
             if (alreadyInstalled) {
@@ -361,7 +361,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
 
         // 收集已安装插件的清单
         //
-        // ★ 这里同时给出两个名字，各有各的用途（2026-09 修）：
+        // 这里同时给出两个名字，各有各的用途：
         //   id  —— 归一化后的**身份**：依赖匹配（after）与资源 URL 的基准。
         //          它等于 manifest.id（缺失时才回落到目录名）。
         //   dir —— 磁盘上的**实际目录名**：前端按它拼脚本/样式的 URL。
@@ -386,6 +386,14 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
                 defaultEnabled: m.defaultEnabled !== false,
                 after: Array.isArray(m.after) ? m.after : [],
                 hidden: m.hidden === true,
+                // 前端 host API 的能力组（AGENTS.md D18 / 表 A22）：原样搬运。
+                // **必须带出去** —— 前端 createHostApi 靠它决定给插件下发哪些成员；
+                // 漏了这一行，插件声明的 theme/achievements/dragSort/openFolder
+                // 全部拿不到，而症状是"插件加载成功但功能静默失效"。
+                // 没声明时不写这个字段（同 server 的理由：避免给每个插件加一行噪音）。
+                ...(Array.isArray(m.capabilities) && m.capabilities.length
+                    ? { capabilities: m.capabilities.filter((s) => typeof s === 'string' && s) }
+                    : {}),
                 // 宿主半边（服务端路由 / 上传目录）的**声明**，原样带出去交给 serve.mjs 装配。
                 // 这里只搬运不解释：声明是否合法由 server/mod-server.mjs 判定并报错 ——
                 // 扫描器不该长着"路由前缀怎么写才合法"的知识。
@@ -429,7 +437,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
     /**
      * 读插件的 README（供插件页的「说明」按钮）。
      *
-     * ★ 为什么用**白名单文件名**而不是"让前端传文件名"：
+     * 为什么用**白名单文件名**而不是"让前端传文件名"：
      *   一旦接受任意文件名，就等于给了一个"读插件目录里任意文件"的口子 ——
      *   而插件目录里可能有 manifest.json（含作者私密配置）甚至别的插件留下的东西。
      *   这里只认几个约定俗成的说明文件名，其余一律不读。

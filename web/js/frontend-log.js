@@ -59,7 +59,7 @@
             console.debug = function () { origDebug.apply(console, arguments); push('debug', toText(arguments)); };
         }
 
-        // ★ console.log 也转发，但**只转 mod 相关的那几条**（2026-09 补）。
+        // console.log 也转发，但**只转 mod 相关的那几条**。
         //
         // 为什么必须补：插件的加载是"看不见的过程" ——
         //   · 成功时插件走 host.log()，而它落到 console.log → 启动窗口里一条都没有；

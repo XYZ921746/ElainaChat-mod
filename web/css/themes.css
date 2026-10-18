@@ -59,7 +59,7 @@ html[data-theme-template="ios"] {
     --pixso-brown-dark: #1b2330;
     --pixso-brown-soft: #566070;
     --pixso-cream: #f7f9fc;
-    /* ★ 补 `--pixso-surface`（原本 4 套主题**都漏了**这个变量）：
+    /* 补 `--pixso-surface`（原本 4 套主题**都漏了**这个变量）：
        `#appShell`（应用外壳）用的是它，而 :root 里写死 #ffffff。
        漏掉时主题切换后外壳仍是纯白，与主题配色割裂 ——
        浅色下还能勉强看，深色下就是一块刺眼的白（见 8.57）。
@@ -71,7 +71,7 @@ html[data-theme-template="ios"] {
     --pixso-green: #7aa7f0;
     --pixso-green-dark: #4f7cf0;
     --pixso-line: #d5dce6;
-    /* ★ 2026-10 新增：**警示色**（与品牌主色分开）。
+    /* 2026-10 新增：**警示色**（与品牌主色分开）。
        为什么需要它：Agent 权限那块有大量"⚠️ 这意味着…"的警示文案，
        原先在 HTML 里写死成 #b45309（橙）。深色模式下写死的浅底配浅字看不清，
        于是改成主题变量 —— 但**不能借用 --pixso-orange**：它在 iOS 主题下是
@@ -124,7 +124,7 @@ html[data-theme-template="claude"] {
     --pixso-brown-dark: #2b211a;
     --pixso-brown-soft: #6d5a4d;
     --pixso-cream: #faf6f2;
-    /* ★ 补 --pixso-surface（详见 ios 主题里的说明） */
+    /* 补 --pixso-surface（详见 ios 主题里的说明） */
     --pixso-surface: #fffdfb;
     --pixso-panel: #f0e9e2;
     --pixso-panel-soft: #f6f1ec;
@@ -132,7 +132,7 @@ html[data-theme-template="claude"] {
     --pixso-green: #d97757;
     --pixso-green-dark: #bf5f3f;
     --pixso-line: #ded2c7;
-    /* ★ 警示色（详见 ios 主题里的说明）：claude 主题本身就是暖色系，
+    /* 警示色（详见 ios 主题里的说明）：claude 主题本身就是暖色系，
        所以直接复用它的主色，视觉上更协调。 */
     --pixso-warn: #b45309;
     --pixso-warn-soft: #9a3412;
@@ -160,67 +160,6 @@ html[data-theme-template="claude"] {
     --ink: #3a2d24;
 }
 
-/* ==================== 鼠尾草（照抄上游 + 提亮主色） ====================
- *
- * 用户反馈"绿色太暗不好看"。上游 sage 的主色 #4f9d7d 是配它自己的浅底玻璃用的，
- * 在我们这套结构里（主按钮是实心渐变、气泡是实心块）显得闷。
- *
- * 但**不能只调亮** —— 实测白字对比度会掉：
- *     #4f9d7d → 3.26:1     #3fae87 → 2.76:1     #2fb98a → 2.49:1
- * 越鲜越亮，白字越糊。所以采取"主色更鲜 + 渐变终点更深"的组合：
- * 观感上更通透，同时把对比度拉回 3:1 以上。
- */
-html[data-theme-template="sage"] {
-    --lg-primary: #3fae87;
-    --lg-primary-deep: #2b7d5d;
-    --lg-primary-soft: rgba(63, 174, 135, 0.14);
-    --lg-accent-2: rgba(156, 201, 180, 0.9);
-    --lg-bg: #eef4f0;
-    --lg-ink: #1e3529;
-    --lg-ink-soft: #4e6b5a;
-    --lg-text-muted: #77907f;
-
-    --pixso-canvas: #d8e4dc;
-    --pixso-brown: #1e3529;
-    --pixso-brown-dark: #14251c;
-    --pixso-brown-soft: #4e6b5a;
-    --pixso-cream: #f6faf7;
-    /* ★ 补 --pixso-surface（详见 ios 主题里的说明） */
-    --pixso-surface: #ffffff;
-    --pixso-panel: #e4eee8;
-    --pixso-panel-soft: #eef6f1;
-    --pixso-orange: #3fae87;
-    --pixso-green: #3fae87;
-    /* 终点压深：白字对比度靠它拉回来（浅绿 + 深绿渐变，均值约 3.5:1） */
-    --pixso-green-dark: #25795a;
-    --pixso-line: #cbdcd2;
-    /* ★ 警示色（详见 ios 主题里的说明）：sage 是绿色系，警示仍需暖色才醒目。 */
-    --pixso-warn: #b45309;
-    --pixso-warn-soft: #9a3412;
-    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
-    --pixso-warn-line: #fed7aa;
-    --pixso-shadow: 0 30px 80px rgba(30, 53, 41, 0.16), 0 6px 18px rgba(30, 53, 41, 0.08);
-
-    --tpl-primary: #3fae87;
-    --tpl-primary-deep: #25795a;
-    --tpl-primary-soft: #93d4b9;
-    --tpl-tint: rgba(63, 174, 135, 0.14);
-
-    --color-primary: #3fae87;
-    --color-primary-soft: #93d4b9;
-    --color-secondary: #6b9bd2;
-    --color-secondary-soft: #9dbde3;
-    --color-accent: #7fb069;
-    --text-heading: #1e3529;
-    --text-body: #2f4f3e;
-    --text-secondary: #4e6b5a;
-    --text-muted: #77907f;
-    --text-glass-heading: #1e3529;
-    --text-glass-body: #2f4f3e;
-    --text-glass-muted: #4e6b5a;
-    --ink: #1e3529;
-}
-
 /* ==================== 樱花桃（照抄上游） ==================== */
 html[data-theme-template="sakura"] {
     --lg-primary: #d97b93;
@@ -237,7 +176,7 @@ html[data-theme-template="sakura"] {
     --pixso-brown-dark: #2f1e26;
     --pixso-brown-soft: #775863;
     --pixso-cream: #fbf6f8;
-    /* ★ 补 --pixso-surface（详见 ios 主题里的说明） */
+    /* 补 --pixso-surface（详见 ios 主题里的说明） */
     --pixso-surface: #fffdfe;
     --pixso-panel: #f2e8ec;
     --pixso-panel-soft: #f8f1f4;
@@ -245,7 +184,7 @@ html[data-theme-template="sakura"] {
     --pixso-green: #d97b93;
     --pixso-green-dark: #c2607b;
     --pixso-line: #e0cdd4;
-    /* ★ 警示色（详见 ios 主题里的说明）：樱花是粉紫系，警示仍需暖色才醒目。 */
+    /* 警示色（详见 ios 主题里的说明）：樱花是粉紫系，警示仍需暖色才醒目。 */
     --pixso-warn: #b45309;
     --pixso-warn-soft: #9a3412;
     --pixso-warn-bg: rgba(255, 247, 237, 0.75);
@@ -274,7 +213,7 @@ html[data-theme-template="sakura"] {
 
 /* ==================== 「星屑之日」（生日配色）已移出宿主 ====================
  *
- *  ★ 2026-10：那套配色（灰紫 / 夜空蓝 / 暖金 / 奶油白）原先写在这里，是内置
+ * 2026-10：那套配色（灰紫 / 夜空蓝 / 暖金 / 奶油白）原先写在这里，是内置
  *    模板 `stardust`。生日模块搬进插件（mods/birthday）之后，它改由插件在启用时
  *    通过 `host.theme({ id:'stardust', vars:{…} })` 注册 —— 变量就写在插件里
  *    （见 mods/birthday/index.js），停用插件即从主题选择器里消失。
@@ -316,7 +255,7 @@ html[data-theme-template] body .text-indigo-400,
 html[data-theme-template] body .text-indigo-300,
 html[data-theme-template] body .text-indigo-200 { color: var(--pixso-brown-soft) !important; }
 
-/* ★ 气泡内部的文字要**放行**，不能跟着上面的类级规则走。
+/* 气泡内部的文字要**放行**，不能跟着上面的类级规则走。
  *
  * 用户气泡是深色/主色底，里面必须用白字（宿主原本就有这条规则：
  * `.bubble-user .text-indigo-500 { color: rgba(255,255,255,0.92) }`），
@@ -397,16 +336,27 @@ html[data-theme-template] .orb-2 { background: radial-gradient(circle, var(--tpl
 html[data-theme-template] .orb-3 { background: radial-gradient(circle, var(--tpl-primary-soft), transparent 70%) !important; }
 
 /* 主按钮：上游是"柔和渐变 + 轻投影"，不是纯色块 */
+/* 2026-10 修：`var(--tpl-primary)` 必须给兜底值。
+   这条规则的选择器是 `html[data-theme-template]`（**只看属性在不在**，不看它是哪套），
+   而 `--tpl-primary` 只由"当前那套模板"提供：内置的写在 themes.css 里，
+   插件主题的写在插件注入的 <style> 里。
+   一旦属性还留着、对应变量却没了（插件被停用/卸载，见 theme.js unregisterTemplate；
+   或插件作者照 host.theme 的示例只给了 `--pixso-*` 而没给 `--tpl-*`），
+   整条 background 会"计算期无效"→ 回落透明，而 color 仍是 `#fff !important`
+   —— 弹窗里的「确定」就是白字透明底，**一个看不见的按钮**。
+   兜底到 --pixso-green（每套主题、深色块、:root 都有），最坏情况也只是变色，不会消失。 */
 html[data-theme-template] #sidebar .btn-primary,
 html[data-theme-template] .modal-panel .btn-primary {
-    background: linear-gradient(180deg, var(--tpl-primary) 0%, var(--pixso-green-dark) 100%) !important;
+    background: linear-gradient(180deg, var(--tpl-primary, var(--pixso-green)) 0%, var(--pixso-green-dark, #738746) 100%) !important;
     color: #fff !important;
     border-color: transparent !important;
 }
 
 /* 用户气泡 */
+/* 同上：`var(--tpl-primary)` 也要兜底 —— 缺变量时 `background` 整条失效、
+   而 `color` 仍是 `#fff !important`，用户气泡同样会变成"看不见的白字"。 */
 html[data-theme-template] body .bubble-user {
-    background: linear-gradient(135deg, var(--tpl-primary), var(--pixso-green-dark)) !important;
+    background: linear-gradient(135deg, var(--tpl-primary, var(--pixso-green)), var(--pixso-green-dark, #738746)) !important;
     color: #fff !important;
 }
 
@@ -433,12 +383,12 @@ html[data-theme-template] body .bubble-user {
  *  恢复"边框 + 阴影"这两条边界线索（不强行拉大底色差 —— 那会破坏
  *  上游调好的柔和观感）。边框用半透明深色，既清晰又不抢眼。
  *
- *  ★ 这里**只加边框和阴影，不动背景色**，而且选择器**不带**
+ * 这里**只加边框和阴影，不动背景色**，而且选择器**不带**
  *    `html[data-theme-template]` 前缀。两个决定都是刻意的：
  *
  *    ① 不带主题前缀：气泡边界是**通用需求**，不是主题功能。默认主题
  *       （粉紫）不设 data-theme-template 属性，规则若挂在该属性下就没有
- *       边框，仍然"糊成一片"（实测踩过：思考框内层气泡 border 是 0px）。
+ *       边框，仍然"糊成一片"。
  *
  *    ② 不动背景：宿主给 `.bubble-ai` 的背景是 `var(--pixso-panel-soft)`，
  *       而主题里另有自己的取值。这里若一并改背景，**默认主题的外观就会变**
@@ -461,12 +411,12 @@ body .bubble-user {
 html[data-theme-template] body .bubble-ai {
     background: var(--pixso-cream) !important;
 }
-/* 气泡尾巴已整体移除（2026-09，用户要求）—— 原来这里有两段
+/* 气泡尾巴已整体移除—— 原来这里有两段
    ::after 颜色覆盖，尾巴删了它们也一起删，别留死规则。 */
 
 /* 深色下的气泡边界：底色接近，同样靠边框分开。
  *
- * ★ 注意选择器只到 `.bubble-ai` —— **不要**把 `.thinking-bubble` 也写进来。
+ * 注意选择器只到 `.bubble-ai` —— **不要**把 `.thinking-bubble` 也写进来。
  *
  *   `.thinking-bubble` 是"伊蕾娜正在想…"的**外层容器**
  *   （`flex gap-3 mb-4`，撑满整行，里面还包着头像和气泡两层）。
@@ -493,16 +443,16 @@ html[data-theme-template] body .sidebar-item-active {
 
 /* 侧栏竖栏（左侧那条 108px 窄导航）。
  *
- * ★ 这条竖栏**保持深色**（用 --pixso-brown），这是本项目的原有设计 ——
+ * 这条竖栏**保持深色**（用 --pixso-brown），这是本项目的原有设计 ——
  *   原本是深棕 #4c3123，换模板后自然变成各主题的深色版（iOS 深藏青、
- *   陶土橙深棕、鼠尾草深绿、樱花桃深紫），与浅色内容区形成对比。
+ *   陶土橙深棕、樱花桃深紫），与浅色内容区形成对比。
  *
  *   注意：**不要**照抄上游把它改成浅色。上游那条竖栏是浅色玻璃，
  *   但那是上游的设计语言；我们这边深色竖栏是既有视觉识别的一部分
  *   （用户明确反馈这个配色好看、要保留）。所以浅色模式下**不加覆盖**，
  *   让宿主的 `background: var(--pixso-brown)` 照常生效。
  *
- * ★ 但深色模式必须覆盖：那时 --pixso-brown 变成**浅色**（#dfe6f0，因为它是
+ * 但深色模式必须覆盖：那时 --pixso-brown 变成**浅色**（#dfe6f0，因为它是
  *   文字色变量），竖栏会跟着变浅 → 深色界面里一条刺眼的浅色竖条。
  *   所以深色下单独指定深色渐变。
  */
@@ -514,7 +464,7 @@ html[data-theme="dark"] #sidebar::before {
 html[data-theme="dark"] #sidebar .sidebar-rail-btn { color: #9aa6b8 !important; }
 html[data-theme="dark"] #sidebar .sidebar-rail-btn:hover {
     color: #eef2f7 !important;
-    /* ★ 2026-10 修：原来写死 iOS 蓝 rgba(10,132,255,.18)；这条带 #sidebar，
+    /* 2026-10 修：原来写死 iOS 蓝 rgba(10,132,255,.18)；这条带 #sidebar，
        优先级比下面那条同类规则更高，所以必须**在这里**改，否则悬停高亮
        永远泛蓝、不跟模板。 */
     background: var(--tpl-tint) !important;
@@ -545,7 +495,7 @@ html[data-theme="dark"] {
     --pixso-brown-dark: #eef2f7;
     --pixso-brown-soft: #9aa4b6;
     --pixso-cream: #232833;
-    /* ★★ 2026-10 补：`--pixso-surface` 原来**只定义了一次**（index.html 的 :root，
+    /* 2026-10 补：`--pixso-surface` 原来**只定义了一次**（index.html 的 :root，
        值是 #ffffff），深色块里漏了它 —— 而 `#appShell` 用的正是这个变量
        （`#appShell { background: var(--pixso-surface) }`）。
        后果：深色模式下整个应用外壳是**纯白**（实测计算值 rgb(255,255,255)），
@@ -559,7 +509,7 @@ html[data-theme="dark"] {
     --pixso-green: #4f7cf0;
     --pixso-green-dark: #3d6ae0;
     --pixso-line: #2c3542;
-    /* ★ 警示色（深色）：底要压暗（否则浅底 + 浅字读不清，实测六个隐私开关全糊），
+    /* 警示色（深色）：底要压暗，
        文字要提亮（#b45309 在深底上对比度只有 3.7:1，偏暗）。
        这里选琥珀色 #fbbf24 —— 与"警告"的语义一致，且在深底上对比度约 9:1。 */
     --pixso-warn: #fbbf24;
@@ -583,18 +533,18 @@ html[data-theme="dark"] {
     --ink: #eef2f7;
 }
 
-/* ★★ 2026-10：深色模式下**每套模板仍要认得出自己**。
+/* 2026-10：深色模式下**每套模板仍要认得出自己**。
  *
- * 症状（用户实测）："深色下默认是 iOS 蓝，切其它模板完全没用"。
+ * 症状："深色下默认是 iOS 蓝，切其它模板完全没用"。
  * 根因就在上面那个深色变量块 —— 它把品牌变量写死成 iOS 蓝（#0a84ff / #4f7cf0），
  * 而它与 `html[data-theme-template="…"]` 的**特异性相同**（都是 `0,1,1`），
  * 又排在那些模板块**后面** → 同名的变量全被它盖掉，四套模板看起来一模一样。
  *
  * 修法：给每套模板补一组"深色版"变量，选择器带上两个属性
  * `html[data-theme="dark"][data-theme-template="x"]`（特异性 `0,2,1` > `0,1,1`，稳赢）。
- * ★ 只覆盖**品牌色 + 深浅底色**：文字 / 警示 / 阴影那些沿用上面那套深色值 ——
+ * 只覆盖**品牌色 + 深浅底色**：文字 / 警示 / 阴影那些沿用上面那套深色值 ——
  *   深色的对比度是专门调过的（见 --pixso-warn 那几条注释），不该跟着模板跑。
- * ★ ios 那组与默认深色**取值相同**，写出来只是为了让"每套模板自带完整定义"，
+ * ios 那组与默认深色**取值相同**，写出来只是为了让"每套模板自带完整定义"，
  *   将来改默认深色时不必再回头补它。
  */
 html[data-theme="dark"][data-theme-template="ios"] {
@@ -635,25 +585,6 @@ html[data-theme="dark"][data-theme-template="claude"] {
     --tpl-primary-soft: #e8a288;
     --tpl-tint: rgba(224, 138, 106, 0.16);
 }
-html[data-theme="dark"][data-theme-template="sage"] {
-    --lg-primary: #4cc296;
-    --lg-primary-deep: #35916d;
-    --lg-primary-soft: rgba(76, 194, 150, 0.16);
-    --lg-bg: #0f1511;
-    --pixso-canvas: #0c120e;
-    --pixso-cream: #202c22;
-    --pixso-surface: #131a15;
-    --pixso-panel: #18211a;
-    --pixso-panel-soft: #1f2b21;
-    --pixso-orange: #4cc296;
-    --pixso-green: #4cc296;
-    --pixso-green-dark: #35916d;
-    --pixso-line: #29392e;
-    --tpl-primary: #4cc296;
-    --tpl-primary-deep: #35916d;
-    --tpl-primary-soft: #78d3b2;
-    --tpl-tint: rgba(76, 194, 150, 0.16);
-}
 html[data-theme="dark"][data-theme-template="sakura"] {
     --lg-primary: #e58ba1;
     --lg-primary-deep: #cf6c87;
@@ -676,7 +607,7 @@ html[data-theme="dark"][data-theme-template="sakura"] {
 
 /* 默认主题「暖米绿」（elaina）的深色版。
  *
- * ★ 为什么必须单独写：默认主题是**不设** `data-theme-template` 属性来表达的
+ * 为什么必须单独写：默认主题是**不设** `data-theme-template` 属性来表达的
  *   （见 theme.js 的 setTemplate：「elaina 是默认主题，不设属性」）。所以上面
  *   那四条 `[data-theme-template="x"]` 都盖不到它 —— 它会落回基础深色块，
  *   而那块是 iOS 蓝的一套。结果就是用户报的"深色下暖米绿和 iOS 蓝是同一种颜色"。
@@ -708,7 +639,7 @@ html[data-theme="dark"]:not([data-theme-template]) {
 
 /* 深色：页面与聊天区 */
 html[data-theme="dark"] body { background: var(--pixso-canvas) !important; }
-/* ★★ 2026-10 修：这里的蓝色光斑与三段底色原来是**写死的**（rgba(10,132,255,…)、
+/* 2026-10 修：这里的蓝色光斑与三段底色原来是**写死的**（rgba(10,132,255,…)、
    #101318 / #151a21）—— 于是不管选哪套模板，聊天区都泛着一层 iOS 蓝；而外壳、
    卡片、输入框已经跟着模板变量走了，两者之间就出现了用户说的"过渡奇怪"。
    改成走变量：光斑用 --tpl-tint（每套模板自己的色），底色用 --lg-bg / --pixso-surface。
@@ -739,7 +670,7 @@ html[data-theme="dark"] .glass-button {
 }
 html[data-theme="dark"] .modal-input,
 html[data-theme="dark"] .modal-textarea {
-    /* ★ 用 `background-color`，不要用 `background` 简写：简写带 `!important`
+    /* 用 `background-color`，不要用 `background` 简写：简写带 `!important`
        会把 `background-image` 一并重置为 `none` —— 而 `<select>` 也带
        `.modal-input` 类，于是**深色下所有下拉的小三角被它抹掉**。
        （与文件下方 `#settingsPanel` 那条是同一个坑，两处都要用 background-color。） */
@@ -768,7 +699,7 @@ html[data-theme="dark"] .sidebar-item-active {
     background: rgba(255, 255, 255, 0.08) !important;
     border-color: color-mix(in srgb, var(--pixso-green) 45%, transparent) !important;
 }
-/* ★ 2026-10 修：聚焦高亮原来写死 iOS 蓝（项目"已知问题"里记的就是这条：
+/* 2026-10 修：聚焦高亮原来写死 iOS 蓝（项目"已知问题"里记的就是这条：
    "深色模式下输入框聚焦高亮色被硬编码为蓝色，与部分主题配色不匹配"）。
    改成主题主色 —— 各套模板的输入框聚焦才跟自己的配色一致。 */
 html[data-theme="dark"] .modal-input:focus,
@@ -823,7 +754,7 @@ html[data-theme="dark"] body .bubble-ai .text-indigo-400,
 html[data-theme="dark"] body .bubble-ai .text-indigo-300 { color: #a4afc0 !important; }
 
 /* ============================================================================
- *  深色：语音条 + 名牌（2026-09，用户截图标出的突兀元素）
+ *  深色：语音条 + 名牌
  * ==========================================================================
  *  根因：宿主把这两块写死浅色（语音条 #dec9be、名牌 #e2d3cc），themes.css
  *  此前没有它们的深色规则 —— 深色气泡里嵌亮棕色块；且文字用
@@ -838,9 +769,9 @@ html[data-theme="dark"] body .ai-voice-player {
 html[data-theme="dark"] body .ai-voice-player:hover {
     background: rgba(255, 255, 255, 0.16) !important;
 }
-/* ★ 文字与波形条只设 color/background 各自需要的：
+/* 文字与波形条只设 color/background 各自需要的：
  *   波形条是色块（background 生效），秒数是文字（color 生效）——
- *   上一版把 background 一并给了秒数，白底 + 白字 = "一片白"（用户实测）。
+ *   上一版把 background 一并给了秒数，白底 + 白字 = "一片白"。
  *   文字类元素一律只改 color，不碰 background。 */
 html[data-theme="dark"] body .ai-voice-player .voice-play-box,
 html[data-theme="dark"] body .ai-voice-player .voice-duration {
@@ -868,7 +799,7 @@ html[data-theme="dark"] #settingsContent .settings-card {
 
 /* 深色：设置面板的**结构性白块**。
  *
- * 宿主里这几处写死了浅色，深色下就是一块块白（实测截图确认）：
+ * 宿主里这几处写死了浅色，深色下就是一块块白：
  *
  *   #settingsPanel > div:nth-child(2)              background: #fbfaf8      ← 主体区
  *   #settingsPanel > div:first-child               background: rgba(255,255,255,.92)  ← 标题栏
@@ -878,7 +809,7 @@ html[data-theme="dark"] #settingsContent .settings-card {
  * 用 !important 覆盖（宿主那几条也带 !important，且选择器同权重，
  * 靠后加载 + 提高权重才能压住）。
  *
- * ★★ 2026-10 两次结构变更，这份注释与规则都跟着改过：
+ * 2026-10 两次结构变更，这份注释与规则都跟着改过：
  *    ① 顶部「设置」标题行删除（✕ 移进导航行）→ 子元素索引前移，
  *       `div:first-child` 从"标题栏"错位成"导航行"。
  *    ② 底部「恢复默认/取消/保存」按钮栏删除（设置改成改完即生效）→
@@ -896,7 +827,7 @@ html[data-theme="dark"] #settingsContent .settings-tab-panel > div.mb-4 {
     border-color: rgba(255, 255, 255, 0.10) !important;
     box-shadow: none !important;
 }
-/* 分栏导航：**纯文字透明背景**（2026-10 用户最终要求）——
+/* 分栏导航：**纯文字透明背景**——
    深浅色下都不给任何底色块，只靠文字颜色区分选中。
    ★ 这条必须与 index.html 的浅色规则一致，否则同一个界面在深浅色下
      "选中态长什么样"不一样（之前深色是绿实底、浅色是下划线，很割裂）。 */
@@ -925,7 +856,7 @@ html[data-theme="dark"] #settingsPanel .glass-button {
 html[data-theme="dark"] #settingsPanel .modal-input,
 html[data-theme="dark"] #settingsPanel .modal-textarea,
 html[data-theme="dark"] #settingsPanel select {
-    /* ★ 必须用 `background-color` 而不是 `background` 简写（2026-10 修）：
+    /* 必须用 `background-color` 而不是 `background` 简写：
        简写会把 `background-image` 一并重置为 `none`，而它带 `!important` ——
        于是**深色下所有下拉右侧的小三角全部消失**。
        用户反馈"边上还是要加小三角，不然人家都不知道有下拉"就是这个原因
@@ -936,7 +867,7 @@ html[data-theme="dark"] #settingsPanel select {
     color: var(--pixso-brown) !important;
 }
 
-/* ★★★ 2026-10 修：深色下下拉**弹层**是白底浅字，几乎看不清。
+/* 2026-10 修：深色下下拉**弹层**是白底浅字，几乎看不清。
  *
  * 实测症状（截图确认）：点开「模型名」下面那个 select，弹出的候选列表
  * **背景纯白**，而未选中的选项是**浅灰色**（#dfe6f0 系）—— 白底浅字，读不出来。
@@ -986,7 +917,7 @@ html:not([data-theme="dark"]) #settingsPanel select option:checked {
     background-color: #e9eef5 !important;
     color: #1b2330 !important;
 }
-/* ★ 设置面板之外的 select（例如移动会话的"移动到…"）同样处理。
+/* 设置面板之外的 select（例如移动会话的"移动到…"）同样处理。
    用同一个变量体系，不重复写死颜色。 */
 html[data-theme="dark"] select option {
     background-color: var(--pixso-panel) !important;

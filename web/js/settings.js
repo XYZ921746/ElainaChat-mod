@@ -1,0 +1,2349 @@
+/* ========================================================================
+ * 设置与运维：状态机 / 设置 / 悬浮窗 / 副屏监视 / 日志 / 数据 / 密码
+ *
+ * 本文件由 web/index.html 的主脚本按分区拆分而来（保持原始加载顺序）。
+ * 拆分前提：主脚本是全局作用域，拆分后各文件共享同一全局词法环境，
+ * 因此顶层 function / const / let 互相可见，调用点无需修改。
+ *
+ * 包含分区：
+ *   · 状态机 UI
+ *   · 设置
+ *   · 操作悬浮窗（APK 独有）
+ *   · 副屏监视窗
+ *   · 日志设置（服务端）
+ *   · 我的数据（导出 / 导入 / 位置）
+ *   · 访问密码（局域网鉴权）
+ *   · 问候打字机
+ * ======================================================================== */
+
+// ==================== 状态机 UI ====================
+
+function alignFloatingMicToComposer() {
+    if (!elements.floatingMic || elements.floatingMic.classList.contains('hidden')) return;
+    const conversationComposer = elements.inputBar && !elements.inputBar.classList.contains('hidden')
+        ? elements.inputBar.querySelector('.conversation-composer')
+        : null;
+    const initialComposer = elements.initialState && !elements.initialState.classList.contains('hidden')
+        ? elements.initialState.querySelector('.initial-composer-shell')
+        : null;
+    const target = conversationComposer || initialComposer;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    elements.floatingMic.style.left = `${Math.round(rect.left)}px`;
+    elements.floatingMic.style.top = `${Math.round(rect.top)}px`;
+    elements.floatingMic.style.width = `${Math.round(rect.width)}px`;
+    elements.floatingMic.style.transform = 'none';
+}
+
+let lastVoiceStateDispatch = '';
+function updateUI() {
+    const { voiceState } = state;
+
+    // 通知视频通话界面（Live2D）语音状态变化：🎤 说话按钮同步聆听状态
+    if (voiceState !== lastVoiceStateDispatch) {
+        lastVoiceStateDispatch = voiceState;
+        window.dispatchEvent(new CustomEvent('voice-state', { detail: { state: voiceState } }));
+    }
+
+    const statusMap = {
+        'idle': '点击麦克风开始说话',
+        'listening': '正在聆听...',
+        'paused': '⏸ 已暂停（可继续说话，或点麦克风结束）',
+        'thinking': '伊蕾娜思考中...',
+        'error': '发生错误'
+    };
+    elements.statusText.textContent = statusMap[voiceState] || '';
+
+    const micClass = {
+        'listening': 'mic-btn mic-listening relative w-32 h-32 rounded-full flex items-center justify-center',
+        'paused': 'mic-btn mic-paused relative w-32 h-32 rounded-full flex items-center justify-center',
+        'thinking': 'mic-btn mic-thinking relative w-32 h-32 rounded-full flex items-center justify-center',
+        'error': 'mic-btn mic-error relative w-32 h-32 rounded-full flex items-center justify-center',
+        'idle': 'mic-btn mic-idle relative w-32 h-32 rounded-full flex items-center justify-center'
+    };
+    elements.micBtn.className = micClass[voiceState] || micClass['idle'];
+
+    const listening = voiceState === 'listening' || voiceState === 'paused';
+    elements.pulseRing1.classList.toggle('hidden', !listening);
+    elements.pulseRing2.classList.toggle('hidden', !listening);
+    elements.floatingPulse1.classList.toggle('hidden', !listening);
+    elements.floatingPulse2.classList.toggle('hidden', !listening);
+
+    if (elements.floatingVoiceTitle) {
+        elements.floatingVoiceTitle.textContent = voiceState === 'paused' ? '等待继续说话' : '正在聆听';
+        elements.floatingVoiceHint.textContent = voiceState === 'paused'
+            ? '继续说话，或点击绿色按钮发送'
+            : '说完后点击麦克风发送';
+    }
+
+    const dockVisible = listening && !state.notesMode && !state.diaryMode;
+    elements.floatingMic.classList.toggle('hidden', !dockVisible);
+    if (dockVisible) requestAnimationFrame(alignFloatingMicToComposer);
+}
+
+
+// ==================== 设置 ====================
+
+// 把 state.settings / state.characterCard 填充到设置表单（打开设置 / 恢复默认后调用）
+function fillSettingsForm() {
+    // 回落用"当前格式"的预设，不要用 DEFAULT_SETTINGS —— 后者写死 DeepSeek 的地址和模型，
+    // 选 Anthropic 时清空输入框会回落到 DeepSeek 的 URL，看起来像"格式没生效"。
+    const fillPreset = CHAT_API_FORMATS[state.settings.apiFormat] || CHAT_API_FORMATS['openai-compatible'];
+    elements.settingApiFormat.value = state.settings.apiFormat || 'openai-compatible';
+    elements.settingBaseUrl.value = state.settings.baseUrl || fillPreset.defaultBaseUrl;
+    elements.settingChatModel.value = state.settings.model || fillPreset.defaultModel;
+    elements.settingApiKey.value = state.settings.apiKey;
+    // 思考模式：开关 + 强度。用 syncThinkingModeControls() 统一回填，
+    // 不在这里各写一遍 —— 回填逻辑分散就会有一天忘记同步新增的档位。
+    syncThinkingModeControls();
+    elements.settingTtsProvider.value = state.settings.ttsProvider || 'mimo';
+    document.getElementById('settingMinimaxApiKey').value = state.settings.minimaxApiKey || '';
+    document.getElementById('settingMinimaxVoice').value = state.settings.minimaxVoice || '';
+    document.getElementById('settingMinimaxModel').value = state.settings.minimaxModel || 'speech-2.8-hd';
+    document.getElementById('settingDashscopeTtsModel').value = state.settings.dashscopeTtsModel || 'qwen3-tts-flash';
+    document.getElementById('settingDashscopeTtsVoice').value = state.settings.dashscopeTtsVoice || 'Cherry';
+    document.getElementById('settingVisionBaseUrl').value = state.settings.visionBaseUrl || '';
+    document.getElementById('settingVisionApiKey').value = state.settings.visionApiKey || '';
+    document.getElementById('settingVisionModel').value = state.settings.visionModel || '';
+    elements.settingTtsSpeed.value = state.settings.ttsSpeed;
+    elements.ttsSpeedLabel.textContent = state.settings.ttsSpeed.toFixed(1) + 'x';
+    elements.settingTtsVolume.value = Number(state.settings.ttsVolume ?? 1);
+    elements.ttsVolumeLabel.textContent = Math.round(Number(state.settings.ttsVolume ?? 1) * 100) + '%';
+    updateSliderFill(elements.settingTtsSpeed);
+    updateSliderFill(elements.settingTtsVolume);
+
+    document.querySelectorAll('input[name="ttsLang"]').forEach(r => {
+        r.checked = (r.value === (state.settings.ttsLang || 'japanese'));
+    });
+    document.querySelectorAll('input[name="replyDisplayMode"]').forEach(r => {
+        r.checked = (r.value === (state.settings.replyDisplayMode || DEFAULT_SETTINGS.replyDisplayMode));
+    });
+
+    document.querySelectorAll('input[name="asrProvider"]').forEach(r => {
+        r.checked = (r.value === (state.settings.asrProvider || 'browser'));
+    });
+    updateChatFormatUI();
+    updateAsrProviderUI();
+    updateTtsProviderUI();
+
+    document.getElementById('settingDashscopeApiKey').value = state.settings.dashscopeApiKey || '';
+    // 阿里百炼 ASR 的 Key：独立于语音输出（与 TTS 的 dashscopeApiKey 分开存）
+    document.getElementById('settingAsrApiKey').value = state.settings.asrApiKey || '';
+    document.getElementById('settingDashscopeAsrBaseUrl').value = state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
+    document.getElementById('settingDashscopeAsrModel').value = state.settings.dashscopeAsrModel || 'qwen3-asr-flash';
+    // MiMo TTS 凭据（独立于 ASR）。Key 默认空；接口地址固定在默认值里（界面上已删除该输入框）。
+    document.getElementById('settingMimoTtsApiKey').value = state.settings.mimoTtsApiKey || '';
+    // MiMo ASR 凭据（内部键名仍为 mimoApiKey / mimoBaseUrl：为兼容已存数据不改键名）
+    document.getElementById('settingMimoAsrApiKey').value = state.settings.mimoApiKey || '';
+    document.getElementById('settingMimoAsrBaseUrl').value = state.settings.mimoBaseUrl || 'https://api.xiaomimimo.com';
+    document.getElementById('settingMimoTtsModel').value = state.settings.mimoTtsModel || 'mimo-v2.5-tts';
+    document.getElementById('settingMimoTtsVoice').value = state.settings.mimoTtsVoice || 'mimo_default';
+    document.getElementById('settingMimoVoiceDesignPrompt').value = state.settings.mimoTtsVoiceDesignPrompt || '';
+    // 文件框不能程序化回填：清空控件，改用状态里保存的文件名/数据展示已存样本
+    const cloneInput = document.getElementById('settingMimoTtsCloneSample');
+    if (cloneInput) cloneInput.value = '';
+    updateMimoTtsCloneSampleStatus();
+    updateMimoTtsModelUI();
+    document.getElementById('settingOpenaiTtsBaseUrl').value = state.settings.openaiTtsBaseUrl || 'https://api.openai.com/v1';
+    document.getElementById('settingOpenaiTtsApiKey').value = state.settings.openaiTtsApiKey || '';
+    document.getElementById('settingOpenaiTtsModel').value = state.settings.openaiTtsModel || 'tts-1';
+    document.getElementById('settingOpenaiTtsVoice').value = state.settings.openaiTtsVoice || 'alloy';
+    document.getElementById('settingMimoAsrModel').value = state.settings.mimoAsrModel || 'mimo-v2.5-asr';
+    elements.settingAutoMemory.checked = Boolean(state.settings.autoMemory);
+    elements.settingMemoryEvery.value = state.settings.memoryEvery || 6;
+    // 三档 AI 权限
+    document.querySelectorAll('input[name="agentAccess"]').forEach(r => {
+        r.checked = (r.value === currentAgentAccess());
+    });
+    const phoneToggle = document.getElementById('settingAgentPhoneEnabled');
+    if (phoneToggle) phoneToggle.checked = state.settings.agentPhoneEnabled !== false;
+    fillAgentReadToggles();
+    renderAgentFolderSummary();
+    void refreshAgentReadPermStatus();
+    syncAgentSectionsByDevice();
+
+    renderCardSelect();
+    fillCharacterCardForm();
+    settingsContent.scrollTop = 0;
+    renderScheduledTaskList();
+    void refreshDataSettings();
+    void refreshOverlayStatus();
+    // 日志查看器**不从设置里打开**：它的显示入口是 railLogBtn →
+    //   window.LogViewer.open()（见 init.js）。
+    //   不要在设置里再调 open()：那会让"打开设置"顺带弹出日志页。
+}
+
+
+// ==================== 操作悬浮窗（APK 独有） ====================
+// AI 操作的是别的应用。没有悬浮窗时，每一步确认都要用户切回本应用来点，
+// 而"切回来"会让被操作的应用退到后台，那一步操作就可能失败 → AI 重试 → 看起来像卡住。
+// 悬浮窗是唯一能打破这个循环的东西：它浮在目标应用之上，不离开当前界面就能确认或停止。
+//
+// 注意这是 Android 的**特殊权限**（「显示在其他应用上层」），只能由用户
+// 在系统设置里手动打开 —— 应用无法弹运行时权限框索取。所以这里只能"跳过去 + 回来复检"。
+async function refreshOverlayStatus() {
+    const dot = document.getElementById('overlayStatusDot');
+    const text = document.getElementById('overlayStatusText');
+    const btn = document.getElementById('overlayEnableBtn');
+    const wrap = document.getElementById('overlayStatusDot')?.closest('div')?.parentElement;
+    if (!text) return;
+
+    const plugin = deviceBridge();
+    // 网页版没有原生层：整块隐藏（在那个环境里这个设置本来就不适用）
+    if (!plugin || typeof plugin.overlayStatus !== 'function') {
+        if (wrap) wrap.classList.add('hidden');
+        return;
+    }
+    if (wrap) wrap.classList.remove('hidden');
+    try {
+        const res = await plugin.overlayStatus();
+        const ok = Boolean(res && res.canDraw);
+        if (dot) dot.className = 'w-2 h-2 rounded-full flex-none ' + (ok ? 'bg-emerald-400' : 'bg-amber-400');
+        text.textContent = ok ? '已开启' : '未开启（AI 操作时会提示你开）';
+        if (btn) btn.textContent = ok ? '去系统设置检查' : '开启悬浮窗';
+    } catch (e) {
+        text.textContent = '检测失败';
+    }
+}
+
+/**
+ * 跳到系统设置里的「显示在其他应用上层」，让用户开启悬浮窗权限。
+ *
+ * @param opts.quiet 静默模式：不弹"已打开系统设置"的说明框。
+ *   AI 操作流程里要用它 —— 那时用户正要去看 AI 做了什么，
+ *   再叠一个说明框会挡住视线（而且他刚从确认框点过来的，已经知道自己在干什么）。
+ */
+async function enableOverlay(opts) {
+    const quiet = Boolean(opts && opts.quiet);
+    const plugin = deviceBridge();
+    if (!plugin || typeof plugin.requestOverlay !== 'function') {
+        showCustomAlert('当前环境没有原生设备层（电脑版没有这个功能）。', '操作悬浮窗');
+        return;
+    }
+    try {
+        await plugin.requestOverlay();
+        if (quiet) return;
+        // 跳到系统设置后用户会切走再回来 —— 这时 fillSettingsForm 会重新跑一次，
+        // 但用户也可能直接返回而没触发刷新，所以下面给一句明确的手动提示。
+        showCustomAlert(
+            '已打开系统设置。\n\n'
+            + '请找到并打开「显示在其他应用上层」/「悬浮窗」权限，然后返回本应用。\n\n'
+            + '回来后在设置里点「重新检测」确认状态变成「已开启」。',
+            '操作悬浮窗');
+    } catch (e) {
+        showCustomAlert('打开系统设置失败：' + (e.message || e), '操作悬浮窗');
+    }
+}
+
+
+// ==================== 副屏监视窗 ====================
+//
+// AI 用「模块」后端操作手机时，它在**独立虚拟副屏**上跑，物理主屏看不到。
+// 这个窗口把副屏画面搬进应用，让用户知道 AI 正在点什么、界面变成了什么样。
+//
+// 不做成 iframe 套模块的 3070 网页面板：那等于把浏览器塞进应用，风格割裂、
+// 还有滚动/缩放两套坐标系。这里只从模块取「画面 + 状态」，UI 完全是我们自己的。
+const SCREEN_WATCH_INTERVAL = 1500;   // 自动刷新间隔（模块出帧约 18ms，1.5s 足够跟手）
+let screenWatchTimer = null;
+let screenWatchAuto = true;
+let screenWatchBusy = false;
+let screenWatchLogs = [];
+
+function screenWatchEl(id) { return document.getElementById(id); }
+
+// setStep 在 agentRuntime 的 IIFE 里够不到这个函数，挂到 window 供它回调
+window.__screenWatchNote = (text) => screenWatchNote(text);
+
+/** 记录一条"AI 最近动作"，显示在监视窗里 */
+function screenWatchNote(text) {
+    const t = String(text || '').trim();
+    if (!t) return;
+    const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    screenWatchLogs.push(stamp + '  ' + t);
+    if (screenWatchLogs.length > 40) screenWatchLogs = screenWatchLogs.slice(-40);
+    const box = screenWatchEl('screenWatchLog');
+    if (box) {
+        box.innerHTML = screenWatchLogs.slice(-12).map((line) =>
+            '<div>' + line.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</div>').join('');
+        box.scrollTop = box.scrollHeight;
+    }
+}
+
+/** 拉一帧副屏画面 + 状态 */
+async function screenWatchRefresh() {
+    if (screenWatchBusy) return;
+    const plugin = deviceBridge();
+    const img = screenWatchEl('screenWatchImg');
+    const empty = screenWatchEl('screenWatchEmpty');
+    const meta = screenWatchEl('screenWatchMeta');
+    const dot = screenWatchEl('screenWatchDot');
+    const powerBtn = screenWatchEl('screenWatchPowerBtn');
+    if (!plugin || typeof plugin.liveFrame !== 'function') {
+        if (meta) meta.textContent = '电脑版没有副屏';
+        return;
+    }
+    screenWatchBusy = true;
+    try {
+        const res = await plugin.liveFrame();
+        if (!res || !res.ok) {
+            // 明确区分"没有画面"和"模块不可用" —— 前者要引导启动副屏，后者要引导刷模块
+            if (res && res.reason === 'no-frame') {
+                if (meta) meta.textContent = '副屏无画面';
+                if (dot) dot.style.background = '#fbbf24';
+                if (empty) empty.classList.remove('hidden');
+                if (img) img.classList.add('hidden');
+                const hint = screenWatchEl('screenWatchEmptyHint');
+                if (hint) hint.textContent = '副屏是空的（只有壁纸）。让 AI 先执行一次「手机打开 某应用」。';
+            } else {
+                if (meta) meta.textContent = '模块不可用';
+                if (dot) dot.style.background = '#f87171';
+                if (empty) empty.classList.remove('hidden');
+                if (img) img.classList.add('hidden');
+                const hint = screenWatchEl('screenWatchEmptyHint');
+                if (hint) hint.textContent = String(res && res.text || '没刷 KernelSU 模块，或 vd_server 没在跑。');
+            }
+            if (powerBtn) powerBtn.textContent = '启动副屏';
+            return;
+        }
+        if (img && res.imageBase64) {
+            img.src = 'data:' + (res.mime || 'image/jpeg') + ';base64,' + res.imageBase64;
+            img.classList.remove('hidden');
+            if (empty) empty.classList.add('hidden');
+            // 模块的截图优先返回**缓存的帧**（换速度），刚启动应用时可能还是旧的黑帧。
+            // 判断依据：JPEG 极小时基本就是纯色（黑屏副屏约 9KB，有内容时几十~几百KB）。
+            // 这里不弹提示打断，只把状态文字改掉，1.5s 后的自动刷新通常会追上新画面。
+            const tiny = (res.bytes || 0) < 20000;
+            if (tiny && meta && String(res.status || '') === 'running') {
+                meta.textContent = '运行中 · Display ' + res.displayId + ' · 画面更新中…';
+            }
+        }
+        const running = String(res.status || '') === 'running';
+        if (dot) dot.style.background = running ? '#34d399' : '#fbbf24';
+        if (meta) {
+            meta.textContent = running
+                ? ('运行中 · Display ' + res.displayId + ' · ' + res.width + '×' + res.height)
+                : '已休眠';
+        }
+        if (powerBtn) powerBtn.textContent = running ? '关闭副屏' : '启动副屏';
+    } catch (e) {
+        if (meta) meta.textContent = '读取失败';
+    } finally {
+        screenWatchBusy = false;
+    }
+}
+
+function screenWatchStartAuto() {
+    screenWatchStopAuto();
+    if (!screenWatchAuto) return;
+    screenWatchTimer = setInterval(() => { void screenWatchRefresh(); }, SCREEN_WATCH_INTERVAL);
+}
+function screenWatchStopAuto() {
+    if (screenWatchTimer) { clearInterval(screenWatchTimer); screenWatchTimer = null; }
+}
+
+function openScreenWatch() {
+    const panel = screenWatchEl('screenWatchPanel');
+    if (!panel) return;
+    // 监视窗与设置面板同为 100002 层（见 CSS 里的分层说明）。两者若同时开着，
+    // 谁在上面就由 DOM 顺序决定 —— 那正是注释里说要避免的事。
+    // 所以打开监视窗前先把设置关掉 —— 否则两层的先后就落在 DOM 顺序上，
+    // 变成"有时监视窗在下层"的不可控行为。
+    if (typeof closeSettingsPanel === 'function') closeSettingsPanel();
+    panel.classList.remove('hidden');
+    panel.classList.add('flex');
+    void screenWatchRefresh();
+    screenWatchStartAuto();
+}
+function closeScreenWatch() {
+    const panel = screenWatchEl('screenWatchPanel');
+    if (panel) { panel.classList.add('hidden'); panel.classList.remove('flex'); }
+    screenWatchStopAuto();
+}
+
+
+
+
+// ==================== 我的数据（导出 / 导入 / 位置） ====================
+// 后端把数据分类落在 data/ 下（人设卡一卡一文件、聊天记录、记忆各自独立）。
+// 这里只负责"让用户能看见、能备份、能恢复" —— 换机器和升级前的那道保险。
+//
+// 两种运行环境，两条路径：
+//   Web：数据在服务端 data/ 下 → 走 /api/data/*
+//   APK：没有本地服务 → 走 web/js/chat-backup.js，直接读写 localStorage
+//
+// **APK 侧**恰恰是最需要备份的地方 ——
+// 数据存在应用私有目录，卸载即丢，用户连手动拷出来都做不到。
+// 所以两边都提供导入导出，而且备份格式同构，可以互相导入。
+async function refreshDataSettings() {
+    const box = document.getElementById('dataStatusBox');
+    const section = document.getElementById('dataSettingsSection');
+    if (!box) return;
+
+    // ---- APK：本地统计，不发请求 ----
+    if (IS_NATIVE_APP && window.ChatBackup) {
+        try {
+            let cards = 0;
+            let convs = 0;
+            let mem = 0;
+            try { cards = JSON.parse(Store.getItem('elaina_open_character_cards') || '[]').length; } catch { /* 忽略 */ }
+            try { convs = JSON.parse(Store.getItem('elaina_open_conversations') || '[]').length; } catch { /* 忽略 */ }
+            try { mem = (JSON.parse(Store.getItem('elaina_open_memory_core') || '{}').diary || []).length; } catch { /* 忽略 */ }
+            box.innerHTML = '数据位置：<code class="text-indigo-500">应用私有目录</code>'
+                + '<span class="text-indigo-300">（安卓应用数据，卸载会一并删除）</span><br>'
+                + '人设卡 <b>' + escapeHtml(String(cards)) + '</b> 张'
+                + ' · 对话 <b>' + escapeHtml(String(convs)) + '</b> 个'
+                + ' · 记忆 <b>' + escapeHtml(String(mem)) + '</b> 条';
+        } catch (e) {
+            box.textContent = '无法读取本地数据统计';
+        }
+        return;
+    }
+
+    // ---- Web：走后端 ----
+    try {
+        const res = await fetch('/api/data/info');
+        if (!res.ok) { if (section) section.classList.add('hidden'); return; }
+        const json = await res.json();
+        if (!json.ok) { if (section) section.classList.add('hidden'); return; }
+        const c = json.counts || {};
+        box.innerHTML = '数据位置：<code class="text-indigo-500">' + escapeHtml(json.dir || 'data')
+            + '</code><br>'
+            + '人设卡 <b>' + escapeHtml(String(c.characters || 0)) + '</b> 张'
+            + ' · 对话 <b>' + escapeHtml(String(c.conversations || 0)) + '</b> 个'
+            + ' · 记忆 <b>' + escapeHtml(String(c.memoryEntries || 0)) + '</b> 条';
+    } catch (e) {
+        if (section) section.classList.add('hidden');
+    }
+}
+
+function setDataHint(text, isError) {
+    const hint = document.getElementById('dataActionHint');
+    if (!hint) return;
+    hint.textContent = text || '';
+    hint.className = isError ? 'text-[11px] text-red-500' : 'text-[11px] text-indigo-300';
+}
+
+async function exportDataBackup() {
+    setDataHint('导出中…');
+
+    // ---- APK：本地生成 zip 并**写进应用文档目录**（没有后端可用）----
+    //
+    // 为什么不用 <a download> + blob URL：**安卓 WebView 不处理 blob: 下载**。
+    // 桌面浏览器会把 blob 交给下载器，WebView 里点下去通常毫无反应
+    //（这也是 Capacitor 社区反复提到的一点）。所以 APK 侧走 Capacitor Filesystem，
+    // 把备份真正写到磁盘上，再把路径告诉用户。
+    if (IS_NATIVE_APP && window.ChatBackup) {
+        try {
+            const fs = nativeFs();
+            if (!fs) { setDataHint('导出失败：文件系统插件不可用', true); return; }
+            const blob = await window.ChatBackup.buildBackupBlob();
+            if (!blob.size) { setDataHint('导出失败：本地数据为空', true); return; }
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            const t = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            const fileName = 'elainachat-backup-' + t + '.zip';
+            // Documents 目录：用户能用系统文件管理器找到（比 Data 私有目录友好）
+            const dir = (fs.Directory && fs.Directory.Documents) ? fs.Directory.Documents : 'DOCUMENTS';
+            await nativeWriteFile(fileName, dir, bytes);
+            // 同时取一个 WebView 能访问的 URL，方便用户直接点开/分享
+            let where = '文档目录';
+            try {
+                const uri = await fs.getUri({ path: fileName, directory: dir });
+                if (uri && uri.uri) where = uri.uri;
+            } catch { /* 拿不到就只报目录名 */ }
+            setDataHint('已导出：' + fileName + '（' + Math.round(bytes.length / 1024) + ' KB）');
+            showCustomAlert(
+                '备份已保存到手机的**文档目录**：\n\n' + fileName
+                + '\n\n大小 ' + Math.round(bytes.length / 1024) + ' KB。'
+                + '\n\n用系统「文件管理」进 文档 / Documents 就能看到它。'
+                + '传到电脑后，在网页版的「我的数据 → 导入备份」里可以直接还原。',
+                '导出完成');
+        } catch (e) {
+            setDataHint('导出失败：' + (e.message || e), true);
+        }
+        return;
+    }
+
+    // ---- Web：走后端 ----
+    try {
+        const res = await fetch('/api/data/export');
+        if (!res.ok) { setDataHint('导出失败（HTTP ' + res.status + '）', true); return; }
+        const blob = await res.blob();
+        // 空响应要明确报错，而不是静默存下一个 0 字节文件。
+        // 什么时候会空：装了迅雷/FDM 之类下载器的浏览器，其扩展会拦走带
+        // attachment 的响应（后端刻意不发那个头，但代理、中间层或
+        // 别的服务版本仍可能造成空响应）。这种情况用户拿到的文件是坏的，必须说出来。
+        if (!blob.size) {
+            setDataHint('导出失败：服务端返回了空内容。若装了迅雷/FDM，请先关掉它的浏览器扩展再试。', true);
+            return;
+        }
+        // 文件名走自定义头（后端不再发 Content-Disposition，避免被下载器识别成下载）
+        let name = res.headers.get('X-Backup-Filename') || '';
+        if (!name) {
+            const cd = res.headers.get('Content-Disposition') || '';
+            const m = cd.match(/filename="?([^";]+)"?/);
+            if (m && m[1]) name = m[1];
+        }
+        if (!name) {
+            const t = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+            name = 'elainachat-backup-' + t + '.zip';
+        }
+        // blob: 是内存地址，外部下载器接管不了，也不会弹它的窗口
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        setDataHint('已导出：' + name + '（' + Math.round(blob.size / 1024) + ' KB）');
+    } catch (e) {
+        setDataHint('导出失败：' + (e.message || e), true);
+    }
+}
+
+/**
+ * APK 侧导入入口：先看文档目录里有没有导出过的备份，有就让用户选；
+ * 一个都没有（或插件不可用）时退回系统文件选择器。
+ *
+ * 为什么要有这条路径：安卓 WebView 的 <input type="file"> 行为在各厂商 ROM 上
+ * 差异很大（有的能选、有的只能选图片）。而"自己导出的备份就在文档目录里"是
+ * **最常见的使用场景**（导完想恢复），走 Filesystem 读取最可靠。
+ */
+async function importFromDocumentsOrPicker() {
+    const fs = nativeFs();
+    let names = [];
+    try {
+        const dir = (fs.Directory && fs.Directory.Documents) ? fs.Directory.Documents : 'DOCUMENTS';
+        const res = await fs.readdir({ path: '', directory: dir });
+        names = (res && res.files ? res.files : [])
+            .filter((f) => /^elainachat-backup-.*\.(zip|json)$/i.test(f.name))
+            .map((f) => f.name)
+            .sort()
+            .reverse();   // 最新的排前面
+    } catch { /* 目录读不到就当没有 */ }
+
+    if (!names.length) {
+        // 没有备份 → 交给系统文件选择器（用户可能从微信/下载目录里选了传进来的）
+        document.getElementById('dataImportFile')?.click();
+        return;
+    }
+
+    const picked = await showCustomModal({
+        title: '从手机里选择备份',
+        message: '文档目录里找到 ' + names.length + ' 个备份（最新的在最前）：\n\n'
+            + names.slice(0, 8).map((n, i) => (i + 1) + '. ' + n).join('\n')
+            + (names.length > 8 ? '\n…还有 ' + (names.length - 8) + ' 个' : '')
+            + '\n\n输入序号导入；留空则改用系统文件选择器。',
+        input: true,
+        defaultValue: '1',
+        placeholder: '序号，如 1',
+    });
+    if (picked === null || picked === undefined || String(picked).trim() === '') {
+        document.getElementById('dataImportFile')?.click();
+        return;
+    }
+    const idx = Number(String(picked).trim()) - 1;
+    if (!Number.isInteger(idx) || idx < 0 || idx >= names.length) {
+        setDataHint('序号无效', true);
+        return;
+    }
+    const fileName = names[idx];
+    try {
+        const dir = (fs.Directory && fs.Directory.Documents) ? fs.Directory.Documents : 'DOCUMENTS';
+        const read = await fs.readFile({ path: fileName, directory: dir });
+        // Capacitor 返回 base64（v7 起固定返回 data 字段）
+        const b64 = String(read && read.data ? read.data : '');
+        if (!b64) { setDataHint('读不到文件内容', true); return; }
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        const file = new File([bytes], fileName, { type: 'application/zip' });
+        await importDataBackup(file);
+    } catch (e) {
+        setDataHint('读取备份失败：' + (e.message || e), true);
+    }
+}
+
+async function importDataBackup(file) {
+    if (!file) return;
+    // 合并模式：只覆盖备份里有的数据，本机其它数据不动 —— 比"替换"安全得多，
+    // 所以默认用它，且不做二次确认之外的额外询问。
+    const okToGo = await showCustomConfirm(
+        '导入备份会覆盖同名的数据（聊天记录 / 人设卡 / 记忆 / 设置），本机其它数据保留。\n\n'
+        + '继续导入吗？', '导入备份');
+    if (!okToGo) { setDataHint('已取消'); return; }
+    setDataHint('导入中…');
+
+    // ---- APK：本地写回 localStorage（没有后端可用）----
+    if (IS_NATIVE_APP && window.ChatBackup) {
+        try {
+            const r = await window.ChatBackup.applyBackup(file);
+            setDataHint('已导入 ' + r.keys + ' 项数据（' + (r.source === 'zip' ? 'zip' : '旧版 JSON') + '）');
+            await refreshDataSettings();
+            showCustomAlert('已导入 ' + r.keys + ' 项数据。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
+        } catch (e) {
+            setDataHint('导入失败：' + (e.message || e), true);
+        }
+        return;
+    }
+
+    // ---- Web：交给后端 ----
+    try {
+        // 直接把文件原样发上去：备份是 zip（二进制），不能走 JSON 包装。
+        // 后端两种都认（zip 与 v1 的单 JSON 旧备份），所以这里不用判断类型。
+        const res = await fetch('/api/data/import?mode=merge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: file
+        });
+        const json = await res.json().catch(() => ({ ok: false, message: '服务端返回了非 JSON 内容（HTTP ' + res.status + '）' }));
+        if (!json.ok) { setDataHint(json.message || '导入失败', true); return; }
+        setDataHint(json.message || '导入完成');
+        await refreshDataSettings();
+        showCustomAlert((json.message || '导入完成') + '。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
+    } catch (e) {
+        setDataHint('导入失败：' + (e.message || e), true);
+    }
+}
+
+
+// ==================== 访问密码（局域网鉴权） ====================
+// 本机（127.0.0.1）自动是管理员：免密、且可修改访问密码（也是忘记密码的找回入口）。
+async function refreshAuthStatus() {
+    const box = document.getElementById('authStatusBox');
+    if (!box) return;
+    try {
+        const res = await fetch('/api/auth/status');
+        if (!res.ok) { box.textContent = '无法获取鉴权状态（HTTP ' + res.status + '）'; return; }
+        const json = await res.json();
+        if (!json.ok) { box.textContent = '无法获取鉴权状态'; return; }
+        if (json.isAdmin) {
+            box.innerHTML = json.isDefaultPassword
+                ? '当前是本机管理员（免密）。访问密码仍是初始随机密码：<code class="text-indigo-500">' + escapeHtml(json.passwordHint || '') + '</code>，建议改成自己的。'
+                : '当前是本机管理员（免密）。访问密码已由你自行设置，控制台不再显示。';
+        } else {
+            box.textContent = '当前设备已登录（非本机）。如需修改访问密码，请在这台电脑上打开本应用操作。';
+        }
+    } catch (e) {
+        // 安卓 App（Capacitor 本地文件）没有本地服务，此功能不适用
+        box.textContent = '当前环境没有本地服务（如安卓 App），访问密码功能不适用。';
+    }
+}
+
+async function changeAccessPassword() {
+    const a = document.getElementById('authNewPwd');
+    const b = document.getElementById('authNewPwd2');
+    const next = (a && a.value ? a.value : '').trim();
+    const again = (b && b.value ? b.value : '').trim();
+    if (next.length < 6) { showCustomAlert('新密码至少 6 位。', '访问密码'); return; }
+    if (next !== again) { showCustomAlert('两次输入的密码不一致，请重新输入。', '访问密码'); return; }
+    try {
+        const res = await fetch('/api/auth/change-password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ next })
+        });
+        const json = await res.json();
+        if (!json.ok) { showCustomAlert(json.message || '修改失败', '访问密码'); return; }
+        if (a) a.value = '';
+        if (b) b.value = '';
+        await refreshAuthStatus();
+        showCustomAlert('访问密码已更新。\n\n· 手机/平板等局域网设备需要重新输入新密码\n· 本机仍然免密\n· 服务端控制台不再显示密码，请记牢', '访问密码');
+    } catch (e) {
+        showCustomAlert('修改失败：' + (e.message || e), '访问密码');
+    }
+}
+
+async function logoutAccess() {
+    try {
+        await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (e) { /* 忽略：无论成功与否都跳登录页 */ }
+    location.href = '/login';
+}
+
+// 「电脑操作权限」与「手机操作」两组设置按设备形态只显示一组：
+// 电脑上给「允许操作电脑」，手机上给「手机操作」—— 混在一起用户看不懂。
+// 用 IS_MOBILE_DEVICE（设备本身）而不是窗口宽度，电脑上把窗口拖窄不该变成"手机"。
+function syncAgentSectionsByDevice() {
+    const pcSection = document.getElementById('agentPermissionSection');
+    const phoneSection = document.getElementById('agentPhoneSection');
+    if (pcSection) pcSection.classList.toggle('hidden', IS_MOBILE_DEVICE);
+    if (phoneSection) phoneSection.classList.toggle('hidden', !IS_MOBILE_DEVICE);
+}
+
+// ===== 手机「读取信息」隐私开关=====
+//
+// 用户要求："加个提示如果不想让 ai 知道太多信息请关闭对应权限"。
+// 六个开关各对应一类隐私数据，默认全开；关掉后 AI **连标签都看不到**
+// （见 agent.js 的 agentPhoneSkillText 与 phoneReadAllowed）——
+// 这是"根本没这个能力"，而不是"读了不说"，后者对用户毫无保障。
+//
+// 开关 id ↔ 设置字段 ↔ 手机操作名 三者的对应关系集中在下面这张表，
+// 避免在四个地方各写一遍字符串而漏掉一处。
+const AGENT_READ_TOGGLES = [
+    { id: 'settingAgentReadApps', key: 'agentReadApps', action: '手机应用列表', label: '已安装应用列表' },
+    { id: 'settingAgentReadNotifications', key: 'agentReadNotifications', action: '手机通知', label: '通知内容' },
+    { id: 'settingAgentReadDevice', key: 'agentReadDevice', action: '手机设备信息', label: '设备与前台状态' },
+    { id: 'settingAgentReadSms', key: 'agentReadSms', action: '手机短信', label: '短信' },
+    { id: 'settingAgentReadContacts', key: 'agentReadContacts', action: '手机通讯录', label: '通讯录' },
+    { id: 'settingAgentReadCalendar', key: 'agentReadCalendar', action: '手机日历', label: '日历' },
+];
+
+/** 把设置里的值刷到界面开关上 */
+function fillAgentReadToggles() {
+    for (const t of AGENT_READ_TOGGLES) {
+        const el = document.getElementById(t.id);
+        // 默认**关**（与 core.js 的 DEFAULTS 保持一致）。
+        //   已存过的值照旧尊重用户选择，只有"从没设过"的才落到关 ——
+        //   这些是隐私数据，不能因为用户没表态就当同意。
+        if (el) el.checked = state.settings[t.key] === true;
+    }
+}
+
+/**
+ * 从界面开关读回一份设置补丁。
+ *
+ * 元素不在时**保留原值**（而不是写 undefined / 漏掉键）：
+ *   设置页在电脑上会把整块「手机操作」隐藏（syncAgentSectionsByDevice），
+ *   将来若有人把这块 DOM 挪走或按需渲染，漏掉的键会让 state.settings
+ *   丢掉那个字段 —— 而 saveSettings 是**整体替换** state.settings 的，
+ *   丢一个键就等于把用户的开关重置回默认。所以这里显式兜底。
+ */
+function readAgentReadToggles() {
+    const patch = {};
+    for (const t of AGENT_READ_TOGGLES) {
+        const el = document.getElementById(t.id);
+        patch[t.key] = el ? el.checked : (state.settings[t.key] !== false);
+    }
+    return patch;
+}
+
+/**
+ * 某个读取类操作现在允许吗（供 agent.js 的分发与提示词用）。
+ *
+ * 找不到对应开关的操作（例如手机状态）一律放行 —— 那张表只列**隐私数据**，
+ * 界面/状态这类不涉及隐私的读取不该被这些开关误伤。
+ */
+function phoneReadAllowed(action) {
+    const t = AGENT_READ_TOGGLES.find((x) => x.action === action);
+    if (!t) return true;
+    return state.settings[t.key] !== false;
+}
+
+// ===== Agent 工作区 / 用户授权文件夹=====
+
+/** 把当前授权文件夹的状态刷到设置页文字上 */
+function renderAgentFolderSummary() {
+    const el = document.getElementById('agentFolderSummary');
+    if (!el) return;
+    const name = String(state.settings.agentFolderName || '').trim();
+    const uri = String(state.settings.agentFolderUri || '').trim();
+    if (uri) {
+        el.textContent = '已授权文件夹：' + (name || '（未命名）')
+            + ' —— AI 可以读写这个文件夹里的文件。';
+        el.style.color = '#059669';
+    } else {
+        el.textContent = '还没有授权额外文件夹。AI 只能在 Agent 工作区里读写文件。';
+        el.style.color = '#818cf8';
+    }
+}
+
+function openSettings() {
+    fillSettingsForm();
+    void refreshAuthStatus();
+    // 每次打开设置都刷新插件列表：用户可能在服务运行期间往 mods/ 丢了新 zip，
+    // 刷新一次就能看到（而不是要求他重启服务）
+    void refreshModsList();
+    // 外观主题：同步模板卡片选择态（深色切换已移到顶栏三段开关，
+    // 由 init.js 的 markThemeSeg 自行同步 —— 这里不再碰 #themeDarkMode，
+    // 否则会留下"HTML 里没有的 id"悬空引用）
+    if (window.ElainaTheme) {
+        window.ElainaTheme.renderPicker();
+        window.ElainaTheme.markPicker();
+        // 重新落一次深色模式 DOM：让「跟随设备」在打开设置时取到最新的系统状态
+        window.ElainaTheme.setDarkMode(window.ElainaTheme.darkMode());
+    }
+    elements.settingsOverlay.classList.remove('hidden');
+    elements.settingsOverlay.classList.add('flex');
+    setRailActive('settings');
+}
+
+// ==================== 插件（mod）设置栏 ====================
+
+// ===== 插件页的平台说明=====
+//
+// 两个平台**装插件的方式根本不同**，共用一句说明必然误导一边：
+//   电脑版：有服务端，把 zip 丢进 mods/ 会自动解压安装；也能「上传安装」。
+//   APK   ：没有服务端、碰不到应用私有目录，**只能**「上传安装」。
+// 文案不能只写前者（"丢进 mods/ 即会自动安装"）：安卓用户看了会去找
+// 一个根本不存在的目录 —— 这是"说了做不到"的典型。
+function applyModsPlatformHint() {
+    const el = document.getElementById('modsPlatformHint');
+    if (!el) return;
+    const common = '<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。'
+        + '拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。';
+    el.innerHTML = IS_NATIVE_APP
+        ? '可选功能的开关。安卓版没有本地服务端，装插件请点右上角<b>「上传安装」</b>选一个 zip；'
+            + '卸载点卡片上的 🗑。' + common
+        : '可选功能的开关。插件放在项目根的 <code class="px-1 rounded bg-white/60">mods/</code> 下，'
+            + '把 <code class="px-1 rounded bg-white/60">xxx.zip</code> 丢进去即会自动安装'
+            + '（也可以点右上角「上传安装」）。' + common;
+}
+
+/**
+ * 渲染「设置 → 插件」列表。
+ *
+ * 数据来源两条路，缺一不可：
+ *   ① 服务端 /api/plugins —— 会扫描 mods/ 并把新丢进去的 zip 解压安装，
+ *      然后返回清单。这是"装了哪些 mod"的权威来源。
+ *   ② 前端 window.ElainaMods.list() —— 加载器**实际加载**的结果（含每个 mod 的
+ *      运行状态：ready / disabled / error）。
+ *
+ * 为什么要合并两者：服务端知道"磁盘上有什么"，前端知道"跑起来没有"。
+ * 只看服务端会把加载失败的 mod 显示成正常；只看前端则看不到"刚丢进去还没加载"的 mod。
+ * 另外 APK 端没有服务端，此时只能靠前端那份（构建时打包进去的 mod）。
+ */
+async function refreshModsList() {
+    const box = document.getElementById('modsList');
+    if (!box) return;
+    const hint = document.getElementById('modsHint');
+    // 平台说明随列表一起刷新（IS_NATIVE_APP 是常量，但集中在一处好维护）
+    applyModsPlatformHint();
+    // 技能列表与插件列表同在一屏（技能块在插件列表下方），但**是两个独立的数据源**：
+    // 技能不是插件，绝不合并进下面的 fromServer —— 这里只是"刷新插件时顺带刷一下技能"。
+    void refreshSkillsList();
+
+    let fromServer = [];
+    try {
+        const res = await fetch('/api/plugins', { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            fromServer = Array.isArray(data && data.plugins) ? data.plugins : [];
+            // 安装失败的 zip 要让用户看见原因，否则"我放进去了但没反应"无从排查
+            const bad = (data && data.installResults || []).filter((r) => !r.ok);
+            if (hint && bad.length) {
+                hint.textContent = '有 ' + bad.length + ' 个 zip 安装失败：' + bad.map((b) => b.zip + '（' + b.error + '）').join('；');
+                hint.className = 'text-[11px] text-red-500';
+            }
+        }
+    } catch (e) { /* APK 端没有这个接口，走前端那份 */ }
+
+    const fromLoader = (window.ElainaMods && typeof window.ElainaMods.list === 'function')
+        ? window.ElainaMods.list() : [];
+
+    // 以服务端清单为准，用加载器状态补充
+    const stateOf = new Map(fromLoader.map((m) => [m.id, m]));
+    const merged = fromServer.map((m) => Object.assign({}, m, stateOf.get(m.id) || {}, { _fromServer: true }));
+    // 服务端没有但加载器有的（APK 端 / 手工放目录）也要显示
+    for (const m of fromLoader) {
+        if (!merged.some((x) => x.id === m.id)) merged.push(Object.assign({}, m, { _fromServer: false }));
+    }
+
+    // ==================== 分栏（分组）数据 ====================
+    //
+    // 存储模型（跨设备同步；键都已在 store.js 的 DATA_KEYS 里）：
+    //     elaina_mods_groups    = [{ id, name, collapsed, fixed? }]  分栏清单（有序）
+    //     elaina_mods_group_of  = { <插件id>: <分栏id> }              插件 → 分栏 归属
+    //     elaina_mods_order     = [插件id...]                          插件顺序（栏内/平铺共用）
+    //     elaina_mods_top_order = [{t:'mod'|'group', id}...]           顶层混排顺序
+    //   未分类不是一个"栏"：没归属的插件直接平铺在顶层
+    //   （不设 UNGROUPED_ID 这个栏，省得出现一个装了又空的"未分类"栏）。
+    const GROUPS_KEY = 'elaina_mods_groups';
+    const GROUP_OF_KEY = 'elaina_mods_group_of';
+    const UNGROUPED_ID = '__ungrouped__';
+    const readGroups = () => {
+        try {
+            const v = JSON.parse(Store.getItem(GROUPS_KEY) || '[]');
+            return Array.isArray(v) ? v.filter((g) => g && g.id && g.id !== UNGROUPED_ID) : [];
+        } catch (e) { return []; }
+    };
+    const saveGroups = (gs) => {
+        try {
+            Store.setItem(GROUPS_KEY, JSON.stringify(gs));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+        } catch (e) { /* 忽略 */ }
+    };
+    const groupOf = (() => {
+        try { const v = JSON.parse(Store.getItem(GROUP_OF_KEY) || '{}'); return (v && typeof v === 'object') ? v : {}; }
+        catch (e) { return {}; }
+    })();
+
+    // 按用户拖出来的顺序排；没记过的保持清单原序
+    const ORDER_KEY = 'elaina_mods_order';
+    const readOrder = () => {
+        try { const v = JSON.parse(Store.getItem(ORDER_KEY) || '[]'); return Array.isArray(v) ? v : []; }
+        catch (e) { return []; }
+    };
+
+    const ICON = {
+        grip: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
+        doc: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/></svg>',
+        // 齿轮：几何直齿画法（手写弧线命令极易写歪，实测一团毛刺）
+        gear: '<svg fill="currentColor" viewBox="0 0 24 24"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.41 5.39L10.53 2.72L13.47 2.72L13.59 5.39L15.55 6.20L17.53 4.40L19.60 6.47L17.80 8.45L18.61 10.41L21.28 10.53L21.28 13.47L18.61 13.59L17.80 15.55L19.60 17.53L17.53 19.60L15.55 17.80L13.59 18.61L13.47 21.28L10.53 21.28L10.41 18.61L8.45 17.80L6.47 19.60L4.40 17.53L6.20 15.55L5.39 13.59L2.72 13.47L2.72 10.53L5.39 10.41L6.20 8.45L4.40 6.47L6.47 4.40L8.45 6.20ZM12 15.2a3.2 3.2 0 100-6.4 3.2 3.2 0 000 6.4z"/></svg>',
+        folder: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>',
+        refresh: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h5M20 20v-5h-5"/><path stroke-linecap="round" stroke-linejoin="round" d="M20 9A8 8 0 006 5.3M4 15a8 8 0 0014 3.7"/></svg>',
+        trash: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 13h8l1-13"/></svg>',
+    };
+
+    /** 单张插件卡片（AstrBot 式：把手 + 名称/状态/描述 + 底部操作排 + iOS 开关） */
+    function renderModCard(m) {
+        const id = escapeHtml(m.id);
+        const name = escapeHtml(m.name || m.id);
+        const desc = escapeHtml(m.description || '');
+        const ver = m.version
+            ? '<span class="text-[10px] text-indigo-400 ml-1">v' + escapeHtml(m.version) + '</span>' : '';
+
+        // 状态角标（加载失败/前置不可用必须显眼）
+        let badge = '';
+        if (m.state === 'error') {
+            badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 ml-1" title="'
+                + escapeHtml(m.error || '') + '">'
+                + (m.autoDisabled ? '加载失败 · 已自动停用' : '加载失败') + '</span>';
+        } else if (m.state === 'blocked') {
+            badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 ml-1" title="'
+                + escapeHtml(m.error || '') + '">前置插件不可用</span>';
+        } else if (m.state === 'ready') {
+            badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 ml-1">已加载</span>';
+        } else if (m.state === 'disabled') {
+            badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 ml-1">未启用</span>';
+        }
+
+        // 报错详情**直接写在卡片上**（不只在 title 里、也不弹全局提示）。
+        //
+        // 为什么必须落在卡片上：错误的原因只有这个人自己关心，而它跟"哪个插件"
+        //   强绑定。弹一个全局提示会说"某个插件加载失败了"—— 用户还得回头找
+        //   是哪个；写成 title 则要悬停才看得见，触屏上根本没有悬停。
+        // 为什么不在别处显示：插件坏了不该在聊天区/顶栏/公告里出现任何东西 ——
+        //   那是"软件本身有问题"的观感。软件是好的，只是这个插件装坏了。
+        let errorDetail = '';
+        if (m.state === 'error' && m.error) {
+            errorDetail = '<div class="mt-1.5 rounded-md bg-red-50 border border-red-100 px-2 py-1.5">'
+                + '<div class="text-[11px] text-red-600 leading-relaxed break-words">'
+                + escapeHtml(String(m.error)) + '</div>'
+                + '<div class="text-[11px] text-red-400 leading-relaxed mt-1">'
+                + (m.autoDisabled
+                    ? '已自动停用，软件其余功能不受影响。修好它之后把开关重新打开即可。'
+                    : '软件其余功能不受影响。')
+                + '</div></div>';
+        } else if (m.state === 'blocked' && m.error) {
+            errorDetail = '<div class="mt-1.5 rounded-md bg-red-50 border border-red-100 px-2 py-1.5">'
+                + '<div class="text-[11px] text-red-600 leading-relaxed break-words">'
+                + escapeHtml(String(m.error)) + '</div></div>';
+        }
+
+        // 缺依赖：逐条给出原因 + 该做什么
+        const missing = Array.isArray(m.missingDeps) ? m.missingDeps : [];
+        let blockReason = '';
+        if (missing.length) {
+            const rows = missing.map((d) => {
+                const dep = typeof d === 'string' ? { id: d, reason: '不可用' } : d;
+                const what = '前置插件「' + escapeHtml(dep.id) + '」' + escapeHtml(dep.reason || '不可用');
+                if (dep.reason === '未启用') return what + ' —— 把它的开关打开';
+                if (dep.reason === '未安装') return what + ' —— 需要先安装它';
+                if (dep.reason === '插件系统总开关已关闭') return what + ' —— 插件系统被关闭（旧版本设置残留），刷新页面即可恢复';
+                return what;
+            });
+            blockReason = '<span class="block text-[11px] text-red-500 leading-relaxed mt-1">'
+                + rows.join('<br>') + '</span>';
+        }
+
+        // hidden 的插件（公共依赖）仍给开关 —— 否则一旦被禁用，界面上就没有
+        //   任何入口能再把它打开，只能手改存储键
+        const hiddenNote = m.hidden
+            ? '<span class="text-[10px] text-indigo-300 ml-1">（公共依赖）</span>' : '';
+
+        // iOS 风格开关
+        const toggle = '<label class="mod-switch" title="' + (m.enabled ? '点击停用' : '点击启用') + '">'
+            + '<input type="checkbox" class="mod-toggle" data-mod-id="' + id + '"'
+            + (m.enabled ? ' checked' : '') + ' aria-label="启用 ' + name + '">'
+            + '<span class="track"></span><span class="knob"></span></label>';
+
+        // 底部那排按钮。
+        //
+        // 「打开文件夹」只在**电脑版**显示，不能用 `canManage` 一个条件控两个按钮：
+        //   APK 上 `/api/plugins` 是被原生拦截器接住的（见 core.js 的
+        //   nativePluginsFetch）—— 于是 _fromServer 也是 true，按钮照样出现，
+        //   但**原生没有实现 open-folder 这个接口**，点下去必然拿到
+        //   「Not found（手机端未实现该接口）」。
+        //
+        //   为什么不"补一个原生实现"而是不显示这个按钮：
+        //   那个接口做的是"用系统的文件管理器打开插件目录"（serve.mjs 里调
+        //   explorer/open）。安卓上插件住在应用私有目录，**没有文件管理器能打开它**
+        //   （除非 root）。所以它不是"还没实现"，而是"在安卓上没有意义"。
+        //   「删除」按钮则两端都有意义 —— APK 上走 nativeDeletePlugin。
+        const canManage = m._fromServer === true;
+        const openFolderBtn = (canManage && !IS_NATIVE_APP)
+            ? '<button type="button" class="mod-act mod-openfolder" data-mod-id="' + id + '"'
+                + ' data-mod-name="' + name + '" title="在文件管理器里打开这个插件的目录">' + ICON.folder + '</button>'
+            : '';
+        const delBtn = canManage
+            ? '<button type="button" class="mod-act mod-act-danger mod-del-btn" data-mod-id="' + id + '"'
+                + ' data-mod-name="' + name + '" title="删除这个插件（含安装包）">' + ICON.trash + '</button>'
+            : '';
+        // 「设置」按钮：插件有独立设置窗（settings.modal）→ 打开；老插件占分栏 → 切分栏
+        const hasModal = Boolean(window.__modSettingsOpeners && window.__modSettingsOpeners[m.id]);
+        const hasTab = Boolean(document.querySelector('[data-settings-tab="tab-' + m.id + '"]'));
+        const settingsBtn = (hasModal || hasTab)
+            ? '<button type="button" class="mod-act mod-opensettings" data-mod-id="' + id + '"'
+                + ' title="打开这个插件的设置">' + ICON.gear + '</button>'
+            : '';
+
+        return '<div class="mod-card" data-mod-id="' + id + '">'
+            + '<button type="button" class="mod-grip" title="按住拖动可调整显示顺序" aria-label="拖动排序">' + ICON.grip + '</button>'
+            + '<div class="min-w-0 flex-1">'
+              + '<div class="flex items-start gap-2">'
+                + '<div class="min-w-0 flex-1">'
+                  + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + ver + hiddenNote + badge
+                  + (desc ? '<div class="text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + desc + '</div>' : '')
+                  + errorDetail
+                  + blockReason
+                + '</div>'
+                + '<div class="flex-none pt-0.5">' + toggle + '</div>'
+              + '</div>'
+              + '<div class="flex items-center gap-1.5 mt-2">'
+                + '<button type="button" class="mod-act mod-readme-btn" data-mod-id="' + id + '"'
+                  + ' data-mod-name="' + name + '" title="查看插件自带的说明（README）">' + ICON.doc + '</button>'
+                + settingsBtn
+                + openFolderBtn
+                + '<button type="button" class="mod-act mod-refresh-one" data-mod-id="' + id + '"'
+                  + ' title="重新加载插件列表">' + ICON.refresh + '</button>'
+                + delBtn
+              + '</div>'
+            + '</div>'
+            + '</div>';
+    }
+
+    /** 一个分栏的 HTML（头部 + 可折叠体） */
+    function renderGroupHtml(g, items) {
+        const order = readOrder();
+        items.sort((a, b) => {
+            const ia = order.indexOf(a.id), ib = order.indexOf(b.id);
+            if (ia < 0 && ib < 0) return 0;
+            if (ia < 0) return 1;
+            if (ib < 0) return -1;
+            return ia - ib;
+        });
+        const collapsed = g.collapsed === true;
+        const gid = escAttr(g.id);
+        // 折叠标记：disclosure triangle（▶ 收着 / ▼ 展开），展开时 rotate(90deg)
+        // 左侧是专门的拖拽把手（三条竖线，与插件卡片同款）—— 拖拽与折叠不再抢手势
+        return '<div class="mod-group' + (collapsed ? ' mod-group-collapsed' : '') + '" data-group-id="' + gid + '">'
+            + '<div class="mod-group-head" data-group-id="' + gid + '" title="点击收纳/展开">'
+            + '<span class="mod-grip mod-group-grip" title="按住拖动可调整位置" aria-label="拖动排序">'
+            + '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></span>'
+            + '<button type="button" class="mod-group-toggle" data-group-id="' + gid + '"'
+            + ' title="' + (collapsed ? '展开' : '收纳') + '" aria-label="' + (collapsed ? '展开分栏' : '收纳分栏') + '">'
+            + '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6z"/></svg></button>'
+            + '<span class="mod-group-name text-xs font-semibold text-indigo-800" data-group-id="' + gid + '">'
+            + escAttr(g.name) + '</span>'
+            + '<span class="text-[10px] text-indigo-400">' + items.length + '</span>'
+            + '<span class="mod-group-actions ml-auto flex items-center gap-1">'
+            + '<button type="button" class="mod-act mod-group-rename" data-group-id="' + gid + '" title="重命名这个分栏">'
+            + '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5h6M4 20h16M13.5 4.5l4 4L8 18H5v-3l8.5-10.5z"/></svg></button>'
+            + '<button type="button" class="mod-act mod-act-danger mod-group-del" data-group-id="' + gid + '" title="删除这个分栏（里面的插件回到顶层）">'
+            + '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 13h8l1-13"/></svg></button>'
+            + '</span>'
+            + '</div>'
+            + '<div class="mod-group-body' + (collapsed ? ' is-collapsed' : '') + '" data-group-body="' + gid + '">'
+            + (items.length
+                ? items.map(renderModCard).join('')
+                : '<div class="text-[11px] text-indigo-300 py-3 text-center">把插件卡片拖到这里</div>')
+            + '</div>'
+            + '</div>';
+    }
+
+    // groups 要在 renderGroupHtml **之前**声明 —— 它在函数体里被引用，
+    //   const 无提升，放后面就是 TDZ（Cannot access before initialization）。
+    const groups = readGroups();
+
+    // ── 组装：**单一有序列表** —— 平铺插件与分栏同等级，混排（用户要求） ──
+    const byGroup = new Map();
+    const loose = [];
+    for (const m of merged) {
+        const gid = groupOf[m.id];
+        if (gid && gid !== UNGROUPED_ID && groups.some((g) => g.id === gid)) {
+            if (!byGroup.has(gid)) byGroup.set(gid, []);
+            byGroup.get(gid).push(m);
+        } else {
+            loose.push(m);   // 没归属 / 归属的分栏已被删 → 顶层平铺
+        }
+    }
+    const looseById = new Map(loose.map((m) => [m.id, m]));
+
+    const escAttr = (s) => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+    // 顶层混排顺序（没提到的项按 插件在前、分栏在后 兜底追加）
+    const TOP_KEY = 'elaina_mods_top_order';
+    let topOrder = [];
+    try {
+        const v = JSON.parse(Store.getItem(TOP_KEY) || '[]');
+        if (Array.isArray(v)) topOrder = v.filter((x) => x && x.t && x.id);
+    } catch (e) { /* 忽略 */ }
+    const seenTop = new Set(topOrder.map((x) => x.t + ':' + x.id));
+    for (const m of loose) {
+        if (!seenTop.has('mod:' + m.id)) topOrder.push({ t: 'mod', id: m.id });
+    }
+    for (const g of groups) {
+        if (!seenTop.has('group:' + g.id)) topOrder.push({ t: 'group', id: g.id });
+    }
+
+    box.innerHTML = topOrder.map((entry) => {
+        if (entry.t === 'group') {
+            const g = groups.find((x) => x.id === entry.id);
+            return g ? renderGroupHtml(g, byGroup.get(g.id) || []) : '';
+        }
+        const m = looseById.get(entry.id);
+        return m ? renderModCard(m) : '';
+    }).join('');
+
+    // ---- 开关：走 mod 系统的 setEnabled（会持久化 + 通知 mod 自己）----
+    box.querySelectorAll('.mod-toggle').forEach((el) => {
+        el.addEventListener('change', async () => {
+            const id = el.getAttribute('data-mod-id');
+            // setEnabled 是 async 的：必须 await 之后再刷新，否则读到旧 state
+            if (window.ElainaMods) {
+                // 开关要处理"插件不在注册表里"这种情况：
+                //   setEnabled 对**不在注册表里**的插件会直接 `return false` —— 而注册表
+                //   只在页面启动时建立。于是刚装好、还没被扫到的插件：开关设上了、紧接着
+                //   列表重绘又按状态把它拨回去，看上去就是"按启动按钮没反应 /
+                //   点了像启动了又关掉 / 弹回原位"。
+                //   这里的处理：先重扫一次再重试；仍失败就**如实说**并把开关拨回去 ——
+                //   绝不显示"已启用（立即生效）"这种假状态。
+                let ok = await window.ElainaMods.setEnabled(id, el.checked);
+                if (ok === false && typeof window.ElainaMods.reload === 'function') {
+                    try { await window.ElainaMods.reload(); } catch (e) { /* 下面照常汇报 */ }
+                    ok = await window.ElainaMods.setEnabled(id, el.checked);
+                }
+                if (ok === false) {
+                    if (hint) {
+                        hint.textContent = '这个插件当前没能启用（加载器没认到它）。刷新页面后再试一次。';
+                        hint.className = 'text-[11px] text-red-500';
+                    }
+                    el.checked = !el.checked;   // 把开关拨回去，别留一个假状态
+                    void refreshModsList();
+                    return;
+                }
+            }
+            if (hint) {
+                hint.textContent = '已' + (el.checked ? '启用' : '停用') + ' ' + id + '（立即生效）';
+                hint.className = 'text-[11px] text-indigo-500';
+            }
+            void refreshModsList();
+        });
+    });
+
+    // ---- 说明（README）：点开弹窗 ----
+    box.querySelectorAll('.mod-readme-btn').forEach((el) => {
+        el.addEventListener('click', async () => {
+            const id = el.getAttribute('data-mod-id');
+            const name = el.getAttribute('data-mod-name') || id;
+            await openModReadme(id, name);
+        });
+    });
+
+    // ---- 启用/停用后：重渲染保持状态一致（setModEnabled 会改 state）----
+    box.querySelectorAll('.mod-opensettings').forEach((el) => {
+        el.addEventListener('click', () => {
+            const id = el.getAttribute('data-mod-id');
+            const openers = window.__modSettingsOpeners || {};
+            if (typeof openers[id] === 'function') {
+                openers[id]();
+                return;
+            }
+            if (typeof switchSettingsTab === 'function') switchSettingsTab('tab-' + id);
+        });
+    });
+
+    // ---- 打开插件目录（POST /api/plugins/open-folder?id=…）----
+    box.querySelectorAll('.mod-openfolder').forEach((el) => {
+        el.addEventListener('click', async () => {
+            const id = el.getAttribute('data-mod-id');
+            el.disabled = true;
+            try {
+                const res = await fetch('/api/plugins/open-folder?id=' + encodeURIComponent(id), { method: 'POST' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || data.ok === false) {
+                    if (hint) {
+                        hint.textContent = '打开失败：' + ((data && data.message) || ('HTTP ' + res.status));
+                        hint.className = 'text-[11px] text-red-500';
+                    }
+                }
+            } finally {
+                el.disabled = false;
+            }
+        });
+    });
+
+    // ---- 单个刷新 ----
+    box.querySelectorAll('.mod-refresh-one').forEach((el) => {
+        el.addEventListener('click', () => { void refreshModsList(); });
+    });
+
+    // ---- 删除：调 DELETE /api/plugins/:id（删目录 + 安装包），带二次确认 ----
+    box.querySelectorAll('.mod-del-btn').forEach((el) => {
+        el.addEventListener('click', async (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const id = el.getAttribute('data-mod-id');
+            const name = el.getAttribute('data-mod-name') || id;
+            const okToGo = await showCustomConfirm(
+                '删除插件「' + name + '」？\n\n'
+                + '会把插件目录和安装包一起删掉（下次打开设置不会再出现）。\n'
+                + '要重新安装，需要再上传一次 zip。',
+                '删除插件');
+            if (!okToGo) return;
+
+            el.disabled = true;
+            if (hint) { hint.textContent = '正在删除 ' + name + '…'; hint.className = 'text-[11px] text-indigo-500'; }
+            try {
+                const res = await fetch('/api/plugins/' + encodeURIComponent(id), { method: 'DELETE' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || data.ok === false) {
+                    if (hint) {
+                        hint.textContent = '删除失败：' + ((data && data.message) || ('HTTP ' + res.status));
+                        hint.className = 'text-[11px] text-red-500';
+                    }
+                } else {
+                    // 同时清掉前端记录的启用状态 —— 插件都删了，那个键留着没意义
+                    if (window.ElainaMods && typeof window.ElainaMods.forget === 'function') {
+                        window.ElainaMods.forget(id);
+                    }
+                    if (hint) {
+                        hint.textContent = '已删除 ' + name + '（刷新页面后彻底生效）';
+                        hint.className = 'text-[11px] text-emerald-600';
+                    }
+                    void refreshModsList();
+                }
+            } catch (err) {
+                if (hint) {
+                    hint.textContent = '删除失败：' + String((err && err.message) || err);
+                    hint.className = 'text-[11px] text-red-500';
+                }
+            } finally {
+                el.disabled = false;
+            }
+        });
+    });
+
+    // ---- 分栏交互：重命名 / 删除 ----
+    box.querySelectorAll('.mod-group-rename').forEach((el) => {
+        el.addEventListener('click', () => {
+            const gid = el.getAttribute('data-group-id');
+            const gs = readGroups();
+            const g = gs.find((x) => x.id === gid);
+            const cur = g ? g.name : '';
+            const next = window.prompt('分栏名称：', cur);
+            if (next === null) return;
+            const name2 = String(next).trim();
+            if (!name2 || name2 === cur) return;
+            if (g) { g.name = name2; saveGroups(gs); }
+            void refreshModsList();
+        });
+    });
+
+    box.querySelectorAll('.mod-group-del').forEach((el) => {
+        el.addEventListener('click', async () => {
+            const gid = el.getAttribute('data-group-id');
+            const gs = readGroups();
+            const g = gs.find((x) => x.id === gid);
+            if (!g) return;
+            const inside = merged.filter((m) => (groupOf[m.id] || UNGROUPED_ID) === gid);
+            if (inside.length) {
+                const names = inside.map((m) => m.name || m.id).join('、');
+                const msg = '这个分栏里还有 ' + inside.length + ' 个插件：' + names
+                    + '\n\n请先把它们拖出来（拖到列表任意位置），再删除分栏。';
+                try {
+                    if (typeof showCustomAlert === 'function') showCustomAlert(msg, '不能删除');
+                    else window.alert(msg);
+                } catch (e) { window.alert(msg); }
+                return;
+            }
+            const okToGo = await showCustomConfirm('删除分栏「' + g.name + '」？', '删除分栏');
+            if (!okToGo) return;
+            saveGroups(gs.filter((x) => x.id !== gid));
+            try {
+                const top = JSON.parse(Store.getItem('elaina_mods_top_order') || '[]');
+                Store.setItem('elaina_mods_top_order',
+                    JSON.stringify(top.filter((x) => !(x.t === 'group' && x.id === gid))));
+                if (typeof Store._flush === 'function') Store._flush();
+            } catch (e) { /* 忽略 */ }
+            void refreshModsList();
+        });
+    });
+
+    // ---- 拖拽：栏内排序 / 拖进分栏归类 / 拖出分栏 / 顶层混排 / 分栏折叠 ----
+    bindGroupDragSort(box, () => void refreshModsList(), { readGroups, saveGroups });
+}
+
+function closeSettingsPanel() {
+    // 停掉日志轮询：面板一关，日志分栏就不可见了，
+    //   继续每 2 秒拉 /api/logs/tail 是纯自噪音（服务端日志会被它刷屏）。
+    try { if (window.LogViewer) window.LogViewer.close(); } catch (e) { /* 忽略 */ }
+    // 关闭前把待保存的改动冲掉 —— 用户改完最后一项马上点 ✕ 时，
+    //   那次改动还排在 300ms 防抖里，不冲就会丢（见 flushAutoSave 的说明）。
+    try { flushAutoSave(); } catch (e) { /* 忽略：关闭不该因为保存失败而卡住 */ }
+    elements.settingsOverlay.classList.add('hidden');
+    elements.settingsOverlay.classList.remove('flex');
+    syncRailActive();
+}
+
+function updateAsrProviderUI() {
+    const provider = document.querySelector('input[name="asrProvider"]:checked')?.value || 'browser';
+    elements.dashscopeAsrFields.classList.toggle('hidden', provider !== 'aliyun');
+    const mimoFields = document.getElementById('mimoAsrFields');
+    if (mimoFields) mimoFields.classList.toggle('hidden', provider !== 'mimo');
+    // 浏览器识别暂不可用提示
+    const warn = document.getElementById('asrBrowserWarn');
+    if (warn) warn.classList.toggle('hidden', provider !== 'browser');
+    // 阿里云 ASR Key 现在是**独立**输入框（#settingAsrApiKey），状态由输入框本身体现，
+    // 不再需要单独的状态提示（原 #settingAsrKeyStatus 已随共用 Key 一起移除）。
+}
+
+function updateTtsProviderUI() {
+    const provider = elements.settingTtsProvider?.value || 'mimo';
+    // MiMo TTS 的 Key / 接口地址是 TTS 专用的（与 ASR 独立），只在 TTS 选了 MiMo 时显示。
+    elements.mimoTtsFields?.classList.toggle('hidden', provider !== 'mimo');
+    elements.openaiTtsFields?.classList.toggle('hidden', provider !== 'openai-tts');
+    elements.minimaxTtsFields?.classList.toggle('hidden', provider !== 'minimax');
+    elements.dashscopeTtsFields?.classList.toggle('hidden', provider !== 'dashscope');
+    // MiMo TTS 三个模型用的字段各不相同，随模型下拉一起切换
+    updateMimoTtsModelUI();
+}
+
+// 依 MiMo TTS 模型切换子字段（三者互斥）：
+//   mimo-v2.5-tts            → 预置音色（audio.voice = Voice ID）
+//   mimo-v2.5-tts-voicedesign → 音色描述（user 消息，必填；该模型不支持 voice 字段）
+//   mimo-v2.5-tts-voiceclone  → 参考音频样本（audio.voice = 样本 base64，必填；不支持预置音色）
+function updateMimoTtsModelUI() {
+    const model = document.getElementById('settingMimoTtsModel')?.value || 'mimo-v2.5-tts';
+    document.getElementById('mimoTtsVoiceFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts');
+    document.getElementById('mimoTtsVoiceDesignFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts-voicedesign');
+    document.getElementById('mimoTtsVoiceCloneFields')?.classList.toggle('hidden', model !== 'mimo-v2.5-tts-voiceclone');
+    // 切到 voiceclone 且还没有样本时，自动把**软件自带**的伊蕾娜日语
+    //   样本补上（见 loadBuiltinMimoCloneSample 的说明）—— 这样开箱即用，不必让
+    //   用户自己去找一段日语样本。
+    if (model === 'mimo-v2.5-tts-voiceclone') void ensureBuiltinMimoCloneSample();
+}
+
+// 参考音频样本上限：官方示例只需数秒的 mp3/wav，本应用为免设置文件膨胀设 5 MB 硬上限
+const MIMO_TTS_CLONE_SAMPLE_MAX_BYTES = 5 * 1024 * 1024;
+
+// ===== 内置参考音频样本=====
+//
+// 软件自带一段伊蕾娜的日语样本：`web/audio/mimo-elaina-jp.m4a`（随应用一起分发，
+// APK 同步 web/ 时也会带上）。选到 voiceclone 模型而手上还没有样本时，自动把它
+// **转码成 wav 并填入** —— 走的是与"用户自己上传"完全同一条路径
+// （transcodeAudioBufferToWavDataUrl → data URL → 也是服务端拆到 data/voice-samples
+// 的那套），所以没有任何特例分支。
+//
+// 别信这个样本文件的扩展名：它**真实字节是 m4a（ftypisom）容器**，
+//   手机或工具常把它错误命名成 .mp3（所以这里有"按文件头嗅探格式"的注释）。
+//   这里落地成 .m4a 是对的名字；反正前端一律先解码再转 wav，
+//   扩展名不影响可用性，但别再让下一个人误以为它是 mp3。
+//
+// 为什么不做"每次启动都塞一遍"：转码后的 wav 有数 MB，写进 data/ 是实打实的体积；
+//   而且用户一旦自己上传或主动清除，就该尊重他的选择。所以：
+//     · 只在"当前是 voiceclone 且没有样本"时补，且**每个页面会话最多补一次**
+//     · 用户点过「清除样本」后本会话不再自动补（要恢复就点「内置样本」按钮）
+const BUILTIN_MIMO_CLONE_SAMPLE_URL = '/audio/mimo-elaina-jp.m4a';
+const BUILTIN_MIMO_CLONE_SAMPLE_NAME = '伊蕾娜·日语参考（内置）';
+let builtinCloneLoading = null;
+let builtinCloneTriedThisSession = false;
+
+/** 载入内置样本（fetch → 转码 wav → 落盘）。并发调用复用同一个 Promise */
+function loadBuiltinMimoCloneSample() {
+    if (builtinCloneLoading) return builtinCloneLoading;
+    builtinCloneLoading = (async () => {
+        try {
+            const res = await fetch(BUILTIN_MIMO_CLONE_SAMPLE_URL, { cache: 'force-cache' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const dataUrl = await transcodeAudioBufferToWavDataUrl(await res.arrayBuffer());
+            if (dataUrl.length > MIMO_TTS_CLONE_SAMPLE_MAX_BYTES * 1.5) throw new Error('内置样本转码后超过上限');
+            state.settings.mimoTtsCloneSample = dataUrl;
+            state.settings.mimoTtsCloneSampleName = BUILTIN_MIMO_CLONE_SAMPLE_NAME;
+            persistSettings();
+            updateMimoTtsCloneSampleStatusDisplay();
+            return true;
+        } catch (e) {
+            console.warn('[MiMo TTS] 内置参考样本不可用（可手动上传）：', e);
+            updateMimoTtsCloneSampleStatusDisplay('内置样本加载失败，请手动选择参考音频。', true);
+            return false;
+        } finally {
+            builtinCloneLoading = null;
+        }
+    })();
+    return builtinCloneLoading;
+}
+
+/** 自动补内置样本：仅当"当前选的是 voiceclone + 还没有样本 + 本会话还没试过"时动手 */
+function ensureBuiltinMimoCloneSample() {
+    const model = document.getElementById('settingMimoTtsModel')?.value || state.settings.mimoTtsModel || '';
+    if (model !== 'mimo-v2.5-tts-voiceclone') return Promise.resolve(false);
+    if (String(state.settings.mimoTtsCloneSample || '').trim()) return Promise.resolve(false);
+    if (builtinCloneTriedThisSession) return Promise.resolve(false);
+    builtinCloneTriedThisSession = true;
+    return loadBuiltinMimoCloneSample();
+}
+
+// 展示已保存样本的文件名（文件框无法回填，只能靠状态里的文件名）；传 message 则临时覆盖文案。
+// 拆成两个：Display 只渲染（转码完成的回调也用它，避免与 repair 相互触发）。
+function updateMimoTtsCloneSampleStatusDisplay(message, isError) {
+    const el = document.getElementById('mimoTtsCloneSampleStatus');
+    if (!el) return;
+    // 用 .tts-sample-status 这套类（颜色走主题变量，见 index.html），
+    //   不要写死 Tailwind 色（text-emerald-400 / text-red-400 / text-indigo-300）——
+    //   写死的颜色不会随主题和深色模式变化。
+    if (message) {
+        el.textContent = message;
+        el.className = 'tts-sample-status ' + (isError ? 'is-error' : 'is-ok');
+        return;
+    }
+    const name = String(state.settings.mimoTtsCloneSampleName || '').trim();
+    const hasSample = Boolean(String(state.settings.mimoTtsCloneSample || '').trim());
+    if (hasSample) {
+        el.textContent = `已选择：${name || '(未命名)'}`;
+        el.className = 'tts-sample-status is-ok';
+    } else {
+        el.textContent = '未选择样本';
+        el.className = 'tts-sample-status';
+    }
+}
+function updateMimoTtsCloneSampleStatus(message, isError) {
+    // 顺带把「已存但格式不是 wav」的样本转码成 wav（官方 voiceclone 只稳支持 mp3/wav）
+    try { repairMimoTtsCloneSamplePrefix(); } catch (e) { /* 转码失败不影响展示 */ }
+    updateMimoTtsCloneSampleStatusDisplay(message, isError);
+}
+
+// MiMo 音色复刻的参考样本。
+//
+// 官方 API 文档写明：voiceclone 的样本（audio.voice 的 base64）**仅支持 mp3 和 wav**。
+//   而手机录音常是 m4a/aac，还被系统或工具错误地命名成 .mp3 —— 实测用户的样本文件名是
+//   "202610131732.mp3"，真实字节却是 `ftypisom`（m4a 容器），服务端直接以
+//   「invalid audio format」400 拒绝。**光改 data URL 前缀救不了**：字节本身就不是它认的格式。
+// 因此这里**一律转码成 16-bit PCM WAV** —— 浏览器自带的 Web Audio 能解码 m4a/aac/flac/ogg，
+//   于是无论用户丢进来什么，最终都变成服务端最稳的 wav，用户不必自己去外部工具转码。
+// 已存的老样本也会被自动转一次（见 repairMimoTtsCloneSamplePrefix）。
+const MIMO_TTS_CLONE_WAV_PREFIX = 'data:audio/wav;base64,';
+
+// 嗅探容器格式（仅用于日志与排查，不影响处理流程）
+function mimoSampleFormatFromHead(head) {
+    const b = head || new Uint8Array(0);
+    const at = (i, s) => s.split('').every((c, k) => b[i + k] === c.charCodeAt(0));
+    if (b.length >= 12 && at(0, 'RIFF') && at(8, 'WAVE')) return 'wav';
+    if (b.length >= 4 && at(0, 'fLaC')) return 'flac';
+    if (b.length >= 4 && at(0, 'OggS')) return 'ogg';
+    if (b.length >= 12 && at(4, 'ftyp')) return 'm4a';
+    if (b.length >= 3 && at(0, 'ID3')) return 'mp3';
+    if (b.length >= 2 && b[0] === 0xFF && (b[1] & 0xE0) === 0xE0) return 'mp3';
+    return '(未知)';
+}
+function arrayBufferToBase64(buf) {
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    const CHUNK = 0x8000;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(bin);
+}
+// 编成**单声道** 16-bit PCM WAV：参考样本只为复刻音色，声道数不携带音色信息，
+// 单声道能省一半体积（设置文件里存的是 base64，体积直接翻倍）。
+function encodeMono16Wav(audioBuffer) {
+    const n = audioBuffer.length;
+    const out = new ArrayBuffer(44 + n * 2);
+    const v = new DataView(out);
+    const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE');
+    w(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, audioBuffer.sampleRate, true);
+    v.setUint32(28, audioBuffer.sampleRate * 2, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    w(36, 'data'); v.setUint32(40, n * 2, true);
+    const chs = [];
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) chs.push(audioBuffer.getChannelData(c));
+    let o = 44;
+    for (let i = 0; i < n; i++) {
+        let sum = 0;
+        for (let c = 0; c < chs.length; c++) sum += chs[c][i];
+        const s = Math.max(-1, Math.min(1, sum / chs.length));
+        v.setInt16(o, s * 0x7fff, true); o += 2;
+    }
+    return out;
+}
+// 任意可解码音频 → WAV data URL；浏览器解不了会 reject
+async function transcodeAudioBufferToWavDataUrl(arrayBuffer) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) throw new Error('当前浏览器不支持音频转码');
+    const ac = new AC();
+    try {
+        const audioBuffer = await new Promise((resolve, reject) => {
+            // 传副本：decodeAudioData 会 detach 传入的 ArrayBuffer
+            ac.decodeAudioData(arrayBuffer.slice(0), resolve, reject);
+        });
+        return MIMO_TTS_CLONE_WAV_PREFIX + arrayBufferToBase64(encodeMono16Wav(audioBuffer));
+    } finally {
+        try { await ac.close(); } catch (e) { /* 关闭失败无所谓 */ }
+    }
+}
+let mimoCloneRepairing = false;
+// 已存样本不是 wav → 异步转成 wav 再存（官方只稳支持 mp3/wav）。幂等：已是 wav 时什么都不做。
+function repairMimoTtsCloneSamplePrefix() {
+    const raw = String(state.settings.mimoTtsCloneSample || '');
+    if (!raw || raw.startsWith(MIMO_TTS_CLONE_WAV_PREFIX)) return false;
+    if (mimoCloneRepairing) return false;   // 防重入（转码完成回调里还会再刷一次状态）
+    const comma = raw.indexOf(',');
+    if (comma < 0) return false;
+    let buf;
+    try { buf = base64ToArrayBuffer(raw.slice(comma + 1)); } catch (e) { return false; }
+    mimoCloneRepairing = true;
+    transcodeAudioBufferToWavDataUrl(buf).then((wav) => {
+        state.settings.mimoTtsCloneSample = wav;
+        persistSettings();
+    }).catch((e) => {
+        console.warn('[MiMo TTS] 已存样本转码失败（保留原样）：', e);
+    }).finally(() => {
+        mimoCloneRepairing = false;
+        updateMimoTtsCloneSampleStatusDisplay();
+    });
+    return true;
+}
+
+async function handleMimoTtsCloneSampleFileChange(event) {
+    const input = event?.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+    if (file.size > MIMO_TTS_CLONE_SAMPLE_MAX_BYTES) {
+        input.value = '';
+        updateMimoTtsCloneSampleStatus(
+            `文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），上限 5 MB，请换更短的参考音频。`, true);
+        showCustomAlert('参考音频样本上限为 5 MB（官方示例只需数秒）。请换一个更短的样本文件。', '样本过大');
+        return;
+    }
+    try {
+        const buf = await file.arrayBuffer();
+        const fmt = mimoSampleFormatFromHead(new Uint8Array(buf.slice(0, 16)));
+        console.log(`[MiMo TTS] 参考样本 ${file.name || '(未命名)'}：原始格式=${fmt} ${(file.size / 1024).toFixed(0)}KB → 转为 wav`);
+        const dataUrl = await transcodeAudioBufferToWavDataUrl(buf);
+        if (dataUrl.length > MIMO_TTS_CLONE_SAMPLE_MAX_BYTES * 1.5) {
+            input.value = '';
+            updateMimoTtsCloneSampleStatus('样本转码后过大，请换更短的参考音频（建议数秒）。', true);
+            showCustomAlert('转码后的样本过大。请换一段更短的参考音频（官方示例只需数秒）。', '样本过大');
+            return;
+        }
+        state.settings.mimoTtsCloneSample = dataUrl;
+        state.settings.mimoTtsCloneSampleName = file.name || '';
+        persistSettings();
+        updateMimoTtsCloneSampleStatus();
+    } catch (e) {
+        console.warn('[MiMo TTS] 样本转码失败：', e);
+        input.value = '';
+        updateMimoTtsCloneSampleStatus('无法读取这个音频，请换 wav / mp3 文件。', true);
+        showCustomAlert('无法解码这个参考音频（文件可能损坏或编码不受支持）。请换一个 wav 或 mp3 文件。', '样本无法读取');
+    }
+}
+
+function clearMimoTtsCloneSample() {
+    state.settings.mimoTtsCloneSample = '';
+    state.settings.mimoTtsCloneSampleName = '';
+    // 清掉之后本会话别再自动补内置样本 —— 用户是主动清的，
+    //   不该马上又被塞回来。想恢复就点旁边的「内置样本」按钮。
+    builtinCloneTriedThisSession = true;
+    const input = document.getElementById('settingMimoTtsCloneSample');
+    if (input) input.value = '';
+    persistSettings();
+    updateMimoTtsCloneSampleStatus();
+}
+
+// 只负责"刷新提示文案 + 占位符"，**不改写 Base URL 的值、也不锁成只读**。
+// 按「请求模式」把输入框锁成只读并强行覆盖成预设地址的话，
+// 用户想用自建中转时根本没地方改 —— 所以没有"请求模式"这个下拉。
+function updateChatFormatUI() {
+    const apiFormat = elements.settingApiFormat.value || 'openai-compatible';
+    const preset = CHAT_API_FORMATS[apiFormat] || CHAT_API_FORMATS['openai-compatible'];
+    elements.settingBaseUrl.readOnly = false;
+    elements.settingChatModel.placeholder = preset.defaultModel;
+    const currentBase = String(elements.settingBaseUrl.value || '').trim();
+    const looksLocal = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i.test(currentBase);
+    elements.settingApiKey.placeholder = looksLocal
+        ? '本地服务可留空；远程服务按需填写'
+        : (/dashscope\.aliyuncs\.com/i.test(currentBase)
+            ? 'sk-...（留空则复用语音里已填的 DashScope Key）'
+            : 'sk-...（只保存在本机）');
+    // 每个格式"什么时候该选它"直接写在旁边。
+    // 选错格式报的错完全看不出是格式选错，这句话放在这里比放在文档里有用的多。
+    const hintEl = document.getElementById('apiFormatHint');
+    if (hintEl) hintEl.textContent = preset.hint || '';
+    if (elements.chatFormatHint) {
+        elements.chatFormatHint.textContent = `请求从当前设备直接发给 ${preset.label}，不经过作者服务器。Android Key 使用系统 Keystore 加密；Web Key 仅保存在当前标签页会话。`;
+    }
+}
+
+function readProviderSettingsForm() {
+    const apiFormat = elements.settingApiFormat.value || 'openai-compatible';
+    const preset = CHAT_API_FORMATS[apiFormat] || CHAT_API_FORMATS['openai-compatible'];
+    return {
+        ...state.settings,
+        apiProvider: DEFAULT_SETTINGS.apiProvider,
+        apiFormat,
+        baseUrl: elements.settingBaseUrl.value.trim() || preset.defaultBaseUrl,
+        // 回落必须用"当前格式"的默认模型，不能用 DEFAULT_SETTINGS.model ——
+        // 后者硬编码 deepseek-chat，选 Anthropic 时清空模型框就会把 deepseek-chat 发过去，
+        // 而 placeholder 显示的却是 Claude 的模型名，界面上完全看不出来。
+        model: elements.settingChatModel.value.trim() || preset.defaultModel,
+        apiKey: elements.settingApiKey.value.trim(),
+        minimaxApiKey: document.getElementById('settingMinimaxApiKey')?.value.trim() || '',
+        minimaxVoice: document.getElementById('settingMinimaxVoice')?.value.trim() || '',
+        minimaxModel: document.getElementById('settingMinimaxModel')?.value || 'speech-2.8-hd',
+        ttsProvider: elements.settingTtsProvider?.value || 'mimo',
+        mimoTtsModel: document.getElementById('settingMimoTtsModel')?.value || 'mimo-v2.5-tts',
+        mimoTtsVoice: document.getElementById('settingMimoTtsVoice')?.value.trim() || 'mimo_default',
+        // 音色描述：voicedesign 模型的 user 消息文本
+        mimoTtsVoiceDesignPrompt: document.getElementById('settingMimoVoiceDesignPrompt')?.value.trim() || '',
+        // 参考音频样本不从这里读（文件框无法回填），直接保留 state.settings 里已存的值（见上方 ...state.settings）
+        // MiMo TTS 凭据（独立于 ASR）：TTS 用自己的 Key / 接口地址
+        mimoTtsApiKey: document.getElementById('settingMimoTtsApiKey')?.value.trim() || '',
+        // MiMo TTS 的接口地址已不在界面上（固定用小米官方地址）：不读 DOM，
+        // 保留 ...state.settings 里已有的值（DEFAULT_SETTINGS + 已存设置）
+        openaiTtsBaseUrl: document.getElementById('settingOpenaiTtsBaseUrl')?.value.trim() || 'https://api.openai.com/v1',
+        openaiTtsApiKey: document.getElementById('settingOpenaiTtsApiKey')?.value.trim() || '',
+        openaiTtsModel: document.getElementById('settingOpenaiTtsModel')?.value.trim() || 'tts-1',
+        openaiTtsVoice: document.getElementById('settingOpenaiTtsVoice')?.value.trim() || 'alloy',
+        dashscopeTtsModel: document.getElementById('settingDashscopeTtsModel')?.value.trim() || 'qwen3-tts-flash',
+        dashscopeTtsVoice: document.getElementById('settingDashscopeTtsVoice')?.value.trim() || 'Cherry',
+        dashscopeApiKey: document.getElementById('settingDashscopeApiKey')?.value.trim() || '',
+        // 阿里百炼 ASR 的 Key（独立于 TTS 的 dashscopeApiKey）
+        asrApiKey: document.getElementById('settingAsrApiKey')?.value.trim() || '',
+        dashscopeAsrBaseUrl: document.getElementById('settingDashscopeAsrBaseUrl')?.value.trim() || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
+        dashscopeAsrModel: document.getElementById('settingDashscopeAsrModel')?.value.trim() || 'qwen3-asr-flash',
+        mimoApiKey: document.getElementById('settingMimoAsrApiKey')?.value.trim() || '',
+        // 接口地址预填官方地址；留空时运行时也会回退到同一地址
+        mimoBaseUrl: document.getElementById('settingMimoAsrBaseUrl')?.value.trim() || 'https://api.xiaomimimo.com',
+        mimoAsrModel: document.getElementById('settingMimoAsrModel')?.value.trim() || 'mimo-v2.5-asr',
+        visionBaseUrl: document.getElementById('settingVisionBaseUrl')?.value.trim() || '',
+        visionApiKey: document.getElementById('settingVisionApiKey')?.value.trim() || '',
+        visionModel: document.getElementById('settingVisionModel')?.value.trim() || ''
+    };
+}
+
+async function withSettingsTestButton(button, runningText, callback) {
+    if (!button || button.disabled) return;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = runningText;
+    try { await callback(); }
+    catch (error) { showClientApiError(error); }
+    finally { button.disabled = false; button.textContent = originalText; }
+}
+
+async function testChatConnection() {
+    await withSettingsTestButton(elements.testChatConnectionBtn, '测试中…', async () => {
+        const draft = readProviderSettingsForm();
+        // 测试请求要给思考留余量，不能把 maxTokens 设得很小 —— 对**思考型模型**
+        //   是个坑：例如 8 个 token 会全被模型花在 `reasoning` 上
+        //   （日志里能看到 reasoning:"The user asked me to only…"），
+        //   然后 finish_reason=length → 正文一个 token 都没剩 → 报"模型只返回了思考
+        //   内容"。而且部分网关**不认** `thinking` 字段（它要求用 `reasoning_effort`），
+        //   应用只能剥离后重试，模型于是走自己的默认（照样先思考）。
+        //   给 256 个 token：思考完还能留下可见的 "OK"，测试不会假红。
+        //   代价可忽略（一次测试最多几十~几百 token）。
+        const reply = await callChatAPI([
+            { role: 'system', content: '这是连接测试。' },
+            { role: 'user', content: '只回复 OK' }
+        ], { maxTokens: 256, temperature: 0 }, draft);
+        if (!reply.trim()) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '对话接口返回了空内容');
+        showCustomAlert(`连接成功，模型返回：${reply.trim()}`, '对话连接正常');
+    });
+}
+
+async function testTtsConnection() {
+    await withSettingsTestButton(elements.testTtsConnectionBtn, '测试中…', async () => {
+        const draft = readProviderSettingsForm();
+        const provider = String(draft.ttsProvider || 'mimo');
+        if (provider === 'mimo') {
+            const audio = await generateMimoTtsAudio('你好，这是 MiMo 语音连接测试。', draft);
+            if (!audio?.bytes?.byteLength) throw new ClientApiError('UPSTREAM_UNAVAILABLE', 'MiMo 返回了空音频');
+            showCustomAlert('MiMo 已成功返回测试音频，Key、模型与音色可以使用。', '语音连接正常');
+            return;
+        }
+        if (provider === 'openai-tts') {
+            const audio = await generateOpenaiTtsAudio('你好，这是通用 OpenAI 语音连接测试。', draft);
+            if (!audio?.bytes?.byteLength) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '通用 OpenAI TTS 返回了空音频');
+            showCustomAlert('通用 OpenAI TTS 已成功返回测试音频，Key、模型与音色可以使用。', '语音连接正常');
+            return;
+        }
+        if (provider === 'dashscope') {
+            const audio = await generateDashscopeTtsAudio('你好，这是阿里千问语音连接测试。', draft);
+            if (!audio?.bytes?.byteLength) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '阿里千问音频文件为空');
+            showCustomAlert('阿里千问已成功返回测试音频，Key、模型与音色可以使用。', '语音连接正常');
+            return;
+        }
+        if (!draft.minimaxApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先填写 MiniMax API Key');
+        if (!draft.minimaxVoice) throw new ClientApiError('BAD_REQUEST', '请先填写自己的 MiniMax 音色 ID');
+        const result = await postJsonFromDevice(MINIMAX_TTS_HTTP, {
+            model: draft.minimaxModel,
+            text: 'こんにちは、接続テストです。',
+            stream: false,
+            language_boost: 'Japanese',
+            voice_setting: { voice_id: draft.minimaxVoice, speed: 1, vol: 1, pitch: 0 },
+            audio_setting: { sample_rate: 24000, bitrate: 128000, format: 'mp3', channel: 1 }
+        }, { Authorization: `Bearer ${draft.minimaxApiKey}` });
+        if (!result.ok || Number(result.payload?.base_resp?.status_code || 0) !== 0) {
+            await throwProviderResponseError(result, 'MiniMax 语音连接测试失败');
+        }
+        if (!String(result.payload?.data?.audio || '')) throw new ClientApiError('UPSTREAM_UNAVAILABLE', 'MiniMax 返回了空音频');
+        showCustomAlert('MiniMax 已成功返回测试音频，Key、模型与音色 ID 可以使用。', '语音连接正常');
+    });
+}
+
+async function clearApiKeys() {
+    const confirmed = await showCustomConfirm('确认清除这台设备上保存的 DeepSeek、MiniMax、DashScope、MiMo 与通用 OpenAI API Key？');
+    if (!confirmed) return;
+    await clearStoredApiSecrets();
+    elements.settingApiKey.value = '';
+    document.getElementById('settingMinimaxApiKey').value = '';
+    document.getElementById('settingDashscopeApiKey').value = '';
+    document.getElementById('settingAsrApiKey').value = '';
+    document.getElementById('settingMimoAsrApiKey').value = '';
+    document.getElementById('settingMimoTtsApiKey').value = '';
+    document.getElementById('settingOpenaiTtsApiKey').value = '';
+    showCustomAlert('API Key 已从当前设备清除。', '已清除');
+}
+
+function updateSliderFill(slider) {
+    if (!slider) return;
+    const min = Number(slider.min || 0);
+    const max = Number(slider.max || 100);
+    const value = Number(slider.value || min);
+    const percent = max > min ? ((value - min) / (max - min)) * 100 : 0;
+    slider.style.setProperty('--slider-progress', `${Math.max(0, Math.min(100, percent))}%`);
+}
+
+/**
+ * 把设置表单的当前内容落盘。
+ *
+ * 设置是「改完即生效」——没有底部「保存设置」按钮，
+ *   任何控件一变就自动调这个函数（见 init.js 的自动保存绑定）。
+ *   所以它**不能弹提示、不能关面板**，否则用户每改一项都被弹窗打断。
+ *
+ * @param {{silent?: boolean}} [opts]
+ *   silent=true 时：跳过「设置已保存！」提示与面板关闭（自动保存用）。
+ *   无论哪种模式，落盘行为完全一致 —— 不存在"自动保存少存了什么"。
+ */
+async function saveSettings(opts) {
+    const silent = Boolean(opts && opts.silent);
+    const asrProvider = document.querySelector('input[name="asrProvider"]:checked')?.value || 'browser';
+    const ttsLang = document.querySelector('input[name="ttsLang"]:checked')?.value || 'chinese';
+    const replyDisplayMode = document.querySelector('input[name="replyDisplayMode"]:checked')?.value || DEFAULT_SETTINGS.replyDisplayMode;
+    const providerSettings = readProviderSettingsForm();
+    if (!providerSettings.baseUrl) {
+        if (!silent) showCustomAlert('自定义模式下必须填写 API Base URL。', '设置未保存');
+        return;
+    }
+    // 切到「完全访问」时，把后果在这里一次性讲清楚。
+    //
+    // 为什么放在保存这一步、而不是每次操作都弹：
+    // 完全访问下 AI 每一步都问，用户会从"看清内容再决定"退化成"闭眼点允许"，
+    // 最后那道闸反而等于没有。所以判断前移到这个**一次性**的节点上。
+    //
+    // 只在"真的发生切换"时问 —— 已经是 full 又点保存不该再打扰。
+    const nextAccess = document.querySelector('input[name="agentAccess"]:checked')?.value || 'strict';
+    if (nextAccess === 'full' && currentAgentAccess() !== 'full') {
+        // 自动保存（silent）路径**也要问** —— 这是安全闸门，不能因为
+        //   "弹窗会打断用户"就跳过：设置改完即生效，用户点一下单选钮
+        //   就会落盘，如果这里不问，"完全访问"就被静默开启了。
+        //   拒绝时把单选钮拨回切换前的档，让界面与实际状态一致
+        //   （否则界面显示"完全访问"、实际仍是原档，用户会以为已经开了）。
+        const agreed = await showCustomConfirm(
+            '「完全访问」= AI 可以在这台电脑上做任何事，且**不再询问你**。\n\n'
+            + '开启后，AI 可以：\n'
+            + '· 读写这台电脑上任意路径的文件\n'
+            + '· 执行 PowerShell / cmd 命令（含删除类命令）\n'
+            + '· **删除文件与目录** —— 不进回收站、无法恢复\n'
+            + '· 覆盖已有文件（原内容不会自动备份）\n'
+            + '· 改注册表、关机、下载并执行网上的脚本\n\n'
+            + '与另外两档的关键差别：**这些操作都不会再问你**。\n'
+            + '发现问题只能事后补救，而删除这类操作是补救不了的。\n\n'
+            + '请只在你自己可控、且信任当前对话内容时开启。确定吗？',
+            '⚠️ 开启「完全访问」');
+        if (!agreed) {
+            const prev = currentAgentAccess();
+            document.querySelectorAll('input[name="agentAccess"]').forEach((r) => {
+                r.checked = (r.value === prev);
+            });
+            return;
+        }
+    }
+    state.settings = {
+        ...providerSettings,
+        ttsSpeed: parseFloat(elements.settingTtsSpeed.value) || 1.0,
+        ttsVolume: Math.max(0, Math.min(2, parseFloat(elements.settingTtsVolume.value) || 0)),
+        ttsLang,
+        replyDisplayMode,
+        asrProvider,
+        autoMemory: elements.settingAutoMemory.checked,
+        memoryEvery: Math.max(3, Math.min(50, parseInt(elements.settingMemoryEvery.value, 10) || 6)),
+        agentAccess: nextAccess,
+        agentPhoneEnabled: document.getElementById('settingAgentPhoneEnabled')?.checked !== false,
+        ...readAgentReadToggles(),
+        // 思考：UI 上只有一个"思考强度"四档下拉（off 就是"不思考"）。
+        // `thinkingMode` 由它**派生** —— 请求层与「思考」折叠栏仍读这个布尔量，
+        // 所以两处都要落到同一个来源，绝不能让它和档位脱节（见 core.js 的说明）。
+        // 注意这个控件是"改了立刻生效 + 立刻持久化"的（见 init.js），
+        // 这里再读一次是为了覆盖"用户改了控件但没点保存、又点了保存"的路径。
+        thinkingMode: elements.settingThinkingEffort.value !== 'off'
+            && THINKING_EFFORTS.includes(elements.settingThinkingEffort.value),
+        thinkingEffort: THINKING_EFFORTS.includes(elements.settingThinkingEffort.value)
+            ? elements.settingThinkingEffort.value
+            : 'off',
+        // 对话优化：第三人称两段式开关。与上面一样"改了立刻生效 + 立刻持久化"，
+        // 这里再读一次是为了覆盖"改了控件但没点保存、又点了保存"的路径。
+        thirdPerson: elements.settingThirdPerson.checked
+    };
+    try {
+        await saveApiSecrets(state.settings);
+    } catch (error) {
+        // 密钥存储失败不阻断设置保存（其他设置仍生效；密钥兜底存 localStorage）
+        console.warn('[BYOK] 密钥存储失败（设置仍已保存，密钥可能下次失效）', error);
+    }
+    persistSettings();
+
+    // 存回「当前这套人设」，并落盘整个列表 —— 多套之间互不覆盖
+    syncFormToCurrentCard();
+    state.characterCard = cardContent(currentCard());
+    persistCharacterCards();
+    saveCharacterCard();
+    renderCardSelect();
+
+    // 自动保存（silent）时**不关面板、不弹提示** ——
+    //   用户还在改，弹窗会打断；关面板更荒唐（改一项就被踢出去）。
+    if (!silent) {
+        closeSettingsPanel();
+        showCustomAlert('设置已保存！', '保存成功');
+    }
+}
+
+/**
+ * 自动保存：设置改成「改完即生效」后的唯一入口。
+ *
+ * 设计要点：
+ *  · **防抖 300ms** —— 文本输入框每敲一个字都会触发 input，
+ *    不防抖就会每字符跑一遍 saveApiSecrets（Android 上要过 Keystore，很贵）。
+ *  · 只监听 #settingsPanel 内的控件，且排除插件页（#tab-mods）——
+ *    插件自己的控件归插件管，宿主不该替它们落盘。
+ *  · change 事件覆盖 select / checkbox / radio；input 覆盖文本框与滑杆。
+ *    两者都挂，靠防抖合并重复触发。
+ */
+let autoSaveTimer = null;
+function scheduleAutoSave() {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+        autoSaveTimer = null;
+        Promise.resolve(saveSettings({ silent: true })).catch((e) => {
+            console.warn('[Settings] 自动保存失败', e);
+        });
+    }, 300);
+}
+
+/**
+ * 立刻把待保存的改动落盘（不等防抖）。
+ *
+ * 为什么必须有：用户改完最后一项**马上点 ✕ 关闭**是很常见的操作 ——
+ *   那次 change 只是排了一个 300ms 的定时器，如果关闭时不冲一下，
+ *   定时器随后触发（或永远不触发）就会**丢掉最后一次修改**。
+ */
+function flushAutoSave() {
+    if (!autoSaveTimer) return;
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+    Promise.resolve(saveSettings({ silent: true })).catch((e) => {
+        console.warn('[Settings] 关闭前保存失败', e);
+    });
+}
+
+/** 把自动保存挂到设置面板上（init.js 调用一次） */
+function bindSettingsAutoSave() {
+    const panel = document.getElementById('settingsPanel');
+    if (!panel) return;
+    const onEdit = (ev) => {
+        const t = ev.target;
+        if (!t || !t.closest) return;
+        // 插件页里的控件不归宿主管
+        if (t.closest('#tab-mods')) return;
+        // 纯展示控件不触发保存
+        if (t.matches('button, [type="button"], [type="submit"], [type="file"]')) return;
+        scheduleAutoSave();
+    };
+    panel.addEventListener('change', onEdit, true);
+    panel.addEventListener('input', onEdit, true);
+}
+
+// 不提供「恢复默认设置」（restoreDefaultSettings）这个一键回退入口：
+//   设置改完即生效，一键回退会连带把用户自己录的凭据一起清掉。
+//   需要回默认值就在界面上逐项改，或删掉 data/ 目录重来。
+
+function previewPrompt() {
+    const card = {
+        name: document.getElementById('ccName').value.trim() || '伊蕾娜',
+        title: document.getElementById('ccTitle').value.trim() || '灰之魔女',
+        worldSetting: document.getElementById('ccWorldSetting').value.trim(),
+        characterPrompt: document.getElementById('ccCharacterPrompt').value.trim(),
+        greeting: document.getElementById('ccGreeting').value.trim()
+    };
+    // 只展示用户可编辑的部分（核心协议 + 世界观 + 角色卡），
+    // 系统注入的 Live2D 表现标签、Agent 操作指令等内部提示不在此展示，避免用户误改。
+    const name = card.name;
+    const title = card.title;
+    const prompt = `${ROLEPLAY_CORE_PROTOCOL}
+
+# 世界观设定
+${card.worldSetting}
+
+# 角色卡
+角色名：${name}
+称号：${title}
+${card.characterPrompt}
+
+（说明：系统还会附加 Live2D 表现与 AI 操作等内部指令，不在此展示。）`;
+    showCustomAlert(prompt, '角色卡生成的 System Prompt');
+}
+
+function resetCharacterCard() {
+    document.getElementById('ccName').value = DEFAULT_CHARACTER_CARD.name;
+    document.getElementById('ccTitle').value = DEFAULT_CHARACTER_CARD.title;
+    document.getElementById('ccWorldSetting').value = DEFAULT_CHARACTER_CARD.worldSetting;
+    document.getElementById('ccCharacterPrompt').value = DEFAULT_CHARACTER_CARD.characterPrompt;
+    document.getElementById('ccGreeting').value = DEFAULT_CHARACTER_CARD.greeting;
+}
+
+
+// ==================== 问候打字机 ====================
+
+let greetingTyping = false;
+function startGreetingTyping() {
+    if (greetingTyping) return;
+    greetingTyping = true;
+    const el = document.getElementById('greetingText');
+    const text = state.characterCard.greeting || DEFAULT_CHARACTER_CARD.greeting;
+    el.classList.add('typing-cursor');
+    let i = 0;
+    const timer = setInterval(() => {
+        i++;
+        el.textContent = text.substring(0, i);
+        if (i >= text.length) {
+            clearInterval(timer);
+            el.classList.remove('typing-cursor');
+            greetingTyping = false;
+        }
+    }, 45);
+}
+
+
+
+/**
+ * 绑定插件列表的拖拽排序。
+ *
+ * 实现放在 mods.js 里（window.__elainaBindFlatDragSort），这里只是转发。
+ *   本文件在 mods.js 之前加载，所以只能在使用时取（那时 mods.js 早已执行完）。
+ */
+function bindModsDragSort(box, onDone) {
+    const impl = window.__elainaBindFlatDragSort;
+    if (typeof impl !== 'function') {
+        console.warn('[Mods] 拖拽实现未加载（mods.js 未就绪），插件列表拖动排序不可用');
+        return () => {};
+    }
+    return impl(box, onDone);
+}
+
+/**
+ * 分组版拖拽：统一列表模型 —— 平铺插件与分栏同等级，混排。
+ *
+ *   手势（全部复用内核，同一手感）：
+ *     ① 卡片把手拖动：松手时指针落在分栏上 → 归入；落在顶层 → 拿出来
+ *     ② 分栏把手拖动：调分栏在顶层混排里的位置
+ *     顺序按松手时 DOM 的真实次序重建（所见即所得）。
+ */
+function bindGroupDragSort(box, onDone, hooks) {
+    const { readGroups, saveGroups } = hooks || {};
+    if (typeof window.__elainaBindFlatDragSort !== 'function') {
+        console.warn('[Mods] 拖拽内核未加载，分栏拖拽不可用');
+        return;
+    }
+    const TOP_KEY = 'elaina_mods_top_order';
+    const GROUP_OF_KEY = 'elaina_mods_group_of';
+
+    /** 保存顶层混排顺序（DOM 里卡片与分栏的真实次序，所见即所得） */
+    function saveTopOrder() {
+        const seq = [...box.children].map((el) => {
+            if (el.classList.contains('mod-group')) {
+                return { t: 'group', id: el.getAttribute('data-group-id') };
+            }
+            if (el.classList.contains('mod-card')) {
+                return { t: 'mod', id: el.getAttribute('data-mod-id') };
+            }
+            return null;
+        }).filter(Boolean);
+        try {
+            Store.setItem(TOP_KEY, JSON.stringify(seq));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+        } catch (e) { /* 忽略 */ }
+    }
+
+    /** 保存栏内插件顺序 */
+    function saveModOrder() {
+        try {
+            Store.setItem('elaina_mods_order',
+                JSON.stringify([...box.querySelectorAll('.mod-card')].map((c) => c.getAttribute('data-mod-id'))));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+        } catch (e) { /* 忽略 */ }
+    }
+
+    // 拖拽高亮（拖着卡片悬在分栏上时提示"松手放进这里"）
+    let hoverTarget = null;
+    function clearHover() {
+        if (hoverTarget) { hoverTarget.classList.remove('mod-group-hover'); hoverTarget = null; }
+    }
+    document.addEventListener('pointermove', (e) => {
+        if (!document.body.classList.contains('mod-dragging-active')) { clearHover(); return; }
+        if (!document.querySelector('.mod-card.mod-dragging')) { clearHover(); return; }
+        const zone = (e.target && e.target.closest && e.target.closest('.mod-group'))
+            || document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.mod-group');
+        const head = zone ? zone.querySelector('.mod-group-head') : null;
+        if (!head) { clearHover(); return; }
+        if (hoverTarget === head) return;
+        clearHover();
+        hoverTarget = head;
+        head.classList.add('mod-group-hover');
+    }, true);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') clearHover(); }, true);
+
+    // ① 卡片拖动（内核）：栏内排序 + 松手按落点归类/拿出来
+    window.__elainaBindFlatDragSort(
+        box,
+        () => {
+            saveModOrder();
+            saveTopOrder();
+            if (typeof onDone === 'function') onDone();
+        },
+        {
+            itemSelector: '.mod-card',
+            handleSelector: '.mod-grip',
+            placeholderClass: 'mod-placeholder',
+            draggingClass: 'mod-dragging',
+            // 逃逸容器：卡片拖出分栏体后落到顶层列表 —— "放进去的拿不出来"的解法
+            outerContainer: box,
+        }
+    );
+
+    // ② 卡片松手在分栏上 → 归入；松手在顶层 → 拿出来（松手那一刻决定）
+    document.addEventListener('pointerup', (e) => {
+        const card = document.querySelector('.mod-card.mod-dragging');
+        if (!card) { clearHover(); return; }
+        const modId = card.getAttribute('data-mod-id');
+        const zone = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.mod-group');
+        const head = zone ? zone.querySelector('.mod-group-head') : null;
+        try {
+            const map = JSON.parse(Store.getItem(GROUP_OF_KEY) || '{}');
+            const curGroup = map[modId] || null;
+            const newGroup = head ? head.getAttribute('data-group-id') : null;
+            // 归属没变（还在原分栏松手 / 还在顶层松手）→ 不动，让内核走自己的栏内排序
+            if ((newGroup || null) === curGroup) { clearHover(); return; }
+            if (newGroup) map[modId] = newGroup;
+            else delete map[modId];
+            Store.setItem(GROUP_OF_KEY, JSON.stringify(map));
+            if (Store && typeof Store._flush === 'function') Store._flush();
+            clearHover();
+
+            // 就地搬家 + FLIP（不整页重渲染）：重渲染会打断内核的飞行动画 ——
+            //   卡片瞬移进/出分栏，观感"没有动画"。
+            //   做法：记卡片当前屏幕位置 → 移到目标容器（分栏体开头 / 顶层占位处）→
+            //   从旧位置演到新位置。
+            const oldRect = card.getBoundingClientRect();
+            // 先让内核把卡片从"拖拽态"还原（它会把卡片放回拖前的容器）——
+            // 通过触发它的 pointercancel 路径，我们随后再把卡片挪到正确的新家
+            document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+            // Escape 还原是同步的：现在卡片已回到拖拽前的位置
+            const body2 = newGroup
+                ? document.querySelector('.mod-group[data-group-id="' + newGroup + '"] .mod-group-body')
+                : document.getElementById('modsList');
+            if (!body2) { if (typeof onDone === 'function') onDone(); return; }
+            // 新家开头插入
+            const anchor = body2.querySelector('.mod-card');
+            if (anchor && anchor !== card) body2.insertBefore(card, anchor);
+            else body2.appendChild(card);
+            // 顶层归属时保持 top_order 一致（插到当前指针位置附近 —— 简化为开头）
+            // FLIP：从旧屏幕位置演到新位置
+            const nowRect = card.getBoundingClientRect();
+            const dy = oldRect.top - nowRect.top;
+            const dx = oldRect.left - nowRect.left;
+            if (dy || dx) {
+                card.style.transition = 'none';
+                card.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+                requestAnimationFrame(() => {
+                    card.style.transition = 'transform .25s cubic-bezier(.2,.8,.3,1)';
+                    card.style.transform = '';
+                });
+            }
+            // 更新计数徽标（就地改，避免重渲染打断上面的动画）
+            const groupEl2 = body2.closest('.mod-group');
+            if (groupEl2) {
+                const cnt = groupEl2.querySelector('.mod-group-head > span:nth-last-child(2)')
+                    || groupEl2.querySelector('.mod-group-head span.text-\\[10px\\]');
+                if (cnt) cnt.textContent = String(body2.querySelectorAll('.mod-card').length);
+            }
+            // 故意**不调 onDone**：它会 refreshModsList 整页重建，把刚播的
+            //   FLIP 动画打断（"放进去没动画"的成因）。归属/顺序已各自入 Store。
+        } catch (err) { /* 忽略 */ }
+    }, true);
+
+    // ③ 分栏拖动（内核）：与卡片同一套手感
+    window.__elainaBindFlatDragSort(
+        box,
+        () => {
+            saveTopOrder();
+            if (typeof onDone === 'function') onDone();
+        },
+        {
+            itemSelector: '.mod-group',
+            handleSelector: '.mod-group-grip',
+            idAttr: 'data-group-id',
+            placeholderClass: 'mod-placeholder',
+            draggingClass: 'mod-dragging',
+            // 顶层混排：分栏与平铺卡片同等级，插入点候选包含两类项 ——
+            //   分栏因此可以拖到任何卡片之间（用户要求；之前候选只有分栏，
+            //   分栏永远拖不到卡片上面）。
+            topLevelMixed: true,
+            outerItemSelector: '.mod-card, .mod-group',
+            outerContainer: box,
+            canStart(ev) {
+                return !ev.target.closest('.mod-act') && !ev.target.closest('.mod-group-toggle');
+            },
+        }
+    );
+
+    // ── 折叠：就地切类，不整页重渲染（CSS grid-rows 过渡才能播完） ──
+    box.querySelectorAll('.mod-group-head').forEach((head) => {
+        head.addEventListener('click', (ev) => {
+            if (ev.target.closest('.mod-group-grip')) return;
+            if (ev.target.closest('.mod-act')) return;
+            if (ev.target.closest('.mod-group-toggle')) return;
+            toggleGroupCollapse(head.getAttribute('data-group-id'));
+        });
+    });
+    box.querySelectorAll('.mod-group-toggle').forEach((el) => {
+        el.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            toggleGroupCollapse(el.getAttribute('data-group-id'));
+        });
+    });
+
+    function toggleGroupCollapse(gid) {
+        const gs = readGroups();
+        const g = gs.find((x) => x.id === gid);
+        if (!g) return;
+        g.collapsed = !(g.collapsed === true);
+        saveGroups(gs);
+        const groupEl = box.querySelector('.mod-group[data-group-id="' + gid + '"]');
+        if (!groupEl) { void refreshModsList(); return; }
+        groupEl.classList.toggle('mod-group-collapsed', g.collapsed);
+        groupEl.querySelector('.mod-group-body')?.classList.toggle('is-collapsed', g.collapsed);
+        groupEl.querySelector('.mod-group-toggle')?.setAttribute('title',
+            g.collapsed ? '展开' : '收纳');
+    }
+}
+
+/**
+ * 渲染「设置 → 插件」页面里的**技能（skill）**列表。
+ *
+ * 技能与插件是两回事，所以这里既不合并进 #modsList，也不用插件的数据源：
+ *   它是同一张卡片里、插件列表下方的**独立一屏**，数据来自 /api/skills。
+ *   混在一起会让"插件列表"里冒出本不该在那儿的项，而且两者卸载方式不同。
+ *
+ * 每项显示：名称 / 描述 / 来源 + 查看 / 卸载。
+ *   · 来源 —— 本地技能标「本地」；插件随附的标「来自插件 <owner>」。
+ *   · 查看 —— 读 SKILL.md（GET /api/skills/<id>/content），复用现有说明弹窗 #modReadme*。
+ *   · 卸载 —— **只有本地技能**才给按钮：插件随附的技能住在插件目录里，
+ *           删插件就一起没了；单独给它一个删除按钮只会误导（点了也删不掉）。
+ *
+ * 由 refreshModsList() 顺带触发（见那里的说明），所以用户每次打开设置都能看到最新的。
+ */
+async function refreshSkillsList() {
+    const box = document.getElementById('skillsList');
+    if (!box) return;
+    const hint = document.getElementById('skillsHint');
+    const setHint = (text, cls) => {
+        if (hint) { hint.textContent = text; hint.className = 'text-[11px] ' + (cls || 'text-indigo-400'); }
+    };
+
+    let skills = [];
+    try {
+        const res = await fetch('/api/skills', { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            skills = Array.isArray(data && data.skills) ? data.skills : [];
+        }
+    } catch (e) {
+        // 与插件列表同理：APK 端没有服务端时这个接口不存在，属正常，不必惊动用户
+        box.innerHTML = '';
+        return;
+    }
+
+    if (!skills.length) {
+        box.innerHTML = '<div class="text-[11px] text-indigo-300 py-2 text-center">还没有技能。'
+            + '把含 <code>SKILL.md</code> 的目录放进项目的 skills/，或点上面的「上传安装」选一个 zip。</div>';
+        return;
+    }
+
+    // 复用插件卡片的那两个图标（文档 / 垃圾桶）—— 同一屏内观感要一致
+    const ICON_DOC = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/></svg>';
+    const ICON_TRASH = '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0l1 13h8l1-13"/></svg>';
+
+    box.innerHTML = skills.map((s) => {
+        const id = escapeHtml(s.id);
+        const name = escapeHtml(s.name || s.id);
+        const desc = escapeHtml(s.description || '');
+        const isLocal = s.source === 'local';
+        const srcLabel = isLocal
+            ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 ml-1">本地</span>'
+            : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-500 ml-1">来自插件 '
+                + escapeHtml(s.owner || '') + '</span>';
+        // 卸载按钮只在本地技能上给；随附技能只留一句说明（否则按钮点了也没用）
+        const delBtn = isLocal
+            ? '<button type="button" class="mod-act mod-act-danger skill-del-btn" data-skill-id="' + id + '"'
+                + ' data-skill-name="' + name + '" title="卸载这个技能（含安装包）">' + ICON_TRASH + '</button>'
+            : '<span class="text-[10px] text-indigo-300 ml-1" title="插件随附的技能住在插件目录里，删掉插件就一起没了">随插件删除</span>';
+
+        return '<div class="mod-card" data-skill-id="' + id + '">'
+            + '<div class="min-w-0 flex-1">'
+              + '<div class="flex items-start gap-2">'
+                + '<div class="min-w-0 flex-1">'
+                  + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + srcLabel
+                  + (desc ? '<div class="text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + desc + '</div>' : '')
+                + '</div>'
+              + '</div>'
+              + '<div class="flex items-center gap-1.5 mt-2">'
+                + '<button type="button" class="mod-act skill-view-btn" data-skill-id="' + id + '"'
+                  + ' data-skill-name="' + name + '" title="查看 SKILL.md">' + ICON_DOC + '</button>'
+                + delBtn
+              + '</div>'
+            + '</div>'
+            + '</div>';
+    }).join('');
+
+    // 查看 → 读 SKILL.md 并显示在说明弹窗里
+    box.querySelectorAll('.skill-view-btn').forEach((el) => {
+        el.addEventListener('click', () => {
+            void openSkillContent(el.getAttribute('data-skill-id'), el.getAttribute('data-skill-name'));
+        });
+    });
+
+    // 卸载（仅本地技能）→ DELETE /api/skills/<id>
+    box.querySelectorAll('.skill-del-btn').forEach((el) => {
+        el.addEventListener('click', async (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            const id = el.getAttribute('data-skill-id');
+            const name = el.getAttribute('data-skill-name') || id;
+            const okToGo = await showCustomConfirm(
+                '卸载技能「' + name + '」？\n\n'
+                + '会把技能目录和安装包一起删掉（下次打开设置不会再出现）。\n\n'
+                + '注意：插件随附的技能不能这样卸 —— 它们住在插件目录里，要连同那个插件一起删。',
+                '卸载技能');
+            if (!okToGo) return;
+
+            el.disabled = true;
+            setHint('正在卸载 ' + name + '…', 'text-indigo-500');
+            try {
+                const res = await fetch('/api/skills/' + encodeURIComponent(id), { method: 'DELETE' });
+                const data = await res.json().catch(() => null);
+                if (!res.ok || !data || data.ok === false) {
+                    setHint('卸载失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
+                } else {
+                    setHint('已卸载 ' + name, 'text-emerald-600');
+                    void refreshSkillsList();
+                }
+            } catch (err) {
+                setHint('卸载失败：' + String((err && err.message) || err), 'text-red-500');
+            } finally {
+                el.disabled = false;
+            }
+        });
+    });
+}
+
+/**
+ * 查看单个技能：读它的 SKILL.md 并显示在**复用**的说明弹窗（#modReadme*）里。
+ *
+ * 为什么复用插件 README 那个弹窗而不是再造一个：那套已经处理了滚动、深色模式、
+ * 关闭逻辑，再造第二套只是维护两份一样的壳。技能内容就是一段 markdown 文本，
+ * 与 README 的展示诉求完全一致。
+ *
+ * 走 /api/skills/<id>/content（服务端反查已注册技能后读文件，前端传不了任意路径）。
+ */
+async function openSkillContent(id, name) {
+    const overlay = document.getElementById('modReadmeOverlay');
+    const body = document.getElementById('modReadmeBody');
+    const title = document.getElementById('modReadmeTitle');
+    const fileEl = document.getElementById('modReadmeFile');
+    if (!overlay || !body) return;
+
+    if (title) title.textContent = name + ' · 技能';
+    if (fileEl) fileEl.textContent = '';
+    body.textContent = '正在读取…';
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+
+    try {
+        // id 可能含斜杠（插件随附技能是 owner/rel），encodeURIComponent 会把它编成 %2F，
+        // 服务端按整段捕获再解回来 —— 与插件 README 那种单段 id 的处理一致。
+        const res = await fetch('/api/skills/' + encodeURIComponent(id) + '/content', { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data && data.ok) {
+            body.textContent = String(data.text || '（空文件）');
+            if (fileEl) fileEl.textContent = data.name || 'SKILL.md';
+        } else {
+            body.textContent = (data && data.message) || ('HTTP ' + res.status);
+        }
+    } catch (err) {
+        body.textContent = '读取失败：' + String((err && err.message) || err);
+    }
+}
+
+/**
+ * 打开插件 README 弹窗。
+ *
+ * 走 /api/plugins/<id>/readme（服务端按白名单文件名读，见 server/mods.mjs）。
+ * 没有 README 时服务端回 404，这里明确提示"该插件没有 README 文件"。
+ */
+async function openModReadme(id, name) {
+    const overlay = document.getElementById('modReadmeOverlay');
+    const body = document.getElementById('modReadmeBody');
+    const title = document.getElementById('modReadmeTitle');
+    const fileEl = document.getElementById('modReadmeFile');
+    if (!overlay || !body) return;
+
+    if (title) title.textContent = name + ' · 说明';
+    if (fileEl) fileEl.textContent = '';
+    body.textContent = '正在读取…';
+    overlay.classList.remove('hidden');
+    overlay.classList.add('flex');
+
+    try {
+        const res = await fetch('/api/plugins/' + encodeURIComponent(id) + '/readme', { cache: 'no-store' });
+        const data = await res.json().catch(() => null);
+        if (res.ok && data && data.ok) {
+            body.textContent = String(data.text || '（空文件）');
+            if (fileEl) fileEl.textContent = data.name || 'README';
+        } else {
+            const msg = (data && data.message) || ('HTTP ' + res.status);
+            body.textContent = msg;
+            if (/没有 README/.test(msg)) {
+                body.textContent = '该插件没有 README 文件。\n\n'
+                    + '插件作者可以在插件目录里放一个 README.md 来提供说明。';
+            }
+        }
+    } catch (err) {
+        body.textContent = '读取失败：' + String((err && err.message) || err);
+    }
+}

@@ -11,7 +11,7 @@
  *   --data-dir=<应用私有目录>   以后 data/、data/logs/ 都往这里落
  *   --port=<n>                  默认 0 = 让内核挑一个空闲端口
  *
- * ★ 三条与电脑版不同的硬性约束（都很容易踩）：
+ * 三条与电脑版不同的硬性约束（都很容易踩）：
  *
  *   ① **只绑 127.0.0.1**。安卓上非 root 进程不能监听对外端口，而且就算能，
  *      把服务端暴露到局域网也毫无必要。
@@ -34,13 +34,13 @@
  * 另外 HTTP 头里必须带 CORS：页面是 https://localhost，而这里是
  * http://127.0.0.1:<port>，不同源 —— 电脑版同源所以从不需要这些头。
  *
- * ★ 与电脑端共用的部分：本地中继（/api/relay）与内网判定直接用 server/ 下那两个
+ * 与电脑端共用的部分：本地中继（/api/relay）与内网判定直接用 server/ 下那两个
  *   模块（由 sync-web 复制到本目录的 ./server/），**没有第二份实现**。
  */
 
 import http from 'node:http';
 import process from 'node:process';
-// ★ 2026-10：与电脑端**共用**的两个后端模块（由 scripts/sync-web.mjs 复制到这里
+// 2026-10：与电脑端**共用**的两个后端模块（由 scripts/sync-web.mjs 复制到这里
 //   的 ./server/ 下，见那里的 SHARED_SERVER_MODULES）。不复制源码 —— 中继逻辑
 //   与内网判定只有一份，改一处两端都变。
 import { createRelay } from './server/relay.mjs';
@@ -139,7 +139,7 @@ const server = http.createServer((request, response) => {
         return;
     }
 
-    // ★ 进任何路由之前先过这道门 —— 见 ALLOWED_ORIGIN 的说明
+    // 进任何路由之前先过这道门 —— 见 ALLOWED_ORIGIN 的说明
     if (!originAllowed(request)) {
         sendJson(response, 403, {
             ok: false,
@@ -172,7 +172,7 @@ const server = http.createServer((request, response) => {
 
     if (pathname === '/api/shutdown' && request.method === 'POST') {
         sendJson(response, 200, { ok: true, stopping: true });
-        // ★ 关掉监听、断掉已有的 keep-alive 连接，让事件循环空掉 ——
+        // 关掉监听、断掉已有的 keep-alive 连接，让事件循环空掉 ——
         //   node::Start 随之返回，Java 那边的线程结束，App 进程留着。
         //   不用 process.exit()（见文件头 ③）。
         server.close();

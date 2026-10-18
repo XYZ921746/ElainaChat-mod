@@ -12,11 +12,11 @@
     <script src="/vendor/marked/marked.min.js"></script>
     <script src="/vendor/katex/katex.min.js"></script>
     <!-- ★ Live2D 引擎（live2dcubismcore + pixi-6 + pixi-live2d-display，合计 787KB）
-         已**移出宿主**，改由 web/mods/live2d-models/ 按需注入：
+         已**移出宿主**，改由 mods/live2d-models/ 按需注入：
            · 引擎与模型都住那个资源 mod 里（引擎是能力、模型是数据，都被视频通话复用）
            · 只在真正打开视频通话时才加载 —— 不装 Live2D 的用户不再为这 787KB 付代价
            · 注入顺序由插件保证（core → pixi → display），见它的 ensureEngine()
-         入口是 window.ElainaLive2DModels.ensureEngine()；调用方是 web/mods/live2d/index.js
+         入口是 window.ElainaLive2DModels.ensureEngine()；调用方是 mods/live2d/index.js
          （视频通话的实现也搬进了插件，宿主已没有 live2d-video.js）。 -->
     <!-- 对话 API 格式适配器（三种协议的实现 + 分发表）。
          必须放在主脚本**之前**：主脚本会挂 window.ChatDeps 供它取依赖，
@@ -40,7 +40,7 @@
     <script src="/js/chat-backup.js"></script>
     <script src="/js/data-sync.js"></script>
     <script src="/js/frontend-log.js"></script>
-    <!-- pixi-live2d-display 已随引擎搬进 web/mods/live2d-models/vendor/，
+    <!-- pixi-live2d-display 已随引擎搬进 mods/live2d-models/vendor/，
          它求值前需要 window.Live2D 占位 —— 这一点也由那个插件的 ensureEngine() 负责。 -->
     <!-- Web 字体（Outfit + Noto Sans SC）：★ 必须**非阻塞**加载，否则整页打不开。
          这里原先是 <style> 里的 5 条 @import。@import 会同时挡住**渲染**与
@@ -104,7 +104,7 @@
         *, *::before, *::after { box-sizing: inherit; }
 
         body {
-            /* ★ 这里的 background 会被下面（约 1475 行）那条**同级但更靠后**的
+            /* 这里的 background 会被下面（约 1475 行）那条**同级但更靠后**的
                `body { background: … }` 覆盖 —— 真正生效的是那一条。
                保留这一处只为"早期渲染不闪白"，改配色请改那一条（有说明）。 */
             background: var(--pixso-canvas);
@@ -115,7 +115,7 @@
             overflow: hidden;
         }
 
-        /* ★ 选中文字的底色：原来是写死的粉 rgba(236,72,153,.25) */
+        /* 选中文字的底色：原来是写死的粉 rgba(236,72,153,.25) */
         ::selection {
             background: color-mix(in srgb, var(--pixso-green) 32%, transparent);
         }
@@ -269,7 +269,7 @@
         }
         .modal-input:focus, .modal-textarea:focus {
             background: rgba(255, 255, 255, 0.8);
-            /* ★ 2026-10：原来是写死的粉色 rgba(236,72,153,…) —— 与默认主题
+            /* 2026-10：原来是写死的粉色 rgba(236,72,153,…) —— 与默认主题
                （暖米绿）不符。这里是**较早的一段**规则，会被下面 1789 行起的
                `.modal-input` 那套（走 --pixso-*）覆盖，所以大多数输入框看不出问题；
                但先把它改对，避免"哪段生效取决于顺序"这种脆弱状态。 */
@@ -287,7 +287,7 @@
         }
 
         .gradient-text {
-            /* ★ 2026-10：原来用 --color-primary/secondary/accent（那套是 #ec4899 粉紫，
+            /* 2026-10：原来用 --color-primary/secondary/accent（那套是 #ec4899 粉紫，
                只服务于"自定义"主题与 Tailwind 兜底），在默认主题下就是一段粉紫文字 ——
                与暖米绿界面不符。改用主题色渐变。 */
             background: linear-gradient(135deg, var(--pixso-green-dark), var(--pixso-green), var(--pixso-orange));
@@ -390,7 +390,7 @@
             line-height: 1.5;
         }
         .process-row {
-            /* ★ 2026-10：边框与底色改用**主题变量**。
+            /* 2026-10：边框与底色改用**主题变量**。
                原来这里是 `var(--color-border-soft, …)` / `var(--color-surface-muted, …)`，
                而这两个变量**全项目从未定义**（grep 确认）—— 于是永远落到浅米色兜底值，
                深色模式下过程行就成了一块浅米色卡片，与深色界面割裂（用户实测报的）。
@@ -415,7 +415,7 @@
             color: var(--pixso-brown-soft, #6b5a4e);
             font: inherit;
         }
-        /* ★ 2026-10：hover 底色原为写死的 rgba(0,0,0,.03) —— 深色下等于又压暗一层（方向正好相反）。
+        /* 2026-10：hover 底色原为写死的 rgba(0,0,0,.03) —— 深色下等于又压暗一层（方向正好相反）。
            改用 --pixso-panel：各主题下都比行底色深一档，浅色下近似原来的淡灰、深色下也能看出反馈。 */
         .process-row-head:hover { background: var(--pixso-panel); }
         .process-row-icon { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; opacity: 0.75; }
@@ -444,7 +444,7 @@
             margin: 6px 0 0;
             padding: 7px 8px;
             border-radius: 7px;
-            /* ★ 2026-10：原为写死的 rgba(0,0,0,.045)（深色下几乎看不出、还会偏脏）。
+            /* 2026-10：原为写死的 rgba(0,0,0,.045)（深色下几乎看不出、还会偏脏）。
                改用 --pixso-panel：浅色下是一块比行底略深的浅底（近似原观感），
                深色下则是一块更暗的内嵌底 —— 两个方向都成立。 */
             background: var(--pixso-panel);
@@ -483,7 +483,7 @@
         .process-row[data-state="error"] .process-state { background: #d0523f; opacity: 1; }
         .process-row[data-state="stopped"] .process-state { background: #b08a3f; opacity: 1; }
         .process-row[data-state="error"] .process-row-status {
-            /* ★ 2026-10：原为写死 #c0452f —— 深色底上对比度仅约 2.9:1（11px 小字读不清）。
+            /* 2026-10：原为写死 #c0452f —— 深色底上对比度仅约 2.9:1（11px 小字读不清）。
                项目没有"失败/危险"专用变量，故用 color-mix 把它混进主题文字色
                （--pixso-brown 深色下变浅、浅色下变深）→ 浅色下仍是原来的红，
                深色下自动提亮到约 4.5:1。语义仍是"红"，不会与 stopped 的琥珀混淆。 */
@@ -500,7 +500,7 @@
             max-height: 320px;
             overflow: auto;
         }
-        /* ★★ 2026-10：思考行按参考（DeepSeek 的思维链样式）改成**无框**。
+        /* 2026-10：思考行按参考（DeepSeek 的思维链样式）改成**无框**。
            用户原话："以这个思维链为参考，不需要框框束缚" —— 去掉卡片边框 / 底色 /
            圆角，以及展开时那条虚线分隔；思考正文直接以缩进纯文本铺开，观感与参考图一致。
            ★ 只改思考行（[data-kind="think"]）：工具行仍是卡片 —— 那是"操作记录"，
@@ -642,7 +642,7 @@
         }
 
         .bubble-ai {
-            /* ★ 2026-10：原来是写死的粉紫渐变（rgba(244,114,182)/rgba(139,92,246)）
+            /* 2026-10：原来是写死的粉紫渐变（rgba(244,114,182)/rgba(139,92,246)）
                + 写死的粉色描边 —— 与默认主题（暖米绿）不符。
                改用主题变量的淡色混合，跟随主题切换。 */
             background: linear-gradient(135deg,
@@ -801,7 +801,7 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
         }
 
-        /* ── 顶栏「公告」按钮 + 公告面板（★ 2026-10）─────────────────────────
+        /* ── 顶栏「公告」按钮 + 公告面板─────────────────────────
            按钮本身沿用 .header-memory-btn（桌面图标+文字、手机收成圆图标），
            这里只加"未读红点"与面板的样式。面板配色一律走主题变量。 */
         .announce-dot { background: #ef5b73; }
@@ -819,7 +819,7 @@
             border-radius: 16px;
             box-shadow: 0 18px 44px rgba(44, 42, 69, 0.18);
         }
-        /* ★ 必须写这一条：上面的 #announcePanel 是 id 选择器（优先级高于 Tailwind
+        /* 必须写这一条：上面的 #announcePanel 是 id 选择器（优先级高于 Tailwind
            的 .hidden），不显式覆盖的话 hidden 根本藏不住面板。 */
         #announcePanel.hidden { display: none; }
         .announce-panel-head {
@@ -856,7 +856,7 @@
         }
         .announce-empty { padding: 16px 14px; font-size: 12px; color: var(--pixso-brown-soft, #5d5878); }
 
-        /* ── 设置 → 记忆：轮数步进器 + 手动整理按钮（★ 2026-10 改良）──────────
+        /* ── 设置 → 记忆：轮数步进器 + 手动整理按钮──────────
            开关本身复用全站统一的 .mod-switch；这里只加步进器与手动按钮的样式，
            配色一律走主题变量（写死颜色会在换主题/深色下显得割裂）。 */
         .memory-every-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
@@ -907,7 +907,7 @@
         .memory-now-btn svg { width: 15px; height: 15px; flex: none; }
         .memory-now-btn.is-running { color: var(--pixso-orange, #b8934a); opacity: .8; }
 
-        /* ── MiMo TTS 参考音频样本（★ 2026-10 改良）────────────────────────
+        /* ── MiMo TTS 参考音频样本────────────────────────
            原生 file 控件的“未选择任何文件”改不了文案、也带不进主题，
            所以换成：视觉隐藏的原生 input + 主题化按钮 + 状态文案 + 清除按钮。
            配色全走主题变量 —— 之前那个 `bg-rose-500/20 text-rose-300`
@@ -1351,7 +1351,7 @@
 
         .tab-active {
             background: rgba(255, 255, 255, 0.75);
-            /* ★ 2026-10：原来是写死的粉描边 + 粉阴影，改成主题色 */
+            /* 2026-10：原来是写死的粉描边 + 粉阴影，改成主题色 */
             color: var(--pixso-green-dark);
             border: 1px solid color-mix(in srgb, var(--pixso-green) 34%, transparent);
             box-shadow: 0 2px 10px color-mix(in srgb, var(--pixso-green) 16%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.7);
@@ -1668,7 +1668,7 @@
             --pixso-green-dark: #738746;
             --pixso-orange: #ff7d4d;
             --pixso-line: #d9c7c0;
-            /* ★★ 2026-10 补：默认（elaina）主题**漏定义**了 --pixso-warn* 四个变量。
+            /* 2026-10 补：默认（elaina）主题**漏定义**了 --pixso-warn* 四个变量。
                其余四套主题（ios / claude / sage / sakura）与深色块都定义了它们，
                只有这里没有 —— 而 :root 是"没切主题"时的生效来源，也就是**默认外观**。
                后果：`var(--pixso-warn)` 取不到值、`var(--pixso-warn-bg)` 整条声明失效，
@@ -1697,7 +1697,7 @@
         body {
             color: var(--pixso-brown);
             font-family: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-            /* ★★ 2026-10：这里才是**真正生效**的 body 背景（上面的规则与它同级，
+            /* 2026-10：这里才是**真正生效**的 body 背景（上面的规则与它同级，
                它在文件更后面，所以由它胜出 —— 我第一次只在前面那份上改渐变，
                被这一条 `background` 简写整个盖掉了，实测 bgImage=none）。
 
@@ -2039,7 +2039,7 @@
         .modal-panel .text-rose-500,
         .modal-panel .text-violet-500 { color: var(--pixso-orange) !important; }
 
-        /* ★★ 2026-10：`.text-pink-500` 等 Tailwind 类在**弹窗之外**的地方
+        /* 2026-10：`.text-pink-500` 等 Tailwind 类在**弹窗之外**的地方
            （如顶栏金句的 ✨）没有被上面那条覆盖，仍是原生的 `#ec4899` 粉 ——
            默认主题（暖米绿）下这些粉点是"漏网"的。
 
@@ -2080,7 +2080,7 @@
         .modal-input::placeholder,
         .modal-textarea::placeholder { color: #a48e84; }
 
-        /* ==================== 模型名组合框（★ 2026-10 新增）====================
+        /* ==================== 模型名组合框====================
            用户要求（原话）："下拉框能不能和输入的地方直接二合一，右边的三角形区域
            大一些，点右边三角形区域展开更改设置。就比如获取模型那里，点开直接在
            输入那里显示模型列表；点左边区域可更改模型名称，点右边三角显示模型列表，
@@ -2108,7 +2108,7 @@
              把 select 藏起来当作数据源。这样所有既有代码与检查脚本
              （check-model-list 的 8 组断言都盯着 input.value 与 select）继续有效。 */
         .model-combo { position: relative; }
-        /* ★★ 组合框做成**一个整体外框**（2026-10 重做）。
+        /* 组合框做成**一个整体外框**。
            ── 第一版错在哪 ─────────────────────────────────────────────────
            我给 input 和三角按钮**各画了边框**（按钮只去掉左边那条），
            想靠"边框重叠 1px"骗过眼睛。结果用户一眼看出是**两个部分**：
@@ -2135,7 +2135,7 @@
             box-sizing: border-box;
             transition: border-color .15s ease, background .15s ease;
         }
-        /* 聚焦：外框轻微高亮 —— ★ 但**不再换边框色**（2026-10 用户要求"我不需要绿边"）。
+        /* 聚焦：外框轻微高亮 —— ★ 但**不再换边框色**。
            原来这里把边框改成 `--pixso-green`，聚焦/展开时外框会出现一圈彩色描边；
            现在只保留背景的轻微变化作为聚焦提示，边框始终保持普通线色 ——
            输入框与展开的列表也就天然同色，不会有任何色差。 */
@@ -2191,7 +2191,7 @@
             /* 宽度对齐"输入框 + 三角"那一段（与 .model-combo 同宽，
                而 .model-combo 本身就是 flex-1，不含右侧的获取按钮） */
             right: 0;
-            /* ★ 与输入框**无缝衔接**（原来是 calc(100% + 4px) 留了 4px 间隙，
+            /* 与输入框**无缝衔接**（原来是 calc(100% + 4px) 留了 4px 间隙，
                使列表看起来是"另一个浮层"而不是输入框的一部分） */
             top: 100%;
             z-index: 5;
@@ -2204,13 +2204,13 @@
             box-shadow: 0 10px 30px rgba(30, 27, 75, .16);
         }
         .model-combo-list.hidden { display: none; }
-        /* ★★ 展开时把「输入框」与「下拉列表」合成**一块**（2026-10 用户要求）：
+        /* 展开时把「输入框」与「下拉列表」合成**一块**：
            "把模型名称和下拉栏合并成一个整体，而不是两个分开的地方"。
            ── 原来为什么是两块 ──────────────────────────────────────────────
            输入框是一个圆角框（.model-combo-row），候选列表是浮在它下方 4px 处的
            **另一个**圆角框（各自带边框 + 圆角 + 阴影），中间有空隙 —— 一眼就是两截。
            ── 现在怎么做 ────────────────────────────────────────────────────
-           展开时（.model-combo.is-open，app-07-init.js 展开加、收起移除）：
+           展开时（.model-combo.is-open，init.js 展开加、收起移除）：
              · 输入框的**下角压平**（两个下圆角设 0）；
              · 列表的**上角压平**并**去掉上边框** —— 那条分隔线由输入框自身的
                下边框充当，于是不会出现"两条边框叠在一起"的重边；
@@ -2223,7 +2223,7 @@
             border-bottom-right-radius: 0;
         }
         .model-combo.is-open .model-combo-toggle { border-bottom-right-radius: 0; }
-        /* ★ 展开时输入框与列表的边框**同色**（都保持普通线色 var(--pixso-line)）——
+        /* 展开时输入框与列表的边框**同色**（都保持普通线色 var(--pixso-line)）——
            接缝两角干净、无缺口。这里**不再单独指定颜色**：因为聚焦态已不再换成
            `--pixso-green`，输入框与列表天然同色（用户要求"我不需要绿边"）。 */
         .model-combo.is-open .model-combo-list {
@@ -2261,14 +2261,14 @@
         .modal-input:focus,
         .modal-textarea:focus {
             color: var(--pixso-brown);
-            /* ★ 不能写死 #fff：深色模式下聚焦会突然变白（用户反馈插件页没适配
+            /* 不能写死 #fff：深色模式下聚焦会突然变白（用户反馈插件页没适配
                深色时的一部分）。用 panel-soft，深色下是 #222833、浅色下 #f1e8e5。 */
             background: var(--pixso-panel-soft);
             border-color: var(--pixso-green);
             box-shadow: 0 0 0 3px rgba(167,187,108,.20);
         }
 
-        /* ==================== 所有下拉统一外观（★ 2026-10）====================
+        /* ==================== 所有下拉统一外观====================
            用户反馈："还有其他比如语言主题那里的下拉还是老下拉"。
 
            ── 问题 ────────────────────────────────────────────────────────────
@@ -2306,7 +2306,7 @@
         html[data-theme="dark"] #settingsPanel select.log-select {
             background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa4b6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
         }
-        /* ★ 下拉的**聚焦**样式与「模型名」字段对齐（2026-10 用户要求
+        /* 下拉的**聚焦**样式与「模型名」字段对齐（2026-10 用户要求
            "其他地方下拉栏没做呢，比如深色模式/语音输出/思考…"）。
            ── 差在哪 ────────────────────────────────────────────────────────
            下拉带 `.modal-input` 类，聚焦时走 `.modal-input:focus` →
@@ -2321,7 +2321,7 @@
             box-shadow: none;
         }
 
-        /* ==================== 设置下拉：自绘弹出面板（★ 2026-10）====================
+        /* ==================== 设置下拉：自绘弹出面板====================
            用户要求"改下拉"——要把原生 <select> 的**弹出面板**换成主题化列表，
            对齐「模型名」组合框的候选列表（原生面板是系统绘制的，CSS 改不了它）。
            ── 做法 ──────────────────────────────────────────────────────────
@@ -2403,7 +2403,7 @@
             .guide-title { font-size: 18px; }
             .conversation-prompt-grid textarea { min-height: 96px; }
         }
-        /* ★ 2026-10：顶栏标题行已删除（✕ 移进导航行），子元素索引整体前移 ——
+        /* 2026-10：顶栏标题行已删除（✕ 移进导航行），子元素索引整体前移 ——
            这里改用 id 定位（#settingsContent / #settingsTopBar），
            不再依赖 nth-child（那种写法在结构一改就会错位）。
            ★ 背景也必须走主题变量：原来写死 #fbfaf8 / #fff，
@@ -2414,7 +2414,7 @@
             border-bottom: 1px solid var(--pixso-line);
         }
         #settingsContent > section:last-child { padding-bottom: 0; border-bottom: 0; }
-        /* ★ 底部按钮栏已删除（2026-10 改成改完即生效）——
+        /* 底部按钮栏已删除——
            原来这条 `#settingsPanel > div:last-child` 现在会指向**内容区**，
            必须去掉：内容区不需要底色（卡片自己就是主体）。 */
         #settingsOverlay,
@@ -2434,7 +2434,7 @@
             min-width: 0;
             max-width: 100%;
         }
-        /* ★ 日志工具栏里的下拉/搜索框**不吃**上面那条 width:100% ——
+        /* 日志工具栏里的下拉/搜索框**不吃**上面那条 width:100% ——
            它们是工具栏里的小控件，被拉满整行会把后面的开关/按钮挤到换行，
            实测截图里工具栏整个竖成一列。这里显式给回自己的宽度。 */
         #settingsPanel .log-select,
@@ -2484,7 +2484,7 @@
             align-items: center;
             gap: 12px;
             color: var(--pixso-brown);
-            /* ★ 2026-10 修：原为写死的 `rgba(255,255,255,.84)` ——
+            /* 2026-10 修：原为写死的 `rgba(255,255,255,.84)` ——
                深色模式下语笺/日记页顶栏是一块**白条**（实测计算值 rgba(255,255,255,.84)），
                而文字用深色模式的浅色字，白底浅字看不清。
                改用主题变量，浅色/深色/6 套主题都自动跟随。
@@ -2656,7 +2656,7 @@
         .header-memory-btn.is-running { color: var(--pixso-orange); }
         .header-memory-btn.page-mode-hidden { display: none !important; }
         .header-memory-btn svg { width: 15px; height: 15px; }
-        /* ★ 顶栏「外观模式」开关（2026-10：从「外观 → 深色模式」下拉搬来，
+        /* 顶栏「外观模式」开关（2026-10：从「外观 → 深色模式」下拉搬来，
            并按用户给的截图改成**三段连体胶囊**）：跟随设备 / 浅色 / 深色 三个
            图标按钮连成一个胶囊，选中的那个是**填充圆底 + 白图标**。
            ★「跟随设备」= 原来的「跟随系统」（跟随系统深浅色自动切换）。 */
@@ -2821,9 +2821,9 @@
             background: var(--pixso-panel-soft);
             border-radius: 16px 16px 16px 0;
         }
-        /* 气泡小尾巴（::after 三角）已整体移除（2026-09，用户要求）：
+        /* 气泡小尾巴（::after 三角）已整体移除：
          * 它是与气泡底色绑定的实色三角，换主题/深色模式时要跟着每个
-         * 主题各配一遍，漏一处就是"深色下突兀的亮三角"（实测踩过两次）。
+         * 主题各配一遍，漏一处就是"深色下突兀的亮三角"。
          * 圆角本身（16px 16px 0 16px / 16px 16px 16px 0）保留了聊天气泡的
          * 方向感 —— 靠近发送方的那一角是直角，没有尾巴也一眼能分清谁说的。 */
         .bubble-user .text-indigo-500,
@@ -3111,8 +3111,8 @@
             color: var(--pixso-brown);
             transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
         }
-        /* ==================== 日记分组标题（2026-10 新增） ====================
-           日记改为**按对话分组**后，每组前面有这么一行。见 app-04-ui.js 的
+        /* ==================== 日记分组标题 ====================
+           日记改为**按对话分组**后，每组前面有这么一行。见 ui.js 的
            renderDiaryPage()。
 
            ★ `grid-column: 1 / -1` 是必须的：`.diary-grid` 是两列网格，
@@ -3132,7 +3132,7 @@
             z-index: 1;
             background: var(--pixso-canvas);
             border-bottom: 1px solid var(--pixso-line);
-            /* ★ 2026-10：组头也要有入场动画。用户反馈"点左边对话没动画" ——
+            /* 2026-10：组头也要有入场动画。用户反馈"点左边对话没动画" ——
                卡片有 animate-fade-in-up，而**组头没有**，于是切换筛选时
                标题是"啪"地出现、卡片却淡入，观感上就是"没动画"。
                两处用同一套时长/缓动，切换时才像一个整体在动。 */
@@ -3170,15 +3170,15 @@
         .diary-card-date { color: var(--pixso-orange); font-size: 11px; font-weight: 750; letter-spacing: .02em; }
         .diary-card-title { margin-top: 7px; color: var(--pixso-brown); font-size: 14px; font-weight: 700; line-height: 1.35; }
         /* 卡片正文截成 4 行（保持网格整齐），**点卡片弹窗看全文** ——
-           见 app-04-ui.js 的 openDiaryDetail()。光标给 pointer 提示可点。 */
+           见 ui.js 的 openDiaryDetail()。光标给 pointer 提示可点。 */
         .diary-card-text { margin-top: 8px; color: var(--pixso-brown-soft); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
         .diary-essences { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
         .diary-essence { padding: 4px 8px; color: var(--pixso-green-dark); background: rgba(167,187,108,.18); border-radius: 999px; font-size: 10px; font-weight: 700; }
         .diary-empty { padding: 90px 24px; color: var(--pixso-brown-soft); text-align: center; }
 
-        /* ==================== 日记：筛选条 / 进入对话 / 详情弹窗（2026-10） ====================
+        /* ==================== 日记：筛选条 / 进入对话 / 详情弹窗 ====================
            用户要求："点聊天记录只筛选日记、不跳转聊天"，以及"日记能展开看全文"。
-           这一组是配套的样式（结构见 app-04-ui.js 的 renderDiaryPage /
+           这一组是配套的样式（结构见 ui.js 的 renderDiaryPage /
            focusDiaryGroup / openDiaryDetail）。 */
         .diary-card { cursor: pointer; }
         .diary-group-enter {
@@ -3315,7 +3315,7 @@
         .log-select { max-width: 150px; }
         .log-search { width: 150px; }
         .log-search:focus, .log-select:focus { border-color: var(--pixso-green); }
-        /* ★ 2026-10 改良：原来是一个裸 checkbox（只靠 accent-color 上色），
+        /* 2026-10 改良：原来是一个裸 checkbox（只靠 accent-color 上色），
            和全站其它开关不是一套观感。现在改成与 .mod-switch 同一套语言的
            **紧凑版**开关（原生 input 仍在、仍可聚焦，只是视觉隐藏 ——
            log-viewer.js 读的就是它的 .checked，所以 JS 一行都不用改）。 */
@@ -3516,13 +3516,13 @@
                 gap: 8px;
                 border: 1px solid var(--pixso-line) !important;
                 border-radius: 20px !important;
-                /* ★★ 2026-10 修：这里原本写死 `background: #fff !important` ——
+                /* 2026-10 修：这里原本写死 `background: #fff !important` ——
                    深色模式下顶栏是一块**纯白方块**（实测计算值 rgb(255,255,255)），
                    而顶栏文字用的是深色模式的浅色字，白底浅字几乎看不清。
                    改用主题变量：`--pixso-panel` 在浅色下是奶油白、深色下是深灰，
                    两边都跟着主题走，不需要在 themes.css 里再写一条深色覆盖。
                    ★ 为什么不直接在 themes.css 加 `html[data-theme="dark"] #mainContent > header`
-                     覆盖：那样只治深色，**其它 5 套主题**（iOS 蓝/陶土橙/鼠尾草/樱花桃）
+                     覆盖：那样只治深色，**其它几套主题**（iOS 蓝/陶土橙/樱花桃）
                      的顶栏仍然是写死的白色，与它们的配色割裂。
                      根因是"写死了颜色"，就该改根因。 */
                 background: var(--pixso-panel) !important;
@@ -3536,7 +3536,7 @@
                 color: var(--pixso-brown) !important;
             }
             #mainContent > header .quote-chip { display: none !important; }
-            /* ★ 2026-10：手机端公告**不走金句胶囊** —— 上面那条是老设计（为给拥挤的
+            /* 2026-10：手机端公告**不走金句胶囊** —— 上面那条是老设计（为给拥挤的
                顶栏省地方，手机端整条藏掉胶囊）。公告有自己的入口 #headerAnnounceBtn
                （沿用 .header-memory-btn，见下面那几条手机规则里对它的处理），
                所以这里不需要给胶囊做任何"条件显形"。 */
@@ -3674,7 +3674,7 @@
                 user-select: none;
             }
             #folderList [data-conv-id].is-context-target {
-                /* ★ 原为写死的 rgba(255,255,255,.74) —— 深色模式下会话项被长按时
+                /* 原为写死的 rgba(255,255,255,.74) —— 深色模式下会话项被长按时
                    会闪一块**白底**。改用主题变量，跟随深浅色。 */
                 background: var(--pixso-panel-soft);
                 box-shadow: inset 3px 0 0 var(--pixso-green), 0 7px 18px rgba(76,49,35,.08);
@@ -3697,7 +3697,7 @@
                 border: 0 !important;
                 outline: 0;
                 border-radius: 50% !important;
-                /* ★ 原为写死的 rgba(255,255,255,.48) —— 深色下是一枚**白圆片**。
+                /* 原为写死的 rgba(255,255,255,.48) —— 深色下是一枚**白圆片**。
                    改用主题变量（浅色下仍是淡底，深色下变深）。 */
                 background: var(--pixso-panel-soft);
                 box-shadow: none !important;
@@ -3754,7 +3754,7 @@
             }
             #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
             #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
-            /* ★ 手机上的分栏导航：9 个分栏在 360px 宽里放不下，**横向滚动**是
+            /* 手机上的分栏导航：9 个分栏在 360px 宽里放不下，**横向滚动**是
                  手机上的标准做法（浏览器标签页就是这样），不改成换行 ——
                  换行会占掉 2-3 行高度，把本就紧张的日志区再压小。
                ★ 关键是别浪费宽度：桌面那条 `max-width: calc(100% - 120px)` 是
@@ -3771,7 +3771,7 @@
                 -webkit-overflow-scrolling: touch;
                 scroll-snap-type: x proximity;
                 scroll-padding-inline: 8px;
-                /* ★ 左右各留 2px 内边距：让首/末项与容器边缘有一点呼吸，
+                /* 左右各留 2px 内边距：让首/末项与容器边缘有一点呼吸，
                    也让 scroll-snap 吸附后不贴边（实测贴边时看着像被裁）。
                    ★ 不用 mask 做"右侧渐隐"了 —— mask 是**视觉遮罩**，
                      它会把首/末项的文字也一起渐隐掉，与"被遮挡"的观感叠加
@@ -3781,7 +3781,7 @@
                 -webkit-mask-image: none;
             }
             .settings-tab-btn { scroll-snap-align: start; }
-            /* ★★ 手机上**隐藏分栏图标**，只留文字。
+            /* 手机上**隐藏分栏图标**，只留文字。
                  两个原因：
                  ① 宽度：9 个分栏 + 图标在 360px 上要多滚将近一倍
                     （实测带图标 scrollWidth 341 vs 不带 255）；
@@ -3791,7 +3791,7 @@
                  桌面端宽度充裕、字体也更全，图标保留。
                ★ 图标是 `display:none`，不占位。 */
             .settings-tab-btn::before { display: none; }
-            /* ★ 手机上没有悬停，未选中分栏要**更实一点**：
+            /* 手机上没有悬停，未选中分栏要**更实一点**：
                  桌面端靠悬停区分选中态，而手机上未选中太淡（opacity .78 + 浅色文字）
                  在户外/低亮度下几乎看不清"还有哪些分栏可点"。
                  选中态本来就是主题绿 + 加粗，所以提亮未选中不会混淆。
@@ -3803,7 +3803,7 @@
                  这类"规则写了却不生效"不会报错，只能靠量计算样式发现。
                  所以那些覆盖写在文件后面「手机分栏间距」那一段（基础规则之后）。 */
             .settings-tab-btn { opacity: .92; color: var(--pixso-brown); }
-            /* ★ 级别药丸在手机上收紧：5 个药丸（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+            /* 级别药丸在手机上收紧：5 个药丸（DEBUG/INFO/WARNING/ERROR/CRITICAL）
                  在 360px 上原本要占两行（工具栏 127px 高）。收紧内边距与字号后
                  仍会换行，但只占两行的一半高度，给日志区多留出可视行数。 */
             .log-pill { padding: 3px 8px; font-size: 10.5px; }
@@ -3829,7 +3829,7 @@
             #settingsContent > section,
             #settingsContent > section:last-child {
                 padding: 17px;
-                /* ★ 原为写死的白色玻璃（rgba(255,255,255,.56) + 白描边 + 白内阴影）——
+                /* 原为写死的白色玻璃（rgba(255,255,255,.56) + 白描边 + 白内阴影）——
                    深色模式下设置卡片会是**白底**，与深色面板割裂。
                    改用主题变量：浅色下仍是半透明奶油白（观感接近），深色下自动变深。
                    内阴影的白也去掉（它在深色下是一条刺眼的亮边）。 */
@@ -3842,7 +3842,7 @@
             }
             #settingsPanel .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
             #settingsPanel .flex.gap-4 { flex-wrap: wrap; row-gap: 10px; }
-            /* ★ 底部按钮栏已删除（2026-10 改成改完即生效）——
+            /* 底部按钮栏已删除——
                原来这几条 `#settingsPanel > div:last-child` 现在会指向内容区，
                会把内容区画成一条带顶边框的底栏。已移除。
                内容区在移动端就是最后一块，靠自己的 padding 收尾即可。 */
@@ -3867,7 +3867,7 @@
             #settingsPanel { animation-duration: 0.01ms !important; }
         }
     
-    /* ==================== 设置界面（2026-10 全屏重构）====================
+    /* ==================== 设置界面====================
        用户要求：**设置直接覆盖全屏**，而不是一个放大的弹窗。
 
        结构（沿用现有 DOM，不动那 285 行 HTML）：
@@ -3895,12 +3895,12 @@
             height: 100vh !important;
             max-height: none !important;
             padding: 0 !important;
-            /* ★ 必须改掉 flex 居中：元素上有 Tailwind 的
+            /* 必须改掉 flex 居中：元素上有 Tailwind 的
                `items-center justify-center p-4`，不改的话面板会被居中并留边距，
                看起来仍是"放大的弹窗"而不是全屏页。 */
             align-items: stretch !important;
             justify-content: stretch !important;
-            /* ★ 半透明（2026-10 用户要求）：设置页背后能透出聊天界面，
+            /* 半透明：设置页背后能透出聊天界面，
                  配合模糊形成"毛玻璃整页"的观感。
                  用 color-mix 把主题面板色压到 82% 不透明 ——
                  深色/浅色/各套模板都自动跟随，不用为每套主题写一份。
@@ -3937,7 +3937,7 @@
             margin: 0 !important;
             padding: 0 20px !important;
             border: 0 !important;
-            /* ★ 导航下面那条横线**已删除**（2026-10 用户要求"彻底没有分割"）——
+            /* 导航下面那条横线**已删除**——
                原来这里是 `border-bottom: 1px solid var(--pixso-line)`，
                导航是纯文字浮层、下面再来一条线就又把顶栏切成了一块。
                元素上还带着 Tailwind 的 `border-b border-white/50`，
@@ -3990,7 +3990,7 @@
             margin: 0 auto;
             box-sizing: border-box;
         }
-        /* ★ 底部按钮栏已删除（2026-10 改成改完即生效）——
+        /* 底部按钮栏已删除——
            原来这里给 `#settingsPanel > div:last-child` 画的底栏样式
            现在会落到**内容区**上（面板只剩顶栏 + 内容区两个子元素），
            会在内容底部多出一条分隔线和一块底色。已移除。 */
@@ -4006,7 +4006,7 @@
     #settingsTabNav {
         display: flex;
         align-items: center;
-        /* ★★ `justify-content` 必须是 `flex-start`，**不能是 `center`**！
+        /* `justify-content` 必须是 `flex-start`，**不能是 `center`**！
            这是 flexbox 的一个经典陷阱，也是用户报"导航头和尾被遮挡、还滑不动"的真因。
 
            ── 为什么 `center` 会坏 ──────────────────────────────────────────
@@ -4040,7 +4040,7 @@
         background: transparent !important;
         box-shadow: none !important;
         border-radius: 0 !important;
-        /* ★★★ 2026-10 修：导航按钮组要**居中**（用户："导航栏应该是居中的，
+        /* 2026-10 修：导航按钮组要**居中**（用户："导航栏应该是居中的，
            现在选择靠左"）。
            ── 为什么之前没居中 ────────────────────────────────────────────
            下面这两行（`width: max-content` + `margin: 0 auto`）本意就是居中，
@@ -4082,7 +4082,7 @@
         transition: color .15s ease, opacity .15s ease;
         opacity: .78;                   /* 未选中稍淡，选中更亮 —— 形成层次 */
     }
-    /* ★ 分栏图标（参照图里每项都有图标）：用 ::before 挂 unicode 符号，
+    /* 分栏图标（参照图里每项都有图标）：用 ::before 挂 unicode 符号，
          不动 HTML 的按钮文字（那些文字被 JS 与检查脚本依赖，不能改）。
          用 data-settings-tab 定位，插件注册的分栏没有对应图标就不显示。
        ★ 用**单色几何符号**而不是 emoji —— 参照图是单色线性图标，
@@ -4097,7 +4097,7 @@
     }
     .settings-tab-btn.active::before { opacity: 1; }
     .settings-tab-btn[data-settings-tab="tab-appearance"]::before { content: '◐'; }
-    /* ★★ 2026-10 修（用户报"角色这笑脸是什么情况"）：`\FE0E` 是**文字呈现**变体
+    /* 2026-10 修（用户报"角色这笑脸是什么情况"）：`\FE0E` 是**文字呈现**变体
        选择符（VARIATION SELECTOR-15），用来强制这个字符按文字渲染而不是彩色 emoji。
        为什么只有这两个要加：`☺`(U+263A) 与 `⚙`(U+2699) 带彩色 emoji 变体 ——
        安卓 WebView 上实测「角色」渲染成黄色笑脸、不跟随主题色（与上面那段
@@ -4153,9 +4153,9 @@
          这类"规则写了却不生效"**不会报任何错**，只能靠量计算样式发现。 */
     @media (max-width: 860px) {
         #settingsTabNav {
-            /* ★ `gap: 12px` 让相邻分栏之间有清晰空隙（原来 4px 太挤）。 */
+            /* `gap: 12px` 让相邻分栏之间有清晰空隙（原来 4px 太挤）。 */
             gap: 12px !important;
-            /* ★ 容器宽度：给 ✕ 留出刚好够的位置就行。
+            /* 容器宽度：给 ✕ 留出刚好够的位置就行。
                基础规则是 `calc(100% - 120px)` —— 那是给**桌面端"标题 + ✕"两侧**
                留的（桌面顶栏左边有标题）。而手机上标题行已删、✕ 只有一个且
                `right: 20px` 绝对定位（宽 38px），所以只需留 38 + 20 + 8(间隙) ≈ 66px。
@@ -4165,7 +4165,7 @@
             max-width: calc(100% - 66px);
             /* 左右留 2px：首/末项不贴边，不会被误看成"被裁掉" */
             padding: 0 2px !important;
-            /* ★★ 去掉 `mask` 渐隐：mask 是**视觉遮罩**，会把首/末项的文字
+            /* 去掉 `mask` 渐隐：mask 是**视觉遮罩**，会把首/末项的文字
                一起渐隐掉 —— 与"头尾被遮挡"的观感叠加，反而更像 bug。
                可滑动的提示交给"露出半个分栏"本身（手机上这是通用约定）。 */
             mask-image: none;
@@ -4175,7 +4175,7 @@
             padding: 8px 0;
             font-size: 12.5px;
             gap: 0;
-            /* ★ 这一条是关键：不压缩，让导航真的滚动起来 */
+            /* 这一条是关键：不压缩，让导航真的滚动起来 */
             flex-shrink: 0;
         }
     }
@@ -4188,7 +4188,7 @@
          那条 `background: color-mix(...)`（同权重、靠后者胜），
          半透明就永远不生效（实测踩到）。 */
     #settingsOverlay {
-        /* ★★ 2026-10 修（真 bug，用户报"手机端设置变透明、不像之前带点颜色"）：
+        /* 2026-10 修（真 bug，用户报"手机端设置变透明、不像之前带点颜色"）：
          *   这条用的是 `background: color-mix(…)` —— **而这个 WebView 不一定支持它**。
          *   实测（安卓模拟器 SM-A5560 / Android 15）：
          *     WebView = Chrome/110.0.5481.154；`CSS.supports('background','color-mix(…)')`
@@ -4208,7 +4208,7 @@
         backdrop-filter: blur(18px) saturate(1.2) !important;
         -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
     }
-    /* ★★ 不支持 color-mix 的浏览器的兜底：退回**实色主题面板色**。
+    /* 不支持 color-mix 的浏览器的兜底：退回**实色主题面板色**。
      *
      *   为什么是 @supports 而不是"同一规则写两句"：见上面那段注释 ——
      *   未定义值不回退，同规则里的实色兜底会被 shorthand 压掉，实测无效。
@@ -4221,13 +4221,13 @@
     @supports not (background: color-mix(in srgb, red 82%, transparent)) {
         #settingsOverlay { background: var(--pixso-panel) !important; }
     }
-    /* ★ 导航下面的横线已删除（用户要求"彻底没有分割"）——
+    /* 导航下面的横线已删除（用户要求"彻底没有分割"）——
        原来这条 `#settingsTopBar { border-color: ... }` 是给那条线配色的，
        现在没有线了，规则一并去掉。 */
-    /* ★ 底部按钮栏已删除 → 原来这条 `div:last-child` 的边框色规则也去掉
+    /* 底部按钮栏已删除 → 原来这条 `div:last-child` 的边框色规则也去掉
        （它会落到内容区上，给内容区加一条多余的顶边框）。 */
     
-    /* ==================== Agent 权限区块的着色面板（★ 2026-10）====================
+    /* ==================== Agent 权限区块的着色面板====================
        「AI 权限」与「手机操作」里有几块**带色调**的说明面板（警告橙 / 信息蓝紫）。
        它们在 HTML 里是用内联 style 写死的浅色底（rgba(255,247,237,.75) 之类）+
        深色文字（#b45309 / #9a3412）—— 浅色主题下没问题，**深色主题下就糊了**：
@@ -4271,7 +4271,7 @@
         color: var(--pixso-brown-soft) !important;
     }
 
-    /* ── 「读取信息」每行右侧的**系统权限现状**小徽标（★ 2026-10 新增）──────────
+    /* ── 「读取信息」每行右侧的**系统权限现状**小徽标──────────
        它回答的是「应用能不能拿到」，与同一行那个 .mod-switch（管"让不让 AI 知道"）
        是两道独立的闸，所以两样东西都要显示。
        配色与 .tts-sample-status 同一套写法：只走主题变量 + 回调色，
@@ -4312,7 +4312,7 @@
     #settingsContent .settings-tab-panel > section,
     #settingsContent .settings-tab-panel > div.mb-4 {
         position: relative;
-        /* ★ 卡片也半透明（比背景更实一点）—— 配合半透明背景形成层次：
+        /* 卡片也半透明（比背景更实一点）—— 配合半透明背景形成层次：
              背景 82% 透明 → 卡片再压一层，卡片里的文字仍然清楚。
              用 color-mix 跟随主题色，深浅色都自动适配。 */
         background: var(--pixso-panel-soft);
@@ -4320,7 +4320,7 @@
         border: 1px solid var(--pixso-line);
         border-radius: 16px;
         padding: 18px 20px;
-        /* ★ 卡片之间留出明确间距（用户要求"各个模块是分开的"）——
+        /* 卡片之间留出明确间距（用户要求"各个模块是分开的"）——
            18px 比 14px 更能看出是独立模块，尤其两列并排时。 */
         margin-bottom: 18px;
         transition: border-color .15s ease, box-shadow .15s ease;
@@ -4331,7 +4331,7 @@
         border-color: var(--pixso-green);
         box-shadow: 0 4px 14px rgba(30,27,75,.08);
     }
-    /* ★ 原来用 border-t 分隔的"第二段"（如对话页的思考模式）——
+    /* 原来用 border-t 分隔的"第二段"（如对话页的思考模式）——
        它现在也是独立卡片，那条分隔线要收掉，否则卡片里多一条横线。 */
     #settingsContent .settings-tab-panel > section.mt-4,
     #settingsContent .settings-tab-panel > section.border-t {
@@ -4370,7 +4370,7 @@
     
     /* 大屏下：内容列里卡片两列排布（一屏塞下更多功能） */
     @media (min-width: 900px) {
-        /* ★★ 必须写 `.active-panel` —— 不能只写 `#settingsContent .settings-tab-panel`！
+        /* 必须写 `.active-panel` —— 不能只写 `#settingsContent .settings-tab-panel`！
            基础规则是 `.settings-tab-panel{display:none}`（特异性 0,1,0），
            而 `#settingsContent .settings-tab-panel`（1,1,0）特异性更高，
            会把 display:none 覆盖掉 → **所有分栏内容同时显示**（实测踩到：
@@ -4380,7 +4380,7 @@
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 18px;                  /* 与卡片 margin 一致，模块之间分得开 */
             align-content: start;
-            /* ★★ `align-items: start` 是必须的 —— 默认的 stretch 会把同一行
+            /* `align-items: start` 是必须的 —— 默认的 stretch 会把同一行
                的卡片拉到**等高**：左边「语音输出」很长，右边「语音输入」很短，
                结果右边被撑成一个巨大的空盒子（参照图里没有这种现象）。
                start 让每张卡片只占自己内容的高度。 */
@@ -4391,7 +4391,7 @@
         #settingsContent .settings-tab-panel > div.mb-4 {
             margin-bottom: 0;
         }
-        /* ★ 通栏判定：**只有确实需要整行**的卡片跨两列 ——
+        /* 通栏判定：**只有确实需要整行**的卡片跨两列 ——
            插件列表（卡片一列放不下）、主题选择器（本身是网格）、多行文本域。
            ★ 刻意**不**按"有没有滑杆/输入框"自动通栏：那会让
              「语音输出（大）」通栏、「语音输入（小）」单独占半行，反而更零碎。
@@ -4414,7 +4414,7 @@
     #tab-mods.settings-tab-panel.active-panel { display: block !important; }
     #tab-mods .settings-card { margin-bottom: 0; }
 
-    /* ★ 日志分栏同理：它只有**一块**内容（终端式日志区），
+    /* 日志分栏同理：它只有**一块**内容（终端式日志区），
        如果走上面那条 ≥900px 的两列 grid，这一块只会占**半宽** ——
        实测截图里就是"日志区被挤成窄窄一条、右边一大片空白"。
        终端输出要的是整行宽度（长路径 / 长报错不换行才好看），所以固定用 block。 */
@@ -4422,7 +4422,7 @@
     /* 日志区的宽度与高度都交给它自己（见 .log-tab-body），不要被 grid 影响 */
     #tab-log .log-tab-body { grid-column: 1 / -1; }
 
-    /* ★★ 日志分栏激活时，内容区改成**不滚动 + flex 纵向** ——
+    /* 日志分栏激活时，内容区改成**不滚动 + flex 纵向** ——
        这是让 `.log-tab-body { flex: 1 }` 真正生效的前提：
        flex 子项要"吃掉剩余高度"，父元素必须是有确定高度的 flex 容器。
        默认的 `#settingsContent` 是 `overflow-y:auto` 的普通块，
@@ -4443,7 +4443,7 @@
         overflow: hidden;
         min-height: 0;
     }
-    /* ★★ 关键第二步：日志栏**自己**必须是 flex 列容器 + 撑满内容区。
+    /* 关键第二步：日志栏**自己**必须是 flex 列容器 + 撑满内容区。
        只把内容区改成 flex 是不够的 —— 实测那样 `#tab-log` 仍是
        `display: block`（被上面那条 `display:block !important` 定的），
        它内部的 `.log-tab-body { flex:1 }` 因此无处可依，
@@ -4462,7 +4462,7 @@
 
     .l2d-bg-opt.selected { outline: 2px solid #6366f1; outline-offset: 2px; box-shadow: 0 0 0 3px rgba(99,102,241,.35); }
 
-    /* ==================== 插件页（卡片式，2026-10 重做）====================
+    /* ==================== 插件页====================
        参照 AstrBot 的插件页：卡片 + iOS 风格开关 + 卡片底部一排操作按钮。
        全部用变量与柔和阴影，深浅色主题下都能看（宿主主题会改 :root 变量）。
 
@@ -4504,7 +4504,7 @@
     .mod-card{
         position:relative;display:flex;gap:12px;align-items:flex-start;
         padding:14px 14px 10px;border-radius:16px;
-        /* ★ 用主题变量而不是写死的白色 —— 深色模式下这些变量会变暗，
+        /* 用主题变量而不是写死的白色 —— 深色模式下这些变量会变暗，
            插件页才能跟着适配（此前写死 rgba(255,255,255,…) 导致深色下
            卡片是白的、文字看不清，用户反馈"没适配深色模式"）。
            ★ 注意不能用 --pixso-surface：它在 index.html 的 :root 里被兜底
@@ -4582,7 +4582,7 @@
         border-radius:16px;
         background:var(--pixso-panel-soft);
         overflow:hidden;
-        /* ★ 折叠后的"收缩"（用户反馈：折叠起来还占大面积）：
+        /* 折叠后的"收缩"（用户反馈：折叠起来还占大面积）：
            分栏外框的上下 padding 也随折叠收到 0，只留一条头部 ——
            加上过渡让收缩本身也是平滑的。 */
         transition:padding .25s ease;
@@ -4610,7 +4610,7 @@
     .mod-group-toggle svg{width:12px;height:12px;transition:transform .18s ease}
     .mod-group:not(.mod-group-collapsed) .mod-group-toggle svg{transform:rotate(90deg)}
     .mod-group-body{padding:6px 8px 10px}
-    /* ★ 折叠/展开动画（2026-10 用户要求）：
+    /* 折叠/展开动画：
        之前用 display:none 硬切，没有过渡，很生硬。
        改用 grid-template-rows 0fr→1fr 过渡 —— 这是纯 CSS 做高度动画的最稳方案
        （不需要 JS 测内容高度，内容多高都适用；max-height 方案要拍一个大数，
@@ -4620,7 +4620,7 @@
          不要写成父级选择器 —— 类挂错元素动画永远不生效（第一版踩到）。 */
     .mod-group-body{
         display:grid;
-        /* ★ 必须用 minmax(0, 1fr) 而不是裸 1fr —— 裸 fr 的隐式下限是
+        /* 必须用 minmax(0, 1fr) 而不是裸 1fr —— 裸 fr 的隐式下限是
            内容的 min-content（0fr 也收不死，实测剩 26px 的提示行）。
            minmax(0,…) 把下限钳到 0，行才能真的收到 0。 */
         grid-template-rows:minmax(0, 1fr);
@@ -4631,7 +4631,7 @@
     .mod-group-body > *{min-height:0;overflow:hidden}
     .mod-group-body.is-collapsed{
         grid-template-rows:minmax(0, 0fr);
-        /* ★ 隐式行也钳死：分栏里有卡片时重渲染后 body 可能同时含
+        /* 隐式行也钳死：分栏里有卡片时重渲染后 body 可能同时含
            卡片 + 空状态提示两个子元素，第二个落进**隐式行** ——
            template-rows 只管显式行，隐式行按内容撑开（实测折叠后
            多出一行 107px）。grid-auto-rows 把隐式行也钳到 0。 */
@@ -4667,7 +4667,7 @@
         position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:9999px;background:#fff;
         box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;pointer-events:none;
     }
-    /* ★ 2026-10：同上，写死的粉紫渐变改成主题变量（开关拨到"开"时的轨道色）。 */
+    /* 2026-10：同上，写死的粉紫渐变改成主题变量（开关拨到"开"时的轨道色）。 */
     .mod-switch input:checked ~ .track{background:linear-gradient(90deg,var(--pixso-green),var(--pixso-green-dark))}
     .mod-switch input:checked ~ .knob{transform:translateX(18px)}
     .mod-switch input:focus-visible ~ .track{outline:2px solid var(--pixso-green);outline-offset:2px}
@@ -4675,7 +4675,7 @@
     .mod-act{
         flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
         border-radius:10px;border:none;
-        /* ★ 2026-10 修：原来写死 rgba(255,255,255,.7) —— 深色模式下就是**一块白方块**
+        /* 2026-10 修：原来写死 rgba(255,255,255,.7) —— 深色模式下就是**一块白方块**
            （实测：插件页那排「上传安装 / 重新扫描 / 插件市场」在深色下全是白的）。
            改用 --pixso-panel：它在每套主题与深色块里都有定义，且比卡片底
            （--pixso-panel-soft）深一档 —— 两个模式下都读得出"这是个按钮"。 */
@@ -4788,7 +4788,7 @@
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <div class="text-center text-[10px] text-indigo-200 select-none">v1.3.2 · 魔女之旅</div>
+                <div class="text-center text-[10px] text-indigo-200 select-none">v1.3.3 · 魔女之旅</div>
             </div>
         </aside>
 
@@ -4819,7 +4819,7 @@
                         </div>
                     </div>
                 </div>
-                <!-- 顶部按钮插槽挂载点（★ 2026-10 移到最前）：Live2D 的「视频通话」等插件按钮
+                <!-- 顶部按钮插槽挂载点：Live2D 的「视频通话」等插件按钮
                      排在「整理记忆」「外观模式」之前 —— 用户要求视频按钮在按钮组最左边。
                      display:contents 让按钮直接参与 header 的 flex 布局（gap-3 照常生效），
                      空着时不占任何空间。 -->
@@ -4829,7 +4829,7 @@
                     <span>整理记忆</span>
                     <span id="memoryStatusDot" class="hidden w-2 h-2 rounded-full bg-current animate-pulse"></span>
                 </button>
-                <!-- 公告入口（★ 2026-10）：和「整理记忆」同款按钮 —— 桌面显示「图标+文字」，
+                <!-- 公告入口：和「整理记忆」同款按钮 —— 桌面显示「图标+文字」，
                      手机由媒体查询自动收成 38px 圆图标；有未读公告时带红点。点开下面那块面板。
                      ★ 为什么单独做一个按钮、而不是并进顶栏那个金句胶囊：胶囊在 ≤860px 是被
                      **刻意隐藏**的（见手机媒体查询），公告并进去等于手机端没有入口。 -->
@@ -4838,7 +4838,7 @@
                     <span>公告</span>
                     <span id="announceStatusDot" class="announce-dot hidden w-2 h-2 rounded-full flex-shrink-0"></span>
                 </button>
-                <!-- 公告面板（点上面的按钮展开；条目由 app-02-data.js 的 renderAnnounceList 生成，
+                <!-- 公告面板（点上面的按钮展开；条目由 data.js 的 renderAnnounceList 生成，
                      内容一律 textContent 渲染。绝对定位锚在 header 上 —— header 已加 relative。） -->
                 <div id="announcePanel" class="hidden absolute right-4 top-full mt-2">
                     <div class="announce-panel-head">
@@ -5158,7 +5158,7 @@
             <!-- 设置分栏导航 + 关闭按钮（同一行）
                  ★ id 是给插件系统用的：mod 通过 host.slot('settings.tabs', …) 注册的
                    分栏按钮由 mods.js 插进这个容器。点击**不在这里逐个绑定**，见
-                   app-07-init.js 的事件委托说明。 -->
+                   init.js 的事件委托说明。 -->
             <!-- ★ class 里原来有 `border-b border-white/50`（导航下面那条横线）——
                  用户要求"彻底没有分割"，直接**从元素上删掉这两个类**，
                  而不是靠 CSS 的 !important 去压：类还在的话，任何一处
@@ -5181,12 +5181,12 @@
                          而收益只是"少往下滚一点"。合并后导航 7 个，一屏能看全。
                          ★ 三个 id 已统一为 tab-model；旧 id 不再存在，别照着旧代码找。 -->
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-model">模型</button>
-                    <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 web/mods/live2d/）。
+                    <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 mods/live2d/）。
                          这里不能留同名按钮 —— 插槽的撞名检查会因此拒绝插件注册，
                          表现为"设置里能看到 Live2D，但点开是空的"。 -->
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability">能力</button>
                     <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced">高级</button>
-                    <!-- 日志：独立分栏（2026-10 用户要求）。
+                    <!-- 日志：独立分栏。
                          ★ 为什么给它一个分栏而不是塞进「高级」：塞进去时它是高级的最后一项，
                            而高级那一栏比屏幕还高（920px > 842px 视口），入口被挤到**屏幕外**，
                            用户根本看不见（实测：按钮 top=895，视口高 900）。
@@ -5278,7 +5278,7 @@
                 </section>
 
                 <!-- ★ 世界观卡：从「角色设定卡」里拆出来的**独立模块**（与上方「人设」分开）。
-                     #ccWorldSetting 仍按 id 被 app-02-data.js / app-06-settings.js 读写，位置变动无影响。 -->
+                     #ccWorldSetting 仍按 id 被 data.js / settings.js 读写，位置变动无影响。 -->
                 <section id="worldSettingsSection" class="mt-6 pt-4 border-t border-indigo-100">
                     <div class="modal-label flex items-center gap-2 mb-2">
                         <span class="text-pink-500">✦</span> 世界观卡
@@ -5363,7 +5363,7 @@
                        "off" 本身已表达"关掉思考"，再单留一个开关只会出现
                        "开关关着、档位却是 max"这种自相矛盾的状态。
                        底层仍保留 thinkingMode 布尔（由档位派生，见 loadSettings
-                       与 app-07-init.js 的 change 监听），请求层与「思考」折叠栏
+                       与 init.js 的 change 监听），请求层与「思考」折叠栏
                        的判据不变。
 
                      ★ 第三人称：换成与全站一致的 iOS 风格开关（复用 .mod-switch，
@@ -5372,7 +5372,7 @@
                        开启后一轮对话走**两段式生成** ——
                        先让模型以 GM 讲述者视角推进剧情（不展示），
                        再把 GM 文本交给"第一人称转换器"改写成主角口吻展示给用户。
-                       见 app-02-data.js 的 generateThirdPersonReply。 -->
+                       见 data.js 的 generateThirdPersonReply。 -->
                 <section class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
                     <div class="modal-label flex items-center gap-2"><span class="text-amber-500">✦</span> 对话优化</div>
 
@@ -5453,7 +5453,7 @@
                                 <label class="text-xs text-indigo-500 mb-1 block">参考音频样本（voiceclone 模型必填）</label>
                                 <!-- ★ 2026-10 改良：原生 file 控件各浏览器的长相不同、还带"未选择任何文件"
                                      这类本地化文案，跟主题格格不入 —— 藏起来，改用一个主题化的按钮去触发它。
-                                     ★ id 必须保留：app-07-init.js 的 change 监听、app-06-settings.js 的
+                                     ★ id 必须保留：init.js 的 change 监听、settings.js 的
                                      读取与清空都还认这个 id。 -->
                                 <input id="settingMimoTtsCloneSample" autocomplete="off" type="file" accept="audio/*" class="tts-sample-input">
                                 <div class="tts-sample-row">
@@ -5666,7 +5666,7 @@
                 </section>
                 </div><!-- /tab-model -->
 
-                <!-- Live2D 设置面板已搬进 web/mods/live2d/（由 settings.tabs 插槽渲染）。
+                <!-- Live2D 设置面板已搬进 mods/live2d/（由 settings.tabs 插槽渲染）。
                      见那个插件的 panel.html 与 settings-panel.js。 -->
 
                 <!-- ============ 能力：AI 能做什么 ============
@@ -5887,7 +5887,7 @@
                                         通知内容
                                         <span class="text-[11px] text-indigo-300">（哪个应用发来什么消息 —— <b>最敏感的一项</b>）</span>
                                     </div>
-                                    <!-- 可点的徽标（★ 2026-10 B 方案）：短信/通讯录/日历 → 弹系统授权框；
+                                    <!-- 可点的徽标：短信/通讯录/日历 → 弹系统授权框；
                                          通知读取 → 跳系统的「通知使用权」页。纯展示的那两个（应用列表/设备）不加。 -->
                                     <span id="agentPermBadgeNotifications" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里打开系统的「通知使用权」设置">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭通知内容">
@@ -5950,7 +5950,7 @@
                                  （「申请短信 / 通讯录 / 日历权限」「开启通知读取」），现已删除。
                                  入口改由**徽标本身**承担（B 方案，见上面四个带 is-actionable 的）：
                                  点一下即申请 / 跳系统设置页 —— 观感仍是状态标记，不多一排按钮。
-                                 状态与点击逻辑在 app-03-agent.js 的 renderAgentPermBadges /
+                                 状态与点击逻辑在 agent.js 的 renderAgentPermBadges /
                                  handleAgentPermBadgeAction；那两个按钮的监听已删
                                  （否则 check-dom-refs 会因为 id 不存在而报错）。 -->
                             <p class="text-[11px] leading-relaxed mt-1.5" style="color:#b45309">
@@ -6008,11 +6008,9 @@
                      日志 / 我的数据 / 访问密码都属于这一层。 -->
                 <div id="tab-advanced" class="settings-tab-panel">
                     <section>
-                    <!-- 这里原本是「日志设置」块（落盘级别 / 控制台级别 / 追踪日志开关）。
-                         已按用户要求删除 —— 级别回默认（环境变量 LOG_LEVEL / LOG_CONSOLE 仍优先），
-                         追踪日志固定开启（LOG_CHAT=0 才能关）。来龙去脉见 开发文档.md 8.48。
-                         ★ 日志本身没走：它现在是**独立分栏**（#tab-log），
-                           在顶部导航上与外观/角色/对话并列 —— 不用滚动就能看到。 -->
+                    <!-- 「高级」里没有日志设置：级别回默认（环境变量 LOG_LEVEL / LOG_CONSOLE 仍优先），
+                         追踪日志固定开启（LOG_CHAT=0 才能关）。日志本身是**独立分栏**（#tab-log），
+                         在顶部导航上与外观/角色/对话并列 —— 不用滚动就能看到。 -->
 
                     <div class="mt-4 pt-3 border-t border-indigo-100" id="dataSettingsSection">
                         <div class="text-xs font-semibold text-indigo-700 mb-1"><span class="text-fuchsia-500">✦</span> 我的数据</div>
@@ -6149,12 +6147,12 @@
                 </div><!-- /tab-log -->
 
                 <!-- ==================== 插件（mod） ====================
-                     这一栏由 mod 系统动态渲染：列表来自服务端扫描 web/mods/ 生成的清单，
+                     这一栏由 mod 系统动态渲染：列表来自服务端扫描 mods/ 生成的清单，
                      所以装了新 mod 刷新页面就会出现，不需要改宿主代码。
                      每个 mod 一个开关，默认关闭（用户自己决定要不要用）。 -->
                 <div id="tab-mods" class="settings-tab-panel">
                     <section class="settings-card">
-                        <!-- 标题行：左边标题，右边 上传安装 / 重新扫描（2026-10 移到右上角） -->
+                        <!-- 标题行：左边标题，右边 上传安装 / 重新扫描 -->
                         <div class="flex items-center gap-2 mb-1">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
                                 <span class="text-pink-500">✦</span> 插件（Mod）
@@ -6163,11 +6161,11 @@
                             <button type="button" id="modsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个插件 zip 安装">⬆ 上传安装</button>
                             <button type="button" id="modsRefreshBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新读取插件列表">⟳ 重新扫描</button>
                         </div>
-                        <!-- ★★ 2026-10：这段说明**按平台分叉**（由 app-06-settings.js 的
+                        <!-- ★★ 2026-10：这段说明**按平台分叉**（由 settings.js 的
                              applyModsPlatformHint() 填）—— 两个平台装插件的方式根本不同：
-                               电脑版：把 zip 丢进 web/mods/ 会自动装（也可用「上传安装」）
+                               电脑版：把 zip 丢进 mods/ 会自动装（也可用「上传安装」）
                                APK   ：没有服务端、碰不到那个目录，**只能**「上传安装」
-                             原来只有一句"丢进 web/mods/ 即会自动安装"，在安卓上纯属误导
+                             原来只有一句"丢进 mods/ 即会自动安装"，在安卓上纯属误导
                              （用户会去找一个根本访问不到的目录）。 -->
                         <p id="modsPlatformHint" class="text-[11px] text-indigo-400 leading-relaxed mb-3">
                             可选功能的开关。<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
@@ -6191,7 +6189,7 @@
                                技能 = 一个含 SKILL.md 的目录，是**给 AI 的指令与知识**，
                                       纯文本、不注册进应用、不参与运行。
                                插件 = 扩展应用本身（插槽 / 接口 / 资源，是代码）。
-                             条目由 app-06-settings.js 的 refreshSkillsList() 填（复用 .mod-card
+                             条目由 settings.js 的 refreshSkillsList() 填（复用 .mod-card
                              样式，深色模式才能跟着适配）。 -->
                         <div class="flex items-center gap-2 mt-5 mb-2">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
@@ -6212,7 +6210,7 @@
 
             <!-- ★ 2026-10 用户要求：底部的「恢复默认设置 / 取消 / 保存设置」
                  三个按钮**已删除** —— 改成"改什么就是什么"：任何控件一变
-                 就立刻落盘（见 app-07-init.js 的自动保存），关闭设置直接点 ✕。
+                 就立刻落盘（见 init.js 的自动保存），关闭设置直接点 ✕。
                  「恢复默认设置」后来也按要求彻底删掉了（含函数与绑定），
                  不再提供任何一键回退入口。 -->
         </div>
@@ -6273,7 +6271,7 @@
     </div>
 
     <!-- 公告（远端 announcements.json / 10.17 本地兜底）：
-         内容只当纯文本渲染（app-02-data.js 用 textContent 赋值，绝不用 innerHTML）。 -->
+         内容只当纯文本渲染（data.js 用 textContent 赋值，绝不用 innerHTML）。 -->
     <div id="serverAnnounceOverlay" class="fixed inset-0 hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel guide-modal-panel animate-modal-pop">
             <div class="guide-modal-scroll scroll-soft">
@@ -6412,27 +6410,27 @@
             且后面的模块会引用前面的定义）。加新模块时插在合适位置，别直接追加到末尾。
          ⚠️ 不要在本注释里书写脚本标签字面量 —— HTML 注释中出现脚本开标签会让
             「内联脚本语法检查」把注释内容当成代码解析，报出假的 SyntaxError。 -->
-    <script src="/js/app-01-core.js"></script>
+    <script src="/js/core.js"></script>
     <!-- 流式输出（SSE 增量解析）。
-         必须排在 app-01-core.js **之后**：core 里的 requestChatJson 会调用
+         必须排在 core.js **之后**：core 里的 requestChatJson 会调用
          window.ChatStream.withStreamFlag()，而这个调用发生在"用户发消息"时，
          不是加载时，所以顺序其实不敏感；但放在 core 之后更符合"core 定义出口、
          本文件提供能力"的依赖方向，也方便以后有人把它改成加载时就取。 -->
     <script src="/js/chat-stream.js"></script>
     <script src="/js/agent-tags.js"></script>
-    <script src="/js/app-02-data.js"></script>
-    <script src="/js/app-03-agent.js"></script>
-    <script src="/js/app-04-ui.js"></script>
-    <script src="/js/app-05-voice.js"></script>
-    <script src="/js/app-06-settings.js"></script>
+    <script src="/js/data.js"></script>
+    <script src="/js/agent.js"></script>
+    <script src="/js/ui.js"></script>
+    <script src="/js/voice.js"></script>
+    <script src="/js/settings.js"></script>
     <!-- 插件市场：从 web 仓库（XYZ921746/web）拉取可选扩展包并安装。
-         排在 app-06-settings.js **之后** —— 它复用那边的 .mod-card 样式，
+         排在 settings.js **之后** —— 它复用那边的 .mod-card 样式，
          装完还要调 refreshModsList() 把「插件」栏一起刷新。
-         它只在**点击时**才调 switchSettingsTab()，所以不必等 app-07-init.js。 -->
+         它只在**点击时**才调 switchSettingsTab()，所以不必等 init.js。 -->
     <script src="/js/mod-market.js"></script>
     <!-- 多主题：模板切换 + 深色模式。
-         放在 app-* 之后、mods.js 之前 —— 它只改 html 属性与一个设置容器，
-         不依赖 app-* 的内部函数；而 mods 的界面不该被主题切换影响。 -->
+         放在业务模块（core～settings）之后、mods.js 之前 —— 它只改 html 属性与一个设置容器，
+         不依赖那些模块的内部函数；而 mods 的界面不该被主题切换影响。 -->
     <script src="/js/theme.js"></script>
     <!-- 诊断输出格式（window.ElainaDiag）。
          必须排在 mods.js **之前**：插件加载器用它打结构化日志
@@ -6440,22 +6438,22 @@
          与 server/diagnostics.mjs 是同一套格式，两端日志看起来是一回事。 -->
     <script src="/js/diagnostics.js"></script>
     <!-- 插件系统（mod 加载器）。
-         必须排在 app-07-init.js **之前**：初始化会读插件清单来渲染
+         必须排在 init.js **之前**：初始化会读插件清单来渲染
          「设置 → 插件」那一栏，加载器没就位的话那一栏会是空的。
-         但它要排在 app-01..06 之后 —— 插件拿到的宿主 API 依赖这些模块已定义。 -->
+         但它要排在 core～settings 之后 —— 插件拿到的宿主 API 依赖这些模块已定义。 -->
     <script src="/js/mods.js"></script>
     <!-- 宿主插槽清单（★ 插件作者看这一个文件就知道能挂在哪）。
-         必须排在 mods.js **之后**（要用 ElainaMods.defineSlot）、app-07-init.js **之前**。
+         必须排在 mods.js **之后**（要用 ElainaMods.defineSlot）、init.js **之前**。
          为什么单独成文件：插槽是 mod 系统与宿主界面之间**唯一的契约面**，
          散在各处会让"我能往哪儿挂"变成一个要通读全部前端才能回答的问题。 -->
     <script src="/js/host-slots.js"></script>
     <!-- 日志查看器：软件内按级别/模块筛选查看服务端日志（AstrBot 式分级体验的前端）。 -->
     <script src="/js/log-viewer.js"></script>
     <!-- 成就系统（含生日纪念记录）。
-         排在 app-* 之后：它读 state.conversations / state.memoryCore 做进度判定，
-         那些全局变量在 app-01-core / app-02-data 里定义。
+         排在业务模块（core～settings）之后：它读 state.conversations / state.memoryCore 做进度判定，
+         那些全局变量在 core / data 里定义。
          但它**不在加载时**碰它们（只在 open()/evaluate() 时读），
-         所以顺序上只要排在 app-02-data.js 之后即可。
+         所以顺序上只要排在 data.js 之后即可。
          ★ 生日纪念由**插件**（mods/birthday）在合适时机调用它上报（host.unlock）。 -->
     <script src="/js/achievements.js"></script>
     <!-- ★ 2026-10：「星屑之日」生日隐藏模式已从宿主搬进插件 **mods/birthday/**。
@@ -6463,8 +6461,8 @@
          拼接、顶栏/侧栏 DOM 三处宿主私有能力。宿主补齐 host.theme / host.storage /
          host.unlock 与 app-ready 事件之后才可能插件化（那几个 API 就是为它开的）。
          装好后要在「设置 → 插件」里**启用**；默认关闭（插件不该在用户不知情时改界面）。 -->
-    <script src="/js/app-07-init.js"></script>
-    <!-- Live2D 视频通话已改由 web/mods/live2d/ 提供（插件脚本按需注入） -->
+    <script src="/js/init.js"></script>
+    <!-- Live2D 视频通话已改由 mods/live2d/ 提供（插件脚本按需注入） -->
 
     <!-- ==================== 插件弹窗（顶层） ====================
          ★ 必须放在 #settingsOverlay **外面**（2026-10 修）。

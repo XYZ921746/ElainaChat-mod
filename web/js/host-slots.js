@@ -26,8 +26,8 @@
  * 3. 若是"每项级"，`item: true` + `cleanup` + `refresh`
  * 4. 在 README 的插件作者章节与 开发文档.md 的插槽表里各加一行
  *
- * ★ 加插槽时**不要**顺手加一个新的 API 方法：插槽机制就是为了避免
- *   "每多一种扩展点就多一个宿主 API"（见 开发文档.md 8.45）。
+ * 加插槽时**不要**顺手加一个新的 API 方法：插槽机制就是为了避免
+ *   "每多一种扩展点就多一个宿主 API"。
  * ========================================================================== */
 
 /** 把 mod id 变成能安全塞进 CSS 选择器的形式（mod id 由插件自己声明，不能直接拼） */
@@ -47,6 +47,8 @@ function modSlotCssEscape(id) {
 function containerSlot(containerId, note) {
     return {
         note,
+        /** 形状由 mod 系统统一校验（见 mods.js 的 validateSlotSpec） */
+        spec: { required: ['render'], types: { render: 'function', id: 'string', title: 'string' } },
         mount(spec, ctx) {
             const box = document.getElementById(containerId);
             if (!box) {
@@ -92,6 +94,8 @@ function containerSlot(containerId, note) {
     // ========================================================================
     window.ElainaMods.defineSlot('settings.tabs', {
         note: '设置里的一栏；render 在被点开时才调用',
+        // 分栏的三个字段缺一不可：没有 label 的导航项点不到，没有 render 的分栏是空白
+        spec: { required: ['id', 'label', 'render'], types: { label: 'string', title: 'string', render: 'function' } },
         mount(spec, ctx) {
             const key = String(spec.id || '').trim();
             if (!key) { ctx.log('error', 'settings.tabs 的分栏需要 id'); return null; }
@@ -159,7 +163,7 @@ function containerSlot(containerId, note) {
     //
     //  spec: { id, label, title?, render(container), onOpen?, onClose? }
     //
-    //  ★ 为什么需要它（2026-10 用户要求）：
+    //  为什么需要它：
     //   插件一多，设置面板里就会堆一排分栏（外观/角色/对话/语音/视觉/Live2D/能力/高级/插件…），
     //   而其中大半是**偶尔才调一次**的插件设置。全堆在主设置里既难找也难看。
     //   独立成窗之后：主设置只留宿主自己的分栏，插件设置从插件卡片上的齿轮按钮进入。
@@ -170,6 +174,7 @@ function containerSlot(containerId, note) {
     // ========================================================================
     window.ElainaMods.defineSlot('settings.modal', {
         note: '插件设置独立成窗；由插件卡片上的齿轮按钮打开',
+        spec: { required: ['id', 'render'], types: { label: 'string', title: 'string', render: 'function', onOpen: 'function', onClose: 'function' } },
         mount(spec, ctx) {
             const key = String(spec.id || '').trim();
             if (!key) { ctx.log('error', 'settings.modal 需要 id'); return null; }
@@ -182,15 +187,15 @@ function containerSlot(containerId, note) {
             const bodyEl = document.getElementById('modSettingsBody');
             if (!overlay || !bodyEl) { ctx.log('error', '找不到插件设置弹窗容器，未注册'); return null; }
 
-            // ★ 每个插件**各有一个自己的容器**（由宿主创建、挂在 bodyEl 里），
+            // 每个插件**各有一个自己的容器**（由宿主创建、挂在 bodyEl 里），
             //   打开谁的设置就显示谁的那块、藏起其它的。
             //
-            //   为什么不直接让所有插件往 #modSettingsBody 里写（原先的做法，有 bug）：
+            //   为什么不直接让所有插件往 #modSettingsBody 里写（那样会坏）：
             //   插件为了不白占启动时间，都是"首次打开时才渲染"，并且渲染第一件事
             //   就是 `container.innerHTML = '...'` 清空容器。而容器是**共用**的 ——
             //   于是：打开 A（渲染 A）→ 打开 B（清掉 A、渲染 B）→ 再打开 A
             //   （A 以为自己已经渲染过，跳过）→ **标题是 A、内容还是 B**。
-            //   实测复现：标题「Live2D 引擎与模型 · 设置」，里面却是视频通话的下拉。
+            //   复现形态：标题「Live2D 引擎与模型 · 设置」，里面却是视频通话的下拉。
             //
             //   给每个插件一块自己的 DOM，这个问题从根上不存在了：
             //   · 谁也不用清空别人的内容，打开谁就显示谁的那块
@@ -210,7 +215,7 @@ function containerSlot(containerId, note) {
                 return paneEl;
             };
 
-            /** 渲染（只做一次）。★ 先捕获 pane，异步渲染也不会写错地方 */
+            /** 渲染（只做一次）。先捕获 pane，异步渲染也不会写错地方 */
             const renderOnce = () => {
                 if (rendered) return;
                 rendered = true;
@@ -221,7 +226,7 @@ function containerSlot(containerId, note) {
             };
 
             /** 只显示自己那块，藏起其它插件的。
-             *  ★ 用自有类 mod-settings-pane-off（display:none）而不是 Tailwind 的
+             *  用自有类 mod-settings-pane-off（display:none）而不是 Tailwind 的
              *    .hidden：pane 是运行期建的元素，不该依赖工具类是否被正确生成；
              *    且 display:none 才能让 #modSettingsBody 的 space-y-5 不给隐藏块留空隙。 */
             const showOnlyMine = () => {
@@ -286,7 +291,7 @@ function containerSlot(containerId, note) {
                     if (window.__modSettingsOpeners) delete window.__modSettingsOpeners[key];
                     // 若正开着这个插件的设置，关掉 —— 否则停用后弹窗还留着（内容是死的）
                     if (overlay.getAttribute('data-mod-settings-id') === key) close();
-                    // 把自己的那块容器也摘掉。★ 不摘的话它会以 hidden 状态留在
+                    // 把自己的那块容器也摘掉。不摘的话它会以 hidden 状态留在
                     // #modSettingsBody 里 —— 插件重新启用时会再建一块，
                     // 于是残留越积越多（虽然看不见，但 DOM 一直在长）。
                     try { if (paneEl && paneEl.isConnected) paneEl.remove(); } catch (e) { /* 忽略 */ }
@@ -305,6 +310,8 @@ function containerSlot(containerId, note) {
     // ========================================================================
     window.ElainaMods.defineSlot('header.actions', {
         note: '顶部栏的一个按钮；spec 里给 label / svg / onClick',
+        // onClick 必填：没有它的按钮点了没反应，比不注册更让人困惑
+        spec: { required: ['id', 'onClick'], types: { label: 'string', title: 'string', svg: 'string', onClick: 'function' } },
         mount(spec, ctx) {
             const slot = document.getElementById('headerModSlot');
             if (!slot) { ctx.log('error', '找不到顶部按钮挂载点，按钮未注册'); return null; }
@@ -351,7 +358,7 @@ function containerSlot(containerId, note) {
     window.ElainaMods.defineSlot('composer.actions', containerSlot('composerModSlot', '输入框那一行的按钮位'));
 
     // ========================================================================
-    //  ⑤ chat.message.actions —— 每条消息的标题行（★ 每项级插槽）
+    //  ⑤ chat.message.actions —— 每条消息的标题行（每项级插槽）
     //
     //  spec: { id, render(container, item) }，item = { message, conversationId }
     //  只在**有消息**时才可能被调用，所以注册时挂不了任何东西。
@@ -359,6 +366,7 @@ function containerSlot(containerId, note) {
     window.ElainaMods.defineSlot('chat.message.actions', {
         item: true,
         note: '每条消息标题行上的按钮；render(container, { message, conversationId })',
+        spec: { required: ['id', 'render'], types: { render: 'function' } },
         cleanup(modId) {
             // 停用/卸载：把该 mod 已经画上去的按钮摘掉。
             // 必须**立刻**摘 —— 否则用户关了插件，消息行里还留着点了没反应的按钮。
@@ -374,7 +382,7 @@ function containerSlot(containerId, note) {
     /**
      * 宿主渲染完消息后调用它 —— 把消息行里的插槽容器交给各 mod。
      *
-     * ★ 为什么由宿主"推"而不是让 mod 自己监听消息渲染：
+     * 为什么由宿主"推"而不是让 mod 自己监听消息渲染：
      *   mod 若自己去 MutationObserver 或改写 renderMessage，就绕过了宿主本来的
      *   增量渲染，也把"哪个元素属于哪条消息"的知识复制了一份到插件里。
      *   宿主明确地把容器和上下文交出去，插件只负责往里画。
@@ -412,7 +420,7 @@ function containerSlot(containerId, note) {
         }
     }
 
-    // 供 app-04-ui.js 在 renderMessage 之后调用（经典脚本共享全局作用域）
+    // 供 ui.js 在 renderMessage 之后调用（经典脚本共享全局作用域）
     window.decorateMessageSlots = decorateMessageSlots;
 
     /** 诊断用：列出宿主挖好的插槽（mod 也可以用 host.slots() 取） */

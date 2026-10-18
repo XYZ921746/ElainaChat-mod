@@ -39,7 +39,7 @@ const skipModels = lite
 //
 //   用户决定（2026-10）：**完全纯净** —— APK 不带任何插件，
 //   与电脑版 fresh clone 完全一致；插件一律走「应用内上传安装」
-//   （原生接口，见 app-01-core.js 的 nativePluginsFetch）。
+//   （原生接口，见 core.js 的 nativePluginsFetch）。
 //
 //   兼容：`--with-mods` 恢复旧行为（把插件源码打进去）。
 //   环境变量 WITH_BUNDLED_MODS=1 等价（CI 里方便）。
@@ -77,7 +77,7 @@ const SHARED_SERVER_MODULES = ['relay.mjs', 'http-util.mjs', 'net-guard.mjs'];
 const modelsSourceRoot = path.join(modsSourceRoot, 'live2d-models', 'models');
 // ★ APK 里的落地路径**不变**：仍是 www/live2d/models/。
 //   为什么不变：模型 URL（`/live2d/models/<名>/…`）是前端与 AI 提示词里都在用的约定，
-//   也是 app-01-core.js 的播种逻辑与 check-bundled-models 的判据。
+//   也是 core.js 的播种逻辑与 check-bundled-models 的判据。
 //   只有**仓库里的源位置**从 web/live2d/models/ 搬到了 mod 目录下（资源与代码分开），
 //   打包产物这一侧完全不需要跟着动 —— 改这一行就够，不必碰任何运行时代码。
 const modelsDestRoot = path.join(androidWebRoot, 'live2d', 'models');
@@ -257,7 +257,7 @@ for (const rel of cssFiles) {
 //
 // ★★ 2026-10 补：漏了这里，手机端的 MiMo TTS「内置样本」直接失效。
 //   软件自带的伊蕾娜日语参考样本是 `web/audio/mimo-elaina-jp.m4a`（454KB），
-//   前端从 `/audio/mimo-elaina-jp.m4a` 直接 fetch（见 app-06-settings.js 的
+//   前端从 `/audio/mimo-elaina-jp.m4a` 直接 fetch（见 settings.js 的
 //   loadBuiltinMimoCloneSample）。电脑端有 serve.mjs 把 URL 映射到 web/audio/，
 //   手机端没有服务端 —— 文件必须在 www/ 里，否则 fetch 404 →
 //   「内置样本加载失败，请手动选择参考音频」，且切到 voiceclone 时的自动补样也失效。

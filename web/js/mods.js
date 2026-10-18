@@ -35,47 +35,42 @@
     /**
      * 插件根目录（相对站点根）。
      *
-     * ★ 2026-10（原生适配）：`let` 而不是 `const` —— 安卓 APK（Capacitor）上
-     *   这个根会在**首次加载插件之前**被替换成应用数据目录的 WebView 可访问地址：
-     *     `https://localhost/_capacitor_file_/…/files/mods/`
-     *   （由 app-01-core.js 的 `__nativeModsRootPromise` 设置，见那边说明）。
+     * 必须是 `let`：安卓 APK（Capacitor）上这个根要在**首次加载插件之前**换成
+     *   应用数据目录的 WebView 可访问地址 `https://localhost/_capacitor_file_/…`，
+     *   由 `__nativeModsRootPromise` 在 core.js 里设好。
      *
-     *   为什么换根就能全通：本文件里 MOD_ROOT 的 9 处使用点**全部是 URL 拼接**
-     *   （script/link/fetch/img —— 调研确认），而 convertFileSrc 出来的地址
-     *   能被这些元素正常加载（Live2D 模型的纹理已走同一条路）。
+     *   换根就能全通，是因为本文件里 MOD_ROOT 的使用点**全部是 URL 拼接**
+     *   （script / link / fetch / img），而 convertFileSrc 出来的地址能被这些元素加载。
      *
-     *   ★ 基址**不做编码**：编码由 modDir() 逐段负责（见下）。
-     *     在 app-01-core.js 的赋值处再 encode 一次会双重编码 → 404。
+     *   基址**不做编码**：编码由 modDir() 逐段负责（见下）——
+     *   在赋值处再 encode 一次会双重编码，资源直接 404。
      */
     let MOD_ROOT = '/mods/';
 
     /**
      * 等原生插件根就绪。
      *
-     * ★ 判定**不在这里做**（这是 `check-data-single-source.mjs` 的硬约束：
-     *   "平台分支只允许在存储层"，业务文件里不许长 `isNativePlatform` ——
-     *   否则 Web/APK 会分裂成两套代码）。判定在 app-01-core.js：
-     *   它保证非原生环境下 `__nativeModsRootPromise` 不存在（undefined）——
-     *   这里只看这个**结果**，不做平台测试。
+     * 判定**不在这里做**：平台分支只允许留在存储层，业务文件里长
+     *   `isNativePlatform` 会让 Web/APK 分裂成两套代码。判定在 core.js：
+     *   它保证非原生环境下 `__nativeModsRootPromise` 不存在 —— 这里只看这个**结果**。
      *
      * 为什么必须显式等待（不能赌时序）：本 IIFE 同步执行时早于
-     * `fs.getUri()` 这个异步调用完成 —— 首次 loadAll 若不等，就会用
-     * 桌面根 `/mods/` 去加载（APK 上 404）。
+     *   `fs.getUri()` 那个异步调用完成，首次 loadAll 若不等就会用桌面根 `/mods/`
+     *   去加载，APK 上全部 404。
      *
-     * ★ 等待**放进 loadAll 内部**而不是只在 boot() 处：loadAll 的入口不止
-     *   boot 一个（多设备同步收到"插件开关变了"时也会再调，app-07-init.js:70）——
-     *   在入口函数里等，任何触发路径都安全。
+     * 等待**放进 loadAll 内部**而不是只在 boot() 处：loadAll 的入口不止 boot
+     *   一个（多设备同步收到"插件开关变了"时也会再调）。在入口函数里等，任何触发路径都安全。
      */
     let _nativeModRootWaited = null;
     function awaitNativeModRoot() {
-        // 非原生（或根初始化失败）：app-01-core 不会设置这个 Promise → 立即过
+        // 非原生（或根初始化失败）：core 不会设置这个 Promise → 立即过
         if (!window.__nativeModsRootPromise) return Promise.resolve();
         if (!_nativeModRootWaited) {
             _nativeModRootWaited = Promise.resolve(window.__nativeModsRootPromise)
                 .then(() => {
                     if (window.__nativeModBase) MOD_ROOT = window.__nativeModBase;
                 })
-                .catch(() => { /* app-01-core 那边已打日志；回落桌面根 */ });
+                .catch(() => { /* core 那边已打日志；回落桌面根 */ });
         }
         return _nativeModRootWaited;
     }
@@ -83,26 +78,22 @@
     /**
      * 插件在磁盘上的**实际目录名**（已做 URL 编码，可直接拼进 URL）。
      *
-     * ★ 为什么不能直接用 manifest.id 拼 URL（2026-09 修的真 bug）：
-     *   插件 id 是**身份**（依赖匹配、资源引用都以它为准），而目录名是
-     *   "它落在磁盘的哪个文件夹"。两者正常时相同，但**可能不同** ——
-     *   历史版本把打包产物名（`elaina-avatar-1.0.0.zip`）当目录名安装过，
-     *   于是目录叫 `elaina-avatar-1.0.0` 而 id 是 `elaina-avatar`。
-     *   此时按 id 拼 URL 会让脚本与图片**全部 404**（表现为
-     *   "插件开关打开了，但桌宠/Galgame 没有立绘、依赖也报缺失"）。
+     * 为什么不能直接用 manifest.id 拼 URL：
+     *   插件 id 是**身份**（依赖匹配、资源引用都以它为准），目录名是"它落在磁盘的
+     *   哪个文件夹"。两者正常时相同，但**可以不同** —— 打包产物名当目录名安装过
+     *   （目录叫 `elaina-avatar-1.0.0` 而 id 是 `elaina-avatar`），此时按 id 拼 URL
+     *   会让脚本与图片**全部 404**，表现为"开关打开了，但没有立绘、依赖还报缺失"。
      *
-     * ★ 为什么必须 encodeURIComponent（2026-09 第二次踩）：
+     * 为什么必须 encodeURIComponent：
      *   用户完全可以把插件目录改成中文（"桌宠"）或带空格（"my pet"）。
      *   不编码的话，同一个目录在不同地方会拼出不同字符串：
      *     · `el.src = '/mods/桌宠/index.js'` —— 浏览器读属性时得到**已编码**的
      *       `/mods/%E6%A1%8C%E5%AE%A0/index.js`
      *     · 而 `loadedScripts` 里存的是**未编码**的原串
-     *   两者对不上 → `neverLoaded` 永远为真 → **每次启用都重复注入脚本**，
-     *   插件的初始化会跑两次（界面出现两份、事件监听挂两遍）。
-     *   `assetUrl()` 同理：编码后 `new Image().src` 与 fetch 才都能取到。
+     *   两者对不上 → `neverLoaded` 永远为真 → 每次启用都重复注入脚本，
+     *   插件初始化跑两遍（界面两份、事件监听挂两遍）。
      *
-     * 服务端在清单里为每个插件同时给出 id 与 dir，这里优先用 dir；
-     * 旧版服务端没有 dir 字段时回落到 id（那时两者本来就一致）。
+     * 服务端在清单里同时给出 id 与 dir，这里优先用 dir；没有 dir 的清单回落到 id。
      */
     function modDir(manifest) {
         const d = manifest && typeof manifest.dir === 'string' ? manifest.dir.trim() : '';
@@ -121,6 +112,16 @@
     /** 全局开关：用户可以在设置里彻底关掉插件系统 */
     const MODS_ENABLED_KEY = 'elaina_plugins_enabled';
     const MOD_ENABLED_KEY_PREFIX = 'elaina_plugin_';
+    /**
+     * 插件上次加载失败的原因（`elaina_pluginfail_<id>` → `{at, error}`）。
+     *
+     * 为什么单独一个前缀而不是塞进开关那个键：开关的价值是"0/1"，
+     * 混进 JSON 会让解析变脆；而且这两件事的生命周期不同 —— 开关由用户决定，
+     * 失败记录由系统写、用户修好插件后清掉。
+     * 前缀带 `elaina_plugin` 是刻意的：store.js 的 DATA_KEYS 用
+     * `^elaina_plugin_\S+$` 动态放行，这样这些键天然落盘、跨设备同步。
+     */
+    const MOD_FAILED_KEY_PREFIX = 'elaina_plugin_failed_';
 
     // ========================================================================
     //  用户偏好（哪些插件启用）
@@ -158,7 +159,7 @@
             Store.removeItem(MOD_ENABLED_KEY_PREFIX + id);
             const entry = registry.get(id);
             registry.delete(id);
-            // ★ 真删：这个 mod 注册过的插槽/样式/提示词/事件订阅一并释放。
+            // 真删：这个 mod 注册过的插槽/样式/提示词/事件订阅一并释放。
             //   只删目录不释放注册项的话，界面里会留下一个点了没反应的入口
             //   （它指向的插件已经不在了）—— 比"没装过"更难理解。
             disposeContributions(id);
@@ -173,17 +174,13 @@
             // 两者可能不同（见 modDir 说明），只按 id 匹配会漏删，
             // 于是重装同一个插件时脚本不会被重新注入（表现为"装了没反应"）。
             //
-            // ★ 2026-10（原生适配）：匹配从"任意位置子串"改为"**锚定在
-            //   MOD_ROOT 紧后方的第一个路径段**"。两个原因：
+            // 匹配**锚定在 MOD_ROOT 紧后方的第一个路径段**，不做子串匹配：
             //   ① 原生模式下 URL 是 `…/_capacitor_file_/…/files/mods/<id>/…`，
-            //      而插件 id 白名单允许叫 `files` / `data`（甚至等于包名）——
-            //      子串匹配下，卸载一个叫 `files` 的插件会把**所有**插件的
-            //      注入记录全清掉（`/files/` 撞进每个 URL）。
-            //   ② 桌面端同款存量问题：id 叫 `mods` 的插件 needle `'/mods/'`
-            //      同样全命中。锚定后两个世界都精确。
-            //   needle 形如 `'/foo/'`，去掉首斜杠要求它紧跟在 MOD_ROOT 之后：
-            //   `…/mods/foo/…` 命中；`…/mods/foo-bar/…`、`…/files/foo/…`、
-            //   `…/mods/bar/foo/…` 全部不命中（实测验证过斜杠边界）。
+            //      而插件 id 允许叫 `files` / `data` —— 子串匹配下卸载一个叫 `files`
+            //      的插件会把**所有**插件的注入记录全清掉（`/files/` 撞进每个 URL）。
+            //   ② 桌面端同理：id 叫 `mods` 的插件 needle `'/mods/'` 同样全命中。
+            //   锚定后 `…/mods/foo/…` 命中，而 `…/mods/foo-bar/…`、`…/files/foo/…`、
+            //   `…/mods/bar/foo/…` 都不命中（斜杠边界）。
             const needles = ['/' + id + '/'];
             if (entry && entry.manifest && entry.manifest.dir) needles.push('/' + entry.manifest.dir + '/');
             loadedScripts.forEach((v, k) => {
@@ -199,6 +196,113 @@
     // ========================================================================
 
     /**
+     * 宿主内部接口（`window.ElainaHost`）。
+     *
+     * 插件系统的**唯一**宿主依赖面：本文件不直接摸 `handleUserInput`、
+     * `renderMessageText`、`state` 这些宿主内部名字，一律经这张表取。
+     *
+     * 为什么必须这样：宿主内部函数一改名，插件就在运行到那一步时才炸，
+     * 而插件作者看不到宿主的改名 —— 这正是收窄的 host API 该防住的事。
+     * 走这一层之后，宿主随便重构内部，只要更新 core.js 里的映射即可。
+     *
+     * 宿主缺失时返回一个空对象：下面每处调用都判了能力，缺了就降级，
+     * 不会因为"宿主少了一块"而把插件系统整体带崩。
+     */
+    function host() {
+        try { return window.ElainaHost || {}; } catch (e) { return {}; }
+    }
+
+    /**
+     * 宿主**声明的**能力清单（`host.has(name)` 的合法参数）。
+     *
+     * 为什么是白名单而不是 `typeof window[name]`：探测任意全局名等于把 window
+     * 上的所有东西（包括别的插件的私有全局名）都变成插件 API。固定清单才能让
+     * "宿主到底承诺了什么"可读、可检查，名字写错时也能立刻报出来。
+     *
+     * 加一项时它必须是**宿主能力**（聊天链路、渲染、弹窗、主题、成就、存储、
+     * 本机服务端）。某个具体插件的功能不算宿主能力。
+     */
+    const HOST_CAPABILITIES = {
+        /** 能发用户消息（走主输入框同一条链路） */
+        sendUserMessage: () => typeof host().sendUserMessage === 'function',
+        /** 能渲染 Markdown / LaTeX */
+        renderText: () => typeof host().renderMessageText === 'function',
+        /** 有宿主弹窗（提示 / 确认） */
+        dialogs: () => typeof host().showCustomAlert === 'function',
+        /** 有主题系统（host.theme 可用） */
+        theme: () => Boolean(host().theme),
+        /** 有成就系统（host.unlock 可用） */
+        achievements: () => Boolean(host().achievements),
+        /** 有会话数据（host.getConversation / getMessages 可用） */
+        conversations: () => Boolean(host().state),
+        /** 有本机服务端（openFolder 等需要服务端的能力才会成功） */
+        localServer: () => {
+            try {
+                return typeof location !== 'undefined'
+                    && /^(127\.0\.0\.1|localhost|\[::1\])$/.test(String(location.hostname || ''));
+            } catch (e) { return false; }
+        },
+    };
+
+    /**
+     * host API 的成员分组：每组要插件在 manifest 里**声明**才拿得到。
+     *
+     * 为什么分组而不是全给：`createHostApi` 曾经一次性给 20 多个成员，插件随手
+     *   就能用上"很重的"那几个（注册主题模板、写宿主成就、绑全站拖拽内核）——
+     *   而绝大多数插件一辈子用不到它们。给全部等于把这些重能力的维护成本
+     *   摊到每个插件身上，也让"这个插件到底要什么"在清单里看不出来。
+     *
+     * 分组之后：不声明的组，对应成员**根本不在** `host` 上（不是空函数，
+     *   是 undefined）—— 误用时立刻 TypeError，离调用点最近，最好查。
+     *
+     * 兼容：`core` 组永远给（存消息、渲染、弹窗、storage、slot…），
+     *   它是插件能干活的最小集合。已有插件不需要改 manifest 就能继续跑；
+     *   要额外能力时在 manifest 的 `capabilities` 里加一个字符串即可。
+     */
+    const HOST_API_GROUPS = {
+        /** 永远提供：插件的基本生存能力 */
+        core: [],
+        /** 主题模板注册（host.theme / use / restore） */
+        theme: ['theme'],
+        /** 成就上报（host.unlock） */
+        achievements: ['unlock'],
+        /** 全站拖拽排序内核（host.dragSort） */
+        dragSort: ['dragSort'],
+        /** 在系统文件管理器里打开插件目录（host.openFolder） */
+        openFolder: ['openFolder'],
+    };
+
+    /**
+     * 读某个插件声明的 host API 能力组。
+     *
+     * 声明位置是 manifest 的 `capabilities`（数组，与 server.capabilities 同名
+     * 但各管一半：这个只管前端 host API）。缺省 = 只给 core。
+     * 未知组名**明确报出来**并忽略 —— 静默忽略会让插件作者以为申请到了，
+     * 运行到那一步才发现 `host.theme` 是 undefined。
+     */
+    function declaredApiGroups(manifest, log) {
+        const raw = manifest && manifest.capabilities;
+        const out = new Set(['core']);
+        if (raw === undefined || raw === null) return out;
+        if (!Array.isArray(raw)) {
+            log('error', 'manifest 的 capabilities 必须是字符串数组（可用：'
+                + Object.keys(HOST_API_GROUPS).join('、') + '），本次按「只给 core」处理');
+            return out;
+        }
+        for (const item of raw) {
+            const g = String(item || '').trim();
+            if (!g) continue;
+            if (!Object.prototype.hasOwnProperty.call(HOST_API_GROUPS, g)) {
+                log('warn', 'manifest 的 capabilities 里有未知组「' + g + '」（可用：'
+                    + Object.keys(HOST_API_GROUPS).join('、') + '），已忽略');
+                continue;
+            }
+            out.add(g);
+        }
+        return out;
+    }
+
+    /**
      * 构造交给插件的宿主接口。
      *
      * 为什么不直接把 window 给它：插件一旦随手引用宿主的内部变量
@@ -209,15 +313,13 @@
      * @param {object} manifest 清单条目
      * @param {string} [regName] 插件脚本里 register() 用的名字（缺省 = manifest.id）
      */
-    // ---- 插件私有存储（host.storage 的实现）★ 2026-10 ----
+    // ---- 插件私有存储（host.storage 的实现）----
     //
     //  存在宿主的一个 Store 键里：`{ "<插件id>": { … } }`，按 id 分区。
     //  为什么给插件开这个口子：插件要"跨刷新/跨重启记住状态"，却拿不到宿主
     //  私有的 Store 内部键；让它自己写 localStorage 又进不了 data/（不跨设备、
-    //  不进备份）。生日模块的状态（今天看过彩蛋没有、用户选了哪个分支、
-    //  生日前的主题）正需要这个。
-    //  ★ 这个键必须列在 store.js 的 DATA_KEYS 白名单里，否则写入只进内存
-    //    缓存、刷新即丢（本项目踩过三次的坑）。
+    //  不进备份）。
+    //  这个键必须列在 store.js 的 DATA_KEYS 白名单里，否则写入只进内存缓存、刷新即丢。
     const MOD_STORAGE_KEY = 'elaina_mod_storage';
 
     function readModStorage() {
@@ -271,6 +373,9 @@
             const fn = console[level] || console.log;
             try { fn(tag, ...args); } catch (e) { /* 忽略 */ }
         };
+        // 这个插件声明了哪些能力组（缺省只有 core）
+        const groups = declaredApiGroups(manifest, log);
+        const hasGroup = (g) => groups.has(g);
         return {
             id: name,
             manifestId: manifest.id,
@@ -297,7 +402,7 @@
             /** 本插件资源目录的 URL（结尾带 /），供需要自行拼路径的场合 */
             assetBase() { return MOD_ROOT + modDir(manifest) + '/'; },
 
-            // ---- 查找其他插件（★ 由插件系统统一解析，插件不自己拼路径）----
+            // ---- 查找其他插件（由插件系统统一解析，插件不自己拼路径）----
             /**
              * 按**注册名 / 清单 id / 目录名**中的任意一个查找插件。
              *
@@ -353,11 +458,10 @@
             // ---- 对话数据（只读约定：改数据请走下面的 API）----
             /** 取当前会话；没有则 null */
             getConversation() {
-                try {
-                    if (typeof state === 'undefined' || !state) return null;
-                    const list = state.conversations || [];
-                    return list.find((c) => c.id === state.currentConversationId) || list[0] || null;
-                } catch (e) { return null; }
+                const st = host().state;
+                if (!st) return null;
+                const list = st.conversations || [];
+                return list.find((c) => c.id === st.currentConversationId) || list[0] || null;
             },
             /** 取会话里的消息数组（引用，插件只读遍历） */
             getMessages() {
@@ -366,23 +470,21 @@
             },
             /** 当前是否处于某个特殊页面模式（便签/日记），插件据此决定要不要显示 */
             getUiMode() {
-                try {
-                    return { notes: !!state.notesMode, diary: !!state.diaryMode };
-                } catch (e) { return { notes: false, diary: false }; }
+                const st = host().state;
+                return { notes: !!(st && st.notesMode), diary: !!(st && st.diaryMode) };
             },
 
             // ---- 发送消息（走宿主既有链路，不另起一套请求）----
             /**
-             * 以用户身份发一条消息。复用宿主 handleUserInput，
+             * 以用户身份发一条消息。复用宿主的 handleUserInput，
              * 保证"从插件发出的消息"和"从主输入框发出的"完全同一条链路
              * （记忆、续跑、停止、语音都自动生效）。
              *
-             * ★ 必须自己构造消息**对象**并推进会话，不能只把字符串丢给
+             * 必须自己构造消息**对象**并推进会话，不能只把字符串丢给
              *   handleUserInput —— 它签名是 `(message, conversation)`，
-             *   内部读 `message.text` / `message.id`。早先这里传的是字符串，
-             *   于是 `message.text` 是 undefined → **发出去的是空消息**
-             *   （实测踩过：出站请求里 `role=user` 的内容长度是 0，
-             *   桌宠的"主动搭话"因此说了个空话，AI 完全看不到电脑状态）。
+             *   内部读 `message.text` / `message.id`。传字符串会得到
+             *   `message.text === undefined`，发出去的是**空消息**
+             *   （出站请求里 role=user 的内容长度是 0，模型什么都看不到）。
              *
              *   主输入框那条路（processVoiceInput / handleInitialTextSubmit）
              *   也是这么构造的：id + role + text + timestamp，再 push 进
@@ -392,12 +494,12 @@
                 try {
                     const msg = String(text || '').trim();
                     if (!msg) return false;
+                    const H = host();
                     const c = this.getConversation();
-                    if (!c || typeof handleUserInput !== 'function') return false;
-                    if (typeof generateId !== 'function') return false;
+                    if (!c || typeof H.sendUserMessage !== 'function' || typeof H.newId !== 'function') return false;
 
                     const message = {
-                        id: generateId(),
+                        id: H.newId(),
                         role: 'user',
                         text: msg,
                         timestamp: new Date().toLocaleTimeString(),
@@ -409,27 +511,26 @@
                     // 否则插件发出的第一条消息不会让会话标题变正常
                     if (c.messages.length === 1) {
                         try {
-                            if (typeof autoNameConversation === 'function') {
-                                c.title = autoNameConversation(c.messages);
-                            }
-                            if (typeof renderFolderList === 'function') renderFolderList();
-                            if (typeof updateCurrentConversationTitle === 'function') updateCurrentConversationTitle();
+                            if (H.autoNameConversation) c.title = H.autoNameConversation(c.messages);
+                            if (H.renderFolderList) H.renderFolderList();
+                            if (H.updateCurrentConversationTitle) H.updateCurrentConversationTitle();
                         } catch (e) { /* 命名失败不影响发送 */ }
                     }
                     // 让界面把新消息画出来（主输入框那条路也会 loadConversation）
                     try {
-                        if (typeof loadConversation === 'function') loadConversation(c.id);
+                        if (H.loadConversation) H.loadConversation(c.id);
                     } catch (e) { /* 忽略 */ }
 
-                    handleUserInput(message, c);
+                    H.sendUserMessage(message, c);
                     return true;
                 } catch (e) { log('error', 'sendUserMessage 失败', e); return false; }
             },
 
             // ---- 文本渲染（Markdown / LaTeX，与主界面同一套）----
             renderText(text) {
+                const fn = host().renderMessageText;
                 try {
-                    if (typeof renderMessageText === 'function') return renderMessageText(text);
+                    if (fn) return fn(text);
                 } catch (e) { /* 回落到纯文本 */ }
                 // 回落：至少把 HTML 转义掉，避免插件直接把用户内容当 HTML 插进去
                 return String(text == null ? '' : text)
@@ -450,8 +551,9 @@
              */
             alert(message, title) {
                 const text = String(message == null ? '' : message);
+                const fn = host().showCustomAlert;
                 try {
-                    if (typeof showCustomAlert === 'function') return showCustomAlert(text, title);
+                    if (fn) return fn(text, title);
                 } catch (e) { /* 回落到原生 */ }
                 try { window.alert((title ? title + '\n\n' : '') + text); } catch (e) { /* 忽略 */ }
             },
@@ -459,8 +561,9 @@
             /** 弹一个确认框，返回 Promise<boolean>。同上：不要直接摸宿主内部。 */
             async confirm(message, title) {
                 const text = String(message == null ? '' : message);
+                const fn = host().showCustomConfirm;
                 try {
-                    if (typeof showCustomConfirm === 'function') return Boolean(await showCustomConfirm(text, title));
+                    if (fn) return Boolean(await fn(text, title));
                 } catch (e) { /* 回落到原生 */ }
                 try { return window.confirm((title ? title + '\n\n' : '') + text); } catch (e) { return false; }
             },
@@ -472,28 +575,30 @@
              *   await host.openFolder();                  // 插件自己的目录
              *   await host.openFolder('models/deepseek'); // 插件目录内的一层子路径
              *
-             * ★ 为什么让宿主代劳而不是插件自己 fetch：路径白名单在**服务端**，
+             * 为什么让宿主代劳而不是插件自己 fetch：路径白名单在**服务端**，
              *   而这些判断属于"宿主与宿主接口之间"的约定。插件只要说"我想开我自己
              *   目录下的这个子路径"，越界与否由宿主拒绝 —— 插件不必也不该知道
-             *   `web/mods/` 在哪、白名单长什么样。
+             *   `mods/` 在哪、白名单长什么样。
              *
-             * ★ 只有本机（有服务端）能开；APK / 局域网设备会拿到明确的失败原因，
+             * 只有本机（有服务端）能开；APK / 局域网设备会拿到明确的失败原因，
              *   插件据此给用户提示即可（不要静默）。
              *
              * @returns {Promise<{ok:boolean, path?:string, message?:string}>}
              */
-            async openFolder(sub) {
-                const q = new URLSearchParams({ id: manifest.id });
-                if (sub) q.set('sub', String(sub));
-                try {
-                    const res = await fetch('/api/plugins/open-folder?' + q.toString(), { method: 'POST' });
-                    const data = await res.json().catch(() => null);
-                    if (res.ok && data && data.ok) return { ok: true, path: data.path };
-                    return { ok: false, message: (data && data.message) || ('HTTP ' + res.status) };
-                } catch (e) {
-                    return { ok: false, message: String((e && e.message) || e) };
-                }
-            },
+            ...(hasGroup('openFolder') ? {
+                async openFolder(sub) {
+                    const q = new URLSearchParams({ id: manifest.id });
+                    if (sub) q.set('sub', String(sub));
+                    try {
+                        const res = await fetch('/api/plugins/open-folder?' + q.toString(), { method: 'POST' });
+                        const data = await res.json().catch(() => null);
+                        if (res.ok && data && data.ok) return { ok: true, path: data.path };
+                        return { ok: false, message: (data && data.message) || ('HTTP ' + res.status) };
+                    } catch (e) {
+                        return { ok: false, message: String((e && e.message) || e) };
+                    }
+                },
+            } : {}),
 
             // ---- 列表拖拽排序（宿主实现，插件复用）----
             /**
@@ -502,11 +607,11 @@
              *
              *   const stop = host.dragSort(container, (ids) => save(ids));
              *
-             * ★ 为什么由宿主实现：这套交互有相当多细节（指针捕获、FLIP 动画、
+             * 为什么由宿主实现：这套交互有相当多细节（指针捕获、FLIP 动画、
              *   占位块、Esc 取消、触屏），每个插件各写一份必然分叉 ——
              *   而且"某个列表拖起来手感不一样"是最难解释的那类不一致。
              *
-             * ★ 只改**显示顺序**：宿主不解释这些 id 的语义，也不碰任何加载顺序。
+             * 只改**显示顺序**：宿主不解释这些 id 的语义，也不碰任何加载顺序。
              *   要不要持久化、存哪儿，由调用方在自己那个 `onDone(ids)` 里决定
              *   （宿主不该知道某个插件的排序存在哪）。
              *
@@ -514,11 +619,16 @@
              * @param {(ids:string[], container:Element)=>void} [onDone] 松手后回调
              * @returns {Function} 解绑函数
              */
-            dragSort(container, onDone) {
-                return bindFlatDragSort(container, onDone);
-            },
+            // 重能力：只有 manifest.capabilities 声明了对应组才存在。
+            //   不声明时 host.dragSort 是 undefined（不是空函数）——
+            //   误用会立刻 TypeError，离调用点最近，最好查。
+            ...(hasGroup('dragSort') ? {
+                dragSort(container, onDone) {
+                    return bindFlatDragSort(container, onDone);
+                },
+            } : {}),
 
-            // ---- 插件私有持久化（跨刷新 / 跨重启 / 跨设备同步）★ 2026-10 ----
+            // ---- 插件私有持久化（跨刷新 / 跨重启 / 跨设备同步）----
             /**
              * `host.storage`：一块**带插件命名空间**的存储，落宿主 data/。
              *
@@ -527,15 +637,15 @@
              *   s.get('seen', '');              // 读；不存在返回第二个参数
              *   s.remove('seen'); s.keys(); s.all();
              *
-             * ★ 为什么由宿主提供：插件拿不到宿主的 Store 内部键，而自己写
+             * 为什么由宿主提供：插件拿不到宿主的 Store 内部键，而自己写
              *   localStorage 又进不了 data/（不跨设备、不进备份）。宿主把所有
              *   插件的存储收在 `elaina_mod_storage` 一个键里、按 id 分区，
              *   互不干扰。
-             * ★ 停用插件**不会**清掉它的数据 —— 那是"关掉功能"，不是"抹掉记录"。
+             * 停用插件**不会**清掉它的数据 —— 那是"关掉功能"，不是"抹掉记录"。
              */
             storage: createModStorage(manifest.id),
 
-            // ---- 注册一个主题模板（插件主题）★ 2026-10 ----
+            // ---- 注册一个主题模板（插件主题）----
             /**
              * `host.theme({ id, name, dots, vars })` —— 把一套配色注册进
              * 「设置 → 外观」的主题选择器，用 vars（CSS 变量表）落成样式。
@@ -546,27 +656,26 @@
              *     vars: { '--pixso-canvas': '#ded8e8', '--pixso-green': '#6d6aa8', … },
              *   });
              *
-             * ★ 启用时注册、停用/卸载时**自动摘除**（走与插槽同一套贡献回收）：
+             * 启用时注册、停用/卸载时**自动摘除**（走与插槽同一套贡献回收）：
              *   停用后那套配色从选择器里消失；用户正停在它上面时会回落默认主题。
-             * ★ 只给"浅色"var：深色由宿主的深色块统一覆盖（见 theme.js 的说明）。
+             * 只给"浅色"var：深色由宿主的深色块统一覆盖（见 theme.js 的说明）。
              * @returns {{ok:boolean, id:string}}
              */
+            ...(hasGroup('theme') ? {
             theme(spec) {
                 const t = { ...(spec || {}) };
                 if (!t.id) { log('warn', 'host.theme 需要 id'); return { ok: false, id: '' }; }
                 const apply = () => {
+                    const th = host().theme;
                     try {
-                        if (window.ElainaTheme && typeof window.ElainaTheme.registerTemplate === 'function') {
-                            return window.ElainaTheme.registerTemplate(t) !== false;
-                        }
+                        if (th && typeof th.registerTemplate === 'function') return th.registerTemplate(t) !== false;
                     } catch (e) { /* 忽略 */ }
                     return false;
                 };
                 const undo = () => {
+                    const th = host().theme;
                     try {
-                        if (window.ElainaTheme && typeof window.ElainaTheme.unregisterTemplate === 'function') {
-                            window.ElainaTheme.unregisterTemplate(t.id);
-                        }
+                        if (th && typeof th.unregisterTemplate === 'function') th.unregisterTemplate(t.id);
                     } catch (e) { /* 忽略 */ }
                 };
                 addContribution(manifest.id, { activate: apply, deactivate: undo, dispose: undo });
@@ -575,16 +684,17 @@
                     id: String(t.id),
                     /** 临时切到这套主题（记住切换前的那套，供 restore() 还原） */
                     use() {
-                        try { return window.ElainaTheme?.useTemplate?.(t.id); } catch (e) { return null; }
+                        try { return host().theme?.useTemplate?.(t.id) ?? null; } catch (e) { return null; }
                     },
                     /** 还原到 use() 之前用户用的那套主题 */
                     restore() {
-                        try { return window.ElainaTheme?.restoreTemplate?.(); } catch (e) { return null; }
+                        try { return host().theme?.restoreTemplate?.() ?? null; } catch (e) { return null; }
                     },
                 };
             },
+            } : {}),
 
-            // ---- 触发达成一条成就（成就在宿主侧，插件只当触发器）★ 2026-10 ----
+            // ---- 触发达成一条成就（成就在宿主侧，插件只当触发器）----
             /**
              * `host.unlock(id, detail)` —— 解锁一条**宿主已定义**的成就。
              *
@@ -594,11 +704,14 @@
              *
              * @returns {boolean} 是否成功（id 不在宿主清单里返回 false）
              */
+            ...(hasGroup('achievements') ? {
             unlock(id, detail) {
+                const ac = host().achievements;
                 try {
-                    return Boolean(window.ElainaAchievements && window.ElainaAchievements.unlock(id, detail));
+                    return Boolean(ac && typeof ac.unlock === 'function' && ac.unlock(id, detail));
                 } catch (e) { return false; }
             },
+            } : {}),
 
             // ---- 宿主插槽：向宿主挖好的命名扩展点里注册 ----
             /**
@@ -623,7 +736,7 @@
             /**
              * 注入一份插件自己的样式表。
              *
-             * ★ 停用时会**真的失效**（`disabled=true`，不重新下载），启用时恢复。
+             * 停用时会**真的失效**（`disabled=true`，不重新下载），启用时恢复。
              *   与清单里 `styles` 声明的那份走同一段代码 —— 两条路径都会回收。
              */
             injectStyle(href) { return injectStyleLink(manifest, href); },
@@ -634,9 +747,8 @@
              * 为什么用注册而不是直接改：插件不该知道宿主怎么拼提示词，
              * 宿主也不该知道有哪些插件 —— 注册表是唯一的耦合点。
              *
-             * ★ 插件被停用时这段提示词会被**摘掉**（文本留着，启用时原样恢复）。
-             *   旧实现从不清 promptHints，于是"关掉的插件还在影响模型行为" ——
-             *   看不见、也想不到去查，属于最难定位的一类。
+             * 插件被停用时这段提示词会被**摘掉**（文本留着，启用时原样恢复）——
+             *   不摘就会出现"关掉的插件还在影响模型行为"，看不见也想不到去查。
              */
             setPromptHint(text) {
                 const t = String(text || '');
@@ -653,7 +765,7 @@
             /**
              * 订阅宿主事件。返回取消订阅的函数。
              *
-             * ★ 停用插件时订阅会被摘掉（回调留着，启用时再接上）——
+             * 停用插件时订阅会被摘掉（回调留着，启用时再接上）——
              *   否则停用的插件仍在后台响应事件，行为和"已停用"不符。
              *   返回的取消函数仍然可用（用于插件自己中途退订）。
              */
@@ -662,7 +774,7 @@
                 const attach = () => {
                     if (!bus.has(event)) bus.set(event, new Set());
                     bus.get(event).add(h);
-                    // ★ 'app-ready' 是"一次性、且可能已经发生过"的事件：mod 在
+                    // 'app-ready' 是"一次性、且可能已经发生过"的事件：mod 在
                     //   DOMContentLoaded 就加载，而初始化完成可能早于某个 mod 的
                     //   注册（loadAll 异步）→ 慢加载的 mod 会永远等不到这个信号。
                     //   所以订阅时若它已经发生过，立刻补调一次。
@@ -690,9 +802,28 @@
             },
 
             // ---- 宿主能力探测：插件据此决定降级行为 ----
-            has(name) {
-                try { return typeof window[name] !== 'undefined'; } catch (e) { return false; }
+            /**
+             * `host.has(capability)` —— 宿主**声明的**能力是否可用。
+             *
+             * 参数是一份固定清单里的名字（见 HOST_CAPABILITIES），不是任意全局名。
+             * 早期版本是 `typeof window[name] !== 'undefined'`，等于把 window 上
+             * 的一切都变成了 API：插件写 `host.has('Live2DCall')` 就能探到另一个
+             * 插件的私有全局名，宿主也没法据这份清单做兼容性判断。名字写错时
+             * 现在会明确报出来，而不是安静返回 false。
+             */
+            has(capability) {
+                const key = String(capability || '');
+                if (!Object.prototype.hasOwnProperty.call(HOST_CAPABILITIES, key)) {
+                    log('warn', 'host.has 不认识的能力名「' + key + '」，可用：'
+                        + Object.keys(HOST_CAPABILITIES).join('、'));
+                    return false;
+                }
+                try { return Boolean(HOST_CAPABILITIES[key]()); } catch (e) { return false; }
             },
+            /** 宿主支持的能力名清单（插件做兼容性判断时用，不必猜） */
+            capabilities() { return Object.keys(HOST_CAPABILITIES); },
+            /** 本插件被授予的能力组（manifest.capabilities 解析后的结果） */
+            grantedGroups() { return [...groups]; },
         };
     }
 
@@ -710,7 +841,7 @@
     /**
      * 给某个 mod 挂上"提示词"这条贡献（每个 mod 只挂一次）。
      *
-     * ★ 为什么延迟登记、且只登记一条：
+     * 为什么延迟登记、且只登记一条：
      *   galgame 会随场景切换反复调 setPromptHint。若每次调用都新增一条贡献，
      *   停用时会反复删同一个键（无害但白涨），而"恢复"时会按登记顺序挂回
      *   **早期那份旧文本**（最后一条只会再覆盖一次，结果是巧合而非保证）。
@@ -737,7 +868,7 @@
     /**
      * 'app-ready' 是否已经发生过。
      *
-     * 由 `ElainaMods.markAppReady()` 置位（app-07-init.js 在 init() 末尾调用）。
+     * 由 `ElainaMods.markAppReady()` 置位（init.js 在 init() 末尾调用）。
      * 单独存这个状态而不是只依赖事件：mod 加载是异步的，晚注册的 mod 会
      * 错过一次性事件（见 host.on 里的补调）。
      */
@@ -755,22 +886,20 @@
     //  改成**命名插槽**后，宿主只负责挖插槽（`settings.tabs` / `header.actions`…），
     //  mod 只用一个 `host.slot(name, spec)`。设置分栏与顶部按钮都只是插槽的实例，
     //  以后 Live2D / Galgame / 任何新 mod 共用同一套机制与同一套回收逻辑。
-    //  （改法借鉴自 DSH 的 `ctx.slots.register`，见开发文档 8.45 的对照表。）
     //
-    //  ── ★ 这一节的真正目的：注册必须可以反悔 ──────────────────────────────
+    //  ── 这一节的目的：注册必须可以反悔 ─────────────────────────────────
     //
     //  插件是可开关的，而"关掉"必须真的关掉：注册过的插槽、注入的样式、
-    //  追加的 system 提示词、订阅的事件，都得跟着消失。以前这些全靠各处手写，
-    //  漏一处就是一种难查的 bug —— 实测已有两例：
-    //    · 停用的 mod 仍然往 system 提示词里加内容（promptHints 从不清）
-    //    · injectStyle 挂上去就再没摘过
+    //  追加的 system 提示词、订阅的事件，都得跟着消失。各处手写回收代码时
+    //  漏一处就是一种难查的 bug（停用的 mod 仍往提示词里加内容、injectStyle
+    //  挂上去再没摘过），所以回收只能有一套。
     //
     //  所以这里把 mod 的每一项注册都记成**一条可撤销的贡献**：
     //    停用 → deactivate（从界面/提示词/事件上摘掉，但**保留 spec**）
     //    启用 → activate  （拿保留的 spec 重新挂上）
     //    卸载 → dispose   （真删，连 spec 一起丢）
     //
-    //  ★ 为什么"启用"不重跑 mod 的工厂（register 里的那个函数）：
+    //  为什么"启用"不重跑 mod 的工厂（register 里的那个函数）：
     //    galgame / pet 的工厂里建 DOM、挂监听、起定时器。重跑工厂会得到
     //    两份界面、两组定时器。工厂在 mod 约定里是"初始化一次"，而可以
     //    反复执行的是**注册动作** —— 保留 spec 就是为了这个。
@@ -857,6 +986,14 @@
             log('error', 'host.slot(' + name + ', spec) 的 spec 必须是对象');
             return null;
         }
+        // 形状校验：缺字段 / 类型不对时当场拒绝，并说清缺什么。
+        // 不校验的话故障会推迟到渲染那一刻，报的是"xxx is not a function"，
+        // 插件作者指不回自己的注册点。
+        const bad = validateSlotSpec(name, spec, impl.spec);
+        if (bad) {
+            log('error', '往插槽「' + name + '」注册失败：' + bad);
+            return null;
+        }
         const key = modId + ':' + String(spec.id || spec.key || 'default');
         if (!slotEntries.has(name)) slotEntries.set(name, new Map());
         const table = slotEntries.get(name);
@@ -878,7 +1015,7 @@
         /**
          * 卸载挂载出来的东西，但**保留 spec 与登记行**。
          *
-         * ★ 停用走"真卸载"而不是"只藏起来"：
+         * 停用走"真卸载"而不是"只藏起来"：
          *   藏着的面板会带着旧内容（延迟渲染的标记已经置位），重新启用后显示的是
          *   停用前的状态 —— 而用户在这期间可能改过设置，看到的却是过期界面。
          *   卸载后用同一份 spec 重新挂载，渲染标记也是新的，内容自然是当前的。
@@ -913,7 +1050,7 @@
             deactivate() {
                 entry.active = false;
                 if (impl.item === true) {
-                    // ★ 停用要**立刻**把已经画在界面上的东西摘掉，不能等下次重渲染 ——
+                    // 停用要**立刻**把已经画在界面上的东西摘掉，不能等下次重渲染 ——
                     //   否则用户关了插件，消息行里的按钮还留着（点了会报错或没反应）。
                     //   摘除方式由插槽实现决定（它知道自己的容器长什么样）。
                     if (typeof impl.cleanup === 'function') safely(() => impl.cleanup(modId));
@@ -983,7 +1120,7 @@
      *   · 其它卡片用 FLIP（先量后改再演回去）平滑换位
      *   · 松手后卡片飞回占位块；Esc / pointercancel 取消
      *
-     * ★ 几个必须做对的点（都在实测里踩过）：
+     * 几个必须做对的点：
      *   ① move/up 绑在 **document** 上，不是 grip。卡片拖拽中会被移到 body，
      *      元素搬位置时指针捕获**可能丢失**，一旦丢了卡片会僵在半空、占位块留着。
      *   ② 卡片 fixed 定位必须记住原来的屏幕位置（left/top/width/height），
@@ -997,7 +1134,7 @@
      */
     function bindFlatDragSort(container, onDone, options) {
         if (!container) return () => {};
-        // ★ 可配置项：分栏（.mod-group）的拖拽也复用这套内核 —— 它的"项"是分栏
+        // 可配置项：分栏（.mod-group）的拖拽也复用这套内核 —— 它的"项"是分栏
         //   而不是卡片，把手是整个分栏头而不是三条竖线。选项不给时用卡片默认值。
         const opts = options || {};
         const ITEM_SEL = opts.itemSelector || '.mod-card';
@@ -1005,22 +1142,22 @@
         const ID_ATTR = opts.idAttr || null;              // null = 自动（先 data-model-name 后 data-mod-id）
         const PLACEHOLDER_CLASS = opts.placeholderClass || 'mod-placeholder';
         const DRAGGING_CLASS = opts.draggingClass || 'mod-dragging';
-        // ★ 外层容器的项选择器（可选）：拖出父容器后，插入点候选按这个选。
+        // 外层容器的项选择器（可选）：拖出父容器后，插入点候选按这个选。
         //   插件分栏场景：拖分栏到顶层时，候选要**包含平铺卡片**——否则分栏只能
         //   插到其它分栏前面，永远到不了卡片之间（"分栏拖不到卡片上面"的根因）。
         const OUTER_ITEM_SEL = opts.outerItemSelector || ITEM_SEL;
-        // ★ 顶层混排模式：项本身就在 container 顶层（分栏与卡片混排），
+        // 顶层混排模式：项本身就在 container 顶层（分栏与卡片混排），
         //   插入点候选**始终**用 OUTER_ITEM_SEL（含两类项）—— 不需要"逃逸"判定。
         const TOP_MIXED = Boolean(opts.topLevelMixed);
         // 拖拽时挂在"项"上的类由 CSS 定义（.mod-card.mod-dragging / .mod-group.mod-dragging）
         const handlers = [];
         let drag = null;
-        // ★ 拖拽中的"项"所在的**真实父容器**（pointerdown 时确定）。
+        // 拖拽中的"项"所在的**真实父容器**（pointerdown 时确定）。
         //   不能假设调用方传的 container 就是项的父级：分栏渲染后卡片住在
         //   .mod-group-body 里，container 是更外层的 #modsList。排序范围、
         //   占位块、FLIP 测量都应限定在这一层（跨分栏的移动是上层的职责）。
         let parent = null;
-        // ★ "逃逸"容器：项被拖出父容器范围时的落脚点（outerContainer 选项）。
+        // "逃逸"容器：项被拖出父容器范围时的落脚点（outerContainer 选项）。
         //   例如卡片从分栏体拖出到 #modsList 顶层 —— 没有它，放进去的拿不出来。
         let outer = opts.outerContainer || null;
 
@@ -1081,23 +1218,23 @@
                 if (drag) return;
                 const card = grip.closest(ITEM_SEL);
                 if (!card) return;
-                // ★ 只认主键 / 触摸：右键、中键拖动不该触发排序
+                // 只认主键 / 触摸：右键、中键拖动不该触发排序
                 if (ev.button != null && ev.button !== 0) return;
-                // ★ 调用方否决：把手可能同时是别的控件（如分栏头还是折叠开关），
+                // 调用方否决：把手可能同时是别的控件（如分栏头还是折叠开关），
                 //   canStart 返回 false 表示"这次按下不进拖拽"（调用方已自行处理语义）。
                 if (typeof opts.canStart === 'function' && !opts.canStart(ev)) return;
                 ev.preventDefault();
-                // ★ 记录手势是否移动过 + 起点：配合 opts.onTap 实现"没动就松手 = 单击"。
+                // 记录手势是否移动过 + 起点：配合 opts.onTap 实现"没动就松手 = 单击"。
                 //   preventDefault 吞掉了 click，调用方只能从这里拿单击语义。
                 const downX = ev.clientX, downY = ev.clientY;
                 let moved = false;
 
                 const rect = card.getBoundingClientRect();
-                // ★ 卡片的**真实父容器**：占位块要插到卡片原来的位置，
+                // 卡片的**真实父容器**：占位块要插到卡片原来的位置，
                 //   即卡片自己的 parentElement 里 —— 不能假设调用方传的 container
                 //   就是卡片的父级。分栏渲染后卡片住在 .mod-group-body 里，
                 //   而 container 是更外层的 #modsList；这时 insertBefore(ph, card)
-                //   会抛 "not a child of this node"（实测踩到）。
+                //   会抛 "not a child of this node"。
                 //   排序的目标范围也跟着取真实父容器 —— 拖拽排序本来就是
                 //   "在同一层里换位置"，跨分栏的移动由上层（归类拖拽）负责。
                 parent = card.parentElement;
@@ -1117,22 +1254,22 @@
 
                 drag = {
                     card, ph, grip,
-                    // ★ 抓取点相对卡片左上角的偏移。拖动时保持不变，
+                    // 抓取点相对卡片左上角的偏移。拖动时保持不变，
                     //   卡片才不会在按下的瞬间"跳"到指针下方（桌面图标的手感）。
                     grabDX: ev.clientX - rect.left,
                     grabDY: ev.clientY - rect.top,
                     // 上一次的落点，用于判断占位块要不要挪（否则每帧都触发 FLIP）
                     lastBefore: card,
                     lastParent: null,
-                    // ★ 父容器 rect 缓存：拖动中滚动/结构不变，无需每帧重测
+                    // 父容器 rect 缓存：拖动中滚动/结构不变，无需每帧重测
                     //   （每帧 getBoundingClientRect 是"经过分栏变卡"的元凶之一）。
                     prCache: null,
                 };
                 drag.prCache = parent.getBoundingClientRect();
                 // 抬起效果：略微放大，像从桌面上"拿起来"。
-                // ★ 与跟随位移写在**同一个内联 transform** 里 —— 否则 CSS 一个 scale、
+                // 与跟随位移写在**同一个内联 transform** 里 —— 否则 CSS 一个 scale、
                 //   JS 一个 translate 会互相覆盖（这正是"不跟手"的成因之一）。
-                // ★ transform-origin 设到**抓取点**：默认是以中心缩放，那会让
+                // transform-origin 设到**抓取点**：默认是以中心缩放，那会让
                 //   卡片左边缘外移（实测 630px 宽的卡片外移 10px），按下的瞬间
                 //   手指底下那张卡就"滑"了一下 —— 又是一种不跟手。
                 //   以抓取点为原点缩放，等于"捏住那一点把它提起来"，指针下的
@@ -1142,17 +1279,17 @@
 
                 const onMove = (e) => {
                     if (!drag) return;
-                    // ★ 记录"动过"：移出 5px 即视为拖拽（供 onTap 判单击用）
+                    // 记录"动过"：移出 5px 即视为拖拽（供 onTap 判单击用）
                     if (!moved && (Math.abs(e.clientX - downX) > 5 || Math.abs(e.clientY - downY) > 5)) {
                         moved = true;
                     }
-                    // ★ 二维跟手：抓在哪就一直在哪。原先只写 translateY ——
-                    //   横向拖动时卡片横向不动，所以看起来"不跟手"。
+                    // 二维跟手：抓在哪就一直在哪。只写 translateY 的话横向拖动
+                    //   时卡片横向不动，看起来就是"不跟手"。
                     const dx = e.clientX - rect.left - drag.grabDX;
                     const dy = e.clientY - rect.top - drag.grabDY;
                     setTf(dx, dy, true);
 
-                    // ★ 插入点判定分两种（都排除拖动中的项自身）：
+                    // 插入点判定分两种（都排除拖动中的项自身）：
                     //   a) TOP_MIXED 模式（项在 container 顶层混排，如分栏拖动）：
                     //      候选**始终**用 OUTER_ITEM_SEL —— 卡片与分栏同等级，
                     //      分栏可以插到任何卡片之间（用户要求）。
@@ -1160,7 +1297,7 @@
                     //      指针回到父容器范围 → 降级回栏内。
                     //   c) 其余：候选限定在真实父容器内（普通栏内排序）。
                     //
-                    // ★★ 滞回带（hysteresis）24px：进出外层用**不同的边界** ——
+                    // 滞回带（hysteresis）24px：进出外层用**不同的边界** ——
                     //   走出去要越出边界 24px，走回来要缩进边界内 24px。
                     //   没有滞回时指针在分栏边缘来回 1px 都会翻转 activeParent，
                     //   占位块每帧在两个容器间搬家 + FLIP 全量重测 —— 这就是
@@ -1203,7 +1340,7 @@
                 /** 写内联 transform：位移 +（可选）抬起效果 */
                 function setTf(dx, dy, lifted) {
                     const c = drag ? drag.card : card;
-                    // ★ 只用一个很克制的缩放（1.02），**不要 rotate**。
+                    // 只用一个很克制的缩放（1.02），**不要 rotate**。
                     //   旋转会让卡片的外框膨胀（630px 宽的卡片高度多出约 7px），
                     //   而 FLIP 是按外框测量位移的 —— 那点膨胀会让其它卡片
                     //   每次换位都多轻微抖一下。桌面图标拖动本来也不旋转，
@@ -1215,7 +1352,7 @@
                     document.removeEventListener('pointermove', onMove);
                     document.removeEventListener('pointerup', onUp);
                     document.removeEventListener('pointercancel', onCancel);
-                    // ★ 必须带上 capture:true —— removeEventListener 要求
+                    // 必须带上 capture:true —— removeEventListener 要求
                     //   "捕获标志 + 回调"都对得上才算同一个监听器。
                     //   漏了这个参数就摘不掉：拖拽用鼠标松手结束时（不走 Esc 分支），
                     //   那个 once 监听器会**残留**在 document 上，之后每一次 Escape
@@ -1224,7 +1361,7 @@
                     document.removeEventListener('keydown', onKey, { capture: true });
                     if (!drag) return;
                     const { card: c, ph } = drag;
-                    // ★ 占位块此刻可能已被"拖出分栏"搬进外层容器 —— 还原/落位
+                    // 占位块此刻可能已被"拖出分栏"搬进外层容器 —— 还原/落位
                     //   都要跟着占位块**现在的**父节点走，不能用固定的 parent。
                     const phParent = ph.parentElement || parent;
                     const restore = () => {
@@ -1236,12 +1373,12 @@
                         c.style.width = '';
                         c.style.height = '';
                         c.classList.remove(DRAGGING_CLASS);
-                        // ★ 回到占位块的位置（占位块在哪个容器就插回哪里）
+                        // 回到占位块的位置（占位块在哪个容器就插回哪里）
                         phParent.insertBefore(c, ph);
                         ph.remove();
                         document.body.classList.remove('mod-dragging-active');};
                     if (commit) {
-                        // ★ 没动过 = 单击手势：报告给调用方（它可能有"点把手"的语义，
+                        // 没动过 = 单击手势：报告给调用方（它可能有"点把手"的语义，
                         //   如分栏头的单击切折叠），同时顺序没变，无需 onDone 重排。
                         if (!moved) {
                             restore();
@@ -1251,13 +1388,13 @@
                         }
                         // 松手：把卡片平滑"放"到占位块上，落位后再换回文档流。
                         //
-                        // ★ 位移是相对 **left/top 基准**算的，不是相对当前位置：
+                        // 位移是相对 **left/top 基准**算的，不是相对当前位置：
                         //   卡片是 fixed + left/top=抓取时的屏幕位置，内联 transform
                         //   是相对那个基准的偏移。所以目标偏移 =
                         //   占位块位置 − 基准位置。
                         //   （不能拿"当前位置"再叠加 —— getBoundingClientRect 已经
                         //    含了 transform，再加一次就飞过头。）
-                        // ★ 不写 scale：让卡片从"抬起的 1.03"自己落回 1.0，
+                        // 不写 scale：让卡片从"抬起的 1.03"自己落回 1.0，
                         //   读起来就是"把图标放下"。
                         const target = ph.getBoundingClientRect();
                         const dx = target.left - rect.left;
@@ -1281,13 +1418,12 @@
                 /**
                  * Esc 取消拖动。
                  *
-                 * ★ 为什么要抢在宿主前面：宿主在**弹窗**上也监听 Escape
-                 *   （host-slots.js 的插件设置弹窗、app-07-init.js 的各种弹窗），
+                 * 为什么要抢在宿主前面：宿主在**弹窗**上也监听 Escape
+                 *   （host-slots.js 的插件设置弹窗、init.js 的各种弹窗），
                  *   一条 Escape 会同时触发两个处理器 —— 用户"想取消拖动"却把整个
-                 *   设置弹窗关掉了，拖拽上下文一起丢（实测踩到：Esc 之后卡片测量
-                 *   全部落空，因为弹窗已经 hidden）。
+                 *   设置弹窗关掉了，拖拽上下文一起丢（弹窗 hidden 之后卡片测量全部落空）。
                  *
-                 * ★ 关键是**捕获阶段**（第三个参数 true）：宿主的监听器挂在
+                 * 关键是**捕获阶段**（第三个参数 true）：宿主的监听器挂在
                  *   document 的冒泡阶段，我如果也挂冒泡，会按注册顺序执行 ——
                  *   宿主在打开弹窗时就注册了，一定比我早，我根本拦不住。
                  *   挂捕获阶段则在事件下行途中就先拿到它，此时
@@ -1308,7 +1444,7 @@
                 document.addEventListener('pointermove', onMove);
                 document.addEventListener('pointerup', onUp);
                 document.addEventListener('pointercancel', onCancel);
-                // ★ 捕获阶段（true）—— 见 onKey 的说明，必须抢在宿主前面消费掉 Escape
+                // 捕获阶段（true）—— 见 onKey 的说明，必须抢在宿主前面消费掉 Escape
                 document.addEventListener('keydown', onKey, { once: true, capture: true });
             };
             grip.addEventListener('pointerdown', onDown);
@@ -1318,23 +1454,22 @@
         return () => { for (const [el, fn] of handlers) el.removeEventListener('pointerdown', fn); };
     }
 
-    // 给设置页（app-06-settings.js）复用同一份实现 —— 插件列表与模型列表的拖拽
+    // 给设置页（settings.js）复用同一份实现 —— 插件列表与模型列表的拖拽
     // 本来就是同一件事。
     //
-    // ★ 为什么必须共用：分成两份拷贝的结果就是这次踩的坑 —— 一边修了"卡片被弹窗
+    // 为什么必须共用：分成两份拷贝的结果就是这次踩的坑 —— 一边修了"卡片被弹窗
     //   盖住"、另一边还是坏的；手感也会悄悄分叉（一个只跟纵向、一个跟二维）。
-    // ★ 设置页在 mods.js **之前**加载，所以它只能在真正用的时候来取这个全局
+    // 设置页在 mods.js **之前**加载，所以它只能在真正用的时候来取这个全局
     //   （那时 mods.js 早已执行完）。
     window.__elainaBindFlatDragSort = bindFlatDragSort;
 
     /**
      * 注入（或取回）某个 mod 的样式表，并把它登记成**可撤销贡献**。
      *
-     * ★ 为什么"清单声明的 styles"也必须走这里，而不是 loadOne 里直接建 `<link>`：
-     *   以前清单里声明的样式建完就不管了 —— 插件**停用后它的 CSS 仍在生效**
-     *   （覆盖了宿主样式、藏了某个控件，从界面上完全看不出来是哪个插件干的）。
-     *   插件自己调 injectStyle 的那条路也一样纳入作用域。
-     *   两条注入路径共用这一段代码，才不会再次分叉成"一条能回收、一条不能"。
+     * 为什么"清单声明的 styles"也必须走这里，而不是 loadOne 里直接建 `<link>`：
+     *   不纳入可撤销作用域，插件**停用后它的 CSS 仍在生效** —— 覆盖了宿主样式、
+     *   藏了某个控件，从界面上完全看不出是哪个插件干的。插件自己调 injectStyle
+     *   的那条路也一样纳入。两条注入路径共用这段代码，才不会分叉成"一条能回收、一条不能"。
      *
      * 用 `disabled` 而不是删节点：重新启用时不必再走一次网络请求。
      */
@@ -1363,6 +1498,52 @@
     }
 
     /**
+     * 校验一个插槽 spec 是否符合该插槽的约定。
+     *
+     * 为什么要有这一步：插槽的 spec 形状是**宿主挖插槽那一方**定的
+     * （settings.tabs 要 `label` + `render`，header.actions 要 `onClick`…），
+     * 而插件是第三方写的。形状不对时不校验，故障会推迟到渲染那一刻才炸，
+     * 而且报的是 "xxx is not a function" 这种指不回注册点的错 —— 插件作者
+     * 完全不知道是自己少传了字段。
+     *
+     * 期望的形状由 `defineSlot` 的 `spec` 描述（见 defineSlot 的说明），
+     * 这里只做**通用判定**：必填、类型、id 合法性。不猜业务语义。
+     *
+     * @returns {string|null} 不合规的原因；null 表示通过
+     */
+    function validateSlotSpec(name, spec, schema) {
+        const s = schema || {};
+        const required = Array.isArray(s.required) ? s.required : [];
+        const types = (s.types && typeof s.types === 'object') ? s.types : {};
+
+        for (const field of required) {
+            if (spec[field] === undefined || spec[field] === null || spec[field] === '') {
+                return '缺少必填字段「' + field + '」（' + name + ' 需要：'
+                    + required.join('、') + '）';
+            }
+        }
+        for (const [field, want] of Object.entries(types)) {
+            const v = spec[field];
+            if (v === undefined || v === null) continue;   // 可选字段缺省即跳过
+            const ok = want === 'function' ? typeof v === 'function'
+                : want === 'string' ? typeof v === 'string'
+                    : want === 'number' ? typeof v === 'number'
+                        : want === 'boolean' ? typeof v === 'boolean'
+                            : want === 'array' ? Array.isArray(v)
+                                : true;
+            if (!ok) {
+                return '字段「' + field + '」应是 ' + want + '，实际是 '
+                    + (Array.isArray(v) ? 'array' : typeof v);
+            }
+        }
+        // id 会进 CSS 选择器与 data 属性，只允许安全字符（与 mod id 同口径）
+        if (spec.id !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(spec.id))) {
+            return 'id「' + spec.id + '」不合法（字母数字开头，只含字母数字 . _ -，最长 64）';
+        }
+        return null;
+    }
+
+    /**
      * 宿主把一个插槽挖出来（mod 只能往**已存在**的插槽里注册）。
      *
      * 由掌握该处 DOM 的宿主代码调用（`web/js/host-slots.js` 里集中声明），
@@ -1375,6 +1556,10 @@
      *     `ElainaMods.renderItemSlot(name, container, item)` 把 spec 拉出来渲染
      *     （消息行按钮就属于这种 —— 注册时还没有消息可挂）。
      *     可选提供 `cleanup(modId)`（停用时立刻摘掉已画的元素）与 `refresh(modId)`（启用时补画）。
+     *
+     * 额外可选 `spec: { required: [...], types: { 字段: '类型' } }` 声明本插槽的
+     * 必填字段与字段类型 —— 注册时据此校验，形状不对就当场拒绝并说明缺什么，
+     * 而不是等到渲染时抛出指不回注册点的错误。
      */
     function defineSlot(name, impl) {
         const n = String(name || '');
@@ -1413,15 +1598,14 @@
      * `mods/index.json` 是插件清单数组（构建/手工维护），
      * 加载器读它。这样"加一个 mod"= 加目录 + 往 index.json 加一行。
      *
-     * ★ 2026-10（原生适配）：安卓 APK 上没有静态服务，`/mods/index.json`
-     *   根本不存在（纯净版 APK 连内置插件都不带）。原生模式改走
-     *   `/api/plugins` —— 那条请求被 app-01-core.js 的原生拦截器接住，
-     *   从应用数据目录扫描生成清单（形状与这里期望的完全对齐）。
-     *   ★ 必须用**字面量** `/api/plugins`：拦截器精确匹配这个串，
-     *     拼 MOD_ROOT 的话原生基址会是 `_capacitor_file_` 前缀，匹配不上。
-     *   ★ 平台判定不在这里做（见 awaitNativeModRoot 的说明）：
-     *     桌面模式 `__nativeModBase` 恒为 undefined → 恒走桌面地址；
-     *     原生模式它被设置 → 恒走 /api/plugins。判定收敛在 app-01-core。
+     * 安卓 APK 上没有静态服务，`/mods/index.json` 根本不存在（纯净版 APK
+     *   连内置插件都不带）。原生模式改走 `/api/plugins` —— 那条请求被 core.js 的
+     *   原生拦截器接住，从应用数据目录扫描生成清单（形状与这里期望的完全对齐）。
+     *   必须用**字面量** `/api/plugins`：拦截器精确匹配这个串，
+     *   拼 MOD_ROOT 的话原生基址会是 `_capacitor_file_` 前缀，匹配不上。
+     *   平台判定不在这里做（见 awaitNativeModRoot 的说明）：
+     *   桌面模式 `__nativeModBase` 恒为 undefined → 恒走桌面地址；
+     *   原生模式它被设置 → 恒走 /api/plugins。判定收敛在 core.js。
      */
     async function discover() {
         try {
@@ -1493,10 +1677,10 @@
      *        不可用的前置插件（非空时**拒绝加载**）
      */
     async function loadOne(manifest, missingDeps = []) {
-        // ★ 幂等：已经就绪的插件**不要重跑工厂**（2026-09 修）。
+        // 幂等：已经就绪的插件**不要重跑工厂**。
         //
         //   为什么必须有这道闸：loadAll() 会被调用多次 —— 页面启动一次，
-        //   多设备同步收到"插件开关变了"时还会再来一次（app-07-init 里那条）。
+        //   多设备同步收到"插件开关变了"时还会再来一次（init.js 里那条）。
         //   没有闸门时第二次 loadOne 会照跑工厂，而 <script> 已经注入过、
         //   factory 还在 pendingRegistrations 里 —— 于是 galgame / pet 的
         //   工厂被执行第二遍：**两份界面、两组定时器、双击一样的响应**。
@@ -1510,18 +1694,17 @@
         const entry = { manifest, state: 'pending', error: null, api: null };
         registry.set(manifest.id, entry);
 
-        // ★ 前置插件不可用 → **拒绝加载**，并给出可读原因。
+        // 前置插件不可用 → **拒绝加载**，并给出可读原因。
         //
-        // 旧行为只是 console.error 一句警告、然后照样加载。那很糟：
-        // 插件会在"依赖不在"的前提下跑起来 —— 例如 galgame 拿不到
-        // window.ElainaAvatar，于是它自己回落成"没有立绘"，用户看到的是
-        // "界面能打开但没有人物"，而设置里那个"缺依赖"角标很容易被忽略。
+        // 只打一句警告然后照样加载很糟：插件会在"依赖不在"的前提下跑起来 ——
+        // 例如 galgame 拿不到 window.ElainaAvatar，于是自己回落成"没有立绘"，
+        // 用户看到的是"界面能打开但没有人物"，而设置里那个"缺依赖"角标很容易被忽略。
         // 更麻烦的是**加载顺序失去保证**：依赖可能排在它后面才加载。
         //
-        // 实测踩到的真实日志（旧实现只看"装没装"，漏了"启用没启用"）：
+        // 所以判定同时看"装没装"与"启用没启用"。"装了但没启用"等于不可用：
         //     [Mod] 加载完成：elaina-avatar=disabled galgame=ready pet=ready
-        // 前置被禁用了，两个依赖方却照样 ready —— 拿不到立绘而系统认为正常。
-        // 现在"未启用"也算不可用，并按原因给出**可执行的下一步**。
+        // 这行日志就是漏判的证据 —— 前置被禁用了，两个依赖方却照样 ready，
+        // 拿不到立绘而系统认为正常。每种原因都要给出**可执行的下一步**。
         if (missingDeps.length) {
             entry.state = 'blocked';
             entry.missingDeps = missingDeps;
@@ -1554,7 +1737,21 @@
             return entry;
         }
         if (!isModEnabled(manifest.id, manifest)) {
-            entry.state = 'disabled';
+            // 「上次加载失败被自动停用」与「用户自己关的」是两种不同的关闭，
+            // 必须分得开：前者要把失败原因留在卡片上（用户才知道该修什么），
+            // 后者才是干干净净的"未启用"。
+            //
+            // 原因从**存储**里读，不看内存的 prev：刷新后是新会话，registry 空着，
+            // 只有落盘的记录还在。这就是 autoDisableBroken 必须写盘的原因。
+            const fail = readModFailure(manifest.id);
+            if (fail) {
+                entry.state = 'error';
+                entry.error = fail.error;
+                entry.autoDisabled = true;
+                entry.failedAt = fail.at;
+            } else {
+                entry.state = 'disabled';
+            }
             deactivateContributions(manifest.id);
             return entry;
         }
@@ -1562,7 +1759,7 @@
         try {
             // ① 样式（可选）
             //    路径由 modDir() 统一给出（已 URL 编码），插件自己不拼路径。
-            //    ★ 走 injectStyleLink 而不是直接建 <link>：清单声明的样式也必须
+            //    走 injectStyleLink 而不是直接建 <link>：清单声明的样式也必须
             //      纳入可撤销作用域，否则插件停用后它的 CSS 还在生效（既有 bug）。
             for (const css of (Array.isArray(manifest.styles) ? manifest.styles : [])) {
                 const href = css.startsWith('/') ? css : MOD_ROOT + modDir(manifest) + '/' + css;
@@ -1571,13 +1768,13 @@
 
             // ② 入口脚本
             //
-            // ★ 注入前记下"当前在加载哪个目录"：插件脚本执行时会调
+            // 注入前记下"当前在加载哪个目录"：插件脚本执行时会调
             //   register(name, …)，系统据此知道**这个注册名来自哪个目录**。
             //   这是"路径由插件系统查"的关键一环 —— 见 regByDir 的说明。
             //
-            // ★ 多脚本：manifest.scripts 列出的文件**先**注入，entry **最后**注入。
+            // 多脚本：manifest.scripts 列出的文件**先**注入，entry **最后**注入。
             //
-            //   为什么 entry 放最后（2026-10 定这个语义时踩过）：
+            //   为什么 entry 放最后：
             //   一个插件拆成"实现主体 / 设置面板 / 注册装配"几个文件时，
             //   装配那个文件（entry）要**调用**其它文件定义的东西 ——
             //   所以它必须在最后执行。反过来（entry 先）会让装配时
@@ -1601,7 +1798,7 @@
 
             // ③ 初始化：找这个插件注册的 factory。
             //
-            // ★ 先按 manifest.id 找（常规情况），找不到就按**本目录注册了什么**找。
+            // 先按 manifest.id 找（常规情况），找不到就按**本目录注册了什么**找。
             //   为什么需要第二步：用户改了目录名、而 manifest 又没写 id 时，
             //   manifest.id 会等于目录名（如 pet-renamed），而脚本里注册的
             //   仍是 'pet' —— 只按 manifest.id 查会**永远查不到**，
@@ -1631,18 +1828,72 @@
         } catch (err) {
             entry.state = 'error';
             entry.error = String((err && err.message) || err);
-            console.error('[Mod:' + manifest.id + '] 加载失败（已隔离，不影响其他插件）', err);
+            // 加载失败的插件**直接停用**，并把它已经注册的东西收回去。
+            //
+            // 为什么不能只是标个 error 留在那儿：一个半初始化的插件可能已经
+            //   注册了插槽、注入了样式、挂上了事件订阅（工厂跑到一半抛错），
+            //   这些"半成品"留在界面上会变成点了没反应的按钮 / 解释不了的
+            //   样式错乱。既然它坏了，就当它没启用 —— 这也是用户看到的语义：
+            //   开关关上，卡片上写着为什么。
+            // 停用状态**写盘**（不是只改内存），否则刷新后又会试着加载一遍、
+            //   再失败一次，形成"每次启动都报一次错"的噪音。
+            autoDisableBroken(manifest.id, entry);
+            console.error('[Mod:' + manifest.id + '] 加载失败（已自动停用，不影响其他插件）', err);
         }
         return entry;
+    }
+
+    /**
+     * 把加载失败的插件停用，并收回它已经注册的东西。
+     *
+     * 只做三件事，不碰别的插件：写停用状态、收回注册项、把原因**存起来**。
+     * 设置界面据此把开关显示成「关」并显示原因 —— 用户想再试一次时手动打开
+     * 即可（打开会重新走一遍加载流程）。
+     *
+     * ★ 失败原因必须**落盘**，不能只放在内存的 entry 上：
+     *   下一次刷新是新会话，registry 是空的 —— 那时只能从存储里知道
+     *   "这个插件上次是被系统停用的，原因是 X"。只记在内存的话，刷新一次
+     *   就退化成普通的「未启用」，用户再也看不到为什么坏了。
+     */
+    function autoDisableBroken(id, entry) {
+        try { setModEnabled(id, false); } catch (e) { /* 写盘失败也要继续收回注册项 */ }
+        try { deactivateContributions(id); } catch (e) { /* 同上 */ }
+        if (entry) {
+            entry.autoDisabled = true;      // 供设置界面区分「用户关的」与「坏了自己关的」
+            entry.enabledBefore = true;     // 它本来是要启用的，只是失败了
+            // 原因单独存一个键（不塞进 enabled 那个键里：那是开关语义，
+            // 混进原因会让"0/1"的解析变得脆弱）
+            try {
+                Store.setItem(MOD_FAILED_KEY_PREFIX + id, JSON.stringify({
+                    at: Date.now(),
+                    error: String((entry.error || '') || '未知错误'),
+                }));
+            } catch (e) { /* 存不下就只影响"原因能不能跨会话保留"，不影响隔离 */ }
+        }
+    }
+
+    /** 读某个插件上次的失败记录（没有则 null） */
+    function readModFailure(id) {
+        try {
+            const raw = Store.getItem(MOD_FAILED_KEY_PREFIX + id);
+            if (!raw) return null;
+            const o = JSON.parse(raw);
+            return (o && typeof o === 'object' && o.error) ? o : null;
+        } catch (e) { return null; }
+    }
+
+    /** 清掉失败记录（用户手动重新启用时调用：他想再试一次，就别再顶着旧错误） */
+    function clearModFailure(id) {
+        try { Store.removeItem(MOD_FAILED_KEY_PREFIX + id); } catch (e) { /* 忽略 */ }
     }
 
     /** 插件脚本通过它注册初始化函数（在脚本执行时调用） */
     const pendingRegistrations = new Map();
 
     /**
-     * 注册名 ↔ 目录 的双向映射（★ 插件系统自己维护，插件不参与算路径）。
+     * 注册名 ↔ 目录 的双向映射（插件系统自己维护，插件不参与算路径）。
      *
-     * ── 为什么需要它（2026-09 踩到的真 bug）──────────────────────────────
+     * ── 为什么需要它──────────────────────────────
      *
      * 插件的**身份**其实有两个来源：
      *   · 服务端清单给的 `manifest.id`（来自 manifest.json，或回落到目录名）
@@ -1650,11 +1901,11 @@
      *
      * 正常情况两者相同。但用户**改了插件目录名**之后就可能不同：
      * 目录叫 `pet-renamed`、manifest 又没写 id → 清单 id 是 `pet-renamed`，
-     * 而脚本注册的是 `pet`。旧实现直接 `pendingRegistrations.get(manifest.id)`
+     * 而脚本注册的是 `pet`。只按 `pendingRegistrations.get(manifest.id)` 查
      * → **查不到 factory → 插件永远不初始化**（清单里显示"已加载"，
      * 界面却毫无反应，是最难排查的那种）。
      *
-     * 修法就是"让插件系统来做查找"：脚本是按目录注入的，所以系统**知道**
+     * 所以查找必须由插件系统来做：脚本是按目录注入的，系统**知道**
      * 某个 register() 调用来自哪个目录。于是记录 dir → 注册名，
      * loadOne 先按 manifest.id 找，找不到就按"我这个目录注册了什么"找。
      * 这样**目录怎么改都不影响插件被正确初始化**。
@@ -1670,25 +1921,24 @@
      *
      * ── 为什么要单独做这件事 ─────────────────────────────────────────────
      *
-     * `sortByDependency` 里对找不到的依赖是 `if (d) visit(...)` —— **静默跳过**。
-     * 这在单仓库时代问题不大（一起发布），但 mod 拆到独立仓库分发后，
-     * "只装 galgame 不装 elaina-avatar"会变成常态。那时的表现是
-     * "Galgame 打开了但没有立绘"，控制台一声不响 —— 最难排查的那类问题。
+     * `sortByDependency` 对找不到的依赖是 `if (d) visit(...)` —— **静默跳过**。
+     * mod 拆成独立分发后，"只装 galgame 不装 elaina-avatar"是常态，
+     * 那时的表现是"Galgame 打开了但没有立绘"，控制台一声不响。
      *
-     * ── ★ 关键修正：装了但**没启用**，等于不可用（2026-09 实测踩到）──────
+     * ── 装了但**没启用**，等于不可用 ────────────────────────────────────
      *
-     * 旧实现只判断"清单里有没有这个 id"，于是出现了这个真实日志：
+     * 只判断"清单里有没有这个 id"会漏掉启用状态，漏判的典型日志是：
      *
      *     [Mod] 加载完成：elaina-avatar=disabled galgame=ready pet=ready
      *
-     * 前置被**禁用**了，依赖它的两个插件却照样 ready —— 它们拿不到立绘，
-     * 而系统认为一切正常。所以判定必须同时看**启用状态**：
+     * 前置被禁用了，依赖它的两个插件却照样 ready —— 拿不到立绘而系统认为正常。
+     * 所以判定必须同时看**启用状态**：
      *   · 前置不在清单里           → 原因：未安装
      *   · 前置在清单里但被禁用      → 原因：未启用（用户可以在设置里打开）
      *   · 前置自己被拦（缺它自己的前置）→ 原因：前置本身不可用（级联）
      * 三种情况给三种不同的提示，用户才知道该做什么。
      *
-     * ★ 身份判定要同时认**清单 id**、**目录名**、**注册名**：
+     * 身份判定要同时认**清单 id**、**目录名**、**注册名**：
      *   用户改了插件目录名、而 manifest 没写 id 时，清单 id 会等于目录名
      *   （如 `pet-renamed`），而依赖方 after 里写的仍是注册名 `pet`。
      *   只按清单 id 比会**误报"缺依赖"**，把好好的插件拦下来。
@@ -1751,17 +2001,17 @@
 
     /** 加载全部插件 */
     async function loadAll() {
-        // ★ 原生模式：先等插件根就绪（幂等，任何触发路径都安全 ——
+        // 原生模式：先等插件根就绪（幂等，任何触发路径都安全 ——
         //   本函数的入口不止 boot 一处，多设备同步也会再调）。
         //   不等的话首次加载会用桌面根 /mods/ 去拼 URL，APK 上全部 404。
         await awaitNativeModRoot();
-        // ★ 先打一条总览日志（console.log，会被前端日志转发带到启动窗口）。
+        // 先打一条总览日志（console.log，会被前端日志转发带到启动窗口）。
         //
         // 为什么必须有：插件的加载是"看不见的过程"，而"没有 mod 日志"这个现象
-        // 既可能是**成功**（旧实现里成功日志走 console.log、不被转发），
-        // 也可能是 **mods.js 压根没跑 / 清单读不到** —— 两者在启动窗口里
-        // 长得一模一样，无法据此排查（实测就卡在这里）。
-        // 现在无论成败，先留一条"我是谁、我开始加载了、清单里有几个"的痕迹。
+        // 既可能是**成功**（成功日志若走 console.log 就未必被转发到启动窗口），
+        // 也可能是 **mods.js 压根没跑 / 清单读不到** —— 两者在启动窗口里长得
+        // 一模一样，无法据此排查。所以无论成败都先留一条
+        // "我是谁、我开始加载了、清单里有几个"的痕迹。
         const manifests = await discover();
         console.log('[Mod] 【插件系统】（提供界面扩展与功能增强）开始加载 —— '
             + '清单里发现 ' + manifests.length + ' 个插件'
@@ -1780,7 +2030,7 @@
             return [];
         }
 
-        // ★ 先查不可用的前置插件 —— 这类插件会被**拒绝加载**（不是警告后照跑）。
+        // 先查不可用的前置插件 —— 这类插件会被**拒绝加载**（不是警告后照跑）。
         //   判定同时看"装没装"与"启用没启用"，并认清单 id / 目录名 / 注册名三种键。
         const missing = findMissingDeps(manifests);
         for (const [id, lack] of missing) {
@@ -1809,7 +2059,26 @@
         // 顺序加载（不是并发）：插件之间可能有依赖，且顺序加载让失败定位更容易
         for (const m of ordered) {
             const lack = missing.get(m.id) || [];
-            const entry = await loadOne(m, lack);
+            // 逐插件兜底：**一个插件出事绝不能带崩整轮加载**。
+            //
+            // loadOne 内部已经用 try/catch 包住了插件自己的代码，但它前半段
+            // （读 registry、处理依赖结论）不在那个 try 里。这里再兜一层，
+            // 保证「第 3 个插件出意外」不会让第 4、5、6 个根本不被加载 ——
+            // 那正是 AGENTS.md「失败隔离」要防的事。
+            let entry;
+            try {
+                entry = await loadOne(m, lack);
+            } catch (e) {
+                const prev = registry.get(m.id);
+                entry = prev || { manifest: m, state: 'error', error: null, api: null };
+                entry.state = 'error';
+                entry.error = '加载过程中出现未预期的错误：' + String((e && e.message) || e);
+                registry.set(m.id, entry);
+                // 与 loadOne 的失败路径一致：坏了就停用，别留在"半启用"状态
+                autoDisableBroken(m.id, entry);
+                console.error('[Mod:' + m.id + '] 加载时抛出异常（已隔离并停用，其余插件继续加载）', e);
+            }
+            if (!entry) entry = { manifest: m, state: 'error', error: '加载流程没有返回结果', api: null };
             // 不可用的前置也记到条目上，供设置界面显示（loadOne 已在 error 里写了原因）
             if (lack.length) entry.missingDeps = lack;
             results.push(entry);
@@ -1831,11 +2100,10 @@
     /**
      * 打印加载结果汇总。
      *
-     * ★ 为什么要把这段单独写好（2026-09 重做）：
-     *   上一版打的是 `elaina-avatar=disabled galgame=ready pet=ready` ——
-     *   那是**机器视角的键值对**：换个不知道本项目的 AI（或用户本人）
-     *   看到这行，既不知道 `disabled` 是好是坏，也看不出
-     *   "前置没启用、依赖它的却起来了"这个关键矛盾。
+     * 为什么不直接打 `elaina-avatar=disabled galgame=ready pet=ready`：
+     *   那是**机器视角的键值对**：不了解本项目的 AI（或用户本人）看到这行，
+     *   既不知道 `disabled` 是好是坏，也看不出"前置没启用、依赖它的却起来了"
+     *   这个关键矛盾。
      *
      *   日志是给**排查问题的人（或 AI）**看的，不是给程序看的。所以：
      *     · 先自报家门（哪个模块在说话、它负责什么）
@@ -1861,7 +2129,7 @@
 
         const D = window.ElainaDiag;
         if (!D) {
-            // ---- 回落路径：没有诊断模块时保持旧格式，至少不丢信息 ----
+            // ---- 回落路径：没有诊断模块时用最简格式，至少不丢信息 ----
             console.log('[Mod] 插件加载完成：共 ' + total + ' 个，可用 ' + ready.length + ' 个'
                 + (disabled.length ? '，未启用 ' + disabled.length + ' 个' : '')
                 + (broken.length ? '，有问题 ' + broken.length + ' 个' : '') + '。');
@@ -1946,14 +2214,14 @@
      *
      * 所以启用时必须判断：脚本还没加载就先走一遍加载流程。
      *
-     * ★ 停用是"两步"（2026-09 补齐）：
+     * 停用是"两步"：
      *   ① mod 自己的 setEnabled(false) —— 收起它自建的界面、停掉它的定时器
      *   ② deactivateContributions()      —— 收回它经宿主注册的东西
      *      （插槽入口、注入的样式、system 提示词、事件订阅）
      *   只有 ① 的话，host.slot 注册的设置分栏/顶部按钮、injectStyle 的样式、
      *   setPromptHint 的提示词都会**留在原地** —— 表现为"关掉了但还在起作用"。
      *
-     * ★ 已注入的脚本没法"卸载"，但停用后它不显示、不注册、不响应事件，
+     * 已注入的脚本没法"卸载"，但停用后它不显示、不注册、不响应事件，
      *   效果上等价。真要彻底卸载得整页刷新（或删插件目录）。
      */
     async function setEnabled(id, on) {
@@ -1962,6 +2230,26 @@
         setModEnabled(id, on);
 
         if (on) {
+            // 上一次是**加载失败**吗？这决定了下面走哪条路。
+            //
+            // 关键区别（这里曾经出过真 bug）：
+            //   · 正常的"停用后重新启用" —— 插件**成功初始化过**，只是被关掉了。
+            //     脚本已经注入、工厂已经跑完，注册项还留着 spec，所以只要
+            //     activateContributions() 把宿主侧的东西挂回去即可，**绝不能重跑工厂**
+            //     （重跑会得到两份界面、两组定时器）。
+            //   · 上次是**初始化失败** —— 工厂没跑完，它注册的东西已经被
+            //     autoDisableBroken 收回了，`entry.api` 也是空的。这时"挂回去"
+            //     等于把半成品重新贴到界面上，而且状态还会被强行改成 ready ——
+            //     表现为"坏插件点几次之后自己启动了"。
+            //     这种必须**重新走一遍初始化**（重注入脚本 + 重跑工厂），
+            //     让失败的那一步再失败一次，从而继续被拦下。
+            const wasFailed = entry.state === 'error' || entry.autoDisabled === true;
+            // 用户手动打开 = "我想再试一次"，先把上次的失败记录清掉：
+            // 否则卡片会一直顶着旧错误，哪怕这次其实加载成功了。
+            // （本次若又失败，autoDisableBroken 会重新写一条。）
+            clearModFailure(id);
+            entry.autoDisabled = false;
+            if (entry.state === 'error') { entry.state = 'pending'; entry.error = null; }
             // 还没加载过 → 现场加载（这样开关是"立即生效"，不需要刷新页面）
             //
             // 判据用"入口脚本是否已注入"而不是 api 是否为空：
@@ -1970,32 +2258,60 @@
             const entrySrc = entry.manifest.entry || 'index.js';
             // 与 loadOne 保持一致：走 modDir()，否则"已注入过没有"的判断会看错路径，
             // 导致重复注入脚本（mod 的初始化跑两次）。
-            // ★ 多脚本（manifest.scripts）时，以**最后一个**为判据 —— 它是最后注入的，
+            // 多脚本（manifest.scripts）时，以**最后一个**为判据 —— 它是最后注入的，
             //   存在就说明这一组都注入过了（loadOne 是按顺序 await 的）。
             const extra = Array.isArray(entry.manifest.scripts) ? entry.manifest.scripts : [];
             const lastSrc = extra.length ? extra[extra.length - 1] : entrySrc;
             const src = lastSrc.startsWith('/') ? lastSrc : MOD_ROOT + modDir(entry.manifest) + '/' + lastSrc;
             const neverLoaded = !loadedScripts.has(src);
-            if (neverLoaded) {
+            if (neverLoaded || wasFailed) {
+                // wasFailed 时必须**把"已注入"的记录清掉**，否则 loadOne 会认为
+                // 脚本已经在页面上、跳过注入 —— 而那次注入之后工厂是崩过的，
+                // 重跑工厂需要脚本里那个 register() 重新登记一遍。
+                // （脚本重复执行本身是安全的：它只是再次调用 register 覆盖同一个条目。）
+                if (wasFailed) loadedScripts.delete(src);
                 try {
                     await loadOne(entry.manifest);
                 } catch (e) {
                     // loadOne 内部已经做了失败隔离，这里兜住它自己抛出的意外
                     const fresh = registry.get(id);
-                    if (fresh) { fresh.state = 'error'; fresh.error = String((e && e.message) || e); }
+                    if (fresh) {
+                        fresh.state = 'error';
+                        fresh.error = String((e && e.message) || e);
+                        autoDisableBroken(id, fresh);
+                    }
                 }
             } else {
-                // 已经初始化过：用保留的 spec 把宿主侧注册项挂回去，**不重跑工厂**
-                // （工厂跑第二遍会得到两份界面/两组定时器，见 loadOne 开头的闸门）
+                // 已经初始化**成功**过：用保留的 spec 把宿主侧注册项挂回去，
+                // **不重跑工厂**（工厂跑第二遍会得到两份界面/两组定时器，
+                // 见 loadOne 开头的闸门）。
+                //
+                // 这条路径能执行，前提是 wasFailed === false —— 也就是它上一次
+                // 初始化是成功的、只是被用户关掉了。所以这里把状态标回 ready 是
+                // 对的：它的 api 还在、注册项的 spec 还在，挂回去就真的在跑。
                 activateContributions(id);
                 if (typeof entry.api?.setEnabled === 'function') {
                     try { entry.api.setEnabled(on); } catch (e) { /* mod 自己的开关失败不该影响宿主 */ }
                 }
+                entry.state = 'ready';
             }
             // 注意：loadOne 会往 registry 里塞一个**新** entry 对象，
             // 所以这里必须重新取一次，不能继续用上面那个旧引用（否则读到过期的 state）
+            //
+            // ★ 状态由**加载结果**决定，不许在这里强行改写成 ready。
+            //   曾经这里写的是 `if (fresh.state !== 'error') fresh.state = 'ready'` ——
+            //   而加载失败的插件被 autoDisableBroken 置成了 error 之后，
+            //   下一次点击时它会被上游改成 pending，于是这条判断成立、又被改成
+            //   ready：坏插件点几次之后就在界面上"启动成功"了，功能还是坏的。
+            //   现在只在**真的加载成功**（loadOne 返回 ready）时才保持 ready；
+            //   其余一律以上一步的结论为准。
             const fresh = registry.get(id);
-            if (fresh && fresh.state !== 'error') fresh.state = 'ready';
+            if (fresh && fresh.state === 'pending') {
+                // loadOne 没有把它推进到任何终态（异常路径没覆盖到）：保守当成失败
+                fresh.state = 'error';
+                fresh.error = fresh.error || '启用过程中没有拿到明确的加载结果';
+                autoDisableBroken(id, fresh);
+            }
         } else {
             try {
                 if (typeof entry.api?.setEnabled === 'function') entry.api.setEnabled(false);
@@ -2024,7 +2340,7 @@
         /**
          * 插件脚本用它注册初始化函数：ElainaMods.register('galgame', (host) => ({...}))
          *
-         * ★ 注册名就是插件的**权威身份**（依赖匹配、资源查找都以它为准）。
+         * 注册名就是插件的**权威身份**（依赖匹配、资源查找都以它为准）。
          *   这里同时记下"它来自哪个目录"（loadingDir）—— 这样即使目录名、
          *   manifest.id、注册名三者不一致，插件系统也能靠这张表把它们对上。
          *   见 regByDir 的说明。
@@ -2092,30 +2408,31 @@
                 enabled: isModEnabled(e.manifest.id, e.manifest),
                 // hidden：公共依赖类插件（不提供界面，被其他插件共用）。
                 // 设置界面用它加一句用途说明 —— 但**仍然给开关**：
-                // 以前 hidden 的插件不给开关，一旦被禁用就无法从界面恢复，
-                // 依赖它的插件会连带失效而用户找不到地方修（实测踩过）。
+                // 不给开关的话，它一旦被禁用就无法从界面恢复，依赖它的插件会连带
+                // 失效，而用户找不到地方修。
                 hidden: e.manifest.hidden === true,
                 // 不可用的前置插件（未安装 / 未启用 / 级联不可用）——
                 // 这类插件会被**拒绝加载**，设置界面据此显示原因与下一步
                 missingDeps: e.missingDeps || [],
+                // 是不是「加载失败后自动停用」造成的关闭。
+                // 设置界面用它把卡片文案写成"加载失败已自动停用"，并把原因显示
+                // 在卡片上 —— 否则用户只会看到开关是关的，以为是自己没开。
+                autoDisabled: e.autoDisabled === true,
             }));
         },
         setEnabled,
         /**
          * 重新扫描并加载插件（幂等，可重复调用）。
          *
-         * ★★ 2026-10 修（用户实测报障："插件市场里下载成功、装上了，就是用不了"）：
-         *   **插件的注册表只在页面启动时由 loadAll() 建立一次**。
-         *   市场装完新插件后不重新扫描，那个插件就不在注册表里，于是：
-         *     · 插件栏的开关点了也不生效 —— setEnabled 开头 `registry.get(id)`
-         *       取不到就直接 `return false`，用户看着开关在那儿其实按不动；
-         *     · 而市场装完的提示当时写的是"到插件栏打开它的开关即可生效"，
-         *       那是句**不成立的话**（开关默认就是开的，且对新装的插件无效）。
-         *   暴露这个入口给市场：装完立刻调一次，新插件当场加载，
-         *   之前因缺前置被拒的插件也会在这一轮里**重新评估**依赖（前置补齐即生效）。
+         * 为什么市场装完必须调它：注册表只在 loadAll() 里建立。市场装完新插件后
+         *   不重新扫描，插件就不在注册表里 —— 此时插件栏那个开关点了也不生效
+         *   （setEnabled 开头 `registry.get(id)` 取不到就直接 `return false`），
+         *   用户看着开关在那儿其实按不动，也没有任何报错。
+         *   调一次即可让新插件当场加载，之前因缺前置被拒的插件也会在这一轮里
+         *   **重新评估**依赖（前置补齐即生效）。
          *
          *   为什么重复调用安全：loadAll 全程幂等 —— loadOne 有"脚本已注入过"闸门
-         *   （见那里的说明），本函数本身也被启动与多设备同步两条路径重复调用过。
+         *   （见那里的说明），启动与多设备同步两条路径本来就会重复调用它。
          */
         reload: loadAll,
         /** 删插件时调用：清掉启用状态与已加载记录（避免重装后被自动启用） */
@@ -2173,7 +2490,6 @@
          *
          * 宿主用它决定"值不值得算"：例如 TTS 的音量分析要跑
          * requestAnimationFrame 循环，没人听的时候就不该白跑。
-         * 这也是"宿主 → mod 单向推送"取代直接调用的关键一步（见 8.45）。
          */
         hasListeners(event) {
             const set = bus.get(event);

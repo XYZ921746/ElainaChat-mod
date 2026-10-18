@@ -128,7 +128,7 @@ export function availableShells() {
 /**
  * 把「shell 名 + 命令」翻译成 execFile 的 argv。
  *
- * ★ 关键：命令**始终作为单个 argv 元素**传进去，绝不做字符串拼接。
+ * 关键：命令**始终作为单个 argv 元素**传进去，绝不做字符串拼接。
  *   拼接会让 `; rm -rf /` 这类内容逃出命令本身的边界；作为 argv 传则
  *   shell 只会把它当"要执行的脚本文本"，边界由 shell 自己界定。
  *

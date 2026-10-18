@@ -242,7 +242,15 @@ if (rel.status === 200) {
     //   （见文件头 isUploadable 的说明）。写死的文案会让下载页骗人：
     //   放的是程序本体，标题却说"扩展包（插件 + Live2D 模型）"。
     const hasApk = files.some((f) => f.name.toLowerCase().endsWith('.apk'));
-    const hasZip = files.some((f) => f.name.toLowerCase().endsWith('.zip'));
+    // 电脑版包与扩展包都是 .zip，只能靠文件名区分：电脑版带 `-pc` 后缀
+    // （`ElainaChat-mod-v1.3.3-pc.zip`），扩展包是 `<id>-<version>.zip`。
+    // 不区分的话，只传电脑包时发版说明会写成「扩展包（插件 + Live2D 模型）」
+    // —— 下载页放的是程序本体，标题却说扩展包，等于骗人。
+    const isPcPack = (n) => /-pc[^/]*\.zip$/i.test(n);
+    const pcPacks = files.filter((f) => isPcPack(f.name));
+    const extPacks = files.filter((f) => f.name.toLowerCase().endsWith('.zip') && !isPcPack(f.name));
+    const hasPc = pcPacks.length > 0;
+    const hasExt = extPacks.length > 0;
     const sections = [];
     if (hasApk) {
         sections.push(
@@ -257,7 +265,19 @@ if (rel.status === 200) {
             '> 这是**本地分发**用的包，签名是 debug 签名（见 `android/app/build.gradle`）。',
         );
     }
-    if (hasZip) {
+    if (hasPc) {
+        sections.push(
+            '### 电脑版（`ElainaChat-mod-*-pc.zip`）',
+            '',
+            '解压后双击 `启动.bat`，浏览器会**自动打开**。需先安装 **Node.js >= 20**；无需 `npm install`，也无需构建。',
+            '',
+            '- 默认端口 3999，被占用时自动换到 4000、4001……（启动窗口里会打出实际地址）',
+            '- 程序本体不含插件与 Live2D 模型 —— 那些是扩展包，按需另行安装',
+            '',
+            '> 这是**本地分发**用的电脑版包，解压即用。',
+        );
+    }
+    if (hasExt) {
         sections.push(
             '### 扩展包（插件 + Live2D 模型）',
             '',
@@ -279,11 +299,16 @@ if (rel.status === 200) {
             '> `galgame` 与 `pet` 依赖 `elaina-avatar`，只装前者会没有立绘。',
         );
     }
+    const labelParts = [];
+    if (hasApk) labelParts.push('Android 程序本体');
+    if (hasPc) labelParts.push('电脑版');
+    if (hasExt) labelParts.push('扩展包');
+    const releaseLabel = labelParts.length ? `（${labelParts.join(' + ')}）` : '';
     const create = api('POST', `/repos/${repo}/releases`, {
         contentType: 'application/json',
         body: {
             tag_name: tag,
-            name: tag + (hasApk ? '（Android 程序本体' + (hasZip ? ' + 扩展包' : '') + '）' : ' 扩展包（插件 + Live2D 模型）'),
+            name: tag + releaseLabel,
             body: sections.join('\n'),
             draft: false,
             prerelease: false,

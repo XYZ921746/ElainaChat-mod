@@ -75,7 +75,7 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
         const limit = Math.min(Number(q.limit) || 500, capacity);
         const since = Number(q.since) || 0;
         // 游标：上次已经带走的那条的序号。同毫秒内的新记录靠它区分。
-        // ★ 没传 seq 时**不启用精确模式**（保持旧的严格 ">" 语义）——
+        // 没传 seq 时**不启用精确模式**（保持旧的严格 ">" 语义）——
         //   老调用方只传 since，精确模式会把"同毫秒、但已经给过它"的记录再返回一次，
         //   在它那边表现为重复行。精度是**可选**的：要精确就给 sinceSeq。
         const hasSeqCursor = Number.isInteger(Number(q.sinceSeq)) && q.sinceSeq !== null && q.sinceSeq !== undefined;
@@ -87,11 +87,11 @@ export function createLogBuffer(capacity = RING_CAPACITY) {
             const idx = (head - 1 - i + capacity * 2) % capacity;
             const e = ring[idx];
             if (!e) continue;
-            // ★ 增量游标必须比到**序号**，不能只比时间戳（2026-10 修的真漏洞）。
+            // 增量游标必须比到**序号**，不能只比时间戳。
             //
             //   时间戳只有毫秒精度，而一次启动会连打十几条日志 —— 同一个毫秒里
-            //   完全可能有 5 条。旧实现是 `if (since && e.ts <= since) break;`
-            //   （闭区间），于是查看器带着"这一毫秒最后一条"的 ts 回来时，
+            //   完全可能有 5 条。若用 `if (since && e.ts <= since) break;`（闭区间），
+            //   查看器带着"这一毫秒最后一条"的 ts 回来时，
             //   同一毫秒里**晚于它写入的那些**会被判定为"不比 since 新"而跳过；
             //   更糟的是下一轮增量拿到的 lastTs 还是这个毫秒，它们**永远补不回来**。
             //   表现就是"bat 面板刷过好几行，查看器里少几行"。

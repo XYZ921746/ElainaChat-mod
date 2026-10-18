@@ -9,7 +9,7 @@
 //  写：deflateRawSync + crc32（都是 node:zlib 内置）
 //  读：完整解析中央目录（zip 的权威元数据），兼容 GBK 文件名
 //
-//  ★ 标准兼容性：生成的是最保守的 zip ——
+//  标准兼容性：生成的是最保守的 zip ——
 //    · 只用 deflate(8) 与 store(0) 两种方法
 //    · 文件名统一 UTF-8，并置 bit 11（EFS）标志，让 Windows 资源管理器正确显示中文
 //    · 不写 data descriptor（长度在 local header 里直接给出）
@@ -31,6 +31,22 @@ export const BLOCKED_EXT = new Set([
     '.js', '.mjs', '.cjs', '.jsx', '.ts',
     '.svg', '.xml', '.xsl',
     '.exe', '.dll', '.com', '.scr', '.msi', '.bat', '.cmd', '.ps1', '.psm1', '.vbs', '.wsf', '.jar', '.sh',
+]);
+
+/**
+ * 插件安装时**允许**落盘的危险扩展名（`allowScripts: true` 才生效）。
+ *
+ * 为什么插件要单独一组而不是"整份黑名单都不查"：插件确实需要 .js（它的本质
+ * 就是 JS）和 .html（有些插件带自己的面板页，例如 live2d 的 panel.html），
+ * 但**不需要** .exe / .dll / .bat 这类本机可执行文件 —— 那些对插件毫无用途，
+ * 落盘只会在用户误双击时变成风险。
+ *
+ * 所以这一组是**白名单语义**：只放行"插件真的会用到的危险类型"，
+ * 其余危险类型在插件安装路径上照样拦。
+ */
+export const PLUGIN_EXTS = new Set([
+    '.js', '.mjs', '.cjs', '.jsx', '.ts',
+    '.html', '.htm',
 ]);
 
 /**
@@ -174,9 +190,9 @@ function gbkDecode(buf) {
  *
  * ── 为什么危险类型拦截放在这里（而不是各调用方自己写）──────────────────
  *
- * 这个函数是**服务端唯一的 zip 解压实现**（原先 serve.mjs 里还另有一份
- * 几乎相同的 unzip，已合并过来）。危险扩展名拦截属于"解压这件事"的安全底线，
- * 放在实现内部才能保证每个调用方都受保护 —— 之前 readZip 没有这层，
+ * 这个函数是**服务端唯一的 zip 解压实现**：两份几乎相同的 unzip 各存在时，
+ * 安全修复必须改两处，漏一处就是个洞。危险扩展名拦截属于"解压这件事"的安全底线，
+ * 放在实现内部才能保证每个调用方都受保护 —— 若只在某个调用方里拦，
  * 数据导入路径就成了绕过点（虽然导入的键名受白名单限制，风险低，但没必要留口子）。
  *
  * **默认拦脚本**是因为本函数的主要调用方是"导入用户备份"，而备份里不该有 .js。
@@ -190,11 +206,10 @@ export function readZip(buf, opts = {}) {
     const returnBlocked = opts.returnBlocked === true;
     const blockExts = opts.blockExts || BLOCKED_EXT;
 
-    // 允许脚本时，从黑名单里去掉脚本类扩展名（其余照旧）
-    const SCRIPT_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts']);
+    // 允许脚本时，只放行 PLUGIN_EXTS 那一组（脚本 + HTML 面板），其余危险类型照旧拦
     const isBlocked = (name) => {
         const ext = effectiveExt(path.posix.basename(name));
-        if (allowScripts && SCRIPT_EXTS.has(ext)) return false;
+        if (allowScripts && PLUGIN_EXTS.has(ext)) return false;
         return blockExts.has(ext);
     };
 
