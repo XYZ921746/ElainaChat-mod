@@ -857,6 +857,12 @@ function makeModsSandbox(modsJs) {
 }
 
 async function caseModIdentity(c) {
+    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
+       本地没有这些插件是**正常状态**，跳过而不是判红。 */
+    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => existsSync(path.join(ROOT, 'mods', n)))) {
+        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
+        return;
+    }
     const MODS_JS = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
     const tmp = tempDirFactory('elaina-ident-');
     const newDir = () => tmp.dir();
@@ -1129,6 +1135,12 @@ async function loadModsInSandbox(store) {
 }
 
 async function caseModDeps(c) {
+    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
+       本地没有这些插件是**正常状态**，跳过而不是判红。 */
+    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => existsSync(path.join(ROOT, 'mods', n)))) {
+        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
+        return;
+    }
     // ---- 4.0 失败隔离：坏插件不影响好插件，且自己会被自动停用 ----
     //
     // 这段只做**静态 + 结构**断言：真正的运行期验证放在下面的沙箱用例里。
@@ -1349,6 +1361,12 @@ function findStarterDir() {
 }
 
 async function caseModHostApi(c) {
+    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
+       本地没有这些插件是**正常状态**，跳过而不是判红。 */
+    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => existsSync(path.join(ROOT, 'mods', n)))) {
+        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
+        return;
+    }
     // ---- 5.1 插槽与"注册即副作用"：源码约定 ----
     {
         const modsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
@@ -2024,6 +2042,12 @@ function makeMemFs() {
 }
 
 async function caseModE2E(c) {
+    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
+       本地没有这些插件是**正常状态**，跳过而不是判红。 */
+    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => existsSync(path.join(ROOT, 'mods', n)))) {
+        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
+        return;
+    }
     const tmp = tempDirFactory('e2e-');
     const newDir = () => tmp.dir();
     let child = null;
