@@ -453,6 +453,11 @@ async function caseContinue(c) {
 // ────────────────────────────────────────────────────────────
 
 async function caseOverlay(c) {
+    /* 独立克隆（或 android-app 不在仓库上一级）时没有原生工程 —— 这是环境，不是缺陷，跳过。 */
+    if (!existsSync(MANIFEST)) {
+        console.log('  --   跳过：没有 ../android-app 原生工程（独立克隆 / 未按作者目录结构放置）');
+        return;
+    }
     const html = readFrontend();
     const OVERLAY_JAVA = path.join(JAVA_DIR, 'ElainaOverlay.java');
 
@@ -821,6 +826,11 @@ async function casePaths(c) {
 // ────────────────────────────────────────────────────────────
 
 async function casePhone(c) {
+    /* 插件不随仓库分发：本地没有 mods/live2d 时跳过（不是缺陷） */
+    if (!existsSync(path.join(ROOT, 'mods', 'live2d', 'index.js'))) {
+        console.log('  --   跳过：本地没有 live2d 插件（插件不随仓库分发，这是正常状态）');
+        return;
+    }
     const root = ROOT;
     const html = readFrontend();
     const live2d = readFileSync(path.join(root, 'mods', 'live2d', 'index.js'), 'utf8');
@@ -1199,6 +1209,10 @@ async function casePhone(c) {
 // ────────────────────────────────────────────────────────────
 
 async function caseStrictRoute(c) {
+    if (!existsSync(PLUGIN_JAVA)) {
+        console.log('  --   跳过：没有 ../android-app 的 ElainaShellPlugin.java（独立克隆时正常）');
+        return;
+    }
     const plugin = readFileSync(PLUGIN_JAVA, 'utf8');
 
     // 抠出 runAction 的决策段

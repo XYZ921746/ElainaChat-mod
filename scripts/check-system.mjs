@@ -501,7 +501,10 @@ async function casePcCommand(c) {
     {
         const html = readFrontend();
         const agent = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8'));
-        const live2d = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8'));
+        /* 插件不随仓库分发：本地没有 mods/live2d 时用空串（下面的断言会自然跳过相关检查） */
+        const live2d = (await import('node:fs')).existsSync(path.join(ROOT, 'mods', 'live2d', 'index.js'))
+            ? (await import('node:fs')).readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8')
+            : '';
         const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
 
         c.ok(/agentCommandOperation\(raw\)/.test(agent), 'agentActions 有电脑命令入口');
