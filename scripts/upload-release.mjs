@@ -258,6 +258,20 @@ if (rel.status === 200) {
     const hasPc = pcPacks.length > 0;
     const hasExt = extPacks.length > 0;
     const sections = [];
+    // 安卓包版本与本次 tag 不一致（本版安卓端未做适配）时，把「特别说明」放在最前，
+    // 先讲清楚再列产物 —— 免得用户以为随附的 APK 就是本版构建。
+    const apkFiles = files.filter((f) => f.name.toLowerCase().endsWith('.apk'));
+    const tagVer = (tag.match(/(\d+\.\d+\.\d+)/) || [])[1] || '';
+    const staleApks = tagVer ? apkFiles.filter((f) => !f.name.includes(tagVer)) : [];
+    if (staleApks.length) {
+        const staleVer = (staleApks[0].name.match(/(\d+\.\d+\.\d+)/) || [])[1] || '旧版';
+        sections.push(
+            '> ⚠️ **特别说明（安卓端）**：本次 `' + tag + '` **安卓版未做适配，暂不更新** —— '
+            + '随附的 `' + staleApks.map((f) => f.name).join('`、`') + '` 仍是 **' + staleVer + '** 的构建，'
+            + '功能与 ' + staleVer + ' 版一致。',
+            '',
+        );
+    }
     if (hasApk) {
         sections.push(
             '### 安卓程序本体（`ElainaChat-*-lite-release.apk`）',
@@ -269,6 +283,7 @@ if (rel.status === 200) {
             '2. 打开应用：设置 → 云端连接，填服务地址与 Key',
             '',
             '> 这是**本地分发**用的包，签名是 debug 签名（见 `android/app/build.gradle`）。',
+            '',
         );
     }
     if (hasPc) {
@@ -281,6 +296,7 @@ if (rel.status === 200) {
             '- 程序本体不含插件与 Live2D 模型 —— 那些是扩展包，按需另行安装',
             '',
             '> 这是**本地分发**用的电脑版包，解压即用。',
+            '',
         );
     }
     if (hasExt) {
@@ -303,10 +319,11 @@ if (rel.status === 200) {
             '3. 装完在列表里打开开关（插件默认关闭）',
             '',
             '> `galgame` 与 `pet` 依赖 `elaina-avatar`，只装前者会没有立绘。',
+            '',
         );
     }
     const labelParts = [];
-    if (hasApk) labelParts.push('Android 程序本体');
+    if (hasApk) labelParts.push(staleApks.length ? 'Android 程序本体·未适配暂不更新' : 'Android 程序本体');
     if (hasPc) labelParts.push('电脑版');
     if (hasExt) labelParts.push('扩展包');
     const releaseLabel = labelParts.length ? `（${labelParts.join(' + ')}）` : '';
