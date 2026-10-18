@@ -33,6 +33,9 @@
 //   node scripts/upload-release.mjs --dry-run          # 只看会传什么
 //   node scripts/upload-release.mjs --repo owner/name  # 换仓库
 //
+// 凭据：优先用环境变量 GH_TOKEN / GITHUB_TOKEN（非交互终端下凭据管理器会挂起，
+//   要弹交互窗口而没人点），没有环境变量才回落到 `git credential fill`。
+//
 // 行为：tag 对应的 Release 不存在就创建，存在则复用；已存在的同名附件会**覆盖**
 // （先删旧的再传新的）—— 否则重复运行会因"附件已存在"报 422。
 import { execFileSync } from 'node:child_process';
@@ -75,6 +78,9 @@ const tag = args.includes('--tag') ? args[args.indexOf('--tag') + 1] : 'v1.3.0-m
 let cachedToken = null;
 function ghToken() {
     if (cachedToken) return cachedToken;
+    // 环境变量优先：非交互终端下凭据管理器会挂起（要弹交互窗口，没人点）。
+    const envToken = (process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '').trim();
+    if (envToken) { cachedToken = envToken; return cachedToken; }
     try {
         const out = execFileSync('git', ['credential', 'fill'], {
             input: 'protocol=https\nhost=github.com\n\n', encoding: 'utf8',
