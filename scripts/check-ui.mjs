@@ -83,6 +83,12 @@ function modDirById(id) {
 // ────────────────────────────────────────────────────────────
 
 async function caseLive2dAssets(c) {
+    /* 插件不随仓库分发（仓库只推软件本体，插件走应用内上传安装）—— 本地没有 mods/live2d
+       是正常状态，跳过而不是抛异常（否则 npm run check 在干净克隆里永远红）。 */
+    if (!existsSync(path.join(MODS, 'live2d', 'index.js'))) {
+        console.log('  --   跳过：本地没有 live2d 插件（插件不随仓库分发，这是正常状态）');
+        return;
+    }
     const src = readFileSync(path.join(MODS, 'live2d', 'index.js'), 'utf8');
     const extractFn = (name) => extractFnFrom(src, name, 'mods/live2d/index.js');
 
@@ -174,6 +180,10 @@ async function caseLive2dAssets(c) {
 // ────────────────────────────────────────────────────────────
 
 async function caseLive2dNativeList(c) {
+    if (!existsSync(path.join(MODS, 'live2d-models', 'server.mjs'))) {
+        console.log('  --   跳过：本地没有 live2d-models 插件（插件不随仓库分发，这是正常状态）');
+        return;
+    }
     // 模型已搬进资源 mod：mods/live2d-models/models/
     const MODELS_ROOT = path.join(MODS, 'live2d-models', 'models');
 
@@ -441,7 +451,8 @@ async function caseSceneBackgrounds(c) {
     // ============================================================ 1. 清单 ↔ 文件
     const dir = modDirById('scene-backgrounds');
     if (!dir) {
-        c.ok(false, '找到 scene-backgrounds 插件（按 manifest.id）');
+        console.log('  --   跳过：本地没有 scene-backgrounds / galgame 插件（插件不随仓库分发，这是正常状态）');
+        return;
     } else {
         c.ok(true, '找到 scene-backgrounds 插件（目录 ' + dir + '）');
         const indexSrc = readFileSync(path.join(MODS, dir, 'index.js'), 'utf8');

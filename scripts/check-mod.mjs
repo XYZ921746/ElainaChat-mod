@@ -340,11 +340,17 @@ async function caseModsCore(c) {
     {
         const galPath = modPath('galgame', 'index.js');
         const petPath = modPath('pet', 'index.js');
-        c.ok(Boolean(galPath && existsSync(galPath)), 'galgame/index.js 存在');
-        c.ok(Boolean(petPath && existsSync(petPath)), 'pet/index.js 存在');
         const avatarIndex = modPath('elaina-avatar', 'index.js');
-        c.ok(Boolean(avatarIndex && existsSync(avatarIndex)),
-            'elaina-avatar/index.js 存在（按 manifest.id 找到真实目录：' + modDirById('elaina-avatar') + '）');
+        /* 插件不随仓库分发（仓库只推软件本体）—— 一个都没装是**正常状态**，
+           这里跳过而不是判红，否则干净克隆永远红一片。 */
+        if (!galPath && !petPath && !avatarIndex) {
+            console.log('  --   跳过 1.2：本地没有 galgame / pet / elaina-avatar 插件（插件不随仓库分发，这是正常状态）');
+        } else {
+            c.ok(Boolean(galPath && existsSync(galPath)), 'galgame/index.js 存在');
+            c.ok(Boolean(petPath && existsSync(petPath)), 'pet/index.js 存在');
+            c.ok(Boolean(avatarIndex && existsSync(avatarIndex)),
+                'elaina-avatar/index.js 存在（按 manifest.id 找到真实目录：' + modDirById('elaina-avatar') + '）');
+        }
 
         // 缺实体时这两段整体跳过 —— 本机只有 4 个插件，galgame 不在其中，
         // 后面那些断言没有输入（它们测的是插件源码本身，不是插件系统）。
