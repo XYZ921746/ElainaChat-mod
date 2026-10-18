@@ -18,10 +18,10 @@
 // playwright-core 从安卓工程那边解析（本仓库自身零依赖，不装 npm 包）。
 // 路径只此一处；将来挪了位置也只改这里。
 //
-// ★ 不再写死绝对路径：以前这里硬编码 `D:/222/android-app/...`，换个克隆位置/换台机器
-//   就 `Cannot find module` —— 检查脚本自己在环境里失败，看起来像产品坏了。
-//   现在按顺序找：ELAINACHAT_PLAYWRIGHT 环境变量 → 同级 ../android-app → 本仓库 node_modules；
-//   都没有就抛一条**说清楚怎么办**的错误，而不是把 ENOTFOUND 甩给读者。
+// 按顺序解析而不是写死绝对路径：写死的位置换个克隆目录/换台机器就 `Cannot find module`，
+// 检查脚本自己在环境里失败，看起来像产品坏了。顺序为
+// ELAINACHAT_PLAYWRIGHT 环境变量 → 同级 ../android-app → 本仓库 node_modules；
+// 都找不到时抛一条**说清楚怎么办**的错误，而不是把 ENOTFOUND 甩给读者。
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
