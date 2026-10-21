@@ -593,6 +593,127 @@
         /* 两个下拉箭头都随展开态旋转，用户一眼能看出"哪一层开着" */
         .process-row.is-open .process-row-chevron { transform: rotate(90deg); }
 
+        /* ==================== 时间线外观（参考 DSH 的步骤流）====================
+           目标：让"想 → 做 → 想"看起来是一条**有先后的流**，而不是一堆并列卡片。
+
+           ── 做法 ──────────────────────────────────────────────────────────
+           ① 左侧一条竖线贯穿整块过程区（画在 .turn-process 上），
+              每个 .process-row 的图标位置再压一个圆点 —— 于是竖线像串珠子一样
+              把各步连起来，先后顺序一眼可见。
+           ② 工具行保留卡片（它是一次"操作"，有边界更清楚），思考行仍然无框
+              （它是叙述性文字，加框会像"又调了一次工具"）。
+           ③ 连线用 currentColor + 低透明度：深浅主题、各主题色下都自动正确，
+              不需要为每套主题单独写一条线色。
+
+           ★ 为什么不用"给每行编号"来表达先后：一轮任务可能有十几步，
+             编号会让人下意识去数"到第几步了"，而这条流想表达的是"它在推进"。
+             竖线是**连续**的，不暗示总量。 */
+        .turn-process {
+            position: relative;
+            /* 给左侧留出竖线与圆点的位置 */
+            padding-left: 18px;
+        }
+        .turn-process::before {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 22px;
+            bottom: 8px;
+            width: 1.5px;
+            border-radius: 1px;
+            background: currentColor;
+            opacity: 0.16;
+        }
+        .process-row {
+            position: relative;
+        }
+        /* 每一行图标左侧的节点圆点：把"这一步"钉在那条竖线上 */
+        .process-row::before {
+            content: '';
+            position: absolute;
+            left: -16.5px;
+            top: 12px;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--pixso-cream);
+            border: 1.5px solid currentColor;
+            opacity: 0.5;
+        }
+        /* 圆点与文字里那个状态圆重复表达同一件事时，以**这一颗**为主：
+           它是时间线上的一步，状态色直接画在它上面更自然。
+           所以状态圆（.process-state）在这种情况下淡出，只留节点色。 */
+        .process-row[data-state="ok"]::before { border-color: #3f9d5a; opacity: 0.9; }
+        .process-row[data-state="error"]::before { border-color: #d0523f; opacity: 1; }
+        .process-row[data-state="stopped"]::before { border-color: #b08a3f; opacity: 1; }
+        .process-row[data-state="running"]::before {
+            border-color: currentColor;
+            opacity: 1;
+            animation: dot-bounce 1.2s ease-in-out infinite;
+        }
+        /* 思考行的节点用空心，和工具行的实心区分开：
+           "想"是内在的、没有动作发生。 */
+        .process-row[data-kind="think"]::before {
+            background: transparent;
+            border-style: dashed;
+        }
+        /* 耗时：贴在状态文字左边，比状态更弱（它是补充信息，不是结论） */
+        .process-row-duration {
+            flex: 0 0 auto;
+            font-size: 10.5px;
+            opacity: 0.5;
+            font-variant-numeric: tabular-nums;
+        }
+        /* 参数键值表：让 path / command 这类值从 JSON 里浮出来 */
+        .process-args {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 6px;
+        }
+        .process-arg {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            min-width: 0;
+            font-size: 11.5px;
+            line-height: 1.5;
+        }
+        .process-arg-block {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 3px;
+        }
+        .process-arg-key {
+            flex: 0 0 auto;
+            font-size: 10.5px;
+            font-weight: 600;
+            opacity: 0.55;
+            /* 键名统一宽度，值才能对齐成一列 —— 扫读时靠这一列定位 */
+            min-width: 62px;
+        }
+        .process-arg-value {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11.5px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        code.process-arg-value {
+            background: var(--pixso-panel);
+            border-radius: 5px;
+            padding: 1px 5px;
+        }
+        .process-arg-block pre.process-arg-value {
+            margin: 0;
+            padding: 6px 8px;
+            border-radius: 6px;
+            background: var(--pixso-panel);
+            max-height: 220px;
+            overflow: auto;
+        }
+
         @media (max-width: 860px) {
             /* 手机上总览行的箭头推到最右（桌面跟在一行摘要后面更自然） */
             .turn-summary-toggle { margin-left: auto; }
@@ -1669,7 +1790,7 @@
             --pixso-orange: #ff7d4d;
             --pixso-line: #d9c7c0;
             /* 2026-10 补：默认（elaina）主题**漏定义**了 --pixso-warn* 四个变量。
-               其余四套主题（ios / claude / sage / sakura）与深色块都定义了它们，
+               其余三套主题（mist / amber / plum）与深色块都定义了它们，
                只有这里没有 —— 而 :root 是"没切主题"时的生效来源，也就是**默认外观**。
                后果：`var(--pixso-warn)` 取不到值、`var(--pixso-warn-bg)` 整条声明失效，
                于是 #settingsPanel 里那些警示文案（Agent 权限、以及新加的 TTS 提示）
@@ -3522,7 +3643,7 @@
                    改用主题变量：`--pixso-panel` 在浅色下是奶油白、深色下是深灰，
                    两边都跟着主题走，不需要在 themes.css 里再写一条深色覆盖。
                    ★ 为什么不直接在 themes.css 加 `html[data-theme="dark"] #mainContent > header`
-                     覆盖：那样只治深色，**其它几套主题**（iOS 蓝/陶土橙/樱花桃）
+                     覆盖：那样只治深色，**其它几套主题**（雾蓝/琥珀/暮紫）
                      的顶栏仍然是写死的白色，与它们的配色割裂。
                      根因是"写死了颜色"，就该改根因。 */
                 background: var(--pixso-panel) !important;
@@ -4788,7 +4909,7 @@
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <div class="text-center text-[10px] text-indigo-200 select-none">v1.3.3 · 魔女之旅</div>
+                <div class="text-center text-[10px] text-indigo-200 select-none">v1.3.4 · 魔女之旅</div>
             </div>
         </aside>
 
@@ -5226,10 +5347,7 @@
                           <div id="themeCustomEditor"
                                style="display:none;padding:10px;border-radius:12px;background:rgba(255,255,255,.5);border:1px solid var(--pixso-line)"></div>
 
-                          <!-- ★ 2026-10：深色模式下拉**已删除**，改到顶栏右上角的按钮
-                               （#headerThemeBtn，挨着「整理记忆」）：深色下显太阳、
-                               浅色下显月亮，点一下即切换。这里只留一句说明，免得用户找不到。
-                               ★ 随之移除的还有原下拉的第三态「跟随系统」（用户要求删掉这个开关）。 -->
+                          <!-- 深色模式开关在顶栏右上角（#headerThemeBtn），这里只留说明。 -->
                           <div class="text-[11px] text-indigo-400 mt-3 leading-relaxed">
                               深色模式已移到顶栏右上角
                           </div>
@@ -6417,6 +6535,10 @@
          不是加载时，所以顺序其实不敏感；但放在 core 之后更符合"core 定义出口、
          本文件提供能力"的依赖方向，也方便以后有人把它改成加载时就取。 -->
     <script src="/js/chat-stream.js"></script>
+    <!-- Agent 操作注册表：操作定义（名称/参数/风险/可用性）的唯一来源，
+         标签通道与 function calling 通道共用它。排在 agent-tags.js **之前**：
+         分发时要先能查到条目；它只做声明，执行实现由 agent.js 稍后挂上。 -->
+    <script src="/js/agent-ops.js"></script>
     <script src="/js/agent-tags.js"></script>
     <script src="/js/data.js"></script>
     <script src="/js/agent.js"></script>

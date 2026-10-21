@@ -48,15 +48,42 @@
     }
 
     /**
+     * 带空闲超时地读一块。SSE 流只在两块数据**之间**可能卡死（上游挂起、
+     * 连接半途断掉），所以计时按「距上一块数据的间隔」算，每读到一块就重置。
+     * 超时抛出的错误里带 "timeout" 字样 —— 上游的 toClientApiError 据此把它
+     * 归类成 REQUEST_TIMEOUT（可重试），否则卡死的流会让界面永远转下去。
+     */
+    async function readChunkWithIdleTimeout(reader, idleMs) {
+        if (!(idleMs > 0)) return reader.read();
+        let timer = null;
+        const timeoutPromise = new Promise((_, reject) => {
+            timer = setTimeout(() => {
+                const err = new Error('流式读取超时（timeout）：'
+                    + Math.round(idleMs / 1000) + ' 秒没有收到新数据，连接已断开。');
+                err.name = 'StreamIdleTimeout';
+                // 释放底层连接：不 cancel 的话它会一直挂到服务器关闭为止
+                reader.cancel().catch(() => {});
+                reject(err);
+            }, idleMs);
+        });
+        try {
+            return await Promise.race([reader.read(), timeoutPromise]);
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    /**
      * 通用 SSE 逐行读取器。
      *
      * @param {ReadableStreamDefaultReader} reader
      * @param {(event: {event: string|null, data: string}) => void} onEvent
      *        每凑齐一个 SSE 事件就回调一次。data 可能跨多行（SSE 规范允许），
      *        这里按规范用 \n 拼接。
+     * @param {number} [idleTimeoutMs] 两块数据之间的空闲上限；0 = 不设限
      * @returns {Promise<void>}
      */
-    async function readSse(reader, onEvent) {
+    async function readSse(reader, onEvent, idleTimeoutMs = 0) {
         const decoder = new TextDecoder('utf-8');
         let buffer = '';
         // SSE 事件之间用空行分隔；一个事件里可以有 event: / data: / id: 等字段
@@ -70,7 +97,7 @@
         };
 
         for (;;) {
-            const { done, value } = await reader.read();
+            const { done, value } = await readChunkWithIdleTimeout(reader, idleTimeoutMs);
             if (done) break;
             // stream: true 让多字节 UTF-8 字符跨块时不会被截断成乱码 ——
             // 中文一个字 3 字节，正好卡在网络分块边界上是很常见的
@@ -105,10 +132,11 @@
     //  每个 extractor 接收一个解析后的 SSE 事件，返回若干 chunk：
     //    { kind: 'text',      text }        正文增量
     //    { kind: 'reasoning', text }        思维链增量
-    //    { kind: 'done' }                   流结束
+    //    { kind: 'toolcall',  part }        工具调用的一**片**（要按 index 累积，不能逐片用）
+    //    { kind: 'done', finishReason? }    流结束（可带停止原因）
     //  返回空数组表示"这个事件对回复内容没贡献"（例如 usage 统计、心跳）。
 
-    /** openai-compatible：choices[0].delta 里的 content / reasoning_content */
+    /** openai-compatible：choices[0].delta 里的 content / reasoning_content / tool_calls */
     function extractOpenAICompatible(event) {
         const payload = parseSseData(event.data);
         if (!payload) return [];
@@ -120,11 +148,20 @@
         const reasoning = delta.reasoning_content ?? delta.reasoning;
         if (reasoning) out.push({ kind: 'reasoning', text: String(reasoning) });
         if (delta.content) out.push({ kind: 'text', text: String(delta.content) });
-        if (choice.finish_reason) out.push({ kind: 'done' });
+        // 工具调用：**不能逐片解析**。`function.arguments` 是跨块的 JSON 片段，
+        //   首片通常只带 index/id/type/name（arguments 甚至为空），后续片只带 arguments
+        //   片段；还可能同时来多路调用（各自的 index 交错）。所以这里只把原始片段
+        //   交给合成阶段按 index 累积，最后统一 JSON.parse。
+        if (Array.isArray(delta.tool_calls)) {
+            for (const part of delta.tool_calls) out.push({ kind: 'toolcall', part });
+        }
+        // finish_reason 要**带下来**：`tool_calls` 与服务端"正常说完了"是两回事，
+        //   收尾那一步要据此决定"要不要执行工具、要不要再发一轮"。
+        if (choice.finish_reason) out.push({ kind: 'done', finishReason: String(choice.finish_reason) });
         return out;
     }
 
-    /** anthropic：content_block_delta 里的 text_delta / thinking_delta */
+    /** anthropic：content_block_delta 里的 text_delta / thinking_delta / input_json_delta */
     function extractAnthropic(event) {
         const payload = parseSseData(event.data);
         if (!payload) return [];
@@ -137,8 +174,27 @@
             if (delta.type === 'text_delta' && delta.text) {
                 return [{ kind: 'text', text: String(delta.text) }];
             }
-            // input_json_delta（工具调用参数）暂不参与正文，忽略
+            // 工具调用的参数片段。按块序号累积（块序号就是这里的 payload.index）。
+            if (delta.type === 'input_json_delta') {
+                return [{
+                    kind: 'toolcall',
+                    part: { index: payload.index, function: { arguments: String(delta.partial_json || '') } },
+                }];
+            }
             return [];
+        }
+        // 工具调用的**开头**：id 与 name 只在这一条里出现，后面全是参数片段。
+        // 折成与 OpenAI 形态同构的 part，好让累积逻辑只写一份（两边各写一份必然走样）。
+        if (type === 'content_block_start' && payload.content_block?.type === 'tool_use') {
+            const block = payload.content_block;
+            return [{
+                kind: 'toolcall',
+                part: { index: payload.index, id: block.id, type: 'function', function: { name: block.name, arguments: '' } },
+            }];
+        }
+        // message_delta 带的是**最终**停止原因（Anthropic 的 tool_use 就出现在这里）
+        if (type === 'message_delta' && payload.delta?.stop_reason) {
+            return [{ kind: 'done', finishReason: String(payload.delta.stop_reason) }];
         }
         if (type === 'message_stop') return [{ kind: 'done' }];
         return [];
@@ -175,10 +231,50 @@
     //  这样 chat-providers.js 里那三个解析函数一个字都不用改 ——
     //  流式与非流式走同一段解析代码，就不可能出现"流式能显示、非流式显示不了"
     //  这种只在某一条路上出现的 bug。
+    /**
+     * 累积一路工具调用的片段。
+     *
+     * 两条协议都走这里：`index` 是它的身份（Anthropic 用块序号、OpenAI 用 tool_calls 的
+     * index），`name` 一般只在首片出现而 `arguments` 逐片追加 —— 所以是"累加"而不是"覆盖"。
+     * index 缺失时退化成"延续最后一路"，因为绝大多数上游是顺序发单路调用。
+     */
+    function accumulateToolCall(acc, part) {
+        if (!part) return;
+        const known = [...acc.toolCalls.keys()];
+        const index = Number.isInteger(part.index) ? part.index : (known.length ? known[known.length - 1] : 0);
+        const rec = acc.toolCalls.get(index) || { index, id: '', name: '', args: '' };
+        if (part.id) rec.id = String(part.id);
+        const fn = part.function || {};
+        if (fn.name) rec.name += String(fn.name);
+        if (fn.arguments) rec.args += String(fn.arguments);
+        acc.toolCalls.set(index, rec);
+    }
+
+    /**
+     * 把累积结果收成完整的调用列表（**只有这一份拼装逻辑**）。
+     *
+     * 参数拼不完整（被截断）或不是合法 JSON 时**不在这里抛**：照原样交出去，
+     * 由上层把它当作一次失败的调用回灌给模型 —— 静默丢掉会让模型以为"我调过了，
+     * 只是没结果"，于是对着同一个动作反复重试。
+     */
+    function collectToolCalls(acc) {
+        if (!acc.toolCalls || !acc.toolCalls.size) return [];
+        return [...acc.toolCalls.values()]
+            .filter((c) => c.name)
+            .map((c) => ({ id: c.id || '', type: 'function', function: { name: c.name, arguments: c.args || '{}' } }));
+    }
+
+    /** Anthropic 的 tool_use 要的是**解析后的对象**；解析不了时给空对象，理由同上 */
+    function parseToolArgs(text) {
+        try { return JSON.parse(text || '{}'); } catch { return {}; }
+    }
+
     function composeOpenAICompatible(acc) {
+        const calls = collectToolCalls(acc);
         const message = { role: 'assistant', content: acc.text };
         if (acc.reasoning) message.reasoning_content = acc.reasoning;
-        return { choices: [{ message, finish_reason: 'stop' }] };
+        if (calls.length) message.tool_calls = calls;
+        return { choices: [{ message, finish_reason: acc.finishReason || (calls.length ? 'tool_calls' : 'stop') }] };
     }
 
     function composeAnthropic(acc) {
@@ -186,7 +282,13 @@
         // 顺序和 Anthropic 真实响应一致：thinking block 在前，text block 在后
         if (acc.reasoning) content.push({ type: 'thinking', thinking: acc.reasoning });
         content.push({ type: 'text', text: acc.text });
-        return { content };
+        const calls = collectToolCalls(acc);
+        for (const call of calls) {
+            content.push({ type: 'tool_use', id: call.id, name: call.function.name, input: parseToolArgs(call.function.arguments) });
+        }
+        // stop_reason 与非流式响应同名同义（tool_use / end_turn）——
+        // 流式合成结果必须与非流式同构，否则上层只会在某一条路上读得到它。
+        return { content, stop_reason: acc.finishReason || (calls.length ? 'tool_use' : 'end_turn') };
     }
 
     function composeOpenAIResponses(acc) {
@@ -211,12 +313,15 @@
      * @param {Response} response fetch 返回的流式响应
      * @param {string} format 对话格式
      * @param {(chunk: {kind: string, text?: string}) => void} [onDelta]
-     *        每个增量回调一次。**回调里抛错会中断整条流**，所以调用方要自己 try 住。
-     * @returns {Promise<{payload: object, text: string, reasoning: string}>}
+     *        每个**可见**增量回调一次（正文与思维链；工具调用的片段不回调 ——
+     *        它要整路拼完才有意义）。**回调里抛错会中断整条流**，所以调用方要自己 try 住。
+     * @param {number} [idleTimeoutMs] 两块数据之间的空闲上限（0 = 不设限）。
+     *        fetch 的超时只覆盖到 headers 到达为止，读流阶段卡死要靠这里了结。
+     * @returns {Promise<{payload: object, text: string, reasoning: string, toolCalls: Array, finishReason: string}>}
      */
-    async function consumeStream(response, format, onDelta) {
+    async function consumeStream(response, format, onDelta, idleTimeoutMs = 0) {
         const extractor = EXTRACTORS[format] || extractOpenAICompatible;
-        const acc = { text: '', reasoning: '' };
+        const acc = { text: '', reasoning: '', toolCalls: new Map(), finishReason: '' };
         if (!response.body || typeof response.body.getReader !== 'function') {
             throw new Error('响应没有可读流（该环境不支持流式）');
         }
@@ -224,18 +329,29 @@
         try {
             await readSse(reader, (event) => {
                 for (const chunk of extractor(event)) {
-                    if (chunk.kind === 'text') acc.text += chunk.text;
-                    else if (chunk.kind === 'reasoning') acc.reasoning += chunk.text;
-                    else continue;                       // done 只用于判断结束，不回调
-                    if (onDelta) onDelta(chunk);
+                    if (chunk.kind === 'text' || chunk.kind === 'reasoning') {
+                        acc[chunk.kind] += chunk.text;
+                        if (onDelta) onDelta(chunk);
+                    } else if (chunk.kind === 'toolcall') {
+                        accumulateToolCall(acc, chunk.part);
+                    } else if (chunk.finishReason) {
+                        // done 只用于判断结束；这里额外记下**停止原因**（tool_calls / stop / length…）
+                        acc.finishReason = chunk.finishReason;
+                    }
                 }
-            });
+            }, idleTimeoutMs);
         } finally {
             // 提前 return/抛错时也要放掉 reader，否则连接会挂在那里
             try { reader.releaseLock(); } catch { /* 已经释放过就算了 */ }
         }
         const compose = COMPOSERS[format] || composeOpenAICompatible;
-        return { payload: compose(acc), text: acc.text, reasoning: acc.reasoning };
+        return {
+            payload: compose(acc),
+            text: acc.text,
+            reasoning: acc.reasoning,
+            toolCalls: collectToolCalls(acc),
+            finishReason: acc.finishReason,
+        };
     }
 
     /**
@@ -258,6 +374,9 @@
         // 单独导出，方便检查脚本直接测增量解析而不必造一个真 ReadableStream
         extractors: EXTRACTORS,
         composers: COMPOSERS,
-        _internal: { parseSseData, extractOpenAICompatible, extractAnthropic, extractOpenAIResponses },
+        _internal: {
+            parseSseData, extractOpenAICompatible, extractAnthropic, extractOpenAIResponses,
+            accumulateToolCall, collectToolCalls, parseToolArgs,
+        },
     };
 })();

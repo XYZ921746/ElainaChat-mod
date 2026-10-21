@@ -1,18 +1,19 @@
 {
   "name": "elainachat-mod",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "private": true,
   "license": "GPL-3.0-or-later",
+  "main": "web/serve.mjs",
   "scripts": {
-    "check": "node --experimental-vm-modules scripts/check-frontend.mjs && node scripts/check-agent.mjs && node scripts/check-chat.mjs && node scripts/check-data.mjs && node scripts/check-stream.mjs && node scripts/check-mod.mjs && node scripts/check-log.mjs && node scripts/check-security.mjs && node scripts/check-ui.mjs && node scripts/check-system.mjs",
-    "sync:web": "node scripts/sync-web.mjs",
-    "sync:web:lite": "node scripts/sync-web.mjs --lite",
+    "check": "node --experimental-vm-modules scripts/check-frontend.mjs && node scripts/check-agent.mjs && node scripts/check-chat.mjs && node scripts/check-data.mjs && node scripts/check-stream.mjs && node scripts/check-mod.mjs && node scripts/check-log.mjs && node scripts/check-security.mjs && node scripts/check-ui.mjs && node scripts/check-system.mjs && node scripts/check-exe.mjs",
     "serve:web": "node web/serve.mjs",
-    "pack:assets": "node scripts/pack-assets.mjs",
-    "link:mods": "node scripts/link-mods.mjs",
-    "test": "npm run check && npm run sync:web && npm --prefix ../android-app test",
+    "sync:web": "node dist/Android/scripts/sync-web.mjs",
+    "sync:web:lite": "node dist/Android/scripts/sync-web.mjs --lite",
     "build:apk": "npm run check && npm run sync:web && npm --prefix ../android-app run build:debug",
-    "build:apk:lite": "npm run check && npm run sync:web:lite && npm --prefix ../android-app run build:debug"
+    "build:apk:lite": "npm run check && npm run sync:web:lite && npm --prefix ../android-app run build:debug",
+    "pack:exe": "node dist/Windows/scripts/pack-exe.mjs",
+    "exe:check": "node scripts/check-exe.mjs",
+    "test": "npm run check && npm run sync:web && npm --prefix ../android-app test"
   }
 }
 

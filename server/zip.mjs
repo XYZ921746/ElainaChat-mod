@@ -16,8 +16,33 @@
 //    · 不写 zip64（备份超过 4GB 才需要，数据目录远达不到）
 //  这样 7-Zip / WinRAR / Windows 自带解压 / Python zipfile 都能正确打开。
 
-import { deflateRawSync, inflateRawSync, crc32 } from 'node:zlib';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import path from 'node:path';
+
+/**
+ * CRC-32（IEEE 802.3，zip 用的那个）。
+ *
+ * <p>★ 为什么不 from 'node:zlib' import：{@code zlib.crc32} 是 **Node 20.15+**
+ * 才加的 API，而手机端内嵌的是 nodejs-mobile **v18.20.4** —— 从 zlib 解构它会在
+ * 模块求值阶段就抛 {@code SyntaxError: The requested module 'node:zlib' does not
+ * provide an export named 'crc32'}，整个 bootstrap 起不来（表现是 :node 进程
+ * 起来后 250ms 静默退出）。这个模块是零依赖设计，自己算一遍最稳，也不挑运行时版本。
+ */
+const CRC_TABLE = (() => {
+    const table = new Int32Array(256);
+    for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        table[i] = c;
+    }
+    return table;
+})();
+
+function crc32(buf) {
+    let c = -1;
+    for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+}
 
 // ============================================================================
 //  危险扩展名（解压落盘的安全底线）
@@ -69,6 +94,31 @@ export function effectiveExt(name) {
     s = s.replace(/[. ]+$/, '');           // Windows 会丢弃尾随的点与空格
     return path.extname(s).toLowerCase();
 }
+
+/**
+ * 条目名是否不安全（绝对路径 / 路径穿越）。
+ *
+ * 从这里导出给所有"解压落盘"的调用方（含 serve.mjs 与手机端 bootstrap 的
+ * hostUtils）。理由与 BLOCKED_EXT 相同：它属于"解压/落盘"的安全约束，跟着
+ * 实现走才能保证所有调用方受同一份判定 —— 各留一份本地实现的话，"同一个
+ * 恶意 zip 在电脑被拦、在手机落盘"这种分叉只是时间问题。
+ */
+export function isUnsafeEntryName(name) {
+    if (!name) return true;
+    if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) return true;
+    return name.split('/').some((seg) => seg === '..');
+}
+
+/**
+ * 上传的压缩包大小上限（200MB）。
+ *
+ * 从这里导出：所有调用方（桌面 serve.mjs、手机端 bootstrap 的
+ * hostUtils、插件的 ctx.utils.MAX_UPLOAD）必须吃**同一个数** —— 数字一旦
+ * 分叉就是"同一个接口在电脑上能传、在手机上 413"，这类问题最难查。
+ * 单文件 / 总量上限（maxEntry/maxTotal）不导出：那是 readZip 的参数默认值，
+ * 已在本模块内。
+ */
+export const MAX_UPLOAD = 200 * 1024 * 1024;
 
 // ---------------------------------------------------------------------- 写
 /**

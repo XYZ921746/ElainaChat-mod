@@ -70,7 +70,13 @@ const DANGEROUS_RULES = [
 
     // ---- 注册表 / 系统配置 ----
     { re: /\breg\s+(add|delete|import|restore|copy|save)\b/i, why: '修改注册表' },
-    { re: /\b(New-ItemProperty|Set-ItemProperty|Remove-ItemProperty|New-Item)\b/i, why: '修改注册表或创建项' },
+    // New-ItemProperty / Set-ItemProperty / Remove-ItemProperty 是注册表操作；
+    // New-Item 混在里面是**误伤**——它最常用来建普通文件夹（AI 的「新建文件夹」
+    // 正是它），按当前正则会被整条判成"修改注册表"，用户看到的确认弹窗
+    // 完全对不上号（实测报过）。真正的注册表路径操作交给上面 `reg add/delete`
+    // 与 DANGEROUS_TARGET（重定向到系统关键位置）拦。New-Item 建文件/目录
+    // 的破坏力上限是"多个空文件/目录"，不值得为它打断用户。
+    { re: /\b(New-ItemProperty|Set-ItemProperty|Remove-ItemProperty)\b/i, why: '修改注册表' },
     { re: /\b(bcdedit|bootrec|diskpart)\b/i, why: '修改启动配置或磁盘分区' },
     { re: /\b(Set-ExecutionPolicy|sc\.exe|New-Service|Stop-Service|Start-Service)\b/i, why: '修改执行策略或系统服务' },
 
@@ -135,16 +141,31 @@ export function availableShells() {
  * 用 execFile 而不是 exec 也正是这个原因 —— exec 会把整条命令交给
  * `cmd /c` 再做一次解析，等于多一层可注入面。
  *
+ * 输出编码：Windows 中文系统的 PowerShell / cmd 默认按 **GBK**（代码页 936）
+ *   输出，而 Node 按 UTF-8 解码 —— 中文报错全部变成乱码（实测：`del 一个中文路径`
+ *   的"找不到路径"回灌给 AI 是一串问号方块）。AI 读不懂报错就无法自我纠正，
+ *   只能瞎猜着重试，白白多跑命令。所以两种 shell 都在命令前设置 UTF-8：
+ *   · PowerShell：`[Console]::OutputEncoding` 影响 stdout 与 stderr 的编码；
+ *   · cmd：`chcp 65001`。分号/`&` 与原命令分隔，原命令的解析不受影响。
+ *
  * @param {string} shell 'powershell' | 'cmd' | 'sh'
  * @param {string} command 命令原文
  */
 export function buildShellArgv(shell, command) {
     const cmd = String(command || '');
-    if (shell === 'cmd') return { file: 'cmd.exe', args: ['/d', '/s', '/c', cmd] };
+    if (shell === 'cmd') {
+        return { file: 'cmd.exe', args: ['/d', '/s', '/c', `chcp 65001>nul & ${cmd}`] };
+    }
     if (shell === 'sh') return { file: 'sh', args: ['-c', cmd] };
     // PowerShell：-NoProfile 避免加载用户 profile（profile 里可能有任意代码，
     // 且会让输出不稳定）；-NonInteractive 避免它停下来等输入。
-    return { file: 'powershell.exe', args: ['-NoProfile', '-NonInteractive', '-Command', cmd] };
+    // 编码设置包 try/catch：个别无控制台句柄的环境里它会抛 "handle is invalid"
+    //   —— 编码退回 GBK（不比不修差），但命令本身必须照常执行。
+    return {
+        file: 'powershell.exe',
+        args: ['-NoProfile', '-NonInteractive', '-Command',
+            `try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}; ${cmd}`],
+    };
 }
 
 /**

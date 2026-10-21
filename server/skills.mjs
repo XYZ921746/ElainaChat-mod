@@ -188,6 +188,11 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
                 id: e.name,
                 name: fm.name || e.name,          // 缺 name → 回落目录名
                 description: fm.description || '', // 缺 description → 空串
+                // kind 永远是 'knowledge'：技能是**给 AI 的资料**，不是可执行能力。
+                //   写进清单里是为了让消费方（前端注册表）能**当场断言**这条边界，
+                //   而不是靠"这条接口只会扫文本文件"的隐含前提 —— 扫描结果里出现
+                //   任何别的 kind 都说明有人把技能当插件在装了（见本文件顶部说明）。
+                kind: 'knowledge',
                 owner: null,
                 source: 'local',
                 dir,
@@ -226,6 +231,7 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
                     id: owner + '/' + relNorm,        // 带 owner 前缀，避免与本地技能 id 撞车
                     name: fm.name || relNorm.split('/').pop(),
                     description: fm.description || '',
+                    kind: 'knowledge',                // 见上面那条：技能永远是"资料"，不是能力
                     owner,
                     source: 'mod',
                     dir,

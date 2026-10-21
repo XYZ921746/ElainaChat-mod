@@ -21,7 +21,7 @@
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { readFileSync, readdirSync, mkdtempSync, rmSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, rmSync, statSync, existsSync, copyFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { launchTestBrowser } from './test-browser.mjs';
@@ -1251,6 +1251,170 @@ async function caseDiagnostics(c) {
     }
 }
 
+// ────────────────────────────────────────────────────────────
+// 5. 手机端 bootstrap 的日志接口（与 serve.mjs 同构的那一半）
+//
+// 为什么必须起真实 bootstrap：client-log 的摄入语义（级别白名单 / 截断 /
+// 追踪全文）、/api/logs/tail 的查询参数、relay 摘要进缓冲（console 重挂）、
+// 落盘与脱敏，全是**运行时行为**，静态读源码证明不了"两端同一个消费方
+// （log-viewer.js）拿到的形状一致"。
+//
+// 布局照 sync-web 的产物形态：bootstrap.mjs + server/<共享模块> 复制进临时
+// 目录 —— 仓库里 web/nodejs/ 下没有 server/ 子目录（那是 sync 时才生成的），
+// 直接跑仓库路径会 ERR_MODULE_NOT_FOUND。共享模块清单从 sync-web.mjs 源码里
+// 提取（提取失败 = 清单格式变了，本身就是该报警的漂移）。
+// ────────────────────────────────────────────────────────────
+
+async function caseBootstrapLogs(c) {
+    const TMP = mkdtempSync(path.join(tmpdir(), 'elaina-bootstrap-log-'));
+    const NODE_ROOT = path.join(TMP, 'nodejs');
+    const DATA_DIR = path.join(TMP, 'elaina-data');
+    const ok = (cond, label, extra) => c.ok(cond, label, extra);
+
+    // 从 sync-web.mjs 提取共享模块清单（单一事实源，检查脚本不另写一份）
+    // 打包工具住在 dist/Android/scripts/ —— 与 Android 打包放在一起。
+    const syncSrc = readFileSync(path.join(ROOT, 'dist', 'Android', 'scripts', 'sync-web.mjs'), 'utf8');
+    const listMatch = syncSrc.match(/SHARED_SERVER_MODULES\s*=\s*\[([^\]]*)\]/);
+    ok(Boolean(listMatch), '★ 能从 sync-web.mjs 提取 SHARED_SERVER_MODULES（提取失败=清单格式漂移）');
+    const sharedModules = listMatch
+        ? listMatch[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+        : [];
+
+    mkdirSync(path.join(NODE_ROOT, 'server'), { recursive: true });
+    copyFileSync(path.join(ROOT, 'web', 'nodejs', 'bootstrap.mjs'), path.join(NODE_ROOT, 'bootstrap.mjs'));
+    for (const name of sharedModules) {
+        const src = path.join(ROOT, 'server', name);
+        ok(existsSync(src), `共享模块存在：${name}`);
+        copyFileSync(src, path.join(NODE_ROOT, 'server', name));
+    }
+
+    const child = spawn(process.execPath, [path.join(NODE_ROOT, 'bootstrap.mjs'), `--data-dir=${DATA_DIR}`], {
+        cwd: NODE_ROOT,
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stderr.on('data', (d) => { out += d; });
+
+    /** 从 stdout 的 __ELAINA_READY__ 行解析端口（bootstrap 自己挑端口，F-1） */
+    async function waitReady(timeoutMs = 15000) {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            const m = out.match(/__ELAINA_READY__(\{[^\n]*\})/);
+            if (m) {
+                try { return JSON.parse(m[1]); } catch { /* 行不完整，继续等 */ }
+            }
+            await wait(150);
+        }
+        return null;
+    }
+    const HEADERS = { Origin: 'https://localhost' };   // bootstrap 的 Origin 门（F-2）：不带就是 403
+
+    try {
+        const ready = await waitReady();
+        ok(Boolean(ready && ready.port > 0), 'bootstrap 已监听并回传端口', out.slice(-400));
+        if (!ready) return;
+        const BASE = `http://127.0.0.1:${ready.port}`;
+
+        // ── 1. Origin 门（安全语义不能因加日志被顺手拆掉）──
+        const noOrigin = await fetch(BASE + '/api/ping');
+        ok(noOrigin.status === 403, '★ 无 Origin 的请求仍被 403（Origin 门未松动）', String(noOrigin.status));
+        const preflight = await fetch(BASE + '/api/client-log', { method: 'OPTIONS', headers: HEADERS });
+        ok(preflight.status === 204, 'OPTIONS 预检直接 204（text/plain 上报也免预检）', String(preflight.status));
+
+        // ── 2. client-log 摄入（application/json，桌面同路径）──
+        const post1 = await fetch(BASE + '/api/client-log', {
+            method: 'POST',
+            headers: { ...HEADERS, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: [
+                { level: 'error', text: '手机端报错探针 startup-error', page: '/index.html' },
+                { level: 'warn', text: '带密钥的报错 sk-abcdefghijklmnopqrstuvwxyz 截断探针', page: '/' },
+            ] }),
+        });
+        ok(post1.status === 200 && (await post1.json()).ok === true, 'POST /api/client-log（application/json）成功');
+
+        // ── 3. client-log 摄 text/plain（阶段一 beacon 补丁就这么发的，不能按头拒收）──
+        const post2 = await fetch(BASE + '/api/client-log', {
+            method: 'POST',
+            headers: { ...HEADERS, 'Content-Type': 'text/plain' },
+            body: JSON.stringify({ items: [{ level: 'error', text: 'text-plain 探针 tp-probe', page: '/' }] }),
+        });
+        ok(post2.status === 200 && (await post2.json()).ok === true,
+            '★ POST /api/client-log 对 text/plain 请求体同样收下（不校验 Content-Type）');
+
+        // ── 4. tail：字段形状 + [page] 摄入 + 级别 + 脱敏 ──
+        await wait(300);
+        const tail = await (await fetch(BASE + '/api/logs/tail?limit=500', { headers: HEADERS })).json();
+        ok(tail.ok === true, 'GET /api/logs/tail 可用');
+        ok(Array.isArray(tail.entries) && tail.entries.length > 0, '缓冲里有条目（启动日志已进缓冲）');
+        ok(tail.entries.every((e) => typeof e.ts === 'number' && e.level && e.tag && typeof e.message === 'string' && typeof e.seq === 'number'),
+            '★ 记录字段与 serve.mjs 同形状（ts/level/tag/message/seq）');
+        const pageEntries = tail.entries.filter((e) => e.tag === 'Page');
+        ok(pageEntries.length >= 3, '★ [page] 条目已进缓冲（client-log → console 重挂 → logBuffer）',
+            JSON.stringify(pageEntries.map((e) => e.message).slice(0, 2)));
+        ok(pageEntries.some((e) => e.message.includes('startup-error') && e.level === 'ERROR'),
+            '★ error 级别的上报记成 ERROR');
+        const secretEntry = pageEntries.find((e) => e.message.includes('密钥'));
+        ok(Boolean(secretEntry) && /sk-\*\*\*\*\*\*/.test(secretEntry.message) && !/sk-abcdefgh/.test(secretEntry.message),
+            '★ 缓冲里的 API Key 被脱敏（sk-… → sk-******）', secretEntry && secretEntry.message.slice(0, 80));
+        const errOnly = await (await fetch(BASE + '/api/logs/tail?level=ERROR&limit=500', { headers: HEADERS })).json();
+        ok(errOnly.entries.length > 0 && errOnly.entries.every((e) => ['ERROR', 'CRITICAL'].includes(e.level)),
+            '★ level=ERROR 过滤与 serve.mjs 同语义');
+
+        // ── 5. 增量游标（两个值成对，同毫秒不丢不重）──
+        const firstPull = await (await fetch(BASE + '/api/logs/tail?limit=1', { headers: HEADERS })).json();
+        const since = firstPull.entries[0]?.ts || 0;
+        const sinceSeq = firstPull.entries[0]?.seq ?? -1;
+        await wait(250);
+        const inc = await (await fetch(BASE + `/api/logs/tail?since=${since}&sinceSeq=${sinceSeq}&limit=300`, { headers: HEADERS })).json();
+        ok(inc.entries.every((e) => e.ts > since || (e.ts === since && e.seq > sinceSeq)),
+            '★ since+sinceSeq 增量只返回更新的记录');
+
+        // ── 6. relay 摘要进缓冲（traceLine 只进追踪文件，console 重挂把摘要送进缓冲）──
+        const badRelay = await fetch(BASE + '/api/relay', {
+            method: 'POST',
+            headers: { ...HEADERS, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: 'not-a-url', method: 'GET' }),
+        });
+        ok(badRelay.status === 400, 'relay 无效目标回 400（不依赖网络即可触发 relay 的日志路径）');
+        await wait(200);
+        const tail2 = await (await fetch(BASE + '/api/logs/tail?limit=500', { headers: HEADERS })).json();
+        ok(tail2.entries.some((e) => e.tag === 'Relay' && e.message.includes('目标地址无效')),
+            '★ relay 的 warn 摘要进缓冲（[relay] 标签归一化为 Relay）');
+
+        // ── 7. 落盘：主日志 + 追踪日志都在 <data-dir>/logs/ 下 ──
+        const logsDir = path.join(DATA_DIR, 'logs');
+        const files = existsSync(logsDir) ? readdirSync(logsDir) : [];
+        ok(files.some((f) => /^\d{4}-\d{2}-\d{2}_.*\.log$/.test(f)), '★ 主日志已落盘（<data-dir>/logs/）', JSON.stringify(files));
+        ok(files.some((f) => /\.trace\.log$/.test(f)), '★ 追踪日志已落盘');
+        const traceFile = files.find((f) => /\.trace\.log$/.test(f));
+        if (traceFile) {
+            const traceText = readFileSync(path.join(logsDir, traceFile), 'utf8');
+            ok(traceText.includes('浏览器上报') && traceText.includes('text-plain 探针'),
+                '★ 浏览器上报全文进追踪日志（含 text/plain 那条）');
+        }
+        const mainFile = files.find((f) => /^\d{4}-\d{2}-\d{2}_.*\.log$/.test(f) && !/trace/.test(f));
+        if (mainFile) {
+            const mainText = readFileSync(path.join(logsDir, mainFile), 'utf8');
+            ok(/\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[Page\] \[ERRO\]/.test(mainText),
+                '★ 主日志行带完整前缀（时刻 [Page] [ERRO]，grep 可用）');
+            ok(!/sk-abcdefgh/.test(mainText), '★ 主日志文件里没有明文密钥');
+        }
+
+        // ── 8. 日志设置最小形状 ──
+        const settings = await (await fetch(BASE + '/api/logs/settings', { headers: HEADERS })).json();
+        ok(settings.ok === true && Array.isArray(settings.levels) && settings.keep === 10, 'GET /api/logs/settings 最小形状');
+
+        // ── 9. 收尾：shutdown（同样要过 Origin 门）──
+        const stop = await fetch(BASE + '/api/shutdown', { method: 'POST', headers: HEADERS });
+        ok(stop.status === 200, 'POST /api/shutdown 正常回包');
+    } finally {
+        try { child.kill(); } catch { /* 已退出 */ }
+        await wait(300);
+        dropDir(TMP);
+    }
+}
+
 // 按命令行参数过滤用例（便于只跑其中一段）
 const only = process.argv[2];
 const allCases = [
@@ -1258,6 +1422,7 @@ const allCases = [
     { name: '日志查看接口 /api/logs/tail', fn: caseLogTail },
     { name: '日志查看器', fn: caseLogViewer },
     { name: '诊断输出', fn: caseDiagnostics },
+    { name: 'bootstrap 内嵌日志接口', fn: caseBootstrapLogs },
 ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 

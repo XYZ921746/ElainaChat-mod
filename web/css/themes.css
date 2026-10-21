@@ -3,212 +3,181 @@
  *
  * 加载于 index.html 的所有样式之后；规则都在 `html[data-theme-template="..."]`
  * 或 `html[data-theme="dark"]` 之下 —— 都不设时**一条都不生效**，
- * 所以默认（橄榄绿/深棕）外观与改动前一致。
+ * 所以默认（暖米绿 / 深棕）外观保持原样。
  *
- * ── 配色来源：**照抄上游 v1.3.1 的 theme-liquid.css** ──────────────────────
+ * ── 配色结构 ─────────────────────────────────────────────────────────────
  *
- * 前两版失败的原因值得记下来：
+ *   ① `--pixso-*` —— 这套界面的**真实配色来源**，被大量规则引用。
+ *      浅色模板负责画布、卡片、面板、文字、主色、强调色与边框；
+ *      深色只定义一套中性色"面"与文字色阶，每套模板只再覆盖主色。
+ *   ② `--tpl-*`   —— 主题层自己用的主色与淡色底（按钮、气泡、光斑）。
  *
- *   第一版：只覆盖 `--color-*` / `text-indigo-*` → 只有聊天区变色（割裂）。
- *   第二版：改去覆盖 `--pixso-*` 变量（方向对了），但**颜色值是我自己猜的**
- *           （用 #007aff 当主色、#ffffff 当卡片底）→ 用户反馈"字不清晰、颜色难受"。
- *
- * 实测对比上游后确认差异（这就是"难受"的来源）：
- *
- *   变量                 上游真实值     我猜的值      差异后果
- *   --pixso-green        #7aa7f0        #007aff      我用的太饱和，刺眼
- *   --pixso-green-dark   #4f7cf0        #0062cc      同上
- *   --pixso-canvas       #dce2ea        #eef1f5      我把外框调得太白，层次没了
- *   --pixso-brown        #253040        #1c222c      正文色我调得太黑，对比过硬
- *   --pixso-brown-soft   #566070        #4a5468      次要文字我调得太深
- *   --pixso-cream        #f7f9fc        #ffffff      卡片底我用纯白，与页面拉不开
- *
- * 所以本版**全部改用上游的值**（含 4 套模板与深色模式）。
- * 上游的配色是成体系调过的：主色柔和、正文不是纯黑、卡片底带一点冷调，
- * 这些细节决定了"看着舒不舒服"。
- *
- * ── 两套变量都要覆盖 ─────────────────────────────────────────────────────
- *
- *   ① `--pixso-*` —— 这套界面的**真实配色来源**，被引用 224 次
- *   ② `--lg-*`    —— 上游的变量名，本文件内部引用（也便于与上游对照）
+ * 浅色模板统一走"暖奶油底 + 低饱和主色 + 深色文字"的关系：
+ * 画布可以带明显色相，但卡片与正文保持可读、面板与边框保持低对比。
+ * 深色不再把所有模板压成同一种蓝：中性色由下面深色块独占定义，
+ * 主色仍由当前模板决定，这样深色下也认得出是哪套主题。
  *
  * ── 深色模式 ─────────────────────────────────────────────────────────────
  *
- * 上游深色不只是"把背景压暗"，还有一整套**元素级规则**（按钮渐变、
- * 气泡、侧栏、输入框、设置卡片…），否则会得到"深底 + 浅色元素"的脏效果。
- * 这里照抄了那套规则，并把选择器适配到我们的类名。
+ * 深色不只是"把背景压暗"，还需要元素级规则（按钮渐变、气泡、侧栏、
+ * 输入框、设置卡片…），否则会得到"深底 + 浅色元素"的脏效果。
+ * 这些规则统一写在文件后半段，颜色尽量走变量。
  * ========================================================================== */
 
 /* ============================================================================
- *  一、iOS 蓝（默认液态玻璃，对齐上游主视觉）
+ *  一、雾蓝（冷雾蓝 + 暖橙点缀）
+ *
+ *  画布是低饱和的灰蓝，卡片与聊天区用带一点冷调的暖白，
+ *  正文用深藏青而不是纯黑 —— 这样蓝色主色不会把整页染成"办公软件"，
+ *  暖橙强调色负责把收藏、置顶这类小面积元素拉回来。
  * ========================================================================== */
-html[data-theme-template="ios"] {
-    /* --- 上游 --lg-* 原值 --- */
-    --lg-primary: #007aff;
-    --lg-primary-deep: #0062cc;
-    --lg-primary-soft: rgba(0, 122, 255, 0.12);
-    --lg-accent-2: #8ab4ff;
-    --lg-bg: #eef1f5;
-    --lg-ink: #1c222c;
-    --lg-ink-soft: #4a5468;
-    --lg-text-muted: #66708a;
+html[data-theme-template="mist"] {
+    --lg-primary: #627ea8;
+    --lg-primary-deep: #4a6489;
+    --lg-primary-soft: rgba(98, 126, 168, 0.12);
+    --lg-accent-2: rgba(217, 138, 95, 0.9);
+    --lg-bg: #eef1f4;
+    --lg-ink: #2f3a48;
+    --lg-ink-soft: #5b6776;
+    --lg-text-muted: #8d99a8;
 
-    /* --- 宿主变量（真实生效的那组）：全部照抄上游 --- */
-    --pixso-canvas: #dce2ea;
-    --pixso-brown: #253040;
-    --pixso-brown-dark: #1b2330;
-    --pixso-brown-soft: #566070;
-    --pixso-cream: #f7f9fc;
-    /* 补 `--pixso-surface`（原本 4 套主题**都漏了**这个变量）：
-       `#appShell`（应用外壳）用的是它，而 :root 里写死 #ffffff。
-       漏掉时主题切换后外壳仍是纯白，与主题配色割裂 ——
-       浅色下还能勉强看，深色下就是一块刺眼的白（见 8.57）。
-       这里取比 cream 更亮一档的白，保持"外壳比内容更亮"的原有层次。 */
+    --pixso-canvas: #9fb0c7;
+    --pixso-brown: #2f3a48;
+    --pixso-brown-dark: #24303d;
+    --pixso-brown-soft: #5b6776;
+    --pixso-cream: #f7f8f9;
+    /* 外壳比卡片更亮一档，保住"外壳 / 卡片 / 画布"三层层次。 */
     --pixso-surface: #ffffff;
-    --pixso-panel: #e9eef5;
-    --pixso-panel-soft: #f3f6fa;
-    --pixso-orange: #007aff;
-    --pixso-green: #7aa7f0;
-    --pixso-green-dark: #4f7cf0;
-    --pixso-line: #d5dce6;
-    /* 2026-10 新增：**警示色**（与品牌主色分开）。
-       为什么需要它：Agent 权限那块有大量"⚠️ 这意味着…"的警示文案，
-       原先在 HTML 里写死成 #b45309（橙）。深色模式下写死的浅底配浅字看不清，
-       于是改成主题变量 —— 但**不能借用 --pixso-orange**：它在 iOS 主题下是
-       #007aff（蓝），在 claude 主题下是 #d97757（橙）—— 也就是说
-       "橙色"只是某些主题的巧合，拿它当警示色会让 iOS 主题里的警告变成蓝色，
-       语义直接丢掉（实测踩到：iOS 深色下"⚠️ 开启完全访问意味着"是蓝的）。
-
-       所以单独给一个**在所有主题下都是暖色**的变量，深色下提亮一档保证对比度。 */
+    --pixso-panel: #e3e7ec;
+    --pixso-panel-soft: #eef1f4;
+    --pixso-orange: #d98a5f;
+    --pixso-green: #627ea8;
+    --pixso-green-dark: #4a6489;
+    --pixso-line: #cbd3dd;
     --pixso-warn: #b45309;
     --pixso-warn-soft: #9a3412;
     --pixso-warn-bg: rgba(255, 247, 237, 0.75);
     --pixso-warn-line: #fed7aa;
-    --pixso-shadow: 0 30px 80px rgba(18, 30, 50, 0.16), 0 6px 18px rgba(18, 30, 50, 0.08);
+    --pixso-shadow: 0 30px 80px rgba(35, 45, 58, 0.16), 0 6px 18px rgba(35, 45, 58, 0.08);
 
-    /* 本文件内部使用 */
-    --tpl-primary: #007aff;
-    --tpl-primary-deep: #0062cc;
-    --tpl-primary-soft: #8ab4ff;
-    --tpl-tint: rgba(0, 122, 255, 0.12);
+    --tpl-primary: #627ea8;
+    --tpl-primary-deep: #4a6489;
+    --tpl-primary-soft: #a9bedb;
+    --tpl-tint: rgba(98, 126, 168, 0.15);
 
-    /* 兼容宿主里少数用 --color-* / --text-* 的地方 */
-    --color-primary: #007aff;
-    --color-primary-soft: #8ab4ff;
-    --color-secondary: #5ac8fa;
-    --color-secondary-soft: #8ed9fb;
-    --color-accent: #34aadc;
-    --text-heading: #1c222c;
-    --text-body: #33405a;
-    --text-secondary: #4a5468;
-    --text-muted: #66708a;
-    --text-glass-heading: #1c222c;
-    --text-glass-body: #33405a;
-    --text-glass-muted: #4a5468;
-    --ink: #1c222c;
+    --color-primary: #627ea8;
+    --color-primary-soft: #a9bedb;
+    --color-secondary: #8ba7d1;
+    --color-secondary-soft: #b0c4e2;
+    --color-accent: #d98a5f;
+    --text-heading: #2f3a48;
+    --text-body: #3b4859;
+    --text-secondary: #5b6776;
+    --text-muted: #8d99a8;
+    --text-glass-heading: #2f3a48;
+    --text-glass-body: #3b4859;
+    --text-glass-muted: #5b6776;
+    --ink: #2f3a48;
 }
 
-/* ==================== 陶土橙（照抄上游） ==================== */
-html[data-theme-template="claude"] {
-    --lg-primary: #d97757;
-    --lg-primary-deep: #bf5f3f;
-    --lg-primary-soft: rgba(217, 119, 87, 0.12);
-    --lg-accent-2: rgba(234, 179, 143, 0.9);
-    --lg-bg: #f6f2ed;
-    --lg-ink: #3a2d24;
-    --lg-ink-soft: #6d5a4d;
-    --lg-text-muted: #8a776a;
+/* ==================== 琥珀（暖陶土 + 奶油底） ==================== */
+html[data-theme-template="amber"] {
+    --lg-primary: #a4713c;
+    --lg-primary-deep: #875a2d;
+    --lg-primary-soft: rgba(164, 113, 60, 0.12);
+    --lg-accent-2: rgba(194, 96, 63, 0.9);
+    --lg-bg: #f4eade;
+    --lg-ink: #3d2b1f;
+    --lg-ink-soft: #6d5948;
+    --lg-text-muted: #9a8777;
 
-    --pixso-canvas: #e6ddd4;
-    --pixso-brown: #3a2d24;
-    --pixso-brown-dark: #2b211a;
-    --pixso-brown-soft: #6d5a4d;
-    --pixso-cream: #faf6f2;
-    /* 补 --pixso-surface（详见 ios 主题里的说明） */
-    --pixso-surface: #fffdfb;
-    --pixso-panel: #f0e9e2;
-    --pixso-panel-soft: #f6f1ec;
-    --pixso-orange: #d97757;
-    --pixso-green: #d97757;
-    --pixso-green-dark: #bf5f3f;
-    --pixso-line: #ded2c7;
-    /* 警示色（详见 ios 主题里的说明）：claude 主题本身就是暖色系，
-       所以直接复用它的主色，视觉上更协调。 */
-    --pixso-warn: #b45309;
-    --pixso-warn-soft: #9a3412;
-    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
-    --pixso-warn-line: #fed7aa;
-    --pixso-shadow: 0 30px 80px rgba(58, 45, 36, 0.16), 0 6px 18px rgba(58, 45, 36, 0.08);
+    --pixso-canvas: #c2a084;
+    --pixso-brown: #3d2b1f;
+    --pixso-brown-dark: #2d1f16;
+    --pixso-brown-soft: #6d5948;
+    --pixso-cream: #faf5ed;
+    --pixso-surface: #fffdfa;
+    --pixso-panel: #efe3d4;
+    --pixso-panel-soft: #f6eee4;
+    --pixso-orange: #c2603f;
+    --pixso-green: #a4713c;
+    --pixso-green-dark: #875a2d;
+    --pixso-line: #ddcbb8;
+    /* 琥珀主题本身就是暖色系，警示色仍用更深的赭红，
+       保证与主色、强调色都能拉开一档。 */
+    --pixso-warn: #9a4a12;
+    --pixso-warn-soft: #7c350b;
+    --pixso-warn-bg: rgba(255, 245, 232, 0.78);
+    --pixso-warn-line: #f0c79a;
+    --pixso-shadow: 0 30px 80px rgba(61, 43, 31, 0.16), 0 6px 18px rgba(61, 43, 31, 0.08);
 
-    --tpl-primary: #d97757;
-    --tpl-primary-deep: #bf5f3f;
-    --tpl-primary-soft: #eab38f;
-    --tpl-tint: rgba(217, 119, 87, 0.12);
+    --tpl-primary: #a4713c;
+    --tpl-primary-deep: #875a2d;
+    --tpl-primary-soft: #e3bd93;
+    --tpl-tint: rgba(164, 113, 60, 0.15);
 
-    --color-primary: #d97757;
-    --color-primary-soft: #eab38f;
-    --color-secondary: #c9a227;
-    --color-secondary-soft: #dcc06a;
-    --color-accent: #b8763f;
-    --text-heading: #3a2d24;
-    --text-body: #55443a;
-    --text-secondary: #6d5a4d;
-    --text-muted: #8a776a;
-    --text-glass-heading: #3a2d24;
-    --text-glass-body: #55443a;
-    --text-glass-muted: #6d5a4d;
-    --ink: #3a2d24;
+    --color-primary: #a4713c;
+    --color-primary-soft: #e3bd93;
+    --color-secondary: #b98a5e;
+    --color-secondary-soft: #d8b894;
+    --color-accent: #c2603f;
+    --text-heading: #3d2b1f;
+    --text-body: #55402f;
+    --text-secondary: #6d5948;
+    --text-muted: #9a8777;
+    --text-glass-heading: #3d2b1f;
+    --text-glass-body: #55402f;
+    --text-glass-muted: #6d5948;
+    --ink: #3d2b1f;
 }
 
-/* ==================== 樱花桃（照抄上游） ==================== */
-html[data-theme-template="sakura"] {
-    --lg-primary: #d97b93;
-    --lg-primary-deep: #c2607b;
-    --lg-primary-soft: rgba(217, 123, 147, 0.12);
-    --lg-accent-2: rgba(240, 182, 196, 0.9);
-    --lg-bg: #f7f1f3;
-    --lg-ink: #402a34;
-    --lg-ink-soft: #775863;
-    --lg-text-muted: #967884;
+/* ==================== 暮紫（灰紫 + 蜜桃点缀） ==================== */
+html[data-theme-template="plum"] {
+    --lg-primary: #86699f;
+    --lg-primary-deep: #6c5286;
+    --lg-primary-soft: rgba(134, 105, 159, 0.12);
+    --lg-accent-2: rgba(207, 138, 104, 0.9);
+    --lg-bg: #f2ecf5;
+    --lg-ink: #362a41;
+    --lg-ink-soft: #665772;
+    --lg-text-muted: #9586a1;
 
-    --pixso-canvas: #e6dade;
-    --pixso-brown: #402a34;
-    --pixso-brown-dark: #2f1e26;
-    --pixso-brown-soft: #775863;
-    --pixso-cream: #fbf6f8;
-    /* 补 --pixso-surface（详见 ios 主题里的说明） */
+    --pixso-canvas: #b2a0c2;
+    --pixso-brown: #362a41;
+    --pixso-brown-dark: #281f31;
+    --pixso-brown-soft: #665772;
+    --pixso-cream: #faf6fb;
     --pixso-surface: #fffdfe;
-    --pixso-panel: #f2e8ec;
-    --pixso-panel-soft: #f8f1f4;
-    --pixso-orange: #d97b93;
-    --pixso-green: #d97b93;
-    --pixso-green-dark: #c2607b;
-    --pixso-line: #e0cdd4;
-    /* 警示色（详见 ios 主题里的说明）：樱花是粉紫系，警示仍需暖色才醒目。 */
-    --pixso-warn: #b45309;
-    --pixso-warn-soft: #9a3412;
-    --pixso-warn-bg: rgba(255, 247, 237, 0.75);
-    --pixso-warn-line: #fed7aa;
-    --pixso-shadow: 0 30px 80px rgba(64, 42, 52, 0.16), 0 6px 18px rgba(64, 42, 52, 0.08);
+    --pixso-panel: #ece4ef;
+    --pixso-panel-soft: #f4eef6;
+    --pixso-orange: #cf8a68;
+    --pixso-green: #86699f;
+    --pixso-green-dark: #6c5286;
+    --pixso-line: #d9cde0;
+    --pixso-warn: #a34a2b;
+    --pixso-warn-soft: #84371c;
+    --pixso-warn-bg: rgba(255, 244, 236, 0.78);
+    --pixso-warn-line: #f3c7ac;
+    --pixso-shadow: 0 30px 80px rgba(54, 42, 65, 0.16), 0 6px 18px rgba(54, 42, 65, 0.08);
 
-    --tpl-primary: #d97b93;
-    --tpl-primary-deep: #c2607b;
-    --tpl-primary-soft: #f0b6c4;
-    --tpl-tint: rgba(217, 123, 147, 0.12);
+    --tpl-primary: #86699f;
+    --tpl-primary-deep: #6c5286;
+    --tpl-primary-soft: #cbb4e0;
+    --tpl-tint: rgba(134, 105, 159, 0.15);
 
-    --color-primary: #d97b93;
-    --color-primary-soft: #f0b6c4;
-    --color-secondary: #b98fc9;
-    --color-secondary-soft: #d0b3da;
-    --color-accent: #e89aa8;
-    --text-heading: #402a34;
-    --text-body: #5a4049;
-    --text-secondary: #775863;
-    --text-muted: #967884;
-    --text-glass-heading: #402a34;
-    --text-glass-body: #5a4049;
-    --text-glass-muted: #775863;
-    --ink: #402a34;
+    --color-primary: #86699f;
+    --color-primary-soft: #cbb4e0;
+    --color-secondary: #b195cd;
+    --color-secondary-soft: #cbb4e0;
+    --color-accent: #cf8a68;
+    --text-heading: #362a41;
+    --text-body: #4a3b56;
+    --text-secondary: #665772;
+    --text-muted: #9586a1;
+    --text-glass-heading: #362a41;
+    --text-glass-body: #4a3b56;
+    --text-glass-muted: #665772;
+    --ink: #362a41;
 }
 
 /* ==================== 「星屑之日」（生日配色）已移出宿主 ====================
@@ -411,6 +380,21 @@ body .bubble-user {
 html[data-theme-template] body .bubble-ai {
     background: var(--pixso-cream) !important;
 }
+
+/* 语音条与名牌：宿主写死了暖棕（#dec9be / #e2d3cc），
+   在冷色或紫色主题里会突兀。浅色下也换成主题面板色；
+   深色规则在文件后半段，权重相同且更靠后，会接管深色情况。 */
+html[data-theme-template] body .ai-voice-player {
+    background: var(--pixso-panel) !important;
+    box-shadow: inset 0 0 0 1px var(--pixso-line) !important;
+}
+html[data-theme-template] body .ai-voice-player:hover {
+    background: var(--pixso-panel-soft) !important;
+}
+html[data-theme-template] body .bubble-ai .ai-speaker-name {
+    background: var(--tpl-tint) !important;
+    color: var(--pixso-brown) !important;
+}
 /* 气泡尾巴已整体移除—— 原来这里有两段
    ::after 颜色覆盖，尾巴删了它们也一起删，别留死规则。 */
 
@@ -420,231 +404,175 @@ html[data-theme-template] body .bubble-ai {
  *
  *   `.thinking-bubble` 是"伊蕾娜正在想…"的**外层容器**
  *   （`flex gap-3 mb-4`，撑满整行，里面还包着头像和气泡两层）。
- *   给它加背景/边框会把整行变成一条宽带子，而且把头像也框进去 ——
- *   实测就是这个效果（用户截图里那条异常横条）。
- *   真正的气泡是它内部的 `.bubble-ai`，上面这条规则已经覆盖到了。
+ *   给它加背景/边框会把整行变成一条宽带子，而且把头像也框进去。
+ *   真正的气泡是它内部的 `.bubble-ai`。
  */
 html[data-theme="dark"] body .bubble-ai {
-    background: linear-gradient(150deg, rgba(30, 46, 80, 0.55), rgba(18, 28, 48, 0.55)) !important;
-    border: 1px solid rgba(255, 255, 255, 0.16) !important;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35) !important;
+    border: 1px solid color-mix(in srgb, var(--pixso-brown) 13%, transparent) !important;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.30) !important;
     color: var(--pixso-brown) !important;
 }
 html[data-theme="dark"] body .bubble-user {
     border: 1px solid rgba(255, 255, 255, 0.22) !important;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35) !important;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.30) !important;
 }
-/* 尾巴的深色覆盖已随尾巴整体移除 */
 
-/* 选中态：上游用淡主色底，不是纯色块 */
+/* 选中态：淡主色底，不是纯色块 */
 html[data-theme-template] body .sidebar-item-active {
     background: var(--tpl-tint) !important;
 }
 
 /* 侧栏竖栏（左侧那条 108px 窄导航）。
  *
- * 这条竖栏**保持深色**（用 --pixso-brown），这是本项目的原有设计 ——
- *   原本是深棕 #4c3123，换模板后自然变成各主题的深色版（iOS 深藏青、
- *   陶土橙深棕、樱花桃深紫），与浅色内容区形成对比。
+ * 浅色下竖栏**保持深色**（`--pixso-brown` 在浅色主题里是深色文字色），
+ * 与浅色内容区形成对比；这是本项目的既有设计，不跟着上游改成浅色玻璃。
  *
- *   注意：**不要**照抄上游把它改成浅色。上游那条竖栏是浅色玻璃，
- *   但那是上游的设计语言；我们这边深色竖栏是既有视觉识别的一部分
- *   （用户明确反馈这个配色好看、要保留）。所以浅色模式下**不加覆盖**，
- *   让宿主的 `background: var(--pixso-brown)` 照常生效。
- *
- * 但深色模式必须覆盖：那时 --pixso-brown 变成**浅色**（#dfe6f0，因为它是
- *   文字色变量），竖栏会跟着变浅 → 深色界面里一条刺眼的浅色竖条。
- *   所以深色下单独指定深色渐变。
+ * 深色下 `--pixso-brown` 会变成浅色（它是文字色），竖栏不能跟着变浅，
+ * 所以单独用 `--tpl-rail-*` 指定深色渐变，不会出现"深色竖栏永远是蓝黑"。
  */
 html[data-theme="dark"] #sidebar::before {
-    background: linear-gradient(180deg, #1c232d, #151b24) !important;
+    background: linear-gradient(180deg, var(--tpl-rail-1), var(--tpl-rail-2)) !important;
 }
 
-/* 竖栏里的图标按钮：上游深色下是浅灰，激活态用主色 */
-html[data-theme="dark"] #sidebar .sidebar-rail-btn { color: #9aa6b8 !important; }
+/* 竖栏里的图标按钮：颜色跟深色中性色，激活态用主题深主色 */
+html[data-theme="dark"] #sidebar .sidebar-rail-btn { color: var(--tpl-rail-ink) !important; }
 html[data-theme="dark"] #sidebar .sidebar-rail-btn:hover {
-    color: #eef2f7 !important;
-    /* 2026-10 修：原来写死 iOS 蓝 rgba(10,132,255,.18)；这条带 #sidebar，
-       优先级比下面那条同类规则更高，所以必须**在这里**改，否则悬停高亮
-       永远泛蓝、不跟模板。 */
+    color: var(--pixso-brown-dark) !important;
     background: var(--tpl-tint) !important;
 }
 html[data-theme="dark"] #sidebar .sidebar-rail-btn.active {
     color: #fff !important;
-    background: var(--pixso-orange) !important;
+    background: var(--tpl-primary-deep) !important;
 }
 
 /* ============================================================================
- *  三、深色模式（照抄上游的变量 + 元素级规则）
+ *  三、深色模式
  *
- *  上游深色不只是压暗背景 —— 还配了一整套元素规则（按钮渐变、气泡、
- *  侧栏、输入框、设置卡片）。缺了它们就会得到"深底 + 浅色元素"的脏效果。
+ *  ── 两个维度 ──────────────────────────────────────────────────────────
+ *
+ *   ① 中性色（画布、卡片、面板、边框、正文与侧栏竖栏）：只在这一处定义，
+ *      与具体模板无关 —— 三套模板共用同一套"面"，深色下不会一套一个灰。
+ *   ② 主色：仍由 `data-theme-template` 决定，只在下面三套模板块里覆盖
+ *      primary / accent，让深色下也认得出是哪套主题。
+ *
+ *  为什么"面"与主色要分开：深色下 `--pixso-brown` 会变成浅色（它是文字色），
+ *  竖栏、面板这些"面"不能跟着文字色走；而切换模板时又希望主色跟着换。
+ *  两者正交后，换模板只动主色，中性色始终一套。
  * ========================================================================== */
-html[data-theme="dark"] {
-    --lg-primary: #0a84ff;
-    --lg-primary-deep: #0a6fd8;
-    --lg-primary-soft: rgba(10, 132, 255, 0.16);
-    --lg-bg: #101318;
-    --lg-surface: rgba(255, 255, 255, 0.07);
-    --lg-ink: #eef2f7;
-    --lg-ink-soft: #aab3c2;
-    --lg-text-muted: #8d96a8;
 
-    --pixso-canvas: #0d1015;
-    --pixso-brown: #dfe6f0;
-    --pixso-brown-dark: #eef2f7;
-    --pixso-brown-soft: #9aa4b6;
-    --pixso-cream: #232833;
-    /* 2026-10 补：`--pixso-surface` 原来**只定义了一次**（index.html 的 :root，
-       值是 #ffffff），深色块里漏了它 —— 而 `#appShell` 用的正是这个变量
-       （`#appShell { background: var(--pixso-surface) }`）。
-       后果：深色模式下整个应用外壳是**纯白**（实测计算值 rgb(255,255,255)），
-       顶栏那块白卡片、以及页面边缘露出的白边都来自这里。
-       手机端尤其明显 —— 手机是全屏 `#appShell`，等于整页白底。
-       这里补上与 panel 同色系的深色值，让"外壳"和"面板"在深色下层次一致。 */
-    --pixso-surface: #151a21;
-    --pixso-panel: #1a2029;
-    --pixso-panel-soft: #222833;
-    --pixso-orange: #0a84ff;
-    --pixso-green: #4f7cf0;
-    --pixso-green-dark: #3d6ae0;
-    --pixso-line: #2c3542;
-    /* 警示色（深色）：底要压暗，
-       文字要提亮（#b45309 在深底上对比度只有 3.7:1，偏暗）。
-       这里选琥珀色 #fbbf24 —— 与"警告"的语义一致，且在深底上对比度约 9:1。 */
-    --pixso-warn: #fbbf24;
-    --pixso-warn-soft: #fcd34d;
-    --pixso-warn-bg: rgba(251, 191, 36, 0.10);
-    --pixso-warn-line: rgba(251, 191, 36, 0.35);
+/* 深色中性色：画布带一点暖褐，和默认暖米绿同族。 */
+html[data-theme="dark"] {
+    --lg-primary: #a3b86e;
+    --lg-primary-deep: #7f954f;
+    --lg-primary-soft: rgba(163, 184, 110, 0.16);
+    --lg-bg: #171410;
+    --lg-surface: rgba(255, 255, 255, 0.07);
+    --lg-ink: #f1ece3;
+    --lg-ink-soft: #b6ac9f;
+    --lg-text-muted: #92887a;
+
+    --pixso-canvas: #12100d;
+    --pixso-brown: #f1ece3;
+    --pixso-brown-dark: #faf6ef;
+    --pixso-brown-soft: #b6ac9f;
+    --pixso-cream: #242019;
+    /* `#appShell` 用的是这个变量；深色下它必须是一块深色，
+       否则手机全屏时整页都是白底。 */
+    --pixso-surface: #191612;
+    --pixso-panel: #211d18;
+    --pixso-panel-soft: #2a251f;
+    --pixso-orange: #e0916d;
+    --pixso-green: #a3b86e;
+    --pixso-green-dark: #7f954f;
+    --pixso-line: #3a342c;
+    /* 警示色在深底上要提亮；#b45309 在深色画布上只有约 3.7:1。 */
+    --pixso-warn: #f0bd6a;
+    --pixso-warn-soft: #f7d391;
+    --pixso-warn-bg: rgba(240, 189, 106, 0.10);
+    --pixso-warn-line: rgba(240, 189, 106, 0.32);
     --pixso-shadow: 0 30px 80px rgba(0, 0, 0, 0.5), 0 6px 18px rgba(0, 0, 0, 0.3);
 
-    --tpl-primary: #0a84ff;
-    --tpl-primary-deep: #0a6fd8;
-    --tpl-primary-soft: #4f7cf0;
-    --tpl-tint: rgba(10, 132, 255, 0.16);
+    --tpl-primary: #a3b86e;
+    --tpl-primary-deep: #7f954f;
+    --tpl-primary-soft: #c3d49a;
+    /* 按钮与用户气泡的渐变终点：比 deep 再深一档，白字才站得住。 */
+    --tpl-primary-deeper: #687c3e;
+    --tpl-tint: rgba(163, 184, 110, 0.16);
+    --tpl-rail-1: #1d1914;
+    --tpl-rail-2: #14110e;
+    --tpl-rail-ink: #c9c1b5;
+    --tpl-text-1: #faf6ef;
+    --tpl-text-2: #f1ece3;
+    --tpl-text-3: #e1d9cd;
+    --tpl-text-4: #cdc3b5;
+    --tpl-text-5: #b6ac9f;
+    --tpl-text-6: #9a8f81;
 
-    --text-heading: #eef2f7;
-    --text-body: #d6dae0;
-    --text-secondary: #aab3c2;
-    --text-muted: #8d96a8;
-    --text-glass-heading: #eef2f7;
-    --text-glass-body: #d6dae0;
-    --text-glass-muted: #aab3c2;
-    --ink: #eef2f7;
+    --text-heading: #faf6ef;
+    --text-body: #f1ece3;
+    --text-secondary: #b6ac9f;
+    --text-muted: #92887a;
+    --text-glass-heading: #faf6ef;
+    --text-glass-body: #f1ece3;
+    --text-glass-muted: #b6ac9f;
+    --ink: #f1ece3;
 }
 
-/* 2026-10：深色模式下**每套模板仍要认得出自己**。
+
+/* 深色下的主题主色。
  *
- * 症状："深色下默认是 iOS 蓝，切其它模板完全没用"。
- * 根因就在上面那个深色变量块 —— 它把品牌变量写死成 iOS 蓝（#0a84ff / #4f7cf0），
- * 而它与 `html[data-theme-template="…"]` 的**特异性相同**（都是 `0,1,1`），
- * 又排在那些模板块**后面** → 同名的变量全被它盖掉，四套模板看起来一模一样。
+ * 只覆盖 `--pixso-green*`、`--pixso-orange` 与 `--tpl-*`：
+ * 画布、卡片、面板、文字色阶都留给上面的深色块 —— 三套模板共用同一套"面"，
+ * 这样切换主题时不会一整套灰都变掉，只换主色与强调色。
  *
- * 修法：给每套模板补一组"深色版"变量，选择器带上两个属性
- * `html[data-theme="dark"][data-theme-template="x"]`（特异性 `0,2,1` > `0,1,1`，稳赢）。
- * 只覆盖**品牌色 + 深浅底色**：文字 / 警示 / 阴影那些沿用上面那套深色值 ——
- *   深色的对比度是专门调过的（见 --pixso-warn 那几条注释），不该跟着模板跑。
- * ios 那组与默认深色**取值相同**，写出来只是为了让"每套模板自带完整定义"，
- *   将来改默认深色时不必再回头补它。
+ * 选择器带两个属性（`data-theme` + `data-theme-template`），特异性高于基础
+ * 深色块，所以每个模板的深色主色不会被默认的橄榄绿盖掉。
+ * 默认主题 elaina 不设 `data-theme-template`，直接使用基础块里的橄榄绿。
  */
-html[data-theme="dark"][data-theme-template="ios"] {
-    --lg-primary: #0a84ff;
-    --lg-primary-deep: #0a6fd8;
-    --lg-primary-soft: rgba(10, 132, 255, 0.16);
-    --lg-bg: #101318;
-    --pixso-canvas: #0d1015;
-    --pixso-cream: #232833;
-    --pixso-surface: #151a21;
-    --pixso-panel: #1a2029;
-    --pixso-panel-soft: #222833;
-    --pixso-orange: #0a84ff;
-    --pixso-green: #4f7cf0;
-    --pixso-green-dark: #3d6ae0;
-    --pixso-line: #2c3542;
-    --tpl-primary: #0a84ff;
-    --tpl-primary-deep: #0a6fd8;
-    --tpl-primary-soft: #4f7cf0;
-    --tpl-tint: rgba(10, 132, 255, 0.16);
+html[data-theme="dark"][data-theme-template="mist"] {
+    --lg-primary: #8ba7d1;
+    --lg-primary-deep: #6a86b0;
+    --lg-primary-soft: rgba(139, 167, 209, 0.16);
+    --pixso-orange: #d99b78;
+    --pixso-green: #8ba7d1;
+    --pixso-green-dark: #6a86b0;
+    --tpl-primary: #8ba7d1;
+    --tpl-primary-deep: #6a86b0;
+    --tpl-primary-soft: #b0c4e2;
+    --tpl-primary-deeper: #536b8f;
+    --tpl-tint: rgba(139, 167, 209, 0.16);
 }
-html[data-theme="dark"][data-theme-template="claude"] {
-    --lg-primary: #e08a6a;
-    --lg-primary-deep: #c96f4d;
-    --lg-primary-soft: rgba(224, 138, 106, 0.16);
-    --lg-bg: #17120d;
-    --pixso-canvas: #14100c;
-    --pixso-cream: #2e241e;
-    --pixso-surface: #1d1713;
-    --pixso-panel: #241b16;
-    --pixso-panel-soft: #2d221c;
-    --pixso-orange: #e08a6a;
-    --pixso-green: #e08a6a;
-    --pixso-green-dark: #c96f4d;
-    --pixso-line: #3b2e26;
-    --tpl-primary: #e08a6a;
-    --tpl-primary-deep: #c96f4d;
-    --tpl-primary-soft: #e8a288;
-    --tpl-tint: rgba(224, 138, 106, 0.16);
+html[data-theme="dark"][data-theme-template="amber"] {
+    --lg-primary: #d2a06a;
+    --lg-primary-deep: #b07d49;
+    --lg-primary-soft: rgba(210, 160, 106, 0.16);
+    --pixso-orange: #d98463;
+    --pixso-green: #d2a06a;
+    --pixso-green-dark: #b07d49;
+    --tpl-primary: #d2a06a;
+    --tpl-primary-deep: #b07d49;
+    --tpl-primary-soft: #e3bd93;
+    --tpl-primary-deeper: #8f6338;
+    --tpl-tint: rgba(210, 160, 106, 0.16);
 }
-html[data-theme="dark"][data-theme-template="sakura"] {
-    --lg-primary: #e58ba1;
-    --lg-primary-deep: #cf6c87;
-    --lg-primary-soft: rgba(229, 139, 161, 0.16);
-    --lg-bg: #161013;
-    --pixso-canvas: #130e11;
-    --pixso-cream: #2d2228;
-    --pixso-surface: #1c1518;
-    --pixso-panel: #231a1f;
-    --pixso-panel-soft: #2c2126;
-    --pixso-orange: #e58ba1;
-    --pixso-green: #e58ba1;
-    --pixso-green-dark: #cf6c87;
-    --pixso-line: #3a2b33;
-    --tpl-primary: #e58ba1;
-    --tpl-primary-deep: #cf6c87;
-    --tpl-primary-soft: #eda6b7;
-    --tpl-tint: rgba(229, 139, 161, 0.16);
-}
-
-/* 默认主题「暖米绿」（elaina）的深色版。
- *
- * 为什么必须单独写：默认主题是**不设** `data-theme-template` 属性来表达的
- *   （见 theme.js 的 setTemplate：「elaina 是默认主题，不设属性」）。所以上面
- *   那四条 `[data-theme-template="x"]` 都盖不到它 —— 它会落回基础深色块，
- *   而那块是 iOS 蓝的一套。结果就是用户报的"深色下暖米绿和 iOS 蓝是同一种颜色"。
- *   这里用 `:not([data-theme-template])` 精确命中"深色 + 没有选模板"这一种情况
- *   （插件主题会设属性，因此天然排除在外）。特异性 `0,2,1`，同样稳赢基础块。
- *
- * 取色思路：浅色下这套是"暖米绿"（canvas #a8b974、主色 #a7bb6c / #738746、
- * 暖橙 #ff7d4d、暖褐文字）。深色版把底压成**带绿调的暖炭灰**，主色沿用同一
- * 族但略压深（保证白字按钮还读得出来）。 */
-html[data-theme="dark"]:not([data-theme-template]) {
-    --lg-primary: #9db167;
-    --lg-primary-deep: #74873f;
-    --lg-primary-soft: rgba(157, 177, 103, 0.16);
-    --lg-bg: #121712;
-    --pixso-canvas: #10140f;
-    --pixso-cream: #252c23;
-    --pixso-surface: #171c15;
-    --pixso-panel: #1c221b;
-    --pixso-panel-soft: #242b22;
-    --pixso-orange: #ff7d4d;
-    --pixso-green: #9db167;
-    --pixso-green-dark: #74873f;
-    --pixso-line: #2f3a2e;
-    --tpl-primary: #9db167;
-    --tpl-primary-deep: #74873f;
-    --tpl-primary-soft: #bccd8f;
-    --tpl-tint: rgba(157, 177, 103, 0.16);
+html[data-theme="dark"][data-theme-template="plum"] {
+    --lg-primary: #b195cd;
+    --lg-primary-deep: #8f74ad;
+    --lg-primary-soft: rgba(177, 149, 205, 0.16);
+    --pixso-orange: #dd9f80;
+    --pixso-green: #b195cd;
+    --pixso-green-dark: #8f74ad;
+    --tpl-primary: #b195cd;
+    --tpl-primary-deep: #8f74ad;
+    --tpl-primary-soft: #cbb4e0;
+    --tpl-primary-deeper: #735c8d;
+    --tpl-tint: rgba(177, 149, 205, 0.16);
 }
 
 /* 深色：页面与聊天区 */
 html[data-theme="dark"] body { background: var(--pixso-canvas) !important; }
-/* 2026-10 修：这里的蓝色光斑与三段底色原来是**写死的**（rgba(10,132,255,…)、
-   #101318 / #151a21）—— 于是不管选哪套模板，聊天区都泛着一层 iOS 蓝；而外壳、
-   卡片、输入框已经跟着模板变量走了，两者之间就出现了用户说的"过渡奇怪"。
-   改成走变量：光斑用 --tpl-tint（每套模板自己的色），底色用 --lg-bg / --pixso-surface。
-   ios 那套的变量值与原来的写死值等价（--lg-bg=#101318、--pixso-surface=#151a21），
-   所以 ios 的观感不变；其余模板从此各自成一套。 */
+/* 光斑用主题淡色，底色用深色块的 --lg-bg / --pixso-surface；
+   两者都走变量后，切换模板只换光斑，深色底色保持不变。 */
 html[data-theme="dark"] #mainContent {
     background:
         radial-gradient(1100px 640px at 6% -6%, rgba(255, 255, 255, 0.06), transparent 56%),
@@ -652,20 +580,21 @@ html[data-theme="dark"] #mainContent {
         linear-gradient(135deg, var(--lg-bg) 0%, var(--pixso-surface) 48%, var(--lg-bg) 100%) !important;
 }
 
-/* 深色：面板 / 输入框 / 气泡（照抄上游值） */
+/* 深色：面板 / 输入框 / 气泡
+   这些"面"全部由深色块的变量推导，不再写死冷蓝灰。 */
 html[data-theme="dark"] .glass-panel,
 html[data-theme="dark"] .liquid-glass,
 html[data-theme="dark"] .modal-panel,
 html[data-theme="dark"] .composer-more-menu,
 html[data-theme="dark"] .conversation-context-menu {
-    background: rgba(30, 36, 46, 0.88) !important;
-    border-color: rgba(255, 255, 255, 0.12) !important;
+    background: color-mix(in srgb, var(--pixso-surface) 90%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 12%, transparent) !important;
 }
 html[data-theme="dark"] .modal-overlay { background: rgba(0, 0, 0, 0.55) !important; }
 html[data-theme="dark"] .btn-secondary,
 html[data-theme="dark"] .glass-button {
-    background: rgba(255, 255, 255, 0.10) !important;
-    border-color: rgba(255, 255, 255, 0.18) !important;
+    background: color-mix(in srgb, var(--pixso-brown) 9%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 17%, transparent) !important;
     color: var(--pixso-brown) !important;
 }
 html[data-theme="dark"] .modal-input,
@@ -674,71 +603,78 @@ html[data-theme="dark"] .modal-textarea {
        会把 `background-image` 一并重置为 `none` —— 而 `<select>` 也带
        `.modal-input` 类，于是**深色下所有下拉的小三角被它抹掉**。
        （与文件下方 `#settingsPanel` 那条是同一个坑，两处都要用 background-color。） */
-    background-color: rgba(255, 255, 255, 0.09) !important;
-    border-color: rgba(255, 255, 255, 0.16) !important;
+    background-color: color-mix(in srgb, var(--pixso-brown) 8%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 15%, transparent) !important;
     color: var(--pixso-brown) !important;
 }
-html[data-theme="dark"] .bubble-user {
-    background: rgba(255, 255, 255, 0.10) !important;
-    border-color: rgba(255, 255, 255, 0.18) !important;
-    color: var(--pixso-brown) !important;
+/* 用户气泡：用当前主题的深主色做渐变，白字在三套模板下都读得出来。
+   `--tpl-primary-deeper` 比 deep 再深一档，避免浅色主色配白字发虚。 */
+/* 这两条必须带 `body`：浅色那组是 `html[data-theme-template] body .bubble-*`
+   （0,2,2），不带 body 的深色选择器只有 0,2,1 —— 即使后写也压不过它。
+   而浅色规则里的变量在深色下已经换成深色值，症状就是"看着像生效了、
+   其实用的是另一条规则"（AI 气泡实际拿到的是卡片底而不是面板底）。 */
+html[data-theme="dark"] body .bubble-user {
+    background: linear-gradient(135deg, var(--tpl-primary-deep), var(--tpl-primary-deeper)) !important;
+    border-color: color-mix(in srgb, #ffffff 18%, transparent) !important;
+    color: #ffffff !important;
 }
-/* 同前：只到 .bubble-ai，不含 .thinking-bubble（那是外层容器，见上面的说明） */
-html[data-theme="dark"] .bubble-ai {
-    background: linear-gradient(150deg, rgba(30, 46, 80, 0.55), rgba(18, 28, 48, 0.55)) !important;
-    border-color: rgba(255, 255, 255, 0.14) !important;
+/* 同前：只到 .bubble-ai，不含 .thinking-bubble（那是外层容器，见上面的说明）。
+   AI 气泡不再用藏青渐变：底色跟面板，边框用正文色的低透明度。 */
+html[data-theme="dark"] body .bubble-ai {
+    background: var(--pixso-panel-soft) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 13%, transparent) !important;
     color: var(--pixso-brown) !important;
 }
 html[data-theme="dark"] #sidebar {
-    background: linear-gradient(180deg, rgba(30, 36, 46, 0.92), rgba(22, 27, 35, 0.90)) !important;
-    border-color: rgba(255, 255, 255, 0.10) !important;
+    background: linear-gradient(180deg, var(--pixso-panel), var(--pixso-surface)) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 10%, transparent) !important;
 }
-html[data-theme="dark"] .sidebar-rail-btn { color: #9aa6b8 !important; }
-html[data-theme="dark"] .sidebar-rail-btn:hover { color: #eef2f7 !important; background: var(--tpl-tint) !important; }
-html[data-theme="dark"] .sidebar-item-active {
-    background: rgba(255, 255, 255, 0.08) !important;
+html[data-theme="dark"] .sidebar-rail-btn { color: var(--tpl-rail-ink) !important; }
+html[data-theme="dark"] .sidebar-rail-btn:hover { color: var(--pixso-brown-dark) !important; background: var(--tpl-tint) !important; }
+html[data-theme="dark"] body .sidebar-item-active {
+    background: var(--tpl-tint) !important;
     border-color: color-mix(in srgb, var(--pixso-green) 45%, transparent) !important;
 }
-/* 2026-10 修：聚焦高亮原来写死 iOS 蓝（项目"已知问题"里记的就是这条：
-   "深色模式下输入框聚焦高亮色被硬编码为蓝色，与部分主题配色不匹配"）。
-   改成主题主色 —— 各套模板的输入框聚焦才跟自己的配色一致。 */
+/* 输入框聚焦高亮跟主题主色，不再写死蓝色。 */
 html[data-theme="dark"] .modal-input:focus,
 html[data-theme="dark"] .modal-textarea:focus {
     border-color: color-mix(in srgb, var(--pixso-green) 65%, transparent) !important;
 }
 
-/* 深色：文字色阶（照抄上游的具体值，不是"统一提亮"）
-   上游是**分档**的：越重要的越亮，次要的逐级降。
-   一刀切会让层次糊掉 —— 这是"字不清晰"的常见原因。 */
+/* 深色：文字色阶
+   分档保留：越重要的越亮，次要的逐级降。
+   具体亮度由深色块的 --tpl-text-1..6 提供，整套色阶同族，
+   不会留下某几档偏蓝。 */
 html[data-theme="dark"] body .text-indigo-950,
 html[data-theme="dark"] #sidebar .text-indigo-950,
 html[data-theme="dark"] #sidebarBrand .text-indigo-950,
 html[data-theme="dark"] .modal-panel .text-indigo-950,
-html[data-theme="dark"] .bubble-ai .text-indigo-950 { color: #eef2f7 !important; }
+html[data-theme="dark"] .bubble-ai .text-indigo-950 { color: var(--tpl-text-1) !important; }
 html[data-theme="dark"] body .text-indigo-900,
 html[data-theme="dark"] body .text-indigo-800,
 html[data-theme="dark"] #sidebar .text-indigo-900,
 html[data-theme="dark"] #sidebar .text-indigo-800,
 html[data-theme="dark"] .modal-panel .text-indigo-900,
-html[data-theme="dark"] .modal-panel .text-indigo-800 { color: #dfe6f0 !important; }
+html[data-theme="dark"] .modal-panel .text-indigo-800 { color: var(--tpl-text-2) !important; }
 html[data-theme="dark"] body .text-indigo-700,
 html[data-theme="dark"] #sidebar .text-indigo-700,
-html[data-theme="dark"] .modal-panel .text-indigo-700 { color: #cdd6e2 !important; }
+html[data-theme="dark"] .modal-panel .text-indigo-700 { color: var(--tpl-text-3) !important; }
 html[data-theme="dark"] body .text-indigo-600,
 html[data-theme="dark"] #sidebar .text-indigo-600,
-html[data-theme="dark"] .modal-panel .text-indigo-600 { color: #b6c0cf !important; }
+html[data-theme="dark"] .modal-panel .text-indigo-600 { color: var(--tpl-text-4) !important; }
 html[data-theme="dark"] body .text-indigo-500,
 html[data-theme="dark"] #sidebar .text-indigo-500,
-html[data-theme="dark"] .modal-panel .text-indigo-500 { color: #a4afc0 !important; }
+html[data-theme="dark"] .modal-panel .text-indigo-500 { color: var(--tpl-text-5) !important; }
 html[data-theme="dark"] body .text-indigo-400,
 html[data-theme="dark"] #sidebar .text-indigo-400,
 html[data-theme="dark"] #sidebarBrand .text-indigo-400,
-html[data-theme="dark"] .modal-panel .text-indigo-400 { color: #929db0 !important; }
+html[data-theme="dark"] .modal-panel .text-indigo-400 { color: var(--tpl-text-5) !important; }
 html[data-theme="dark"] body .text-indigo-300,
-html[data-theme="dark"] .modal-panel .text-indigo-300 { color: #7f8aa0 !important; }
-html[data-theme="dark"] body .text-indigo-200 { color: #6b768c !important; }
+html[data-theme="dark"] .modal-panel .text-indigo-300 { color: var(--tpl-text-6) !important; }
+html[data-theme="dark"] body .text-indigo-200 { color: var(--tpl-text-6) !important; }
+/* 强调色跟主题走：不再把粉色硬编码成一种蓝。 */
 html[data-theme="dark"] body .text-pink-500,
-html[data-theme="dark"] body .text-pink-600 { color: #5ca8ff !important; }
+html[data-theme="dark"] body .text-pink-600 { color: var(--tpl-primary) !important; }
 
 /* 深色下气泡内部同样要放行（同浅色那段的理由） */
 html[data-theme="dark"] body .bubble-user .text-indigo-500,
@@ -747,11 +683,11 @@ html[data-theme="dark"] body .bubble-user .text-indigo-300,
 html[data-theme="dark"] body .bubble-user .text-indigo-200,
 html[data-theme="dark"] body .bubble-user .text-pink-500 { color: rgba(255, 255, 255, 0.88) !important; }
 html[data-theme="dark"] body .bubble-ai .text-indigo-950,
-html[data-theme="dark"] body .bubble-ai .text-indigo-800 { color: #eef2f7 !important; }
+html[data-theme="dark"] body .bubble-ai .text-indigo-800 { color: var(--tpl-text-1) !important; }
 html[data-theme="dark"] body .bubble-ai .text-indigo-600,
 html[data-theme="dark"] body .bubble-ai .text-indigo-500,
 html[data-theme="dark"] body .bubble-ai .text-indigo-400,
-html[data-theme="dark"] body .bubble-ai .text-indigo-300 { color: #a4afc0 !important; }
+html[data-theme="dark"] body .bubble-ai .text-indigo-300 { color: var(--tpl-text-5) !important; }
 
 /* ============================================================================
  *  深色：语音条 + 名牌
@@ -775,26 +711,26 @@ html[data-theme="dark"] body .ai-voice-player:hover {
  *   文字类元素一律只改 color，不碰 background。 */
 html[data-theme="dark"] body .ai-voice-player .voice-play-box,
 html[data-theme="dark"] body .ai-voice-player .voice-duration {
-    color: #dfe6f0 !important;
+    color: var(--pixso-brown) !important;
     background: transparent !important;
 }
 html[data-theme="dark"] body .ai-voice-player .voice-wave-bar {
-    background: #dfe6f0 !important;
+    background: var(--pixso-brown-soft) !important;
 }
 html[data-theme="dark"] body .bubble-ai .ai-speaker-name {
-    background: rgba(255, 255, 255, 0.12) !important;
-    color: #eef2f7 !important;
+    background: color-mix(in srgb, var(--pixso-brown) 12%, transparent) !important;
+    color: var(--pixso-brown-dark) !important;
 }
 
 html[data-theme="dark"] body .bg-pink-50,
 html[data-theme="dark"] body .bg-indigo-100 { background-color: rgba(255, 255, 255, 0.07) !important; }
 html[data-theme="dark"] body .border-indigo-100 { border-color: rgba(255, 255, 255, 0.12) !important; }
 
-/* 深色：设置面板（上游给设置区单独一组规则） */
+/* 深色：设置面板 */
 html[data-theme="dark"] #settingsContent > section,
 html[data-theme="dark"] #settingsContent .settings-card {
-    background: rgba(255, 255, 255, 0.04) !important;
-    border-color: rgba(255, 255, 255, 0.09) !important;
+    background: color-mix(in srgb, var(--pixso-brown) 5%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 10%, transparent) !important;
 }
 
 /* 深色：设置面板的**结构性白块**。
@@ -824,7 +760,7 @@ html[data-theme="dark"] #settingsContent .settings-card {
 html[data-theme="dark"] #settingsContent .settings-tab-panel > section,
 html[data-theme="dark"] #settingsContent .settings-tab-panel > div.mb-4 {
     background: color-mix(in srgb, var(--pixso-panel-soft) 90%, transparent) !important;
-    border-color: rgba(255, 255, 255, 0.10) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 10%, transparent) !important;
     box-shadow: none !important;
 }
 /* 分栏导航：**纯文字透明背景**——
@@ -849,8 +785,8 @@ html[data-theme="dark"] #settingsPanel .settings-tab-btn.active {
 /* 设置里其他写死的白色块 */
 html[data-theme="dark"] #settingsPanel .btn-secondary,
 html[data-theme="dark"] #settingsPanel .glass-button {
-    background: rgba(255, 255, 255, 0.08) !important;
-    border-color: rgba(255, 255, 255, 0.16) !important;
+    background: color-mix(in srgb, var(--pixso-brown) 8%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 16%, transparent) !important;
     color: var(--pixso-brown) !important;
 }
 html[data-theme="dark"] #settingsPanel .modal-input,
@@ -862,8 +798,8 @@ html[data-theme="dark"] #settingsPanel select {
        用户反馈"边上还是要加小三角，不然人家都不知道有下拉"就是这个原因
        （浅色下正常、只有深色下没有，所以很难第一时间想到是这里）。
        只改背景色就不会碰掉自绘三角（雪佛龙规则在 index.html 的样式区）。 */
-    background-color: rgba(255, 255, 255, 0.07) !important;
-    border-color: rgba(255, 255, 255, 0.14) !important;
+    background-color: color-mix(in srgb, var(--pixso-brown) 8%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 14%, transparent) !important;
     color: var(--pixso-brown) !important;
 }
 
@@ -910,12 +846,12 @@ html[data-theme="dark"] #settingsPanel select option:hover {
    把 option 画成深底，而我们的 select 是浅底，同样割裂。 */
 html:not([data-theme="dark"]) #settingsPanel select option,
 html:not([data-theme="dark"]) #settingsPanel select optgroup {
-    background-color: #ffffff !important;
-    color: #253040 !important;
+    background-color: var(--pixso-cream) !important;
+    color: var(--pixso-brown) !important;
 }
 html:not([data-theme="dark"]) #settingsPanel select option:checked {
-    background-color: #e9eef5 !important;
-    color: #1b2330 !important;
+    background-color: var(--pixso-panel) !important;
+    color: var(--pixso-brown-dark) !important;
 }
 /* 设置面板之外的 select（例如移动会话的"移动到…"）同样处理。
    用同一个变量体系，不重复写死颜色。 */
@@ -925,19 +861,19 @@ html[data-theme="dark"] select option {
 }
 /* 设置里的选项卡片（主题卡片等） */
 html[data-theme="dark"] .theme-tpl-card {
-    background: rgba(255, 255, 255, 0.07) !important;
+    background: color-mix(in srgb, var(--pixso-brown) 7%, transparent) !important;
 }
 html[data-theme="dark"] #themeCustomEditor {
-    background: rgba(255, 255, 255, 0.05) !important;
-    border-color: rgba(255, 255, 255, 0.12) !important;
+    background: color-mix(in srgb, var(--pixso-brown) 5%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 12%, transparent) !important;
 }
 
 /* 深色：其他可能残留的白底（消息操作条 / 顶部栏 / 空状态） */
 html[data-theme="dark"] .message-actions,
 html[data-theme="dark"] .header-memory-btn,
 html[data-theme="dark"] .glass-button {
-    background: rgba(255, 255, 255, 0.10) !important;
-    border-color: rgba(255, 255, 255, 0.16) !important;
+    background: color-mix(in srgb, var(--pixso-brown) 10%, transparent) !important;
+    border-color: color-mix(in srgb, var(--pixso-brown) 16%, transparent) !important;
     color: var(--pixso-brown) !important;
 }
 html[data-theme="dark"] body .bg-white\/40,
@@ -945,18 +881,15 @@ html[data-theme="dark"] body .bg-white\/50,
 html[data-theme="dark"] body .bg-white\/60,
 html[data-theme="dark"] body .bg-white\/70,
 html[data-theme="dark"] body .bg-white\/80 {
-    background-color: rgba(255, 255, 255, 0.07) !important;
+    background-color: color-mix(in srgb, var(--pixso-brown) 7%, transparent) !important;
 }
-
-/* 深色：主按钮改走**主题主色**渐变。
-   ★ 2026-10 修：原来是照抄上游的"更亮的蓝渐变"（#2a96ff→#0a84ff→#0a74e8），
-   于是深色下无论选哪套模板，主按钮都是 iOS 蓝 —— 和渲染在外壳/卡片上的模板色
-   打架。改成绿色变量后：ios 仍是蓝（#4f7cf0/#3d6ae0，与原来同族），
-   其余模板各自成一套。 */
+/* 深色：主按钮走主题的深主色渐变。
+   `--tpl-primary-deeper` 是 deep 再深一档，白字不会被浅主色拖到发虚；
+   浅色主题仍用 primary → deep，保持柔和。 */
 html[data-theme="dark"] #sidebar .btn-primary,
 html[data-theme="dark"] .modal-panel .btn-primary {
-    background: linear-gradient(180deg, var(--pixso-green) 0%, var(--pixso-green-dark) 100%) !important;
-    box-shadow: 0 10px 26px color-mix(in srgb, var(--pixso-green) 30%, transparent), 0 2px 6px rgba(0, 0, 0, 0.4) !important;
+    background: linear-gradient(180deg, var(--tpl-primary-deep) 0%, var(--tpl-primary-deeper) 100%) !important;
+    box-shadow: 0 10px 26px color-mix(in srgb, var(--tpl-primary-deep) 30%, transparent), 0 2px 6px rgba(0, 0, 0, 0.4) !important;
 }
 
 /* 深色：光斑收敛，否则刺眼 */
@@ -969,3 +902,4 @@ html[data-theme="dark"] .aurora-orb { opacity: .28 !important; }
 .theme-tpl-card:hover { transform: translateY(-2px); }
 .theme-tpl-card.is-active { box-shadow: 0 0 0 2px rgba(255, 255, 255, .6) inset; }
 #themePickerBox { display: flex; gap: 8px; flex-wrap: wrap; }
+

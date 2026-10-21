@@ -3,9 +3,9 @@ import {
     readdirSync, rmSync, existsSync, readFileSync, writeFileSync,
 } from 'node:fs';
 import { stat, lstat, mkdir, writeFile, readFile, readdir, rm, rename } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { createServer, get as httpGet } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
-import { createServer as createNetServer } from 'node:net';
+import { createServer as createNetServer, createConnection } from 'node:net';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes, scrypt, createHash, timingSafeEqual, X509Certificate } from 'node:crypto';
 import os from 'node:os';
@@ -37,7 +37,9 @@ import { createLoginGuard, validatePasswordStrength, PWD_MIN_LEN } from '../serv
 // （体积上限、危险类型拦截、GBK 解码、zip64 回退都在 readZip 里）。
 // 解压逻辑只准有一份 —— 两份意味着安全修复要改两处，漏一处就是个洞。
 // 这里只保留一个薄包装，语义（{files, blocked}）不变。
-import { readZip, BLOCKED_EXT, effectiveExt } from '../server/zip.mjs';
+// isUnsafeEntryName / MAX_UPLOAD 也从这里拿：解压与落盘的安全约束跟着解压
+// 实现走，所有调用方（含手机端 bootstrap 的 hostUtils）吃同一份判定与数字。
+import { readZip, BLOCKED_EXT, effectiveExt, isUnsafeEntryName, MAX_UPLOAD } from '../server/zip.mjs';
 // 启动头格式（横幅）。日志**正文**不走这里 —— 正文保持一行一事件、英文为主。
 // 诊断细节的呈现已移到软件内日志查看器（/api/logs/tail + 设置页），不再刷控制台。
 import { banner } from '../server/diagnostics.mjs';
@@ -88,6 +90,35 @@ const PORT_EXPLICIT = process.env.PORT !== undefined && String(process.env.PORT)
 const PORT_START = Number(PORT_EXPLICIT ? process.env.PORT : 3999);
 /** 往上最多找多少个端口（3999 → 4098）。够用，又不至于卡住启动。 */
 const PORT_SCAN_SPAN = 100;
+/**
+ * 「本项目的另一个实例已经在跑」时的退出码：`启动.bat` 认这个码就不再 pause，
+ * 窗口直接关掉。只有**另起一个服务**才需要人留着窗口看它，而这个分支没有服务可看。
+ */
+const EXIT_ALREADY_RUNNING = 3;
+
+// 已有实例在跑 → 不起第二个服务（用户把 启动.bat 双击了两次就是这条）。
+//
+// 为什么必须分辨「谁占着端口」：端口被占有两种，处置完全相反 ——
+//   · **别的软件**（QQ、别的服务）占着 → 该往后换端口照常起服务；
+//   · **本项目上一个实例**占着 → 再起一个只会多出一份启动窗口、多占一个端口，
+//     而用户要的还是那个已经在跑的界面，于是把浏览器指过去、自己退出。
+// 判定只认我们自己（见 isOurInstance），别的软件不会被误当成"已有实例"。
+//
+// 只在未显式传 PORT 时做（用户双击启动这条路）：检查脚本各自传 PORT 起服务，
+// 它们要的就是"起一个干净的新实例"，不能被这个分支拦下。
+if (!PORT_EXPLICIT) {
+    try {
+        const running = await findRunningInstance(PORT_START, PORT_SCAN_SPAN);
+        if (running) {
+            console.log(`[boot] another instance is already running on port ${running} - reusing it`);
+            openBrowser('http://127.0.0.1:' + running);
+            process.exit(EXIT_ALREADY_RUNNING);
+        }
+    } catch (err) {
+        console.warn('[boot] 检查已有实例失败，按新实例继续：' + String((err && err.message) || err));
+    }
+}
+
 // 插件（mod）根目录。把 xxx.zip 丢进来就会被自动解压并写进 index.json，
 // 前端只读清单 —— 因为浏览器没法列目录（详见 server/mods.mjs 的说明）。
 //
@@ -124,9 +155,7 @@ const SKILLS_DIR = process.env.SKILLS_DIR
 //   GET  /api/live2d/models · POST /api/live2d/upload
 //   DELETE /api/live2d/models/<名> · POST /api/live2d/rename
 // 模型文件也住在那个插件目录下，URL 不变（由 manifest.server.static 映射）。
-const MAX_UPLOAD = 200 * 1024 * 1024;      // 上传的压缩包大小上限 200MB
-const MAX_EXTRACTED = 512 * 1024 * 1024;   // 解压后总大小上限（防 zip bomb：200KB 的包可膨胀到数百 MB）
-const MAX_ENTRY_SIZE = 256 * 1024 * 1024;  // 解压后单文件上限
+// MAX_UPLOAD 从 server/zip.mjs import（所有调用方同一个数，防"电脑能传手机 413"）。
 // BLOCKED_EXT / effectiveExt 定义在 server/zip.mjs（解压实现所在处），
 // 这里通过上面的 import 使用 —— 危险类型清单属于"解压"的安全约束，
 // 跟着实现走才能保证所有调用方（模型上传 / 数据导入 / mod 安装）都受保护。
@@ -311,10 +340,14 @@ const ANSI_TIME = '\x1b[32m';   // 时间绿色，同 AstrBot 的 <green>{time}<
 
 // 版本号：WARN 及以上会附在级别后面（同 AstrBot 的 astrbot_version_tag）。
 // 这个项目频繁重打包，出问题时能一眼对上"这份日志是哪一版产生的"。
-let APP_VERSION = '0.0.0';
-try {
-    APP_VERSION = JSON.parse(readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version || APP_VERSION;
-} catch { /* 读不到就算了 */ }
+// 打包形态（Electron 桌面壳）里 package.json 在 asar 内，服务端读不到磁盘上的它；
+// 桌面壳会通过 APP_VERSION 传版本号。浏览器/exe/安卓入口没有这个变量，照旧读文件。
+let APP_VERSION = process.env.APP_VERSION || '0.0.0';
+if (!process.env.APP_VERSION) {
+    try {
+        APP_VERSION = JSON.parse(readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version || APP_VERSION;
+    } catch { /* 读不到就算了 */ }
+}
 
 // 消息开头的 [xxx] 会被抽出来当标签，正文里不再重复 —— 所以调用点照旧写
 // `console.log('[relay] ...')` 即可。这里把历史遗留的标签收敛成一套固定词汇，
@@ -721,12 +754,10 @@ const contentTypes = new Map([
 
 
 
-/** 条目名是否不安全（绝对路径 / 路径穿越） */
-function isUnsafeEntryName(name) {
-    if (!name) return true;
-    if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) return true;
-    return name.split('/').some(seg => seg === '..');
-}
+// isUnsafeEntryName 已搬到 server/zip.mjs 并从那里 import（判定跟着解压
+// 实现走，见 zip.mjs 内的说明）。
+
+
 
 /**
  * zip 解压（deflate/store，无依赖）。
@@ -1634,6 +1665,48 @@ function canListen(p, h) {
 }
 
 /**
+ * 这个端口上**已经有东西在收连接**吗（站在本机客户端的角度问）。
+ *
+ * 为什么不能只看 canListen：Windows 允许「一个进程绑 127.0.0.1:P、另一个进程绑
+ *   0.0.0.0:P」同时成立 —— 实测就是这样，连 exclusive 也拦不住。于是"我绑上了"
+ *   不等于"这个端口归我"：连到 127.0.0.1:P 的请求会落到对方手里，用户看到的是
+ *   "这个端口的服务时好时坏、连接被重置"。所以"端口能不能用"必须再问一句
+ *   **连上去有没有人接**。
+ *
+ * 超时按"没人应答"处理：防火墙丢包也会超时，宁可当成空闲，也不把能用的端口让出去。
+ *
+ * @returns {Promise<boolean>}
+ */
+function portHasListener(p) {
+    return new Promise((resolve) => {
+        const socket = createConnection({ host: '127.0.0.1', port: p });
+        let settled = false;
+        const settle = (v) => {
+            if (settled) return;
+            settled = true;
+            socket.destroy();
+            resolve(v);
+        };
+        socket.setTimeout(500, () => settle(false));
+        socket.once('connect', () => settle(true));
+        socket.once('error', () => settle(false));
+    });
+}
+
+/**
+ * 我们能不能**独占**地用这个端口：绑得上，且此刻没人在上面收连接。
+ *
+ * 两个条件缺一不可 —— 只满足前者，就是"绑上了却与别人共享"（见 portHasListener）。
+ * 先问"有没有人接"：探测要连一次，比真的绑一次便宜。
+ *
+ * @returns {Promise<boolean>}
+ */
+async function isPortFree(p, h) {
+    if (await portHasListener(p)) return false;
+    return canListen(p, h);
+}
+
+/**
  * 从 start 起找一个能用的端口。
  *
  * @returns {Promise<number>} 可用的端口
@@ -1641,9 +1714,62 @@ function canListen(p, h) {
  */
 async function pickPort(start, h, span) {
     for (let p = start; p < start + span; p++) {
-        if (await canListen(p, h)) return p;
+        if (await isPortFree(p, h)) return p;
     }
     throw new Error('端口 ' + start + '–' + (start + span - 1) + ' 全部被占用，请关掉占用它们的程序后重试');
+}
+
+/**
+ * 这个端口上跑的**是不是本项目自己的实例**（而不是别的软件占了它）。
+ *
+ * 判据是 `/api/server-info` 的应答形状：该接口无需鉴权、只回端口号，
+ * 应答形如 `{ ok: true, httpPort: <数字> }`。别的软件不会恰好回这个形状 ——
+ * 所以"能解析出 ok:true 且 httpPort 是数字"就足以认定是自己人。
+ *
+ * 只连回环地址，不碰对外地址：本服务的实例一定在 127.0.0.1 上可达
+ * （即使 HOST=0.0.0.0 也只多监听别的网卡，回环仍然通）。
+ *
+ * @returns {Promise<boolean>}
+ */
+function isOurInstance(p) {
+    return new Promise((resolve) => {
+        const req = httpGet({ host: '127.0.0.1', port: p, path: '/api/server-info', timeout: 700 }, (res) => {
+            if (res.statusCode !== 200) { res.resume(); resolve(false); return; }
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', (chunk) => {
+                body += chunk;
+                // 不是我们的接口就不值得把整个响应读完（对方可能一直发）
+                if (body.length > 4096) { req.destroy(); resolve(false); }
+            });
+            res.on('end', () => {
+                try {
+                    const info = JSON.parse(body);
+                    resolve(Boolean(info && info.ok === true && typeof info.httpPort === 'number'));
+                } catch { resolve(false); }
+            });
+        });
+        // 连不上（端口其实是空的）与探测超时都算"不是我们的实例"
+        req.on('error', () => resolve(false));
+        req.on('timeout', () => { req.destroy(); resolve(false); });
+    });
+}
+
+/**
+ * 从 start 往上找：在遇到第一个**空闲**端口之前，有没有本项目自己的实例在跑。
+ *
+ * 遇到第一个空闲端口就停 —— 那正是新实例本该起的地方，说明它前面没有我们的实例
+ * （端口只有被别的软件隔开才可能出现"空一个又有一个自己人"，而那种排布本项目的
+ *   启动顺序产不出来：它总是从 3999 起、占最靠下的那几个空闲端口）。
+ *
+ * @returns {Promise<number>} 已有实例的端口；没有则 0（正常的全新启动）
+ */
+async function findRunningInstance(start, span) {
+    for (let p = start; p < start + span; p++) {
+        if (await isPortFree(p, host)) return 0;
+        if (await isOurInstance(p)) return p;
+    }
+    return 0;
 }
 
 function findOpenssl() {
@@ -3321,7 +3447,12 @@ const HTTPS_PORT = Number(process.env.HTTPS_PORT || (port + 1));
 
 mainServer.on('error', (err) => printListenError(err, 'HTTP/HTTPS', port));
 
-mainServer.listen(port, host, async () => {
+// exclusive：在 Windows 上闸住"同一 地址:端口 被别的进程再绑一次"（例如探测与
+//   真正绑定之间被抢走）。
+//   它**挡不住**"别人绑 127.0.0.1:P、我们绑 0.0.0.0:P"那种共享（实测如此），
+//   所以端口归谁是用 isPortFree 的"连一下"探针定的，这里只补一道闸：
+//   万一还是撞上，宁可明确报错，也不要两个监听者共用一个端口、连接看运气。
+mainServer.listen({ port, host, exclusive: true }, async () => {
     // ── 启动事件：**一行一个事实，英文**─────────
     //
     // "怎么用"的引导文字已全部移出日志流 —— 地址和密码在应用里都能看到
@@ -3333,32 +3464,9 @@ mainServer.listen(port, host, async () => {
     }
     console.log(`[boot] listening on ${urls.join(', ')} (HTTP+HTTPS on the same port)`);
 
-    // 自动打开浏览器：只在**用户双击启动**这条路（启动.bat 传 OPEN_BROWSER=1）下做。
-    //
-    // 为什么不无条件打开：serve.mjs 同时也是检查脚本的子进程（几十个用例会各起
-    //   一次服务），以及 `npm run serve:web` 的开发路径。无条件弹窗会在跑检查时
-    //   炸出几十个标签页。
-    // 为什么失败只警告不退出：没有默认浏览器、被策略拦、headless 环境都会失败，
-    //   而服务本身是好的 —— 用户完全可以自己复制地址过去。
-    if (process.env.OPEN_BROWSER === '1') {
-        try {
-            const target = 'http://127.0.0.1:' + port;
-            // Windows 的 start 是 cmd 内建命令，必须经过 cmd /c；第一个引号参数是窗口标题，不能省
-            // （省了的话带引号的 URL 会被当成标题，结果什么都不打开）。
-            const cmd = process.platform === 'win32'
-                ? ['cmd', ['/c', 'start', '', target]]
-                : process.platform === 'darwin'
-                    ? ['open', [target]]
-                    : ['xdg-open', [target]];
-            const child = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
-            // 不 await：浏览器进程要陪着用户，不该让服务端等它
-            child.unref();
-            console.log('[boot] opening browser: ' + target);
-        } catch (err) {
-            console.warn('[boot] 无法自动打开浏览器（' + String((err && err.message) || err)
-                + '）—— 请手动访问 http://127.0.0.1:' + port);
-        }
-    }
+    // 自动打开浏览器（只在用户双击启动那条路下做，判定收在 openBrowser 里）。
+    // 地址用**实际监听到的端口**：端口漂移过之后，写着 3999 的地址是打不开的。
+    openBrowser('http://127.0.0.1:' + port);
 
     // 访问密码：只有仍是初始随机密码时才打明文（用户没别的地方看它）。
     // 用户自己设置过之后，这里只剩一行事实，不再重复提示。
@@ -3399,6 +3507,41 @@ mainServer.listen(port, host, async () => {
     console.log('[boot] 就绪。日志可在应用内「设置 → 日志」按级别/模块筛选查看。');
 });
 
+/**
+ * 按需打开浏览器指向某个已就绪的地址。
+ *
+ * 两条调用点共用它：全新启动（在 listen 回调里，地址是刚监听到的端口）与
+ *   「已有实例在跑」（地址是那个已经在跑的实例，此时也没有自己的服务可等）。
+ *
+ * 只在 `OPEN_BROWSER === '1'`（启动.bat 传的）时打开：serve.mjs 同时是几十个
+ *   检查用例的子进程，也会被 `npm run serve:web` 拉起，无条件弹窗会炸出几十个标签页。
+ * 失败只警告不退出：没有默认浏览器、被策略拦、headless 环境都会失败，
+ *   而服务本身是好的 —— 用户完全可以自己复制地址过去。
+ *
+ * 声明放在使用点之后（函数声明会提升，照常可调用）：这样"打开浏览器"这件事
+ *   全库只有一处实现，检查脚本也只需锚定这一处来确认它没有脱离 OPEN_BROWSER 开关。
+ */
+function openBrowser(url) {
+    if (process.env.OPEN_BROWSER === '1') {
+        try {
+            // Windows 的 start 是 cmd 内建命令，必须经过 cmd /c；第一个引号参数是窗口标题，不能省
+            // （省了的话带引号的 URL 会被当成标题，结果什么都不打开）。
+            const cmd = process.platform === 'win32'
+                ? ['cmd', ['/c', 'start', '', url]]
+                : process.platform === 'darwin'
+                    ? ['open', [url]]
+                    : ['xdg-open', [url]];
+            const child = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
+            // 不 await：浏览器进程要陪着用户，不该让服务端等它
+            child.unref();
+            console.log('[boot] opening browser: ' + url);
+        } catch (err) {
+            console.warn('[boot] 无法自动打开浏览器（' + String((err && err.message) || err)
+                + '）—— 请手动访问 ' + url);
+        }
+    }
+}
+
 // 兼容入口：老的 https://IP:4174 链接继续可用（两个端口都支持双协议）。
 // 在这个端口上用明文 http 访问时，自动跳到同端口的 https。
 if (httpsServer && HTTPS_PORT !== port) {
@@ -3438,6 +3581,20 @@ if (httpsServer && HTTPS_PORT !== port) {
                 + 'Connection: close\r\n\r\n' + body);
         });
     });
-    legacyServer.on('error', (err) => printListenError(err, 'HTTPS(兼容入口)', HTTPS_PORT));
-    legacyServer.listen(HTTPS_PORT, host);
+    // 兼容入口是**旁路**（只为老 https 链接），端口被别的软件占着就不起它。
+    //   缺这层判断时它会与占用者**共享**同一个端口（Windows 默认允许共享），
+    //   于是这个端口变成抽签：请求有时落到对方服务上，表现为"这个端口时好时坏、
+    //   连接被重置"。宁可不起这条旁路，也不要让一个端口有两个主人。
+    //   失败只警告：主服务在主端口上照常跑，旁路起不来不该把它判成"没启动"。
+    legacyServer.on('error', (err) => {
+        console.warn('[boot] HTTPS compat entry unavailable on port ' + HTTPS_PORT + ': '
+            + String((err && err.message) || err));
+    });
+    // isPortFree 先探一次（绑得上 + 此刻没人在上面收连接）：探测与绑定之间被抢走
+    // 那种竞态，由上面的警告兜住。
+    if (await isPortFree(HTTPS_PORT, host)) {
+        legacyServer.listen({ port: HTTPS_PORT, host, exclusive: true });
+    } else {
+        console.log(`[boot] HTTPS compat entry skipped: port ${HTTPS_PORT} is busy`);
+    }
 }

@@ -366,6 +366,36 @@ async function caseProviders(c) {
             c.ok(conv2.instructions === 'S', 'responses 转换: system → instructions');
             c.ok(conv2.input[0].content[0].type === 'input_text', 'responses 转换: user 用 input_text');
             c.ok(conv2.input[1].content[0].type === 'output_text', 'responses 转换: assistant 用 output_text');
+
+            // ---- 工具协议消息的换形（多步任务的历史里这两种是常态）----
+            const toolHistory = [
+                { role: 'user', content: '在桌面建个文件' },
+                {
+                    role: 'assistant', content: '好，我来写。',
+                    tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'save_file', arguments: '{"path":"D:\\\\a.txt","content":"hi"}' } }],
+                },
+                { role: 'tool', tool_call_id: 'call_1', content: '✅ 已保存到：D:\\a.txt' },
+            ];
+            const convT = CP.convertOpenAIToAnthropicMessages(toolHistory);
+            const tuBlock = (convT.messages[1]?.content || []).find((b) => b.type === 'tool_use');
+            c.ok(tuBlock && tuBlock.id === 'call_1' && tuBlock.name === 'save_file'
+                && tuBlock.input?.path === 'D:\\a.txt',
+                'anthropic 转换: assistant 的 tool_calls → tool_use block（参数解析成对象）', JSON.stringify(convT.messages[1]));
+            const trMsg = convT.messages.find((m) => Array.isArray(m.content)
+                && m.content.some((b) => b.type === 'tool_result'));
+            const trBlock = trMsg && trMsg.content.find((b) => b.type === 'tool_result');
+            c.ok(trMsg?.role === 'user' && trBlock?.tool_use_id === 'call_1'
+                && trBlock?.content === '✅ 已保存到：D:\\a.txt',
+                'anthropic 转换: role:tool → user 消息里的 tool_result block（id 对得上）', JSON.stringify(trMsg));
+
+            const convR = CP.convertOpenAIToResponsesInput(toolHistory);
+            const fcItem = convR.input.find((it) => it.type === 'function_call');
+            const fcoItem = convR.input.find((it) => it.type === 'function_call_output');
+            c.ok(fcItem && fcItem.call_id === 'call_1' && fcItem.name === 'save_file'
+                && fcItem.arguments?.includes('a.txt'),
+                'responses 转换: tool_calls → 单独的 function_call 项（arguments 保持字符串）', JSON.stringify(fcItem));
+            c.ok(fcoItem && fcoItem.call_id === 'call_1' && fcoItem.output === '✅ 已保存到：D:\\a.txt',
+                'responses 转换: role:tool → function_call_output 项（call_id 对得上）', JSON.stringify(fcoItem));
         }
     }
 
@@ -420,8 +450,18 @@ async function caseAnthropicRequest(c) {
         // 按端点回不同形状的成功响应 —— 三种格式的成功响应结构不一样，混用会让解析器抛 EMPTY_MODEL_OUTPUT。
         async function postJsonFromDevice(url, body, headers) {
             calls.push({ url, body, headers });
-            if (/\\/chat\\/completions$/.test(url)) return { ok: true, payload: { choices: [{ message: { content: '好的' } }] } };
-            if (/\\/responses$/.test(url)) return { ok: true, payload: { output_text: '好的' } };
+            if (/\\/chat\\/completions$/.test(url)) {
+                // 只有用例显式 setPayload 了一个带 choices 的响应时才用它（默认仍是那条固定成功响应）。
+                // 这样"要看响应侧（工具调用）"的新用例不必再动别的出口，老用例也不受影响。
+                if (nextPayload && nextPayload.choices) return { ok: true, payload: nextPayload };
+                return { ok: true, payload: { choices: [{ message: { content: '好的' } }] } };
+            }
+            if (/\\/responses$/.test(url)) {
+                // 与 chat/completions 同一规矩：用例显式 setPayload 了带 output 的响应才用它
+                // （要看响应侧 function_call 时必须走这条），默认仍是那条固定成功响应。
+                if (nextPayload && nextPayload.output) return { ok: true, payload: nextPayload };
+                return { ok: true, payload: { output_text: '好的' } };
+            }
             return { ok: true, payload: nextPayload };
         }
         async function throwProviderResponseError() { throw new Error('不该走到这里'); }
@@ -429,10 +469,12 @@ async function caseAnthropicRequest(c) {
         ${extractFn('stripThinkTags')}
         ${extractFn('extractTextContent')}
         ${extractFn('normalizeChatReply').replace('function normalizeChatReply(', 'function realNormalizeChatReply(')}
-        // 包一层记录入参：真实的 normalizeChatReply 只返回正文，看不到 reasoning 有没有被认出来
-        function normalizeChatReply(content, reasoningContent = '') {
+        // 包一层记录入参：真实的 normalizeChatReply 只返回正文，看不到 reasoning 有没有被认出来。
+        // 参数要**原样转发**（包括第三个 toolCalls）—— 少转发一个，就等于在测试里
+        // 把"只调工具、一字不说"那条合法回复又变回空回复抛错。
+        function normalizeChatReply(content, reasoningContent = '', toolCalls = []) {
             normalizeCalls.push({ content, reasoningContent });
-            return realNormalizeChatReply(content, reasoningContent);
+            return realNormalizeChatReply(content, reasoningContent, toolCalls);
         }
         // anthropicContentBlocks / convertOpenAIToAnthropicMessages / convertOpenAIToResponsesInput
         // 已随三个协议实现一起迁到 web/js/chat-providers.js（本文件下面会直接加载那个真模块），
@@ -566,6 +608,97 @@ async function caseAnthropicRequest(c) {
     atLeast('不传 maxTokens 时 > 1024', noOpt.body.max_tokens, 1025);
     const big = await send({ maxTokens: 32000 });
     check('传了更大的值时不被压低', big.body.max_tokens, 32000);
+
+    // ---------- 工具通道：请求体怎么带 tools ----------
+    console.log('\n— 工具声明（function calling）—');
+    const toolDefs = [{
+        type: 'function',
+        function: {
+            name: 'save_file', description: '在电脑上写一个文本文件',
+            parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        },
+    }];
+    const withTools = await send({ tools: toolDefs }, { apiFormat: 'openai-compatible' });
+    c.ok(Array.isArray(withTools.body.tools) && withTools.body.tools.length === 1,
+        '★ 请求体带上调用方给的 tools 清单', JSON.stringify(withTools.body.tools));
+    c.ok(withTools.body.tools[0]?.function?.name === 'save_file', 'tools 的形状是 tools[].function');
+    absent('不主动发 tool_choice（有 tools 时它本就是 auto，少一个字段少一次被挑刺）', withTools.body, 'tool_choice');
+    const withoutTools = await send({}, { apiFormat: 'openai-compatible' });
+    absent('没传 tools 时请求体里也不带这个字段（记忆摘要/翻译那些调用不受影响）', withoutTools.body, 'tools');
+    const anthropicTools = await send({ tools: toolDefs });      // 默认 anthropic 格式
+    c.ok(Array.isArray(anthropicTools.body.tools) && anthropicTools.body.tools.length === 1
+        && anthropicTools.body.tools[0]?.name === 'save_file'
+        && anthropicTools.body.tools[0]?.input_schema?.required?.[0] === 'path',
+        '★ Anthropic 带上 tools 且换成扁平形状（name/description/input_schema，不是嵌套 function{}）',
+        JSON.stringify(anthropicTools.body.tools));
+    const anthropicNoTools = await send({});
+    absent('Anthropic 没传 tools 时请求体里也不带这个字段', anthropicNoTools.body, 'tools');
+    const responsesTools = await send({ tools: toolDefs }, {}, 'openai-responses');
+    c.ok(Array.isArray(responsesTools.body.tools) && responsesTools.body.tools.length === 1
+        && responsesTools.body.tools[0]?.type === 'function'
+        && responsesTools.body.tools[0]?.name === 'save_file'
+        && responsesTools.body.tools[0]?.parameters?.required?.[0] === 'path',
+        '★ Responses 带上 tools 且用扁平形状（type/name/description/parameters 平铺）',
+        JSON.stringify(responsesTools.body.tools));
+
+    // 回复侧：工具调用要交给调用方，且"只调工具、一字不说"不能再被当成空回复抛错
+    setPayload({
+        choices: [{
+            message: {
+                content: '',
+                tool_calls: [{ id: 'call_9', type: 'function', function: { name: 'save_file', arguments: '{"path":"D:\\\\tmp.txt","content":"hi"}' } }],
+            },
+            finish_reason: 'tool_calls',
+        }],
+    });
+    const replyInfo = {};
+    const toolReplyText = await callChatAPI(msgs, { tools: toolDefs, replyInfo }, {
+        apiKey: 'test-key', model: 'qwen3.7-flash', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiFormat: 'openai-compatible',
+    });
+    c.ok(Array.isArray(replyInfo.toolCalls) && replyInfo.toolCalls.length === 1
+        && replyInfo.toolCalls[0].args.path === 'D:\\tmp.txt' && replyInfo.toolCalls[0].args.content === 'hi',
+        '★ 回复里的工具调用交给调用方（replyInfo.toolCalls，参数已解析成对象）', JSON.stringify(replyInfo.toolCalls));
+    c.ok(replyInfo.finishReason === 'tool_calls',
+        '停止原因一并带出（收尾据此决定要不要执行、要不要再来一轮）', replyInfo.finishReason);
+    c.ok(toolReplyText === '',
+        '★ 只调工具、一字不说时返回空正文（不再当空回复抛错）', JSON.stringify(toolReplyText));
+
+    // 回复侧（Anthropic 形态）：content 里的 tool_use block 也要交给调用方 ——
+    //   不解析的话这种格式下工具通道等于不存在（模型发了调用、宿主看不见）。
+    {
+        setPayload({ content: [
+            { type: 'text', text: '' },
+            { type: 'tool_use', id: 'call_a', name: 'save_file', input: { path: 'D:\\b.txt', content: '好' } },
+        ] });
+        const info = {};
+        const t = await callChatAPI(msgs, { tools: toolDefs, replyInfo: info }, {
+            apiKey: 'test-key', model: 'claude-sonnet-4-5', baseUrl: 'https://api.anthropic.com',
+            apiFormat: 'anthropic',
+        });
+        c.ok(Array.isArray(info.toolCalls) && info.toolCalls.length === 1
+            && info.toolCalls[0].name === 'save_file' && info.toolCalls[0].args.path === 'D:\\b.txt',
+            '★ Anthropic 回复里的 tool_use 交给调用方（参数解析成对象）', JSON.stringify(info.toolCalls));
+        c.ok(t === '', 'Anthropic 只调工具时同样返回空正文', JSON.stringify(t));
+    }
+    // 回复侧（Responses 形态）：output 里的 function_call 项
+    {
+        setPayload({ output: [
+            { type: 'reasoning', summary: [{ type: 'summary_text', text: '想想' }] },
+            { type: 'function_call', call_id: 'call_r', name: 'save_file', arguments: '{"path":"D:\\\\c.txt","content":"好"}' },
+        ] });
+        const info = {};
+        const t = await callChatAPI(msgs, { tools: toolDefs, replyInfo: info }, {
+            apiKey: 'test-key', model: 'gpt-5.2', baseUrl: 'https://api.openai.com/v1',
+            apiFormat: 'openai-responses',
+        });
+        c.ok(Array.isArray(info.toolCalls) && info.toolCalls.length === 1
+            && info.toolCalls[0].id === 'call_r' && info.toolCalls[0].args.path === 'D:\\c.txt',
+            '★ Responses 回复里的 function_call 交给调用方', JSON.stringify(info.toolCalls));
+        c.ok(String(info.reasoning || '') === '想想', 'Responses 的 reasoning 摘要仍走兜底通道', JSON.stringify(info.reasoning));
+        c.ok(t === '', 'Responses 只调工具时同样返回空正文', JSON.stringify(t));
+    }
+    setPayload({ content: [{ type: 'text', text: '好的' }] });   // 复位，免得影响后面的用例
 
     // thinking 的预算和正文吃同一个额度：只满足 1025 的话正文一个 token 都不剩
     const thinkingSuffix = await send({ maxTokens: 900 }, { model: 'claude-sonnet-4-5-thinking' });
@@ -1279,6 +1412,12 @@ async function caseThinkingCompat(c) {
     const rejectedRequestParam = new Function(
         grabFn(src, 'rejectedRequestParam') + '\nreturn rejectedRequestParam;'
     )();
+    // 工具调用的统一形状（toToolCall）与 Anthropic 侧那个映射也一起抠出来单测：
+    // 它们决定"模型给的东西能不能被执行"，逐片解析/字符串与对象的差别最容易写错。
+    const { toToolCall, anthropicToolCalls } = new Function(
+        grabFn(src, 'toToolCall') + '\n' + grabFn(src, 'anthropicToolCalls')
+        + '\nreturn { toToolCall, anthropicToolCalls };'
+    )();
 
     // ---------- 单测 rejectedRequestParam ----------
     console.log('=== 1. rejectedRequestParam：从 400 里认出被拒参数 ===');
@@ -1301,6 +1440,25 @@ async function caseThinkingCompat(c) {
             '★ 其它 400（图片类）→ null（不剥参数，照常抛错）');
         c.ok(rejectedRequestParam({ status: 500, rawText: 'thinking not supported' }) === null,
             '★ 非 400 → null（5xx 不是参数问题）');
+        // tools：gateway 拒工具声明时的三种常见措辞都要认出来（认不出就会当场抛错，
+        //   用户看到的是"对话服务请求失败"，而其实只是多带了一个字段）
+        c.ok(rejectedRequestParam({ status: 400, payload: { error: { message: 'Unrecognized request argument supplied: tools', param: 'tools' } } }) === 'tools',
+            '★ OpenAI 官方措辞（Unrecognized request argument）→ tools');
+        c.ok(rejectedRequestParam({ status: 400, rawText: 'Unsupported parameter: tools' }) === 'tools',
+            '★ 文本点名 tools → tools');
+        c.ok(rejectedRequestParam({ status: 400, rawText: 'tools are not permitted on this endpoint' }) === 'tools',
+            '★ "tools ... not permitted" → tools');
+        c.ok(rejectedRequestParam({ status: 400, rawText: 'invalid image size' }) === null,
+            '★ 没点到 tools 的 400 → null（别把无关报错认成元凶）');
+        // 统一形状：arguments 是字符串、input 是对象，上层不该关心这个差别
+        const oc = toToolCall('call_1', 'save_file', '{"path":"D:\\\\a.txt","content":"hi"}');
+        c.ok(oc.args.path === 'D:\\a.txt' && oc.args.content === 'hi' && !oc.badArgs,
+            '★ arguments 字符串被解析成对象（统一形状）', JSON.stringify(oc));
+        const bad = toToolCall('call_2', 'save_file', '{"path": "D:\\a.txt"');     // 被截断
+        c.ok(bad.badArgs === true && bad.name === 'save_file',
+            '★ 参数不合法时标 badArgs（不抛、也不静默丢）', JSON.stringify(bad));
+        c.ok(anthropicToolCalls([{ type: 'tool_use', id: 't1', name: 'list_files', input: { path: '%DESKTOP%' } }])[0].args.path === '%DESKTOP%',
+            'anthropic 的 tool_use block → 同一形状（input 本就是对象）');
     }
 
     // ---------- 集成：真跑 callOpenAICompatibleChat ----------

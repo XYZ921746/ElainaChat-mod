@@ -78,6 +78,58 @@
 
     /** 内置镜像源：GitHub Pages 在大陆常被墙，jsDelivr 可达性好得多 */
     var MIRROR_INDEX_URL = 'https://cdn.jsdelivr.net/gh/XYZ921746/web@main/store/index.json';
+    /**
+     * 包下载镜像：把 GitHub Pages 的包地址映射到 jsDelivr 上。
+     *
+     * 为什么需要：索引里的 downloadUrl 写死是 Pages 地址，而 Pages 在大陆**整条链路
+     *   时通时不通**（实测：同一天里单连接从 0.09 MB/s 掉到 20s 全超时，此时 jsDelivr
+     *   的 gcore 镜像还有 0.45 MB/s）。分片并发解决的是"单流被限速"，解决不了
+     *   "这条链路根本连不上" —— 两者必须都有。
+     *
+     * 注意 cdn.jsdelivr.net 实测对**包文件**连不上（索引能取、包不能），所以镜像
+     * 只登记确定能取到包的域名，且失败要能安静跳过。
+     */
+    var MIRROR_PACKAGE_BASES = [
+        'https://gcore.jsdelivr.net/gh/XYZ921746/web@main',
+        'https://testingcf.jsdelivr.net/gh/XYZ921746/web@main',
+    ];
+
+    /**
+     * 上一次哪个源是通的（模块级记忆，不落盘）。
+     *
+     * 为什么要记忆：链路状态在一次会话里很稳定 —— 要么 Pages 通、要么只有镜像通。
+     *   每次下载都从 Pages 开始试的话，Pages 不通时**每个包**都要先白等一次超时
+     *   （装一个带依赖的插件要等 N 次）。记住上次成功的那个，下次直接从它开始。
+     *   只活在内存里：刷新页面就重新学习，不需要也不应该持久化。
+     */
+    var lastGoodBase = '';
+
+    /**
+     * 给一个包地址算镜像候选。
+     *
+     * 顺序：上次成功的源排第一 → 原地址 → 其余镜像，全部去重。
+     *   只认「本站官方索引那两个源下的 store/packages/」—— 用户自建的商店源有
+     *   自己的托管方式，猜不出镜像路径，硬套只会制造 404（那时只返回原地址）。
+     */
+    function packageMirrorUrls(url) {
+        var s = String(url || '');
+        var m = /^https:\/\/(?:xyz921746\.github\.io\/web|cdn\.jsdelivr\.net\/gh\/XYZ921746\/web@main)\/store\/packages\/([^/?#]+\.zip)(?:\?[^#]*)?$/i.exec(s);
+        if (!m) return [url];
+        var file = m[1];
+        var bases = ['https://xyz921746.github.io/web'].concat(MIRROR_PACKAGE_BASES);
+        var out = [];
+        var push = function (u) { if (u && out.indexOf(u) < 0) out.push(u); };
+        if (lastGoodBase) push(lastGoodBase + '/store/packages/' + file);   // 上次通的排第一
+        push(s);                                                            // 原地址
+        for (var i = 0; i < bases.length; i++) push(bases[i] + '/store/packages/' + file);
+        return out;
+    }
+
+    /** 这个地址属于哪个源（用于记录 lastGoodBase） */
+    function baseOfPackageUrl(u) {
+        var m = /^(https:\/\/(?:xyz921746\.github\.io\/web|[a-z0-9-]+\.jsdelivr\.net\/gh\/XYZ921746\/web@main))\/store\/packages\//i.exec(String(u || ''));
+        return m ? m[1] : '';
+    }
 
     /**
      * 商店源候选（按顺序尝试）：自定义源 → Pages → jsDelivr 镜像。
@@ -97,13 +149,20 @@
         return out;
     }
 
-    /** 拉索引：多源逐个试，全失败抛最后一个异常，由调用方决定怎么显示（不吞错） */
+    /**
+     * 拉索引：多源逐个试，全失败抛最后一个异常，由调用方决定怎么显示（不吞错）。
+     *
+     * 缓存策略用 `no-cache` 而不是 `no-store`：前者是"可以存、但每次回源验证"
+     *   （ETag/304，几十字节），后者连存都不让，每次开市场都必须整份重下。
+     *   6 KB 的索引重建一次往返不贵，但它是**每次安装前都会走一遍**的请求
+     *   （installFromMarket 里装完还要再拉一次），能省就省。
+     */
     async function fetchMarketIndex() {
         var lastErr = null;
         var urls = marketIndexUrls();
         for (var i = 0; i < urls.length; i++) {
             try {
-                var res = await fetch(urls[i], { cache: 'no-store' });
+                var res = await fetch(urls[i], { cache: 'no-cache' });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 var data = await res.json();
                 var plugins = (data && Array.isArray(data.plugins)) ? data.plugins : [];
@@ -129,7 +188,8 @@
             if (res.ok) {
                 var data = await res.json();
                 for (var p of ((data && data.plugins) || [])) {
-                    map.set(p.id, { version: p.version || '', enabled: p.defaultEnabled !== false });
+                    // 默认关闭（与 mods.js 的 isModEnabled 同语义）：显式 true 才算默认开
+                    map.set(p.id, { version: p.version || '', enabled: p.defaultEnabled === true });
                 }
             }
         } catch (e) { /* APK 或服务未起：下面那份兜底 */ }
@@ -265,61 +325,325 @@
         }
     }
 
+    /** 单个 Range 请求失败后的重试次数（链路抖动是常态，一次失败不代表这个包下不了） */
+    var SEGMENT_RETRIES = 3;
+    /** 单片最小字节数：片数按体积算，但不让一个 1MB 的包被拆成几十个请求 */
+    var MIN_SEGMENT_BYTES = 512 * 1024;
+    /** 片数上限。每片一条独立 TCP 连接，太多会被对端限流，也白占移动端带宽 */
+    var MAX_SEGMENTS = 16;
+
     /**
-     * 下载一个 zip。
+     * 一个文件该拆几片。
      *
-     * 为什么自己读流而不是 await res.blob()：要给用户看到进度 ——
-     * 立绘、背景包有 7~10 MB，手机上一声不吭地等十几秒，用户会以为卡死了。
-     * 拿不到 Content-Length（或环境不支持流式读取）时就退化成整体读，
-     * 此时进度条只显示已下载字节数。
+     * 为什么要拆：GitHub Pages 对**单条 TCP 流**限速到 ~0.1 MB/s（本机实测：10 MB 的
+     *   立绘包单连接 115 s，32 并发 3.6 s,速率几乎随并发数线性增长）。浏览器自带的
+     *   下载器默认多连接，所以"官网下得飞快、应用里慢成蜗牛"不是应用写错了，
+     *   而是这里只开了**一条**流 —— 一个 7~10 MB 的素材包在这种链路上要等几分钟，
+     *   还经常中途卡死。
+     *
+     * 为什么手机端少开：移动网络的并发收益远小于电脑，而每条连接都要占带宽与内存；
+     *   按**能力**判断（IS_MOBILE_DEVICE），与 core.js 判断设备形态用的是同一个值，
+     *   不另写一套 UA 嗅探。
      */
-    async function downloadZip(url, onProgress) {
-        var res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error('下载失败：HTTP ' + res.status);
-        var total = Number(res.headers.get('Content-Length') || 0);
+    function segmentCountFor(sizeBytes) {
+        if (!sizeBytes || sizeBytes <= 0) return 1;
+        var bySize = Math.ceil(sizeBytes / MIN_SEGMENT_BYTES);
+        var cap = (typeof IS_MOBILE_DEVICE !== 'undefined' && IS_MOBILE_DEVICE) ? 6 : MAX_SEGMENTS;
+        return Math.max(1, Math.min(cap, bySize));
+    }
+
+    /** 读一段 Range 响应体；进度由调用方按"已收字节"累积 */
+    async function readStream(res, onBytes) {
         if (!res.body || typeof res.body.getReader !== 'function') {
             var buf = await res.arrayBuffer();
-            if (onProgress) onProgress(buf.byteLength, buf.byteLength);
-            return new Blob([buf], { type: 'application/zip' });
+            onBytes(buf.byteLength);
+            return buf;
         }
         var reader = res.body.getReader();
         var chunks = [];
-        var got = 0;
         for (;;) {
             var step = await reader.read();
             if (step.done) break;
             chunks.push(step.value);
-            got += step.value.length;
-            if (onProgress) onProgress(got, total);
+            onBytes(step.value.length);
         }
-        return new Blob(chunks, { type: 'application/zip' });
+        return new Blob(chunks);
     }
 
-    /** 从市场安装一个插件（下载 → 复用上传安装协议 → 刷新两栏） */
+    /**
+     * 分片并发下载一个 zip，全部成功才返回（任何一片最终失败都让整次下载失败）。
+     *
+     * 进度按**总已收字节**汇报，与分片完成顺序无关 —— 否则进度条会来回跳。
+     *
+     * @param {string} url
+     * @param {number} total 文件总字节数（必须已知，分片边界靠它算）
+     * @param {function} onProgress
+     */
+    async function downloadZipSegmented(url, total, onProgress) {
+        var n = segmentCountFor(total);
+        var size = Math.ceil(total / n);
+        var parts = new Array(n);
+        var got = 0;
+        var bump = function (bytes) {
+            got += bytes;
+            if (onProgress) onProgress(Math.min(got, total), total);
+        };
+
+        var fetchSegment = async function (i) {
+            var start = i * size;
+            var end = Math.min(total - 1, start + size - 1);
+            var want = end - start + 1;
+            var lastErr = null;
+            for (var attempt = 0; attempt <= SEGMENT_RETRIES; attempt++) {
+                // 上一次尝试已经吐出的字节要退回去（重试会重读同一段），
+                //   否则重试几次后进度会超过 100%
+                var before = 0;
+                try {
+                    var res = await fetch(url, {
+                        cache: 'no-store',
+                        headers: { Range: 'bytes=' + start + '-' + end },
+                    });
+                    if (res.status !== 206) {
+                        // 200 = 服务端忽略了 Range，把整个文件当这一片发了回来。
+                        //   不能当分片用（拼接会重复），直接放弃分片方案回退单流。
+                        throw new Error('服务端不支持分片下载（HTTP ' + res.status + '）');
+                    }
+                    var blob = await readStream(res, function (b) { before += b; bump(b); });
+                    if (blob.size === want) { parts[i] = blob; return; }
+                    bump(-before);
+                    throw new Error('分片长度不符（期望 ' + want + '，实收 ' + blob.size + '）');
+                } catch (e) {
+                    bump(-before);   // before 为 0 时是无操作
+                    lastErr = e;
+                    // "不支持分片"是能力问题，重试也没用 → 立刻上抛给调用方回退单流。
+                    //   其它错误（超时/断连/长度不符）才值得重试。
+                    if (/不支持分片下载/.test(String(e && e.message))) throw e;
+                }
+            }
+            throw lastErr || new Error('分片下载失败');
+        };
+
+        var tasks = [];
+        for (var i = 0; i < n; i++) tasks.push(fetchSegment(i));
+        await Promise.all(tasks);
+        return new Blob(parts, { type: 'application/zip' });
+    }
+
+    /**
+     * 下载一个 zip（多源回退）。
+     *
+     * 顺序由 packageMirrorUrls 决定（上次通的源 → 原地址 → 其余镜像）。
+     *   并发解决"单流被限速"，多源解决"这条链路根本连不上" —— 两者互补，缺一不可：
+     *   实测 Pages 会整条链路 20s 全超时，此时再多的并发也拿不到一个字节。
+     *
+     * 每个源给一个**独立的快速失败预算**：源不通时我们希望尽快换下一个，而不是
+     *   陪着它熬到默认超时（浏览器默认没有超时，一个死连接能挂几分钟）。用
+     *   AbortController 给探测阶段加时限 —— 一旦探测成功（拿到 206 或 200），
+     *   时限就撤掉，正常传输不再受它影响。
+     */
+    async function downloadZip(url, onProgress) {
+        var urls = packageMirrorUrls(url);
+        var lastErr = null;
+        for (var i = 0; i < urls.length; i++) {
+            try {
+                var blob = await downloadZipFrom(urls[i], onProgress);
+                // 记住这个源：同一次会话里后面的包直接从它开始，不必每个都先等一次超时
+                var b = baseOfPackageUrl(urls[i]);
+                if (b) lastGoodBase = b;
+                return blob;
+            } catch (e) {
+                lastErr = e;
+                if (onProgress) onProgress(0, 0);   // 换源重来，进度归零
+            }
+        }
+        throw lastErr || new Error('下载失败');
+    }
+
+    /** 探测阶段的时限（毫秒）：源连不上时尽快换下一个，别陪着死连接熬 */
+    var PROBE_TIMEOUT_MS = 8000;
+
+    /** 给 fetch 套一个只在"拿到响应头"之前生效的时限 */
+    async function fetchWithProbeTimeout(url, opts) {
+        var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+        var timer = null;
+        var o = Object.assign({}, opts);
+        if (ctrl) {
+            o.signal = ctrl.signal;
+            timer = setTimeout(function () { try { ctrl.abort(); } catch (e) { /* 忽略 */ } }, PROBE_TIMEOUT_MS);
+        }
+        try {
+            return await fetch(url, o);
+        } finally {
+            if (timer) clearTimeout(timer);   // 响应头已到 → 时限作废，传输不再被掐
+        }
+    }
+
+    /**
+     * 从**单个**地址下载一个 zip。
+     *
+     * 优先**分片并发**（见 segmentCountFor）：单流在这条链路上被限速，7~10 MB 的
+     *   素材包要等几分钟；多开几条连接能把它压到几秒。
+     *
+     * 为什么先发一个 1 字节的 Range 请求而不是 HEAD：要同时确认三件事 ——
+     *   ① 文件多大（分片边界靠它算）；② 服务端真的回 206（只看 Accept-Ranges
+     *   声明不够，有的源声明了却回 200）；③ 这一跳链路此时通不通。
+     *
+     * 任何一步不成立（拿不到长度 / 非 206 / 体积太小）都**原样退回单流** ——
+     *   对不支持的源是零风险，行为与改动前一致。
+     *
+     * 为什么自己读流而不是 await res.blob()：要给用户看到进度 —— 一声不吭地等十几秒，
+     *   用户会以为卡死了。拿不到 Content-Length（或环境不支持流式读取）时就退化成
+     *   整体读，此时进度只显示已下载字节数。
+     */
+    async function downloadZipFrom(url, onProgress) {
+        // ① 探测：1 字节 Range。206 + Content-Range 才说明分片可用
+        var probe = null;
+        var total = 0;
+        try {
+            probe = await fetchWithProbeTimeout(url, { cache: 'no-store', headers: { Range: 'bytes=0-0' } });
+            if (probe.status === 206) {
+                // Content-Range: bytes 0-0/<total>
+                var m = /\/(\d+)\s*$/.exec(String(probe.headers.get('Content-Range') || ''));
+                total = m ? Number(m[1]) : 0;
+            } else if (probe.ok) {
+                // 源不支持 Range（回了 200 整个文件）—— 这个响应体就是完整文件，
+                //   直接当单流用掉，不再多发一次请求
+                total = Number(probe.headers.get('Content-Length') || 0);
+                var got0 = 0;
+                var blob0 = await readStream(probe, function (b) {
+                    got0 += b;
+                    if (onProgress) onProgress(got0, total);
+                });
+                return new Blob([blob0], { type: 'application/zip' });
+            }
+        } catch (e) { probe = null; /* 探测失败：走下面的单流，让它报真正的错 */ }
+        if (probe && probe.body && typeof probe.body.cancel === 'function') {
+            try { await probe.body.cancel(); } catch (e) { /* 忽略 */ }
+        }
+
+        if (total > MIN_SEGMENT_BYTES && segmentCountFor(total) > 1) {
+            try {
+                return await downloadZipSegmented(url, total, onProgress);
+            } catch (e) {
+                // 分片走不通（源中途改口、或网络让所有分片都失败）→ 退回单流再试一次。
+                //   不在这里吞错：单流也失败时抛出的是单流的错，那才是用户该看到的。
+                if (onProgress) onProgress(0, 0);
+            }
+        }
+
+        // ② 单流（原行为）：小包、不支持分片的源、或分片方案失败了
+        var res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) throw new Error('下载失败：HTTP ' + res.status);
+        var total2 = Number(res.headers.get('Content-Length') || 0) || total;
+        var got = 0;
+        var blob = await readStream(res, function (b) {
+            got += b;
+            if (onProgress) onProgress(got, total2);
+        });
+        return new Blob([blob], { type: 'application/zip' });
+    }
+
+    /**
+     * 把一个插件的依赖（含依赖的依赖）摊平成"先装依赖、后装本体"的安装顺序。
+     *
+     * 为什么要做这件事：依赖必须在**装本体之前**就位，否则本体装完直接拒绝加载
+     *   （表现为"前置插件不可用"）。而用户看不出该装哪个 —— `elaina-avatar`
+     *   这类资源包在列表里没有任何提示说"装 galgame 会用到它"。
+     *   只提示"缺依赖、请先装上"等于把一步可自动完成的事推给用户。
+     *
+     * 顺序用**深度优先后序**：子依赖先入队，本体最后。这样安装包时它的依赖已经就位，
+     *   装完 reload 一次就能直接生效，不会有"先失败再成功"的中间态。
+     *
+     * 已安装且版本不旧的依赖**不重复下载**（跳过），只装缺的那些。
+     * 依赖环（a→b→a）用 visiting 集合挡住，不会死循环 —— 相互依赖本身就是坏数据，
+     *   此时按"谁先遇到谁先装"处理，装完由 mods.js 的加载检查去报缺。
+     *
+     * @param {{id:string, depends?:string[]}} p1 目标插件
+     * @param {Map<string,object>} byId 市场索引里全部插件（id → 条目）
+     * @param {Map<string,object>} installed 本机已装（id → 条目）
+     * @param {Set<string>} [visiting] 递归用的环检测集合
+     * @returns {Array<{plugin:object, missingBehind:string[]}>} 安装顺序（依赖在前）
+     */
+    function resolveInstallOrder(p1, byId, installed, visiting) {
+        visiting = visiting || new Set();
+        var out = [];
+        if (!p1 || visiting.has(p1.id)) return out;
+        visiting.add(p1.id);
+        var deps = Array.isArray(p1.depends) ? p1.depends : [];
+        var missingBehind = [];
+        for (var d of deps) {
+            var dep = byId.get(d);
+            if (!dep) {
+                // 索引里没有这个依赖 —— 装不了，但别因此把主插件也拦住，
+                //   把名字带出去由调用方提示"这个依赖在商店里找不到"。
+                missingBehind.push(d);
+                continue;
+            }
+            out = out.concat(resolveInstallOrder(dep, byId, installed, visiting));
+        }
+        // 已装的依赖不重复下载（用户可能已经装过了，或本来就是手动装的）
+        if (!installed.has(p1.id)) out.push({ plugin: p1, missingBehind: missingBehind });
+        // 本体即使已装也要带出去？不带 —— 调用方对"已装"本来就禁用按钮。
+        return out;
+    }
+
+    /** 从市场安装一个插件（含其依赖）→ 下载 → 复用上传安装协议 → 刷新两栏 */
     async function installFromMarket(p, btn) {
         var name = packageNameOf(p);
         var label = btn ? btn.textContent : '';
         if (btn) { btn.disabled = true; btn.textContent = '准备中…'; }
         try {
             if (!p.downloadUrl) throw new Error('索引里这条没有 downloadUrl');
-            setHint('正在下载 ' + (p.name || p.id) + ' …', 'text-indigo-400');
-            var blob = await downloadZip(p.downloadUrl, function (got, total) {
-                if (!btn) return;
-                var shown;
-                if (total) shown = Math.floor(got / total * 100) + '%';
-                else shown = fmtSize(got) || (Math.round(got / 1024) + ' KB');
-                btn.textContent = '下载 ' + shown;
-            });
-            if (btn) btn.textContent = '安装中…';
-            var res = await fetch('/api/plugins/install?name=' + encodeURIComponent(name), {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/zip' },
-                body: blob,
-            });
-            var data = await res.json().catch(function () { return null; });
-            if (!res.ok || !data || !data.ok) {
-                throw new Error((data && data.message) || ('HTTP ' + res.status));
+
+            // 先把依赖算出来：缺的依赖要**一起装**，否则装完主体它照样拒绝加载。
+            var all = (lastIndex && Array.isArray(lastIndex.plugins)) ? lastIndex.plugins : [];
+            var byId = new Map();
+            for (var one of all) byId.set(one.id, one);
+            var installed = await installedMap();
+            var queue = resolveInstallOrder(p, byId, installed);
+            if (!queue.some(function (q) { return q.plugin.id === p.id; })) {
+                // 理论上不会发生（按钮对已装的是禁用的），兜一下
+                queue.push({ plugin: p, missingBehind: [] });
             }
+
+            var done = [];
+            for (var i = 0; i < queue.length; i++) {
+                var item = queue[i];
+                var cur = item.plugin;
+                var isMain = cur.id === p.id;
+                var total = queue.length;
+                var prefix = total > 1 ? '（' + (i + 1) + '/' + total + '）' : '';
+
+                if (item.missingBehind.length) {
+                    setHint('注意：' + (cur.name || cur.id) + ' 依赖的 '
+                        + item.missingBehind.join('、') + ' 在商店里找不到，装完可能无法加载。',
+                        'text-amber-600');
+                }
+
+                var pkgName = packageNameOf(cur);
+                setHint(prefix + '正在下载 ' + (cur.name || cur.id) + ' …', 'text-indigo-400');
+                var blob = await downloadZip(cur.downloadUrl, function (got, tot) {
+                    if (!btn || !isMain) return;   // 进度只画在用户点的那颗按钮上
+                    var shown;
+                    if (tot) shown = Math.floor(got / tot * 100) + '%';
+                    else shown = fmtSize(got) || (Math.round(got / 1024) + ' KB');
+                    btn.textContent = '下载 ' + shown;
+                });
+                if (btn && isMain) btn.textContent = '安装中…';
+                setHint(prefix + '正在安装 ' + (cur.name || cur.id) + ' …', 'text-indigo-400');
+
+                var res = await fetch('/api/plugins/install?name=' + encodeURIComponent(pkgName), {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/zip' },
+                    body: blob,
+                });
+                var data = await res.json().catch(function () { return null; });
+                if (!res.ok || !data || !data.ok) {
+                    throw new Error((data && data.message) || ('HTTP ' + res.status));
+                }
+                done.push(cur.name || cur.id);
+            }
+
             // 装完必须**重新扫描加载**（ElainaMods.reload → mods.js 的 loadAll）。
             //   不重扫的症状是"下载成功、装上了，就是用不了"：
             //   插件的注册表只在页面启动时建立一次；不重扫的话这个新插件不在注册表里，
@@ -333,8 +657,11 @@
                     reloaded = true;
                 }
             } catch (e) { /* 加载失败不该把"安装成功"说成失败 */ }
+            var extra = done.length > 1
+                ? '（含依赖 ' + done.slice(0, -1).join('、') + '）'
+                : '';
             setHint((reloaded ? '✅ 已安装并已加载 ' : '✅ 已安装 ')
-                + (p.name || p.id)
+                + (p.name || p.id) + extra
                 + (reloaded ? '，已生效。' : '，刷新页面后生效。'), 'text-emerald-600');
             // 插件栏那份清单必须跟着刷新，否则用户切过去看不到刚装的插件
             if (typeof refreshModsList === 'function') void refreshModsList();

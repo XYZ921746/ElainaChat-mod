@@ -1,33 +1,15 @@
 /* ============================================================================
  * 插件系统（动态 mod 加载器）
  *
- * 目标：Galgame、桌宠这类**可选功能**不该长在宿主主脚本里。它们要能：
- *   · 像 mod 一样放/删 —— 插件就是一个目录，删掉目录即卸载
- *   · 独立开关 —— 用户随时启用/停用，互不影响
- *   · 失败隔离 —— 一个插件崩了不能拖垮整个应用
- *   · 按需加载 —— 未启用的插件不注入脚本、不占内存
+ * 插件是用户可自行增删的第三方代码，因此加载器必须做到：
+ *   · 清单驱动 —— 只认 manifest.json，不硬编码插件名；
+ *   · 失败隔离 —— 单个插件抛错只标记该插件，不牵连宿主与其它插件；
+ *   · 按需加载 —— 未启用不注入脚本；
+ *   · 顺序可控 —— manifest.after 做拓扑排序并检测环；
+ *   · 宿主 API 收窄 —— 只经 host 暴露必要能力，不让插件摸宿主内部。
  *
- * ── 设计要点 ────────────────────────────────────────────────────────────────
- *
- * ① **清单驱动**：每个插件目录里有 manifest.json（id/name/version/entry/styles/
- *    defaultEnabled）。加载器只认清单，不硬编码任何插件名 —— 这样"新增一个 mod"
- *    等于"加一个目录"，不需要改宿主代码。
- *
- * ② **失败隔离**：插件的加载与初始化都包在 try/catch 里。任何一个插件抛错，
- *    只把它标记为 error 并继续加载其余插件 —— 绝不让一个坏 mod 白屏整个应用。
- *    这一点必须做，因为 mod 是"用户可自行增删"的东西，质量不可控。
- *
- * ③ **动态 script 注入**：用 <script src> 注入而不是 fetch+eval。原因：
- *    · 保持与现有 app-*.js 一致的加载语义（顶层 const/let 进全局词法环境）
- *    · 浏览器能正常显示来源文件，调试时堆栈可读
- *    · 不需要处理 CSP 与 eval 的额外风险
- *    代价是加载是异步的，所以提供 await loadAll() 让宿主能等。
- *
- * ④ **宿主 API 收窄**：插件不能直接摸宿主内部（那样插件一多就没法重构）。
- *    宿主通过 `host` 参数只暴露必要的接口（见 createHostApi）。
- *
- * ⑤ **顺序可控**：manifest 可声明 `after`（依赖的插件 id），加载器做拓扑排序；
- *    环形依赖会被检测并报错，而不是死循环。
+ * 脚本用 <script src> 注入而非 fetch+eval：保留来源与调试堆栈，也不引入
+ * eval 的风险；代价是异步加载，所以提供 await loadAll()。
  * ========================================================================== */
 (function () {
     'use strict';
@@ -133,13 +115,21 @@
     function setModsGloballyEnabled(on) {
         try { Store.setItem(MODS_ENABLED_KEY, on ? '1' : '0'); } catch (e) { /* 忽略 */ }
     }
+    /**
+     * 某个插件是否启用。**没有用户设置时一律算关闭**。
+     *
+     * 为什么"没写 defaultEnabled"也是关闭：插件会改动界面与行为，不该在用户
+     *   不知情时生效。判据若写成 `!== false`（旧的写法），作者漏写这一行就等于
+     *   默认打开 —— 装完即生效，用户连"我要不要它"都没被问过。要默认开的插件
+     *   必须**显式**写 `"defaultEnabled": true`，那是作者有意的选择。
+     */
     function isModEnabled(id, manifest) {
         try {
             const v = Store.getItem(MOD_ENABLED_KEY_PREFIX + id);
-            if (v === null) return manifest && manifest.defaultEnabled !== false;
+            if (v === null) return Boolean(manifest && manifest.defaultEnabled === true);
             return v === '1';
         } catch (e) {
-            return !(manifest && manifest.defaultEnabled === false);
+            return Boolean(manifest && manifest.defaultEnabled === true);
         }
     }
     function setModEnabled(id, on) {
@@ -1204,15 +1194,6 @@
             }
         }
 
-        /** 指针位置对应的插入点（在 scope 里找；返回要插到谁前面；null = 插到最后） */
-        function targetBefore(scope, y) {
-            for (const c of scope.querySelectorAll(ITEM_SEL)) {
-                const r = c.getBoundingClientRect();
-                if (y < r.top + r.height / 2) return c;
-            }
-            return null;
-        }
-
         container.querySelectorAll(HANDLE_SEL).forEach((grip) => {
             const onDown = (ev) => {
                 if (drag) return;
@@ -1694,6 +1675,31 @@
         const entry = { manifest, state: 'pending', error: null, api: null };
         registry.set(manifest.id, entry);
 
+        // 先看**本插件自己**要不要加载：没启用 / 插件系统总开关关着 → disabled 返回。
+        //
+        //   前置的判定放在这**之后**：前置是"启动它"的前提，不是它自身的故障。
+        //   一个从没启用过的插件（默认关闭的常态）不该顶着红色的
+        //   「前置插件不可用」角标 —— 那是把"没开"误报成了"坏了"。
+        //
+        //   「上次加载失败被自动停用」与「用户自己关的」是两种不同的关闭，
+        //   必须分得开：前者要把失败原因留在卡片上（用户才知道该修什么），
+        //   后者才是干干净净的"未启用"。
+        //
+        //   原因从**存储**里读，不看内存的 prev：刷新后是新会话，registry 空着，
+        //   只有落盘的记录还在。这就是 autoDisableBroken 必须写盘的原因。
+        if (!isModEnabled(manifest.id, manifest)) {
+            const fail = readModFailure(manifest.id);
+            if (fail) {
+                entry.state = 'error';
+                entry.error = fail.error;
+                entry.autoDisabled = true;
+                entry.failedAt = fail.at;
+            } else {
+                entry.state = 'disabled';
+            }
+            deactivateContributions(manifest.id);
+            return entry;
+        }
         // 前置插件不可用 → **拒绝加载**，并给出可读原因。
         //
         // 只打一句警告然后照样加载很糟：插件会在"依赖不在"的前提下跑起来 ——
@@ -1704,54 +1710,41 @@
         // 所以判定同时看"装没装"与"启用没启用"。"装了但没启用"等于不可用：
         //     [Mod] 加载完成：elaina-avatar=disabled galgame=ready pet=ready
         // 这行日志就是漏判的证据 —— 前置被禁用了，两个依赖方却照样 ready，
-        // 拿不到立绘而系统认为正常。每种原因都要给出**可执行的下一步**。
-        if (missingDeps.length) {
+        // 拿不到立绘而系统认为正常。
+        //
+        // 清单期算不出的第三种不可用在这里补上：前置**这一轮**加载失败/被拒
+        //   （依赖序保证它排在前面、已经处理完）。不看这个的话，依赖方会带着
+        //   坏前置以"降级模式"跑起来 —— 界面在了、人物没了，系统却认为正常。
+        //
+        // 这段在"总开关"判定**之前**：总开关关着时，带前置的已启用插件要
+        //   报 blocked（原因指向总开关），不带前置的直接 disabled —— 两种都要
+        //   说得清"是谁拦的"。
+        const lack = (missingDeps || []).slice();
+        for (const d of (Array.isArray(manifest.after) ? manifest.after : [])) {
+            if (lack.some((x) => x.id === d)) continue;    // 已有结论的不重复报
+            const depEntry = findByKey(d);
+            if (depEntry && (depEntry.state === 'error' || depEntry.state === 'blocked')) {
+                lack.push({
+                    id: d,
+                    reason: depEntry.state === 'error' ? '加载失败' : '自身前置不可用',
+                    fixable: false,
+                });
+            }
+        }
+        if (lack.length) {
             entry.state = 'blocked';
-            entry.missingDeps = missingDeps;
+            entry.missingDeps = lack;
             // 不可用时把它之前的注册项收起来：一个"被拒绝加载"的插件
             // 不该继续占着界面入口或往提示词里加东西
             deactivateContributions(manifest.id);
             // 每条原因一句话，人（和 AI）都能读懂该做什么
-            const detail = missingDeps.map((d) => {
-                const what = '前置插件「' + d.id + '」' + d.reason;
-                if (d.reason === '未启用') {
-                    return what + ' —— 到「设置 → 插件」里把它的开关打开';
-                }
-                if (d.reason === '未安装') {
-                    return what + ' —— 需要先安装它（见 Releases 的扩展包）';
-                }
-                if (d.reason === '插件系统总开关已关闭') {
-                    return what + ' —— 到「设置 → 插件」打开「启用插件系统」并刷新页面';
-                }
-                return what + ' —— 请先修好那个插件';
-            }).join('；');
-            entry.error = '已拒绝加载：' + detail
-                + '。（缺了前置就启动，功能只会是残缺的，所以这里直接拒绝而不是带病运行。）';
+            entry.error = refusalMessage(lack);
             console.error('[Mod:' + manifest.id + '] ' + entry.error);
             return entry;
         }
 
         if (!modsGloballyEnabled()) {
             entry.state = 'disabled';
-            deactivateContributions(manifest.id);
-            return entry;
-        }
-        if (!isModEnabled(manifest.id, manifest)) {
-            // 「上次加载失败被自动停用」与「用户自己关的」是两种不同的关闭，
-            // 必须分得开：前者要把失败原因留在卡片上（用户才知道该修什么），
-            // 后者才是干干净净的"未启用"。
-            //
-            // 原因从**存储**里读，不看内存的 prev：刷新后是新会话，registry 空着，
-            // 只有落盘的记录还在。这就是 autoDisableBroken 必须写盘的原因。
-            const fail = readModFailure(manifest.id);
-            if (fail) {
-                entry.state = 'error';
-                entry.error = fail.error;
-                entry.autoDisabled = true;
-                entry.failedAt = fail.at;
-            } else {
-                entry.state = 'disabled';
-            }
             deactivateContributions(manifest.id);
             return entry;
         }
@@ -1850,7 +1843,7 @@
      * 设置界面据此把开关显示成「关」并显示原因 —— 用户想再试一次时手动打开
      * 即可（打开会重新走一遍加载流程）。
      *
-     * ★ 失败原因必须**落盘**，不能只放在内存的 entry 上：
+     * 失败原因必须**落盘**，不能只放在内存的 entry 上：
      *   下一次刷新是新会话，registry 是空的 —— 那时只能从存储里知道
      *   "这个插件上次是被系统停用的，原因是 X"。只记在内存的话，刷新一次
      *   就退化成普通的「未启用」，用户再也看不到为什么坏了。
@@ -1917,6 +1910,24 @@
     let loadingDir = null;
 
     /**
+     * 清单索引：清单 id / 目录名 / 注册名 → 清单条目。
+     *
+     * 三种键都可能被 `after` 引用（用户改过目录名、manifest 没写 id 时，
+     * 依赖方写的仍是脚本里的注册名）—— 建索引用的地方不止一处，
+     * 各写一份必然漂移，收敛成一个函数。
+     */
+    function manifestKeyIndex(manifests) {
+        const byKey = new Map();
+        for (const m of manifests) {
+            if (m.id) byKey.set(m.id, m);
+            if (m.dir && !byKey.has(m.dir)) byKey.set(m.dir, m);
+            const rn = m.dir ? regByDir.get(m.dir) : null;
+            if (rn && !byKey.has(rn)) byKey.set(rn, m);
+        }
+        return byKey;
+    }
+
+    /**
      * 找出每个插件**不可用的前置插件**，并说明原因。
      *
      * ── 为什么要单独做这件事 ─────────────────────────────────────────────
@@ -1946,14 +1957,7 @@
      * @returns {Map<string, Array<{id:string, reason:string, fixable:boolean}>>}
      */
     function findMissingDeps(manifests) {
-        // 建三张索引：清单 id / 目录名 / 注册名 → 清单条目
-        const byKey = new Map();
-        for (const m of manifests) {
-            if (m.id) byKey.set(m.id, m);
-            if (m.dir && !byKey.has(m.dir)) byKey.set(m.dir, m);
-            const rn = m.dir ? regByDir.get(m.dir) : null;
-            if (rn && !byKey.has(rn)) byKey.set(rn, m);
-        }
+        const byKey = manifestKeyIndex(manifests);
 
         // 第一轮：只算"未安装 / 未启用"（不涉及级联）
         const missing = new Map();
@@ -1999,6 +2003,79 @@
         return missing;
     }
 
+    /**
+     * 把"前置为什么不可用"翻译成每条一句话（原因 + 可执行的下一步）。
+     *
+     * loadAll 的拒绝加载与 setEnabled 的拒绝启动**共用**这一份 ——
+     * 两个入口各写一份必然漂移，用户在不同地方会看到两种说法。
+     */
+    function describeMissingDeps(missingDeps) {
+        return (Array.isArray(missingDeps) ? missingDeps : []).map((d) => {
+            const what = '前置插件「' + d.id + '」' + d.reason;
+            if (d.reason === '未启用') {
+                return what + ' —— 到「设置 → 插件」里把它的开关打开';
+            }
+            if (d.reason === '未安装') {
+                return what + ' —— 需要先安装它（见 Releases 的扩展包）';
+            }
+            if (d.reason === '插件系统总开关已关闭') {
+                return what + ' —— 到「设置 → 插件」打开「启用插件系统」并刷新页面';
+            }
+            if (d.reason === '加载失败') {
+                return what + ' —— 先把它修好（它自己的卡片上写着失败原因），再回来打开本插件';
+            }
+            if (d.reason === '自身前置不可用') {
+                return what + ' —— 先把它的前置补齐，再回来打开本插件';
+            }
+            return what + ' —— 请先修好那个插件';
+        }).join('；');
+    }
+
+    /** 拒绝加载 / 拒绝启动时的完整说明（措辞与 describeMissingDeps 同源） */
+    function refusalMessage(missingDeps) {
+        return '已拒绝加载：' + describeMissingDeps(missingDeps)
+            + '。（缺了前置就启动，功能只会是残缺的，所以这里直接拒绝而不是带病运行。）';
+    }
+
+    /**
+     * 把**已启用插件**的前置自动带上（只写开关，不动加载）。
+     *
+     * 为什么放在 loadAll 里：`after` 是"没有它我就残缺"的硬声明，用户打开
+     *   依赖方的那一刻就已经表达过"要完整可用"；前置停在关闭状态时，依赖方
+     *   每次启动都会被拒绝，用户还得自己去猜"还差哪个开关"。
+     *   这里把这种状态自动补齐 —— 加载仍按依赖序在后面统一做，
+     *   顺序保证由 sortByDependency 提供。
+     *
+     * 只动"装了但没启用"的前置；未安装的装不出来（交给加载期按「未安装」
+     *   拒绝并说明）。环依赖用 visiting 挡住（sortByDependency 只报错，不解开环）。
+     */
+    function pullUpPrerequisites(manifests) {
+        if (!modsGloballyEnabled()) return;   // 总开关关着时一切都不加载，别动开关
+        const byKey = manifestKeyIndex(manifests);
+        const pulled = [];
+        const visit = (m, visiting) => {
+            for (const d of (Array.isArray(m.after) ? m.after : [])) {
+                const dep = byKey.get(d);
+                if (!dep) continue;                     // 未安装：加载期会报
+                if (visiting.has(dep.id)) continue;     // 环
+                visiting.add(dep.id);
+                if (!isModEnabled(dep.id, dep)) {
+                    setModEnabled(dep.id, true);
+                    pulled.push(dep.name || dep.id);
+                }
+                visit(dep, visiting);                   // 前置的前置也要带上
+            }
+        };
+        for (const m of manifests) {
+            if (!isModEnabled(m.id, m)) continue;       // 依赖方自己没启用：它的前置不用拉
+            visit(m, new Set([m.id]));
+        }
+        if (pulled.length) {
+            console.log('[Mod] 已连同前置一起启用：' + [...new Set(pulled)].join('、')
+                + '（依赖方是启用的，前置不该停在关闭状态）');
+        }
+    }
+
     /** 加载全部插件 */
     async function loadAll() {
         // 原生模式：先等插件根就绪（幂等，任何触发路径都安全 ——
@@ -2029,6 +2106,10 @@
             }) : '插件清单为空 —— 没安装任何插件，或 /mods/index.json 读取失败'));
             return [];
         }
+
+        // 已启用的插件先把前置带上（为什么在这里做：见 pullUpPrerequisites 的说明），
+        //   再算"还缺什么" —— 拉得起来的不算缺。
+        pullUpPrerequisites(manifests);
 
         // 先查不可用的前置插件 —— 这类插件会被**拒绝加载**（不是警告后照跑）。
         //   判定同时看"装没装"与"启用没启用"，并认清单 id / 目录名 / 注册名三种键。
@@ -2203,6 +2284,94 @@
         }
     }
 
+    /** 按注册名 / 清单 id / 目录名中的任意一个查注册条目（三键都可能被 after 引用） */
+    function findByKey(key) {
+        const k = String(key || '');
+        if (!k) return null;
+        let entry = registry.get(k);
+        if (!entry) {
+            const dir = dirByReg.get(k);
+            if (dir) entry = [...registry.values()].find((e) => (e.manifest.dir || e.manifest.id) === dir);
+        }
+        if (!entry) entry = [...registry.values()].find((e) => (e.manifest.dir || e.manifest.id) === k);
+        return entry || null;
+    }
+
+    /**
+     * 谁正在用这个插件：`after` 指向它、且已启用并加载成功（ready）的插件。
+     *
+     * 给"停用 / 卸载"做闸门用 —— 前置一旦被关掉/删掉，正在运行的依赖方
+     *   下一轮就会以"前置不可用"被拒（界面从"好好的"变成"半残"）。
+     *   所以要在动手**之前**问这里，把"谁会受影响"说给用户听。
+     *
+     * 只算 ready 的依赖方：停用（disabled）/ 被拒（blocked）/ 坏（error）的
+     *   插件本来就没在用它，拦着不让删只会让人莫名其妙。
+     *
+     * @returns {Array<{id:string, name:string}>} 依赖方列表（空 = 没人在用，随便动）
+     */
+    function dependentsOf(id) {
+        const entry = registry.get(id) || findByKey(id);
+        if (!entry) return [];
+        const out = [];
+        for (const e of registry.values()) {
+            if (e === entry) continue;
+            const after = Array.isArray(e.manifest.after) ? e.manifest.after : [];
+            // 三键匹配（清单 id / 目录名 / 注册名）—— 与 findByKey 同一套判据
+            if (!after.some((d) => findByKey(d) === entry)) continue;
+            if (e.state === 'ready' && isModEnabled(e.manifest.id, e.manifest)) {
+                out.push({ id: e.manifest.id, name: e.manifest.name || e.manifest.id });
+            }
+        }
+        return out;
+    }
+
+    /** 依赖方名单拼成「A」「B」这样的可读串（日志与弹窗共用一份措辞） */
+    function dependentNames(using) {
+        return (using || []).map((d) => '「' + (d.name || d.id) + '」').join('、');
+    }
+
+    /**
+     * 把 manifest.after 声明的前置插件逐个**拉到可用**：
+     *   已装但没启用 → 递归 setEnabled（连它自己的前置一起拉）；已就绪 → 跳过。
+     *
+     * 返回拉不起来的清单（未安装 / 加载失败 / 它自己也缺前置），
+     * 调用方据此**拒绝启动**并说明原因 —— 每种原因在 refusalMessage 里都有下一步。
+     *
+     * visiting 挡住 after 成环时的递归（sortByDependency 只报错，不解开环）。
+     *
+     * @returns {Promise<Array<{id:string, reason:string, fixable:boolean}>>}
+     */
+    async function ensurePrerequisites(entry, visiting) {
+        const lack = [];
+        const after = Array.isArray(entry.manifest.after) ? entry.manifest.after : [];
+        for (const d of after) {
+            if (!d || typeof d !== 'string') continue;
+            const depEntry = findByKey(d);
+            if (!depEntry) {
+                lack.push({ id: d, reason: '未安装', fixable: false });
+                continue;
+            }
+            if (visiting.has(depEntry.manifest.id)) continue;    // 环：另一条链正在处理它
+            visiting.add(depEntry.manifest.id);
+            const ready = depEntry.state === 'ready'
+                && isModEnabled(depEntry.manifest.id, depEntry.manifest);
+            if (!ready) {
+                await setEnabled(depEntry.manifest.id, true, visiting);
+                const fresh = registry.get(depEntry.manifest.id);
+                if (!fresh || fresh.state !== 'ready') {
+                    lack.push({
+                        id: d,
+                        reason: fresh && fresh.state === 'error' ? '加载失败'
+                            : (fresh && fresh.state === 'blocked' ? '自身前置不可用' : '不可用'),
+                        fixable: false,
+                    });
+                }
+            }
+            visiting.delete(depEntry.manifest.id);
+        }
+        return lack;
+    }
+
     /** 运行时启用/停用（停用只收回注册项，不卸载脚本 —— 卸载需要整页刷新） */
     /**
      * 运行时启用 / 停用。
@@ -2224,9 +2393,51 @@
      * 已注入的脚本没法"卸载"，但停用后它不显示、不注册、不响应事件，
      *   效果上等价。真要彻底卸载得整页刷新（或删插件目录）。
      */
-    async function setEnabled(id, on) {
+    async function setEnabled(id, on, visiting) {
         const entry = registry.get(id);
         if (!entry) return false;
+
+        if (!on) {
+            // 停用前先问"有谁在用我"：正在运行的依赖方存在 → **拒绝停用**。
+            //
+            //   为什么拦而不是连带关掉依赖方：连带关会一次动掉用户没碰的插件
+            //   （他可能只是想腾点内存，并不知道这一下会连 Galgame 一起没了）；
+            //   拦下并说清"先关谁"，把顺序决定权留给用户。
+            //   判定放在写开关**之前**：拒绝时存储与状态都不能被改动。
+            const using = dependentsOf(id);
+            if (using.length) {
+                const names = dependentNames(using);
+                console.error('[Mod:' + id + '] 拒绝停用：' + names
+                    + ' 正在使用这个插件。如需关闭，请先关闭 ' + names + '。');
+                return false;
+            }
+        }
+
+        if (on) {
+            // 启用前先把前置拉起来（已装未启用的自动启用并加载，递归含前置的前置）。
+            //
+            //   拉不起来的：**拒绝启动** —— 开关拨回关、原因写在条目上
+            //   （设置页卡片显示「前置插件不可用」角标 + 每条的下一步）。
+            //   为什么不"照常启动让它自己降级"：插件的降级路径是按"前置暂时
+            //   不在"写的，用户实际看到的是"功能都在、人物没有"的半残界面，
+            //   而且没有任何提示告诉他差了什么。
+            const lack = await ensurePrerequisites(entry, visiting || new Set([id]));
+            if (lack.length) {
+                setModEnabled(id, false);
+                entry.state = 'blocked';
+                entry.missingDeps = lack;
+                entry.autoDisabled = false;
+                entry.error = refusalMessage(lack);
+                // 拒绝启动不是加载失败：清掉旧的失败记录，
+                // 免得刷新后卡片顶出另一套（过期的）说法
+                clearModFailure(id);
+                deactivateContributions(id);
+                console.error('[Mod:' + id + '] ' + entry.error);
+                emit('mod-changed', { id, enabled: false });
+                return false;
+            }
+        }
+
         setModEnabled(id, on);
 
         if (on) {
@@ -2298,7 +2509,7 @@
             // 注意：loadOne 会往 registry 里塞一个**新** entry 对象，
             // 所以这里必须重新取一次，不能继续用上面那个旧引用（否则读到过期的 state）
             //
-            // ★ 状态由**加载结果**决定，不许在这里强行改写成 ready。
+            // 状态由**加载结果**决定，不许在这里强行改写成 ready。
             //   曾经这里写的是 `if (fresh.state !== 'error') fresh.state = 'ready'` ——
             //   而加载失败的插件被 autoDisableBroken 置成了 error 之后，
             //   下一次点击时它会被上游改成 pending，于是这条判断成立、又被改成
@@ -2363,17 +2574,9 @@
          * @returns {{id, dir, regName, state, entry}|null}
          */
         find(key) {
-            const k = String(key || '');
-            if (!k) return null;
-            // ① 直接命中清单 id
-            let entry = registry.get(k);
-            // ② 命中注册名 → 反查它的目录 → 再取条目
-            if (!entry) {
-                const dir = dirByReg.get(k);
-                if (dir) entry = [...registry.values()].find((e) => (e.manifest.dir || e.manifest.id) === dir);
-            }
-            // ③ 命中目录名
-            if (!entry) entry = [...registry.values()].find((e) => (e.manifest.dir || e.manifest.id) === k);
+            // 三键查找（清单 id / 注册名 / 目录名）收敛在 findByKey ——
+            //   setEnabled 拉前置时也要按同一套键找，两处各写一份必然漂移。
+            const entry = findByKey(key);
             if (!entry) return null;
             return {
                 id: entry.manifest.id,
@@ -2421,6 +2624,13 @@
             }));
         },
         setEnabled,
+        /**
+         * 谁正在用这个插件（已启用且加载成功的依赖方）。
+         *
+         * 停用 / 卸载前问它：非空就别动这个插件 —— 拦下并告诉用户先关谁。
+         * （设置页的开关与删除按钮都先查这里再动手，弹窗文案用它拼名字。）
+         */
+        dependentsOf,
         /**
          * 重新扫描并加载插件（幂等，可重复调用）。
          *

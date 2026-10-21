@@ -110,6 +110,20 @@ async function casePcCommand(c) {
         }
         c.ok(bad.length === 0, `安全命令全部放行（${safe.length} 条）`, bad.join('; '));
 
+        // New-Item 建普通文件夹/文件不该判危险（用户实测：AI 新建文件夹被弹
+        //   "修改注册表或创建项"——它确实出现在那条注册表正则里，属于误伤。
+        //   注册表操作本身仍被拦：reg add/delete 与 New-ItemProperty 那组）。
+        {
+            const mk = classifyCommand('New-Item -ItemType Directory -Path "D:\\桌面2\\旅行日志" -Force');
+            c.ok(mk.risk === 'safe', '★ New-Item 建文件夹不判危险（注册表正则的误伤已修）',
+                `reasons=${JSON.stringify(mk.reasons)}`);
+        }
+        for (const regCmd of ['reg add HKLM\\Software\\X /v y /t REG_SZ /d z', 'New-ItemProperty -Path HKLM:\\Software\\X -Name y']) {
+            const v = classifyCommand(regCmd);
+            c.ok(v.risk === 'dangerous', `注册表操作仍判危险（${regCmd.slice(0, 12)}…）`,
+                `reasons=${JSON.stringify(v.reasons)}`);
+        }
+
         c.ok(classifyCommand('').risk === 'safe', '空命令不误判为危险');
         c.ok(classifyCommand('dir').reasons.length === 0, '安全命令不附带风险原因');
         c.ok(classifyCommand('del x').reasons.length > 0, '危险命令附带风险原因（弹窗要显示给用户）');
@@ -123,12 +137,15 @@ async function casePcCommand(c) {
         c.ok(process.platform !== 'win32' || shells.includes('powershell'), 'Windows 上有 powershell');
         c.ok(process.platform !== 'win32' || shells.includes('cmd'), 'Windows 上有 cmd');
 
-        // ★ 核心断言：整条命令必须是**一个** argv 元素，不能被拆开
+        // ★ 核心断言：整条命令必须完整出现在**同一个** argv 元素里，不能被拆开。
+        //   （可以带必要的输出编码前缀 —— 见 buildShellArgv 的说明；前缀不改变
+        //   命令边界，`; rm -rf /` 仍在原元素内由 shell 自己解析。）
         const evil = 'echo hi; rm -rf /';
+        const holdsWhole = (args, c) => args.some((a) => typeof a === 'string' && a.endsWith(c));
         for (const shell of shells) {
             const { file, args } = buildShellArgv(shell, evil);
             c.ok(typeof file === 'string' && file.length > 0, `${shell}: 有可执行文件`);
-            c.ok(args.includes(evil), `${shell}: 命令原文整体作为一个 argv 元素（未被拆分/拼接）`);
+            c.ok(holdsWhole(args, evil), `${shell}: 命令原文完整落在同一 argv 元素内（未被拆分）`);
             c.ok(!args.some(a => a === ';'), `${shell}: 分号没有被单独拆成 argv`);
         }
         // PowerShell 必须带 -NoProfile / -NonInteractive：
@@ -137,6 +154,21 @@ async function casePcCommand(c) {
         c.ok(ps.args.includes('-NoProfile'), 'powershell 带 -NoProfile');
         c.ok(ps.args.includes('-NonInteractive'), 'powershell 带 -NonInteractive');
         c.ok(__test__.DANGEROUS_RULES.length > 10, '危险规则表非空且有一定规模');
+
+        // 输出编码：Windows 中文系统 PowerShell/cmd 默认按 GBK 输出，Node 按 UTF-8
+        //   解码 → 中文报错全是乱码，AI 读不懂就无法自我纠正（实测：中文路径的
+        //   "找不到路径"回灌成一串问号，模型接着又白发一条等价命令）。
+        if (process.platform === 'win32') {
+            c.ok(/OutputEncoding=\[System\.Text\.Encoding\]::UTF8/.test(ps.args.join(' ')),
+                '★ powershell 命令前设置 UTF-8 输出编码（消除中文乱码）');
+            const cm = buildShellArgv('cmd', 'dir');
+            c.ok(/chcp 65001/.test(cm.args.join(' ')),
+                '★ cmd 命令前设置代码页 65001（同上）');
+            // 编码设置包 try/catch：个别无控制台环境设置会抛错，
+            //   不能让编码失败连累命令执行（退回 GBK 也不比不修差）。
+            c.ok(/try \{ \[Console\]::OutputEncoding/.test(ps.args.join(' ')),
+                '★ 编码设置包 try/catch（设置失败不连累命令本身）');
+        }
     }
 
     // ============================================================ 3. 服务端真实链路
@@ -200,6 +232,15 @@ async function casePcCommand(c) {
             c.ok(String(r.json?.stdout || '').includes('elaina-probe-ok'), '命令真的执行了（输出含探针）',
                 JSON.stringify(r.json?.stdout));
             c.ok(r.json?.risk === 'safe', '服务端回报 risk=safe');
+
+            // 中文输出必须可读（端到端验证编码前缀真的生效）：
+            //   GBK 输出按 UTF-8 解码会变成乱码 —— AI 读不懂报错就无法自我纠正。
+            //   只在 Windows 上断言（其它平台默认就是 UTF-8）。
+            if (process.platform === 'win32') {
+                const zh = await post({ access: 'auto', command: 'echo elaina-中文探针-ok' });
+                c.ok(String(zh.json?.stdout || '').includes('elaina-中文探针-ok'),
+                    '★ 中文输出不乱码（编码前缀端到端生效）', JSON.stringify(zh.json?.stdout));
+            }
 
             const d = await post({ access: 'auto', command: 'del definitely-not-exists.txt' });
             c.ok(d.status === 403, 'auto 档：危险命令未授权时被拒绝（403）', `status=${d.status}`);
@@ -621,6 +662,44 @@ async function casePcCommand(c) {
         c.ok(/window\.ElainaTags/.test(agent), '宿主用 ElainaTags 剥离/分发标签');
         c.ok(!/Live2DCall\.stripTags/.test(agent), '★ 宿主不再依赖 Live2DCall.stripTags');
 
+        // ---- [操作:…] 的**容错**：模型被输出上限截断、或忘了写收尾 `]` 时，
+        //   只认闭合标签的正则一条都匹配不上 —— 剥离与分发会**同时**失效：
+        //   标签连内容原样漏进聊天记录，而操作根本没执行（文件自然也没创建）。
+        //   这条判据必须跑真代码：读源码正则看不出"输入不完整"时的行为。
+        {
+            const calls = [];
+            const sandbox = vm.createContext({
+                window: { agentActions: { agentFileOperation: (v) => calls.push(v) } },
+                console,
+            });
+            vm.runInContext(tags, sandbox, { filename: 'agent-tags.js' });
+            const T = sandbox.window.ElainaTags;
+            c.ok(!!T && typeof T.strip === 'function' && typeof T.dispatchOperations === 'function',
+                'ElainaTags 在沙箱里加载得出（判据打在真实现上，不匹配源码文本）');
+
+            // ① 正常闭合：剥离干净，并且照常分发执行
+            const closed = '旁白 [操作:保存文件 D:\\a.txt|内容] 尾巴';
+            const s1 = T.strip(closed);
+            c.ok(!/操作/.test(s1) && /旁白/.test(s1) && /尾巴/.test(s1),
+                '闭合标签被剥干净（前后正文都还在）');
+            calls.length = 0;
+            T.dispatchOperations(closed);
+            c.ok(calls.length === 1 && /^保存文件 D:\\a\.txt\|内容$/.test(calls[0]),
+                '闭合标签正常分发到 agentFileOperation');
+
+            // ② 未闭合：整块从可见正文里去掉；但**不执行** ——
+            //    半截内容写进磁盘比不写更糟（内容边界无法判定）。
+            const unclosed = '旁白\n\n[操作:保存文件 D:\\a.txt|旁白内容（忘了收尾';
+            c.ok(T.strip(unclosed) === '旁白', '未闭合标签不再漏进可见正文');
+            calls.length = 0;
+            T.dispatchOperations(unclosed);
+            c.ok(calls.length === 0, '未闭合标签不执行（不把边界不明的半截内容写进文件）');
+            c.ok(T.extractOperations(unclosed).length === 0, '未闭合标签不被 extractOperations 取出');
+            // ③ 只认已知标签名：正文里普通的 `[` 不能被当成标签删掉
+            c.ok(T.strip('数组 a[i] 与 [备注:x] 都保留') === '数组 a[i] 与 [备注:x] 都保留',
+                '未知标签名与非标签方括号不受影响');
+        }
+
         // 两条提示词路径都要注入（分层版 + legacy 回滚路径）
         c.ok((data.match(/agentCommandSkillText\(\)/g) || []).length >= 2,
             '分层版与 legacy 两条路径都注入了电脑命令能力');
@@ -992,6 +1071,25 @@ async function caseLaunchScript(c) {
     // 不能无条件打开：这段必须被 if 包着
     const around = serveSrc.slice(Math.max(0, openAt - 60), openAt);
     c.ok(/if\s*\(/.test(around), '打开浏览器被 if 条件包裹（不是无条件执行）');
+
+    // 端口"可用"不能只看绑得上：Windows 允许「别的进程绑 127.0.0.1:P、本进程绑
+    // 0.0.0.0:P」同时成立（连 exclusive 也拦不住），于是绑上了却与对方**共享**同一个
+    // 端口，连到 127.0.0.1:P 的请求会随机落到对方服务上（表现为连接被重置）。
+    // 判据里必须有"连一下"这一半，否则这个故障会再回来。
+    c.ok(/function isPortFree\(/.test(serveSrc) && /portHasListener\(/.test(serveSrc)
+        && /if \(await portHasListener\(/.test(serveSrc),
+        '端口可用性判据 = 绑得上 + 没人接（含"连一下"探测）');
+    c.ok(/if \(await isPortFree\(p, h\)\) return p/.test(serveSrc),
+        'pickPort 用的是"绑得上且没人接"的判据（不是裸 canListen）');
+    c.ok(/HTTPS compat entry skipped/.test(serveSrc),
+        '兼容入口端口被占时不起它（不与之共享该端口）');
+
+    // 已有实例在跑 → 不再另起一个服务（双击两次不该多出一个窗口/一个端口）。
+    // 退出码要与启动.bat 的短路对得上，否则复用时窗口会留着不走。
+    c.ok(/EXIT_ALREADY_RUNNING\s*=\s*3/.test(serveSrc),
+        '已有实例时的退出码是 3（与启动.bat 约定一致）');
+    c.ok(/if\s+%errorlevel%==3\s+exit\s+\/b\s+0/i.test(bat),
+        '启动.bat 认退出码 3 并直接关窗口（不 pause）');
 }
 
 // 按命令行参数过滤用例（便于只跑其中一段）

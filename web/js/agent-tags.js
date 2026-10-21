@@ -57,6 +57,14 @@
         for (const name of TAG_NAMES) {
             out = out.replace(new RegExp('\\[' + name + '[:：][^\\]]*\\]', 'g'), '');
         }
+        // 未闭合的标签：模型被输出长度截断、或干脆忘了收尾的 `]`，上面那条闭合判据
+        // 一条都匹配不上 —— 于是整块标签（连同里面的文件内容、模型编造的"操作结果"）
+        // 原样显示给用户并存进聊天记录。
+        //
+        // 容错方式与流式预览 sanitizeStreamingPreviewText 保持一致：**从开标签起截到文末**。
+        // 两处必须同判据，否则会出现"打字时藏得好好的、提交后整块漏出来"。
+        // 只认已知标签名，避免误删正文里普通的 `[`；标签名取自 TAG_NAMES，不走第二份清单。
+        out = out.replace(new RegExp('\\[(?:' + TAG_NAMES.join('|') + ')[:：][\\s\\S]*$'), '');
         return out.trim();
     }
 
@@ -106,6 +114,39 @@
      *     文件分支的判据很宽泛，排在前面会把命令正文吃掉。
      *   · 手机分支用 `^(手机|设备)` 锚定，与命令分支不冲突。
      */
+    /**
+     * ASCII 工具名 → 中文操作名。
+     *
+     * 为什么需要这张表：模型混用两条通道是**常态**而不是例外 —— 它见过工具清单
+     *   （`save_file` / `list_files` / `run_command`），于是很容易把工具名直接写进标签，
+     *   写成 `[操作:save_file D:\桌面2\a.txt hi]`。
+     *   没人认领时这里只打一行 console.warn 就丢掉：动作**没执行**，
+     *   而模型那边以为发出去了，下一轮就顺着"我做完了"编造结果 ——
+     *   用户桌面上一无所有，日志里也只有一条 WARN。
+     *   所以工具名与标签名必须认成同一个操作（映射只在 agent-ops.js 维护，这里按它的 tool 名换算）。
+     *
+     * 只做"名字换中文动词"这一步，参数处理仍交给原来的中文分支：
+     *   那样两条写法走的是**同一条**执行链，不会各有一套参数规则。
+     */
+    const TOOL_NAME_TO_TAG = {
+        list_files: '列出文件',
+        read_file: '查看文件',
+        save_file: '保存文件',
+        delete_file: '删除文件',
+        run_command: '电脑命令',
+        phone_action: '手机',
+        organize_memory: '整理记忆',
+    };
+
+    /** 把 `[操作:save_file …]` 换成 `[操作:保存文件 …]`；不是工具名就原样返回 */
+    function normalizeToolNameTag(name) {
+        const m = String(name || '').match(/^([A-Za-z][A-Za-z0-9_]*)([\s\S]*)$/);
+        if (!m) return name;
+        const tag = TOOL_NAME_TO_TAG[m[1].toLowerCase()];
+        if (!tag) return name;
+        return tag + m[2];
+    }
+
     function handleOperation(v) {
         const name = String(v == null ? '' : v).trim();
         if (!name) return;
@@ -125,9 +166,18 @@
         if (/整理记忆|记忆整理/.test(name)) return void callAction('organizeMemory');
         if (/^(手机|设备)/.test(name)) return void callAction('agentPhoneOperation', name);
         if (/^(电脑命令|执行命令|运行命令|电脑执行)/.test(name)) return void callAction('agentCommandOperation', name);
-        if (/列出文件|列出目录|查看文件夹|查看文件|读取文件|保存文件|写入文件|创建文件|新建文件/.test(name)) {
+        // 删除必须排在下面的文件分支之前：分支正则里的「删除」不在其中，
+        //   但「查看文件」这类词眼很宽，顺序反了会把删除正文吃掉一半。
+        //   （原本删除**完全没被分发**：agentFileOperation 内部认得「删除文件」，
+        //     可这条分支表里没有它，于是 [操作:删除文件 …] 落进"未知操作"被静默丢弃。）
+        if (/^(?:删除|删掉|移除)(?:文件|目录|文件夹)?/.test(name)) return void callAction('agentFileOperation', name);
+        if (/列出文件|列出目录|查看文件夹|查看文件|读取文件|读文件|保存文件|写入文件|写文件|创建文件|新建文件/.test(name)) {
             return void callAction('agentFileOperation', name);
         }
+        // 模型把工具名写进了标签（见 TOOL_NAME_TO_TAG）：换算成中文操作名**重新过一遍**本函数，
+        //   保证与中文写法走同一条分支，而不是在这里另抄一套分发。
+        const asTag = normalizeToolNameTag(name);
+        if (asTag !== name) return handleOperation(asTag);
         console.warn('[Tags] 未知操作:', name);
     }
 

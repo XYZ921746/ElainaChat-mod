@@ -30,24 +30,26 @@
     'use strict';
 
     /**
-     * 从 400 响应里判断"网关拒绝的是哪个**思考参数**"。
+     * 从 400 响应里判断"网关拒绝的是哪个参数"。
      *
-     * 只认 thinking / reasoning_effort：剥离逻辑只能解决这两类
-     *   冲突。若网关拒的是别的参数（如 param:"image"、param:"tools"），剥思考
-     *   字段毫无用处，重试只会白白多打几次请求 —— 那种 400 必须原样抛错，
-     *   让用户看到真正的原因。
+     * 认识 `thinking` / `reasoning_effort` / `tools` 三类：前两类是**思考参数**
+     *   （同一个语义各家字段名不同，没有全网通用的一种），`tools` 是**工具声明**
+     *   （部分网关与中转不认识这个字段）。三者被拒时的处置方向一致 ——
+     *   剥掉它重试，好过让整个请求失败。
+     * 认不出元凶的 400（如 `param:"image"`）必须原样抛错：剥别的字段毫无用处，
+     *   重试只会白打几次请求，还盖住真正的原因。
      *
-     * 依据两类信号（实测 AMD Radeon 端点 + GitHub 各项目报错样例）：
+     * 依据两类信号：
      *   ① OpenAI 风格错误的 `param` 字段（最可靠 —— 网关亲口点名）：
      *      {"error":{"message":"…","param":"thinking","code":"unsupported_parameter"}}
      *   ② 报错文本里点名（各家措辞不同，按关键词匹配）
      *
      * @param {{status:number, payload?:object, rawText?:string}} result
-     * @returns {string|null} 被拒的思考参数名；认不出返回 null（照常抛错，别重试）
+     * @returns {string|null} 被拒的参数名；认不出返回 null（照常抛错，别重试）
      */
     function rejectedRequestParam(result) {
         if (!result || result.status !== 400) return null;
-        const KNOWN = new Set(['thinking', 'reasoning_effort']);
+        const KNOWN = new Set(['thinking', 'reasoning_effort', 'tools']);
         // ① 结构化字段：error.param（可能嵌在 detail 里 —— FastAPI 系网关爱包一层）
         const payloads = [result.payload, result.payload?.detail];
         for (const p of payloads) {
@@ -67,7 +69,81 @@
         if (/reasoning_effort/i.test(text) && /(not|un)supported|invalid|unknown|must be/i.test(text)) return 'reasoning_effort';
         if (/"?thinking"? is (not supported|unknown)|unsupported_parameter.*thinking|unknown parameter: ?"?thinking/i.test(text)) return 'thinking';
         if (/both ['"]?thinking['"]? and ['"]?reasoning_effort/i.test(text)) return 'thinking';
+        // tools：要求"点到了 tools"且"同时有拒绝词"，避免把别的报错里恰好出现的 tools 认成元凶
+        if (/\btools\b/i.test(text) && /(unrecognized|unsupported|unknown|not permitted|not supported|invalid|extra inputs)/i.test(text)) return 'tools';
         return null;
+    }
+
+    /**
+     * 这个「地址 + 模型」的网关**认不认 tools**（本次运行内的记忆）。
+     *
+     * 为什么要有它：BYOK 下供应商千奇百怪，有的把 tools 直接 400 掉（见
+     *   rejectedRequestParam），有的干脆把未知字段悄悄丢掉（请求 200、回复里却没有
+     *   tool_calls）。撞过一次之后不该每次都再撞 —— 每次撞都意味着用户白等一次完整
+     *   请求，而且这次回复既没有标签也没有工具，等于什么都没做。
+     *
+     * 只存在内存里、不写设置：它是"这次运行、这台机器、这个地址"的观察结果；
+     *   写进设置会让一次偶发失败把用户**永久**降级到标签通道。
+     */
+    const toolsRejectedKeys = new Set();
+    const toolsKey = (baseUrl, model) => String(baseUrl || '') + '|' + String(model || '');
+    function toolsAllowedFor(baseUrl, model) {
+        return !toolsRejectedKeys.has(toolsKey(baseUrl, model));
+    }
+    function noteToolsRejected(baseUrl, model) {
+        const key = toolsKey(baseUrl, model);
+        if (toolsRejectedKeys.has(key)) return;
+        toolsRejectedKeys.add(key);
+        console.warn('[Provider] 网关不接受 tools，本次运行内该地址改走文本标签通道 (base=' + baseUrl + ')');
+    }
+
+    /**
+     * 把一处工具调用收成**统一形状**（两条协议共用这一份映射）。
+     *
+     * 统一在这里做，而不是各 provider 各做一份：OpenAI 的 `arguments` 是**字符串**、
+     *   Anthropic 的 `input` 是**对象**，上层不该关心这个差别。
+     * 参数不是合法 JSON 时**不抛**：标成 badArgs 交出去，由上层回灌一条"参数不合法"
+     *   的工具结果让模型重试 —— 静默丢掉会让模型以为"调过了、只是没结果"。
+     */
+    function toToolCall(id, name, rawArgs) {
+        let args = {};
+        let badArgs = false;
+        try {
+            const parsed = JSON.parse(typeof rawArgs === 'string' ? (rawArgs || '{}') : JSON.stringify(rawArgs ?? {}));
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+            args = parsed;
+        } catch { badArgs = true; }
+        return { id: String(id || ''), name: String(name || ''), args, badArgs, raw: String(rawArgs || '') };
+    }
+    /** OpenAI 形态：`message.tool_calls` */
+    function openAiToolCalls(message) {
+        const list = Array.isArray(message?.tool_calls) ? message.tool_calls : [];
+        return list.filter((c) => c && c.function && c.function.name)
+            .map((c) => toToolCall(c.id, c.function.name, c.function.arguments));
+    }
+    /** Anthropic 形态：`tool_use` block */
+    function anthropicToolCalls(blocks) {
+        const list = Array.isArray(blocks) ? blocks : [];
+        return list.filter((b) => b && b.type === 'tool_use' && b.name)
+            .map((b) => toToolCall(b.id, b.name, b.input ?? {}));
+    }
+    /** openai-responses 形态：`output` 里的 `function_call` 项 */
+    function toResponsesToolCalls(items) {
+        const list = Array.isArray(items) ? items : [];
+        return list.filter((it) => it && it.type === 'function_call' && it.name)
+            .map((it) => toToolCall(it.call_id ?? it.id, it.name, it.arguments));
+    }
+
+    /**
+     * 把"这次回复是从哪条通道来的"交给调用方 —— 走调用方传进来的**显式容器**
+     * （`opts.replyInfo`），不用全局槽位。
+     *
+     * 为什么不用全局的"上次回复元信息"：全库有多处调 callChatAPI（记忆摘要、
+     *   翻译、连接测试…），它们只关心正文；而"上一个请求的元信息"在下一次请求
+     *   出错或重试时会说不清是哪一次的值，误读的后果是"执行了一个根本没发生的调用"。
+     */
+    function reportReplyInfo(opts, info) {
+        if (opts && opts.replyInfo) Object.assign(opts.replyInfo, info);
     }
 
     /**
@@ -131,14 +207,21 @@
         // 思考开关与强度：显式发 disabled 很重要 —— DeepSeek 现在**默认开启**思考，
         // 不发这个字段的话，用户明明关了开关，模型照样思考（慢且费 token）。
         const thinkingFields = buildThinkingParams(opts.thinking, opts.thinkingEffort, 'openai-compatible', settings);
-        const buildBody = (extra) => ({
+        // 工具声明单独一个容器：被网关拒时要能**单独剥掉它**（见下面的重试），
+        //   而不是把思考参数一起牺牲掉。不主动发 tool_choice —— 有 tools 时它本就是
+        //   auto，少一个字段就少一次被某些网关挑刺的机会。
+        let toolFields = (opts.tools?.length && toolsAllowedFor(baseUrl, requestModel))
+            ? { tools: opts.tools }
+            : {};
+        const buildBody = (thinking, tools) => ({
             model: requestModel,
             messages,
             ...(opts.temperature !== undefined && { temperature: opts.temperature }),
             ...(Number.isFinite(opts.maxTokens) && { max_tokens: Math.max(1, Math.floor(opts.maxTokens)) }),
-            ...extra,
+            ...tools,
+            ...thinking,
         });
-        let result = await requestChatJson(endpoint, buildBody(thinkingFields),
+        let result = await requestChatJson(endpoint, buildBody(thinkingFields, toolFields),
             { Authorization: 'Bearer ' + apiKey }, {
                 signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
             }, 'openai-compatible');
@@ -164,11 +247,18 @@
             if (!param || !rejectedParams.add(param)) break;   // 认不出元凶 / 已经剥过了
             console.warn(`[Provider] gateway rejected "${param}" - retrying without it`
                 + ` (base=${baseUrl})`);
-            delete thinkingFields[param];
-            // thinking 和 reasoning_effort 常被一起拒（"invalid combination"），
-            // 报错点名 thinking 时把强度也一并剥掉，省一次往返。
-            if (param === 'thinking' && 'reasoning_effort' in thinkingFields) delete thinkingFields.reasoning_effort;
-            result = await requestChatJson(endpoint, buildBody(thinkingFields),
+            if (param === 'tools') {
+                // 这个网关不认 tools：剥掉重发，并记下来"本次运行内该地址不再发它"
+                //   —— 上层据此改走文本标签通道（见 noteToolsRejected 的说明）
+                noteToolsRejected(baseUrl, requestModel);
+                toolFields = {};
+            } else {
+                delete thinkingFields[param];
+                // thinking 和 reasoning_effort 常被一起拒（"invalid combination"），
+                // 报错点名 thinking 时把强度也一并剥掉，省一次往返。
+                if (param === 'thinking' && 'reasoning_effort' in thinkingFields) delete thinkingFields.reasoning_effort;
+            }
+            result = await requestChatJson(endpoint, buildBody(thinkingFields, toolFields),
                 { Authorization: 'Bearer ' + apiKey }, {
                     signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
                 }, 'openai-compatible');
@@ -176,7 +266,19 @@
         if (!result.ok) await throwProviderResponseError(result, '对话服务请求失败');
         if (!result.payload) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '对话服务返回格式异常');
         const message = result.payload.choices?.[0]?.message || {};
-        return normalizeChatReply(message.content, message.reasoning_content || message.reasoning);
+        const toolCalls = openAiToolCalls(message);
+        const reasoningText = String(message.reasoning_content || message.reasoning || '');
+        reportReplyInfo(opts, {
+            toolCalls,
+            finishReason: String(result.payload.choices?.[0]?.finish_reason || ''),
+            // "本来要发工具、结果一个字段都没发出去" —— 上层据此决定走哪条通道
+            toolsSkipped: Boolean(opts.tools?.length) && !toolFields.tools,
+            // 思考交给兜底通道（见 core.js 里 replyInfo.reasoning 的说明）：
+            //   流式时这段早由 onDelta 送进时间线了，再报一次会重复；
+            //   所以调用方只在"没收到过流式思考"时才用它对账。
+            reasoning: reasoningText,
+        });
+        return normalizeChatReply(message.content, reasoningText, toolCalls);
     }
 
     // ========================================================================
@@ -208,7 +310,14 @@
         return blocks.length ? blocks : [{ type: 'text', text: ' ' }];
     }
 
-    /** OpenAI messages → Anthropic { system, messages } */
+    /** OpenAI messages → Anthropic { system, messages }。
+     *
+     *  工具协议消息在这里一并换形状 —— Anthropic 没有 role:'tool' 这一层：
+     *    · assistant 的 tool_calls → content 里的 tool_use block（参数是**对象**）
+     *    · role:'tool' 的结果      → user 消息里的 tool_result block
+     *  形状对不上会被 400 拒收，而多步任务的历史里这两种消息是常态 ——
+     *  不转换的话第二轮请求就发不出去了。
+     */
     function convertOpenAIToAnthropicMessages(messages) {
         const { extractTextContent, stripThinkTags } = deps();
         const systemParts = [];
@@ -219,11 +328,36 @@
                 systemParts.push(extractTextContent(msg.content));
             } else if (role === 'user') {
                 converted.push({ role: 'user', content: anthropicContentBlocks(msg.content) });
+            } else if (role === 'tool') {
+                // 工具结果只能以 user 角色的 tool_result block 出现，且
+                // tool_use_id 必须与调用对得上 —— 丢了这个字段模型无从知道
+                // 「哪一步的 结果回来了」，多步链路当场断掉。
+                converted.push({
+                    role: 'user',
+                    content: [{
+                        type: 'tool_result',
+                        tool_use_id: String(msg.tool_call_id || msg.toolCallId || ''),
+                        content: String(msg.content ?? ''),
+                    }],
+                });
             } else if (role === 'assistant') {
-                converted.push({ role: 'assistant', content: [{ type: 'text', text: stripThinkTags(extractTextContent(msg.content)) || ' ' }] });
+                const blocks = [];
+                const text = stripThinkTags(extractTextContent(msg.content));
+                if (text) blocks.push({ type: 'text', text });
+                for (const call of (Array.isArray(msg.tool_calls) ? msg.tool_calls : [])) {
+                    if (!call?.function?.name) continue;
+                    let input = {};
+                    // 参数在 OpenAI 侧是字符串，Anthropic 侧要对象；解析失败给空对象
+                    // 并保留调用本身 —— 丢掉整条调用会让后面的 tool_result 对不上号。
+                    try { input = JSON.parse(call.function.arguments || '{}'); } catch { input = {}; }
+                    blocks.push({ type: 'tool_use', id: String(call.id || ''), name: String(call.function.name), input });
+                }
+                if (!blocks.length) blocks.push({ type: 'text', text: ' ' });
+                converted.push({ role: 'assistant', content: blocks });
             }
         }
         // 相邻同角色合并成一条 —— Anthropic 不接受连续的 user 或 assistant
+        // （工具结果转成 user 后，与紧随的用户消息相邻是常态，必须合并）
         const merged = [];
         for (const msg of converted) {
             const last = merged[merged.length - 1];
@@ -256,11 +390,24 @@
         const maxTokens = Number.isFinite(opts.maxTokens)
             ? Math.max(1, Math.floor(opts.maxTokens))
             : ANTHROPIC_MIN_MAX_TOKENS;
+        // 工具声明：OpenAI 形状（嵌套 function{} + parameters）换成 Anthropic 的
+        // 扁平形状（input_schema）。不发或发错形状都会被 400 拒收 —— 那样
+        // 工具通道静默失效，模型只能靠正文标签兜底，用户看到的就是"AI 不调用工具"。
+        const tools = (opts.tools?.length)
+            ? opts.tools
+                .filter((t) => t?.type === 'function' && t.function?.name)
+                .map((t) => ({
+                    name: String(t.function.name),
+                    description: String(t.function.description || ''),
+                    input_schema: t.function.parameters || { type: 'object', properties: {} },
+                }))
+            : null;
         const result = await requestChatJson(endpoint, {
             model: modelName,
             system: payload.system || undefined,
             messages: payload.messages,
             max_tokens: maxTokens,
+            ...(tools ? { tools } : {}),
             // 开了思考就**不能**带 temperature：Anthropic 官方明确禁止
             //   （"temperature may only be set to 1 when thinking is enabled"），
             //   带了会直接 400。宁可让用户少一个采样参数，也不能让请求失败。
@@ -278,7 +425,17 @@
         const blocks = Array.isArray(result.payload.content) ? result.payload.content : [];
         const text = blocks.filter((block) => block?.type === 'text').map((block) => block.text || '').join('');
         const reasoning = blocks.filter((block) => block?.type === 'thinking').map((block) => block.thinking || '').join('');
-        return normalizeChatReply(text, reasoning);
+        // 工具调用：Anthropic 形态是 content 里的 tool_use block，
+        //   anthropicToolCalls 已把它收成统一形状 —— 不解析的话 replyInfo.toolCalls
+        //   永远是空的，工具通道在这条格式下等于不存在。
+        const toolCalls = anthropicToolCalls(blocks);
+        reportReplyInfo(opts, {
+            reasoning,
+            toolCalls,
+            finishReason: String(result.payload.stop_reason || ''),
+            toolsSkipped: Boolean(opts.tools?.length) && !tools,
+        });
+        return normalizeChatReply(text, reasoning, toolCalls);
     }
 
     // ========================================================================
@@ -302,7 +459,37 @@
                 instructions.push(extractTextContent(msg.content));
                 continue;
             }
+            // 工具结果：Responses 没有 role:'tool' 这一层 —— 它是 input 里的
+            // function_call_output 项，call_id 必须与调用对得上。
+            if (role === 'tool') {
+                input.push({
+                    type: 'function_call_output',
+                    call_id: String(msg.tool_call_id || msg.toolCallId || ''),
+                    output: String(msg.content ?? ''),
+                });
+                continue;
+            }
             const isAssistant = role === 'assistant';
+            // assistant 的工具调用：每个调用是**单独一个** function_call 项 ——
+            // Responses 不把它们挂在消息上。正文（若有）仍走 output_text 项。
+            if (isAssistant && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+                for (const call of msg.tool_calls) {
+                    if (!call?.function?.name) continue;
+                    input.push({
+                        type: 'function_call',
+                        call_id: String(call.id || ''),
+                        name: String(call.function.name),
+                        // 参数按原样字符串回填：Responses 的 arguments 就是字符串，
+                        // 重新序列化会改变它的形状（见 getRecentHistoryMessages 同样的取舍）
+                        arguments: String(call.function.arguments || '{}'),
+                    });
+                }
+                const assistantText = extractTextContent(msg.content).trim();
+                if (assistantText) {
+                    input.push({ role: 'assistant', content: [{ type: 'output_text', text: assistantText }] });
+                }
+                continue;
+            }
             const textType = isAssistant ? 'output_text' : 'input_text';
             const parts = [];
             const content = msg.content;
@@ -337,10 +524,24 @@
         const baseUrl = getChatBaseUrl(settings).replace(/\/+$/, '');
         const endpoint = /\/responses$/i.test(baseUrl) ? baseUrl : `${baseUrl}/responses`;
         const payload = convertOpenAIToResponsesInput(messages);
+        // 工具声明：Responses 用扁平形状（name/description/parameters 直接平铺，
+        // 没有 chat/completions 那层 function{} 嵌套）—— 发错形状直接 400，
+        // 而且报错只说 unknown parameter，很难排查，所以在这里一次写对。
+        const tools = (opts.tools?.length)
+            ? opts.tools
+                .filter((t) => t?.type === 'function' && t.function?.name)
+                .map((t) => ({
+                    type: 'function',
+                    name: String(t.function.name),
+                    description: String(t.function.description || ''),
+                    parameters: t.function.parameters || { type: 'object', properties: {} },
+                }))
+            : null;
         const result = await requestChatJson(endpoint, {
             model: String(model || '').trim() || 'gpt-4.1-mini',
             ...(payload.instructions ? { instructions: payload.instructions } : {}),
             input: payload.input,
+            ...(tools ? { tools } : {}),
             ...(opts.temperature !== undefined && { temperature: opts.temperature }),
             ...(Number.isFinite(opts.maxTokens) && { max_output_tokens: Math.max(1, Math.floor(opts.maxTokens)) }),
             // Responses 格式只有 reasoning.effort，没有"关闭"这个取值，
@@ -353,7 +554,7 @@
         if (!result.payload) throw new ClientApiError('UPSTREAM_UNAVAILABLE', 'OpenAI 返回格式异常');
         // 部分兼容实现会把全文直接放在顶层 output_text，先认这个，省得再遍历一遍
         if (typeof result.payload.output_text === 'string' && result.payload.output_text.trim()) {
-            return normalizeChatReply(result.payload.output_text);
+            return normalizeChatReply(result.payload.output_text, '', toResponsesToolCalls([]));
         }
         const items = Array.isArray(result.payload.output) ? result.payload.output : [];
         const text = items
@@ -367,7 +568,15 @@
             .flatMap((item) => (Array.isArray(item.summary) ? item.summary : []))
             .map((part) => part?.text || '')
             .join('');
-        return normalizeChatReply(text, reasoning);
+        // 工具调用：Responses 形态是 output 里的 function_call 项（call_id + arguments 字符串）
+        const toolCalls = toResponsesToolCalls(items);
+        reportReplyInfo(opts, {
+            reasoning,
+            toolCalls,
+            finishReason: String(result.payload.status || ''),
+            toolsSkipped: Boolean(opts.tools?.length) && !tools,
+        });
+        return normalizeChatReply(text, reasoning, toolCalls);
     }
 
     // ========================================================================
@@ -403,5 +612,13 @@
         // 转换器也导出：它们是最容易写错、也最值得单独测的部分
         convertOpenAIToAnthropicMessages,
         convertOpenAIToResponsesInput,
+        // 工具通道的判据与映射也导出：它们决定"走工具还是走标签"，
+        // 单独测比隔着一次完整请求测要可靠（不必造网关）
+        rejectedRequestParam,
+        toToolCall,
+        openAiToolCalls,
+        anthropicToolCalls,
+        toResponsesToolCalls,
+        toolsAllowedFor,
     };
 })();

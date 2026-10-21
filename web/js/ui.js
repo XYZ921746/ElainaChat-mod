@@ -1,18 +1,5 @@
 /* ========================================================================
  * 界面：收藏 / 语笺 / 弹窗 / 会话 / 侧边栏 / 消息渲染
- *
- * 本文件由 web/index.html 的主脚本按分区拆分而来（保持原始加载顺序）。
- * 拆分前提：主脚本是全局作用域，拆分后各文件共享同一全局词法环境，
- * 因此顶层 function / const / let 互相可见，调用点无需修改。
- *
- * 包含分区：
- *   · 收藏（语笺）
- *   · 语笺页面
- *   · 自定义Modal
- *   · 会话管理
- *   · 侧边栏渲染
- *   · 管理分类弹窗
- *   · 消息渲染
  * ======================================================================== */
 
 // ==================== 收藏（语笺） ====================
@@ -602,73 +589,102 @@ function showInitialState() {
 
 
 // ==================== 自定义Modal ====================
+//
+// 全应用只有这一个 #customModal 节点，它的层级又被样式表写死为最上层
+// （见「弹窗之间的层叠顺序必须写死」那段）。多路弹窗请求并发时若各自直接改
+// 这个节点，后到者会把先到者整块顶掉；先到者那个 Promise 再没人 resolve，
+// 等它的调用方会永远挂住 —— 例如语音生成失败的提示与 agent 的敏感操作确认
+// 同时到达时，操作确认被顶掉、agent 就卡死在等待里。
+//
+// 所以这里**串行化**：新请求入队，前一个 settle 后再开下一个。
+
+let customModalQueue = [];
+let customModalActive = false;
 
 function showCustomModal(opts) {
     return new Promise(resolve => {
-        const { title = '提示', message = '', input = false, defaultValue = '', placeholder = '', confirmText = '确定', cancelText = '取消', showCancel = true,
-            // 可选第三键。altText 非空就显示；点了 **resolve 成 altValue**。
-            //   为什么需要它：手机操作的「运行方式」是三选一（前台 / 后台 / 取消），
-            //   而取消键还会被"点遮罩 / 关弹窗"触发 —— 把"后台"绑到取消上，
-            //   用户手指一滑点到遮罩就等于默默用了后台。
-            altText = '', altValue = 'alt' } = opts;
-        elements.customModalTitle.textContent = title;
-        elements.customModalMessage.textContent = message;
-        elements.customModalMessage.classList.toggle('hidden', !message);
-        elements.customModalInput.classList.toggle('hidden', !input);
-        if (input) {
-            elements.customModalInput.value = defaultValue;
-            elements.customModalInput.placeholder = placeholder;
-        }
-        elements.customModalCancelBtn.textContent = cancelText;
-        elements.customModalConfirmBtn.textContent = confirmText;
-        elements.customModalCancelBtn.classList.toggle('hidden', !showCancel);
-        elements.customModalAltBtn.textContent = altText;
-        elements.customModalAltBtn.classList.toggle('hidden', !altText);
-
-        elements.customModal.classList.remove('hidden');
-        elements.customModal.classList.add('flex');
-        // 层级不在这里设：.modal-overlay 上的 z-index !important 会让内联值完全失效，
-        // 写了也不会真的生效（任何按状态算内联 z-index 的分支都是死代码）。
-        // 真正的分层写在样式表的
-        // 「弹窗之间的层叠顺序必须写死」那段 —— #customModal 是 100003，永远在最上面。
-
-        let settled = false;
-        const done = (value) => {
-            if (settled) return;
-            settled = true;
-            elements.customModal.classList.add('hidden');
-            elements.customModal.classList.remove('flex');
-            elements.customModalCancelBtn.onclick = null;
-            elements.customModalAltBtn.onclick = null;
-            elements.customModalConfirmBtn.onclick = null;
-            elements.customModalInput.onkeydown = null;
-            resolve(value);
-        };
-
-        elements.customModalCancelBtn.onclick = () => done(input ? null : false);
-        elements.customModalAltBtn.onclick = () => done(altValue);
-        elements.customModalConfirmBtn.onclick = () => {
-            if (input) {
-                const val = elements.customModalInput.value;
-                done(val === null || val === undefined ? null : val);
-            } else {
-                done(true);
-            }
-        };
-        if (input) {
-            elements.customModalInput.onkeydown = (e) => {
-                if (e.key === 'Enter') {
-                    const val = elements.customModalInput.value;
-                    done(val);
-                }
-                if (e.key === 'Escape') done(null);
-            };
-            setTimeout(() => {
-                elements.customModalInput.focus();
-                elements.customModalInput.select();
-            }, 50);
-        }
+        customModalQueue.push({ opts, resolve });
+        drainCustomModalQueue();
     });
+}
+
+function drainCustomModalQueue() {
+    if (customModalActive) return;
+    const next = customModalQueue.shift();
+    if (!next) return;
+    customModalActive = true;
+    openCustomModal(next.opts, value => {
+        customModalActive = false;
+        next.resolve(value);
+        // 挪到下一帧再开下一个：让本次点击的事件循环先收尾，避免同步递归。
+        setTimeout(drainCustomModalQueue, 0);
+    });
+}
+
+function openCustomModal(opts, done) {
+    const { title = '提示', message = '', input = false, defaultValue = '', placeholder = '', confirmText = '确定', cancelText = '取消', showCancel = true,
+        // 可选第三键。altText 非空就显示；点了 **resolve 成 altValue**。
+        //   为什么需要它：手机操作的「运行方式」是三选一（前台 / 后台 / 取消），
+        //   而取消键还会被"点遮罩 / 关弹窗"触发 —— 把"后台"绑到取消上，
+        //   用户手指一滑点到遮罩就等于默默用了后台。
+        altText = '', altValue = 'alt' } = opts;
+    elements.customModalTitle.textContent = title;
+    elements.customModalMessage.textContent = message;
+    elements.customModalMessage.classList.toggle('hidden', !message);
+    elements.customModalInput.classList.toggle('hidden', !input);
+    if (input) {
+        elements.customModalInput.value = defaultValue;
+        elements.customModalInput.placeholder = placeholder;
+    }
+    elements.customModalCancelBtn.textContent = cancelText;
+    elements.customModalConfirmBtn.textContent = confirmText;
+    elements.customModalCancelBtn.classList.toggle('hidden', !showCancel);
+    elements.customModalAltBtn.textContent = altText;
+    elements.customModalAltBtn.classList.toggle('hidden', !altText);
+
+    elements.customModal.classList.remove('hidden');
+    elements.customModal.classList.add('flex');
+    // 层级不在这里设：.modal-overlay 上的 z-index !important 会让内联值完全失效，
+    // 写了也不会真的生效（任何按状态算内联 z-index 的分支都是死代码）。
+    // 真正的分层写在样式表的
+    // 「弹窗之间的层叠顺序必须写死」那段 —— #customModal 是 100003，永远在最上面。
+
+    let settled = false;
+    const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        elements.customModal.classList.add('hidden');
+        elements.customModal.classList.remove('flex');
+        elements.customModalCancelBtn.onclick = null;
+        elements.customModalAltBtn.onclick = null;
+        elements.customModalConfirmBtn.onclick = null;
+        elements.customModalInput.onkeydown = null;
+        done(value);
+    };
+
+    elements.customModalCancelBtn.onclick = () => finish(input ? null : false);
+    elements.customModalAltBtn.onclick = () => finish(altValue);
+    elements.customModalConfirmBtn.onclick = () => {
+        if (input) {
+            const val = elements.customModalInput.value;
+            finish(val === null || val === undefined ? null : val);
+        } else {
+            finish(true);
+        }
+    };
+    if (input) {
+        elements.customModalInput.onkeydown = (e) => {
+            if (e.key === 'Enter') {
+                const val = elements.customModalInput.value;
+                finish(val);
+            }
+            if (e.key === 'Escape') finish(null);
+        };
+        setTimeout(() => {
+            elements.customModalInput.focus();
+            elements.customModalInput.select();
+        }, 50);
+    }
 }
 
 let conversationMoveTargetId = null;
@@ -1005,11 +1021,6 @@ function updateCurrentConversationTitle() {
     elements.currentConversationTitle.title = conv ? conv.title : '';
 }
 
-function currentConversationHasMessages() {
-    const conv = state.conversations.find(c => c.id === state.currentConversationId);
-    return Boolean(conv && conv.messages.length > 0);
-}
-
 function loadConversation(conversationId) {
     const conv = state.conversations.find(c => c.id === conversationId);
     if (!conv) return;
@@ -1032,7 +1043,15 @@ function loadConversation(conversationId) {
 
     elements.conversationHistory.innerHTML = '';
     conv.messages.forEach(message => {
+        // hidden 的消息不进可见渲染：工具通道的结果、以及"只调工具、一个字没说"的空回复。
+        //   它们只为**下一次请求**存在（协议要求 assistant 的调用后面紧跟结果），
+        //   渲染出来就是聊天记录里多出一段用户没写过、AI 也没说过的文本。
+        if (message && message.hidden === true) return;
         renderMessage(message);
+        // 这一轮当年的思考/工具记录：过程区是临时 DOM，容器已被清空，
+        //   必须按消息上存的数据重新插回去 —— 否则"聊了几轮之后，
+        //   之前的思考记录就不见了"（切会话、刷新页面都会触发）。
+        restoreTurnProcessFor(message);
     });
     renderFolderList();
     syncRailActive();
@@ -1311,7 +1330,6 @@ function renderFolderList() {
     const pinned = state.conversations.filter(c => c.isPinned && matchesSearch(c));
     const regular = state.conversations.filter(c => !c.isPinned && matchesSearch(c));
     const pinnedIds = new Set(pinned.map(c => c.id));
-    const inCategory = new Set(regular.filter(c => c.categoryId).map(c => c.id));
     const unfiled = regular.filter(c => !c.categoryId);
 
     const renderConversationList = (list) => {
@@ -1555,6 +1573,18 @@ function renderThinkingMessage() {
     elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
 }
 
+/**
+ * 更新「正在想」气泡上的文案（超时重试等场景的提示）。
+ *
+ * 为什么需要它：重试期间的等待对用户是完全黑箱的 —— 气泡还挂着三点动画，
+ * 看不出「第二次请求已经发出」。把状态写在这行文案上，用户就能知道
+ * 「不是卡死，是网络不稳正在重试」。气泡不在（已被收掉）就什么都不做。
+ */
+function updateThinkingMessageText(text) {
+    const label = document.querySelector('#thinking-bubble .thinking-label');
+    if (label) label.textContent = String(text || '');
+}
+
 // ========================================================================
 //  回合过程渲染：思考行 + 工具调用行 + 每回合总览
 // ========================================================================
@@ -1648,7 +1678,11 @@ function appendTurnReasoning(delta, phase) {
             id: 'think-' + activeTurnTrace.nextId++,
             at: Date.now(),
             phase: ph,
-            text,
+            // 段首空白只在**建段时**去一次，后续增量原样追加 ——
+            //   这样 item.text 与 DOM 文本节点的内容严格一致（前缀对齐），
+            //   renderTurnProcess 的增量路径才能用 appendData 只追增量。
+            //   （显示层不再做整体 trim：那会每次复制整段文本，正是卡顿来源之一。）
+            text: text.replace(/^\s+/, ''),
         });
     }
     scheduleTurnProcessRender();
@@ -1674,7 +1708,15 @@ function recordTurnTool(entry) {
         state: String(entry?.state || 'ok'),
         // 稳定的时间线 key（见 nextId 的说明）。at 只用于显示相对时间。
         key: 'tool-' + activeTurnTrace.nextId++,
-        at: Date.now()
+        at: Date.now(),
+        // 渲染版本号：updateTurnTool 每次改动自增。增量渲染靠它判断
+        //   "这一行变没变"（O(1)），不必每帧重新构建行的 HTML 去比对。
+        rev: 0,
+        // 计时起点：用于在收尾时算出这一步花了多久。
+        //   为什么要显示耗时：一轮 Agent 任务里"哪一步慢"是用户唯一能据以判断
+        //   "是不是卡住了"的信息。全部只显示"完成"，慢的那一步和快的那一步长得一样。
+        startedAt: Date.now(),
+        ms: 0
     };
     activeTurnTrace.tools.push(item);
     // 同时进时间线 —— 这样"思考 1 → 工具 A → 思考 2"的先后顺序才留得下来
@@ -1715,6 +1757,24 @@ function updateTurnTool(item, patch = {}) {
     if (patch.state !== undefined) item.state = String(patch.state);
     if (patch.result !== undefined) item.result = String(patch.result);
     if (patch.summary !== undefined) item.summary = String(patch.summary);
+    // 标题与类型允许后补：走工具通道时外层先按"调用 save_file"记一行，
+    //   真正的动作含义（"写入文件"）要等进入 doAgentFile 才知道。
+    if (patch.title !== undefined) item.title = String(patch.title);
+    if (patch.kind !== undefined) item.kind = String(patch.kind);
+    // 渲染版本自增：增量渲染据此只重建这一行，而不是整个过程区。
+    item.rev = (item.rev || 0) + 1;
+    // 重开计时：用户在确认弹窗上做决定的时间**不是这一步的执行耗时**。
+    //   不重置的话，一次"等待 17 秒才点允许"会被显示成"命令跑了 20 秒"，
+    //   用户会误以为命令执行本身很慢（实测就是这么报的）。调用方在
+    //   "用户点了允许、真正重发执行"那一刻带 resetTimer。
+    if (patch.resetTimer === true) {
+        item.startedAt = Date.now();
+        item.ms = 0;
+    }
+    // 从 running 变成终态的那一刻结算耗时（只结算一次：重复更新不该把时长清零）
+    if (item.state !== 'running' && item.startedAt && !item.ms) {
+        item.ms = Math.max(0, Date.now() - item.startedAt);
+    }
     scheduleTurnProcessRender();
 }
 
@@ -1759,20 +1819,97 @@ function processStateLabel(state) {
     return '完成';
 }
 
+/** 耗时 → 人能一眼读懂的短文案。
+ *
+ *  阈值定在 **100ms** 而不是 1 秒：Agent 的单步操作（列目录、读文件）本来就常在
+ *  几十到几百毫秒之间，用 1 秒当门槛等于"绝大多数步骤都不显示耗时" ——
+ *  那就失去意义了。低于 100ms 不显示，是因为那个量级的数字反映的是调度抖动，
+ *  不是这一步真的花了多久。
+ */
+function processDurationLabel(ms) {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n < 100) return '';
+    if (n < 1000) return Math.round(n) + 'ms';
+    if (n < 10000) return (n / 1000).toFixed(1) + 's';
+    if (n < 60000) return Math.round(n / 1000) + 's';
+    return Math.floor(n / 60000) + 'm' + Math.round((n % 60000) / 1000) + 's';
+}
+
+/**
+ * 把参数（一行 JSON）拆成「键 → 值」清单，给时间线渲染成表格。
+ *
+ * 为什么要拆：Agent 的参数里最要紧的是 `path` / `command` 这类**值**，
+ * 而一整行 JSON 恰恰让那个值淹没在花括号和逗号里 —— 用户得自己找。
+ * 拆成键值行后，"这一步对哪个文件做了什么"是扫一眼就能读到的。
+ *
+ * 解析不出来就原样返回单条（宁可难看，也不要吞掉参数）。
+ *
+ * @param {string} raw JSON 文本
+ * @returns {Array<{key:string, value:string}>}
+ */
+function processArgEntries(raw) {
+    const text = String(raw || '').trim();
+    if (!text) return [];
+    let obj;
+    try { obj = JSON.parse(text); } catch { return [{ key: '', value: text }]; }
+    if (!obj || typeof obj !== 'object') return [{ key: '', value: text }];
+    const out = [];
+    for (const [k, v] of Object.entries(obj)) {
+        let val;
+        if (typeof v === 'string') val = v;
+        else if (v === null || v === undefined) val = '';
+        else { try { val = JSON.stringify(v); } catch { val = String(v); } }
+        out.push({ key: k, value: val });
+    }
+    return out;
+}
+
+/** 渲染参数块（键值 + 长文本值单独成行） */
+function processArgsHtml(raw) {
+    const entries = processArgEntries(raw);
+    if (!entries.length) return '';
+    const rows = entries.map((e) => {
+        // 长值（文件内容、命令）占一整行，短值（路径、布尔）保持键值并排
+        const long = e.value.includes('\n') || e.value.length > 80;
+        if (long) {
+            return `<div class="process-arg process-arg-block">`
+                + (e.key ? `<span class="process-arg-key">${escapeHtml(e.key)}</span>` : '')
+                + `<pre class="process-arg-value">${escapeHtml(e.value)}</pre></div>`;
+        }
+        return `<div class="process-arg">`
+            + (e.key ? `<span class="process-arg-key">${escapeHtml(e.key)}</span>` : '')
+            + `<code class="process-arg-value">${escapeHtml(e.value)}</code></div>`;
+    });
+    return `<div class="process-args">${rows.join('')}</div>`;
+}
+
 /** 生成一条过程行的 HTML（思考行 / 工具行通用）。
  *
  *  key：跨重渲染**稳定**的行标识（思考行固定 'think'，工具行 'tool-<at>'）。
  *       渲染层每次流式增量都用 innerHTML 整体重建过程区，重建会丢掉 .is-open，
  *       所以需要一个稳定的 key 才能在重建后把"用户手动展开过的行"重新展开 ——
- *       用索引不行：流式期间会不断追加新的工具行，索引会整体后移，恢复会错位。 */
-function processRowHtml({ kind, key, title, summary, state, bodyHtml }) {
+ *       用索引不行：流式期间会不断追加新的工具行，索引会整体后移，恢复会错位。
+ *
+ *  点击**不挂内联 onclick**：流式期间本区每帧整体重建（见 renderTurnProcess），
+ *       用户按下到松开之间行元素可能已被替换 —— 浏览器只在 mousedown 与
+ *       mouseup 目标一致时才派发 click，绑在被替换元素上的 onclick 收不到。
+ *       展开交互改由容器上的 pointerup 委托承担（见 onTurnProcessPointerUp），
+ *       键盘 Enter/Space 保留内联 —— keydown 是即时事件，不受重建影响。
+ *
+ *  时间线形状（参考 DSH）：左侧一列竖线 + 节点圆点，把"想 → 做 → 想"串成一条
+ *  有先后的流；每一行右侧仍是可展开的细节。竖线由 CSS 画在 .process-row 上，
+ *  行与行之间自然接续 —— 所以这里不需要额外的容器元素。
+ */
+function processRowHtml({ kind, key, title, summary, state, bodyHtml, ms }) {
+    const dur = processDurationLabel(ms);
     return `
         <div class="process-row" data-state="${escapeHtml(state || 'ok')}" data-kind="${escapeHtml(kind)}" data-key="${escapeHtml(key || kind)}">
-            <button type="button" class="process-row-head" onclick="toggleProcessRow(this)" aria-expanded="false">
+            <button type="button" class="process-row-head" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleProcessRow(this);}" aria-expanded="false">
                 <span class="process-row-icon" aria-hidden="true">${processIconSvg(kind)}</span>
                 <span class="process-state" aria-hidden="true"></span>
                 <span class="process-row-title">${escapeHtml(title)}</span>
                 ${summary ? `<span class="process-row-summary">${escapeHtml(summary)}</span>` : '<span class="process-row-summary"></span>'}
+                ${dur ? `<span class="process-row-duration">${escapeHtml(dur)}</span>` : ''}
                 <span class="process-row-status">${escapeHtml(processStateLabel(state))}</span>
                 <span class="process-row-chevron" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>
@@ -1782,12 +1919,34 @@ function processRowHtml({ kind, key, title, summary, state, bodyHtml }) {
         </div>`;
 }
 
-/** 展开/收起一条过程行（内联 onclick，与项目其它地方一致） */
+/** 展开/收起一条过程行（键盘操作走这里；指针点击见 onTurnProcessPointerUp） */
 function toggleProcessRow(button) {
     const row = button?.closest?.('.process-row');
     if (!row) return;
     const open = row.classList.toggle('is-open');
     button.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
+/**
+ * 过程区展开/收起的**指针统一入口**：绑在容器（.turn-process）上的 pointerup 委托。
+ *
+ *   为什么用 pointerup 而不是 click：流式期间过程区每帧整体重建
+ *   （renderTurnProcess 的 innerHTML = …），用户按下鼠标到松开之间，
+ *   行元素可能已被重建替换 —— 浏览器只在 mousedown 与 mouseup 的目标
+ *   一致（或存在共同祖先）时才把 click 派发到行上，而内联 onclick 绑在
+ *   被替换的元素上，一个事件都收不到。表现是「AI 正在思考/输出时，
+ *   思考行怎么点都没反应」，流式一停又能点开 —— 也就是"时好时坏"。
+ *   pointerup 直接派发到松开那一刻所在的元素并冒泡，而容器本身从不被
+ *   重建（只换它的子节点），所以委托永远收得到。
+ */
+function onTurnProcessPointerUp(event) {
+    // 只认主键：右键/中键的松开不是"点击"（contextmenu 另算）
+    if (event.button !== undefined && event.button !== 0) return;
+    const target = event.target;
+    const head = target?.closest?.('.process-row-head');
+    if (head) { toggleProcessRow(head); return; }
+    const summary = target?.closest?.('.turn-summary');
+    if (summary) toggleTurnProcess(summary);
 }
 
 /**
@@ -1800,10 +1959,10 @@ function toggleProcessRow(button) {
  *     · 工具条 → 参数 / 结果（与 Agent 工具卡片一致）
  *     · 阶段条 → 该阶段的完整输出文本
  *
- * 为什么必须两端都生效：桌面 CSS 里 is-expanded 只影响布局、三角箭头
- * 也只在手机上显示，若只对**手机**接线，桌面上就是一个"看着能点、点了没用"
- * 的死三角。所以两段式在**两端都生效**，箭头也常驻
- * （见 index.html 的 .turn-summary-toggle 规则）。
+ * 指针点击经 onTurnProcessPointerUp（容器委托），键盘走内联 onkeydown ——
+ * 两条入口最终都到这里。为什么必须两端都生效：桌面 CSS 里 is-expanded 只影响
+ * 布局，若只对**手机**接线，桌面上就是一个"看着能点、点了没用"的死三角。
+ * 箭头因此常驻（见 index.html 的 .turn-summary-toggle 规则）。
  */
 function toggleTurnProcess(summaryEl) {
     const host = summaryEl?.closest?.('.turn-process');
@@ -1847,13 +2006,22 @@ function renderTurnProcess() {
         //   —— 最终顺序正好是「用户消息 → 思考/过程 → AI 正文」。
         elements.conversationHistory.appendChild(host);
     }
+    // 展开交互的 pointerup 委托只绑一次（见 onTurnProcessPointerUp 的说明）：
+    // host 从不被重建、只换子节点，绑在它身上的监听在整个回合里持续有效；
+    // data 标记防重复 —— 本函数每帧都会走到这里。
+    if (!host.dataset.pointerWired) {
+        host.dataset.pointerWired = '1';
+        host.addEventListener('pointerup', onTurnProcessPointerUp);
+    }
 
-    const parts = [];
-
-    // ---- 第一段：总览行（点它展开时间线）----
-    // 思考开关：只控制**思考段落**是否显示。
-    // 工具调用无条件显示 —— 那是"AI 干了什么"的事实记录，
-    // 关掉思考不代表用户可以不知道 AI 动了哪些文件。
+    // ---- 收集条目（**不构建 HTML**）----
+    //
+    // 性能关键：这里只登记"有哪些行、各自的版本号是什么、真要渲染时怎么构建"。
+    // 构建一行的成本随它的文本长度走（escapeHtml + HTML 解析），而流式期间
+    // 每帧真正变化的通常只有**最后一行思考**（appendTurnReasoning 只往最后一个
+    // segment 追加）。版本号是 O(1) 的（长度 / 状态 / 工具行的 rev 计数），
+    // 没变的行在应用阶段直接跳过 —— 每帧成本从 O(思考总长) 降到 O(增量)。
+    // 这正是"思考越长越卡"的根因修复：旧实现每帧把全部内容重建一遍。
     const timeline = trace.timeline.filter((item) => item.kind !== 'reasoning' || showReasoning);
     const visibleReasoning = timeline.filter((item) => item.kind === 'reasoning');
     const hasReasoning = visibleReasoning.length > 0;
@@ -1872,17 +2040,25 @@ function renderTurnProcess() {
     if (counts.error) summaryBits.push(`${counts.error} 个失败`);
     if (counts.running) summaryBits.push(`${counts.running} 个进行中`);
     if (counts.stopped) summaryBits.push(`${counts.stopped} 个已停止`);
+
+    const entries = [];
+    // ---- 第一段：总览行（点它展开时间线）----
+    // 思考开关：只控制**思考段落**是否显示。
+    // 工具调用无条件显示 —— 那是"AI 干了什么"的事实记录，
+    // 关掉思考不代表用户可以不知道 AI 动了哪些文件。
     if (summaryBits.length) {
-        // 总览行是**第一段**开关，两端都生效。
-        //   箭头（.turn-summary-toggle）现在常驻显示 —— 它过去只在手机端出现，
-        //   桌面上是个"没有箭头、点了也没反应"的死行（用户报"三角形点不了"）。
-        parts.push(`<div class="turn-summary" role="button" tabindex="0"`
-            + ` aria-expanded="false" onclick="toggleTurnProcess(this)"`
-            + ` onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTurnProcess(this);}">`
-            + summaryBits.map((b) => escapeHtml(b)).join('<span class="turn-summary-sep">·</span>')
-            + `<span class="turn-summary-toggle" aria-hidden="true">`
-            + `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>`
-            + `</span></div>`);
+        entries.push({
+            key: 'summary', kind: 'summary',
+            // 总览内容只随计数变化（段数 / 各状态的工具数），流式追加期间稳定
+            version: summaryBits.join('\u0001'),
+            build: () => `<div class="turn-summary" role="button" tabindex="0"`
+                + ` aria-expanded="false"`
+                + ` onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleTurnProcess(this);}">`
+                + summaryBits.map((b) => escapeHtml(b)).join('<span class="turn-summary-sep">·</span>')
+                + `<span class="turn-summary-toggle" aria-hidden="true">`
+                + `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 6l6 6-6 6"/></svg>`
+                + `</span></div>`,
+        });
     }
 
     // ---- 时间线：思考段落 / 工具调用 / 阶段输出，**按发生先后**排列 ----
@@ -1890,108 +2066,337 @@ function renderTurnProcess() {
     // 这是第二段的容器：每一条自己再是一个可展开的 .process-row，
     // 展开后显示它的详细内容。旧的实现把"全部思考"合成一行、
     // 工具另起若干行，先后因果全丢了。
-    let seq = 0;
+    const lastTimelineItem = timeline[timeline.length - 1];
     for (const item of timeline) {
-        seq += 1;
         if (item.kind === 'reasoning') {
-            const text = item.text.trim();
-            if (!text) continue;
-            const firstLine = text.split('\n').map((l) => l.trim()).find(Boolean) || '思考中';
-            // 阶段标签：两段式生成时让用户知道这段思考属于哪一步
-            const phaseNote = item.phase ? `（第 ${item.phase} 阶段）` : '';
-            parts.push(processRowHtml({
-                kind: 'think',
-                key: item.id,
-                title: '思考' + phaseNote,
-                summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
-                // 最后一段思考且回合未结束时才是"运行中"，中间的段落都已结束
-                state: (!trace.done && item === timeline[timeline.length - 1]) ? 'running' : 'ok',
-                bodyHtml: `<div class="process-reasoning">${escapeHtml(text)}</div>`
-            }));
+            // 空白段跳过：/\S/ 只扫到第一个非空白字符就停，不会复制整段文本
+            if (!/\S/.test(item.text)) continue;
+            const live = !trace.done && item === lastTimelineItem;
+            entries.push({
+                key: item.id, kind: 'reasoning',
+                // 版本 O(1)：状态（running→ok）+ 文本长度（段内只追加，长度即变化）
+                version: (live ? 'running' : 'ok') + '#' + item.text.length,
+                // 原文交给应用阶段做增量追加（与 DOM 文本严格同源，见 applyTurnProcessEntries）
+                text: item.text,
+                build: () => {
+                    // firstLine 只取有界前缀来算：旧写法 split 整段是 O(n)/帧
+                    const firstLine = item.text.slice(0, 200).split('\n').map((l) => l.trim()).find(Boolean) || '思考中';
+                    // 阶段标签：两段式生成时让用户知道这段思考属于哪一步
+                    const phaseNote = item.phase ? `（第 ${item.phase} 阶段）` : '';
+                    return processRowHtml({
+                        kind: 'think',
+                        key: item.id,
+                        title: '思考' + phaseNote,
+                        summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
+                        // 最后一段思考且回合未结束时才是"运行中"，中间的段落都已结束
+                        state: live ? 'running' : 'ok',
+                        // 注意：不 trim。DOM 文本必须与 item.text 逐字一致，
+                        // 增量追加的前缀对齐才成立（段首空白已在建段时去过，见 appendTurnReasoning）
+                        bodyHtml: `<div class="process-reasoning">${escapeHtml(item.text)}</div>`
+                    });
+                },
+            });
             continue;
         }
         if (item.kind === 'phase') {
             const ph = item.ref || {};
-            const text = String(ph.text || '').trim();
-            const firstLine = text.split('\n').map((l) => l.trim()).find(Boolean) || '（空）';
-            parts.push(processRowHtml({
-                kind: 'phase',
-                key: item.id,
-                title: ph.title || ('第 ' + ph.index + ' 阶段输出'),
-                summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
-                state: ph.state || 'ok',
-                // 阶段输出是**完整原文**：用 pre 保留换行，方便对照
-                bodyHtml: `<div class="process-row-label">完整输出</div><pre class="process-phase-text">${escapeHtml(text)}</pre>`
-            }));
+            const phText = String(ph.text || '');
+            entries.push({
+                key: item.id, kind: 'phase',
+                version: String(ph.state || 'ok') + '#' + phText.length,
+                build: () => {
+                    const text = phText.trim();
+                    const firstLine = text.slice(0, 200).split('\n').map((l) => l.trim()).find(Boolean) || '（空）';
+                    return processRowHtml({
+                        kind: 'phase',
+                        key: item.id,
+                        title: ph.title || ('第 ' + ph.index + ' 阶段输出'),
+                        summary: firstLine.length > 80 ? firstLine.slice(0, 80) + '…' : firstLine,
+                        state: ph.state || 'ok',
+                        // 阶段输出是**完整原文**：用 pre 保留换行，方便对照
+                        bodyHtml: `<div class="process-row-label">完整输出</div><pre class="process-phase-text">${escapeHtml(text)}</pre>`
+                    });
+                },
+            });
             continue;
         }
         if (item.kind === 'tool') {
             const t = item.ref || {};
-            const body = [];
-            if (t.args) body.push(`<span class="process-row-label">参数</span><pre>${escapeHtml(t.args)}</pre>`);
-            if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
-            parts.push(processRowHtml({
-                kind: t.kind,
-                key: item.id,
-                title: t.title,
-                summary: t.summary,
-                state: t.state,
-                bodyHtml: body.join('')
-            }));
+            entries.push({
+                key: item.id, kind: 'tool',
+                // 工具行有专门的 rev 计数（updateTurnTool 每次改动自增），
+                // 状态/耗时一并进版本：任何真实更新都会让版本变化
+                version: (t.rev || 0) + '#' + t.state + '#' + t.ms,
+                build: () => {
+                    const body = [];
+                    // 参数拆成键值行（见 processArgsHtml 的说明）：整行 JSON 会把
+                    //   `path` / `command` 这类真正要紧的值埋进花括号里，得自己找。
+                    if (t.args) body.push(`<span class="process-row-label">参数</span>${processArgsHtml(t.args)}`);
+                    if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
+                    return processRowHtml({
+                        kind: t.kind,
+                        key: item.id,
+                        title: t.title,
+                        summary: t.summary,
+                        state: t.state,
+                        ms: t.ms,
+                        bodyHtml: body.join('')
+                    });
+                },
+            });
             continue;
         }
     }
     // 兜底：时间线为空但确有内容（例如历史数据结构不完整）时，
     // 至少把工具列出来，不让过程区变成空白。
-    if (!parts.some((p) => p.includes('process-row'))) {
+    if (!entries.some((e) => e.kind !== 'summary')) {
         for (const t of trace.tools) {
-            const body = [];
-            if (t.args) body.push(`<span class="process-row-label">参数</span><pre>${escapeHtml(t.args)}</pre>`);
-            if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
-            parts.push(processRowHtml({
-                kind: t.kind, key: t.key || `tool-${t.at}`, title: t.title,
-                summary: t.summary, state: t.state, bodyHtml: body.join('')
-            }));
+            entries.push({
+                key: t.key || `tool-${t.at}`, kind: 'tool',
+                version: (t.rev || 0) + '#' + t.state + '#' + t.ms,
+                build: () => {
+                    const body = [];
+                    if (t.args) body.push(`<span class="process-row-label">参数</span>${processArgsHtml(t.args)}`);
+                    if (t.result) body.push(`<span class="process-row-label">结果</span><pre>${escapeHtml(t.result)}</pre>`);
+                    return processRowHtml({
+                        kind: t.kind, key: t.key || `tool-${t.at}`, title: t.title,
+                        summary: t.summary, state: t.state, ms: t.ms, bodyHtml: body.join('')
+                    });
+                },
+            });
         }
     }
 
-    // 覆盖前先快照"用户手动展开过"的行（data-key）。
-    //   为什么必须做：这里是**每帧整体重建**过程区（innerHTML = ...），
-    //   重建会丢掉 toggleProcessRow 加上的 .is-open —— 表现为"每来一段新内容，
-    //   已展开的思考行又被折叠，用户要反复点开"（用户实测）。所以重建后要补回 is-open。
-    const openKeys = new Set();
-    for (const row of host.querySelectorAll('.process-row.is-open')) {
-        const k = row.getAttribute('data-key');
-        if (k) openKeys.add(k);
-    }
+    // 应用到 DOM：能增量就增量（见 applyTurnProcessEntries 的说明）
+    applyTurnProcessEntries(host, entries);
 
-    host.innerHTML = parts.join('');
-
-    // 恢复展开态：只补回快照里出现过的 key。
-    //   新出现的行不在快照里 → 保持默认收起，符合"只有用户点开过的才保持展开"。
-    if (openKeys.size) {
-        for (const row of host.querySelectorAll('.process-row')) {
-            if (!openKeys.has(row.getAttribute('data-key'))) continue;
-            row.classList.add('is-open');
-            const head = row.querySelector('.process-row-head');
-            if (head) head.setAttribute('aria-expanded', 'true');
-        }
-    }
     // 总览行的 is-expanded 在**宿主** .turn-process 上，重建 innerHTML 不会清掉它
     //   （只换子节点），所以手机端的整体展开态天然保留；但总览元素本身是新造的、
     //   aria-expanded 默认 false，这里同步一下，免得辅助技术读到"已收起"与视觉不符。
     const summaryEl = host.querySelector('.turn-summary');
     if (summaryEl) summaryEl.setAttribute('aria-expanded', host.classList.contains('is-expanded') ? 'true' : 'false');
 
-    // 自动滚到底：流式输出时用户视线在底部，不滚的话新内容会出现在屏幕外
-    elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
+    stickChatScrollToBottom();
+    // 返回容器：还原历史过程区时要把它挪到对应消息后面（见 restoreTurnProcessFor）
+    return host;
 }
 
-/** 回合结束：把思考行标成完成，并保留过程区（历史消息回看时还要看得到） */
+/**
+ * 聊天区"贴底跟随"：只在用户本来就停在底部附近时才自动滚动。
+ *
+ * 无条件滚底会把"流式期间往上翻历史"的用户每帧都拽回底部（用户实测）。
+ * 判据"距底 < 80px"覆盖两种情况：
+ *   · 用户正跟着流看（本来就贴底）→ 新内容出现后距离恰是一帧增量的高度，
+ *     继续贴底，观感不变；
+ *   · 用户往上翻了 → 距离远大于阈值，不再打扰，随便翻。
+ * 过程区与流式正文预览共用这一份 —— 两处各写一遍必然有一处走样。
+ */
+function stickChatScrollToBottom() {
+    const hist = elements.conversationHistory;
+    if (!hist) return;
+    const distance = hist.scrollHeight - hist.scrollTop - hist.clientHeight;
+    if (distance < 80) hist.scrollTop = hist.scrollHeight;
+}
+
+/**
+ * 把条目描述符应用到过程区容器 —— 过程区渲染的**性能核心**。
+ *
+ * ── 为什么需要增量 ─────────────────────────────────────────────────────
+ * 旧实现每帧 `host.innerHTML = 全部内容`：对全部思考文本做 6 趟正则转义、
+ * 整块 HTML 解析、全部子树节点重建。思考越长每帧越贵 —— 用户实测
+ * "思考内容一长（内部滚动条出现后）就开始卡顿"。rAF 合并只压低了频率，
+ * 每帧的成本仍是 O(思考总长)。
+ *
+ * ── 两条路径 ───────────────────────────────────────────────────────────
+ * 快路径（常态：时间线只增长、行序是上次的**前缀**）：
+ *   · 版本没变的行直接跳过（O(1) 比对）；
+ *   · 思考行只是文本变长 → 往它的**文本节点 appendData(增量)**：元素本身
+ *     不动，展开态与行内滚动位置天然保留，且每帧成本只与**增量**成正比，
+ *     与思考总长无关 —— 这是修"越长越卡"的关键一步；
+ *   · 其它变化（工具状态翻转 / 结果回填）→ 只换那一行（outerHTML），
+ *     换前快照展开态与行内滚动、换后回填。
+ * 慢路径（首次渲染 / 思考开关切换导致行集变化 / 行序不符 / DOM 与记录不同步）：
+ *   整体重建 + 快照回填展开态与滚动位置（与旧实现一致，一次性的成本可接受）。
+ *
+ * 状态记录挂在 host 元素自身（`__elainaRows`）：host 按锚点消息 id 命名、
+ * 每回合一个，loadConversation 清空容器时随之丢弃，不会串台。
+ */
+function applyTurnProcessEntries(host, entries) {
+    const prev = host.__elainaRows || null;
+    const children = host.children;
+    const fastPath = prev
+        && prev.keys.length <= entries.length
+        && children.length === prev.keys.length
+        && prev.keys.every((k, i) => k === entries[i].key);
+
+    if (!fastPath) {
+        // ---- 慢路径：整体重建 ----
+        // 覆盖前先快照"用户手动展开过"的行（data-key）。
+        //   重建会丢掉 toggleProcessRow 加上的 .is-open —— 表现为"每来一段
+        //   新内容，已展开的思考行又被折叠"（用户实测），所以重建后要补回。
+        const openKeys = new Set();
+        for (const row of host.querySelectorAll('.process-row.is-open')) {
+            const k = row.getAttribute('data-key');
+            if (k) openKeys.add(k);
+        }
+        // 各行详情内部的滚动位置同样要快照：思考正文 / 结果 pre 都有
+        //   max-height + overflow:auto，重建会把 scrollTop 静默重置为 0 ——
+        //   表现为"流式期间一滑就弹回最上面"。行内滚动容器的出现顺序是
+        //   确定性的（HTML 由本函数生成），按 key + 序号对应即可。
+        const scrollMemory = new Map();
+        for (const row of host.querySelectorAll('.process-row')) {
+            const k = row.getAttribute('data-key');
+            if (!k) continue;
+            const tops = [];
+            for (const scroller of row.querySelectorAll('.process-row-body pre, .process-reasoning')) {
+                if (scroller.scrollTop > 0) tops.push(scroller.scrollTop);
+            }
+            if (tops.length) scrollMemory.set(k, tops);
+        }
+        host.innerHTML = entries.map((e) => e.build()).join('');
+        // 恢复展开态：只补回快照里出现过的 key（新行保持默认收起）
+        if (openKeys.size) {
+            for (const row of host.querySelectorAll('.process-row')) {
+                if (!openKeys.has(row.getAttribute('data-key'))) continue;
+                row.classList.add('is-open');
+                const head = row.querySelector('.process-row-head');
+                if (head) head.setAttribute('aria-expanded', 'true');
+            }
+        }
+        // 恢复行内滚动位置。恢复不了（行没了）就什么都不做。
+        if (scrollMemory.size) {
+            for (const row of host.querySelectorAll('.process-row')) {
+                const tops = scrollMemory.get(row.getAttribute('data-key'));
+                if (!tops) continue;
+                const scrollers = row.querySelectorAll('.process-row-body pre, .process-reasoning');
+                tops.forEach((top, i) => { if (scrollers[i]) scrollers[i].scrollTop = top; });
+            }
+        }
+    } else {
+        // ---- 快路径：只动"变了"的行 ----
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
+            if (i < prev.versions.length && prev.versions[i] === entry.version) continue;
+            if (i >= children.length) {
+                // 新行（时间线增长了）：追加到末尾
+                host.insertAdjacentHTML('beforeend', entry.build());
+                continue;
+            }
+            const old = children[i];
+            // 思考行只是文本变长：往文本节点追加增量。元素本身不动 ——
+            //   展开/折叠、行内滚动天然保留，成本只与增量成正比。
+            //   前缀对齐是硬判据：对不上（理论不该发生）就走下面的整行替换，宁慢勿错。
+            if (entry.kind === 'reasoning' && prev.kinds[i] === 'reasoning') {
+                const bodyEl = old.querySelector('.process-reasoning');
+                const node = bodyEl && bodyEl.firstChild;
+                if (node && node.nodeType === 3   // Text 节点
+                    && entry.text.length > node.data.length
+                    && entry.text.startsWith(node.data)) {
+                    node.appendData(entry.text.slice(node.data.length));
+                    continue;
+                }
+            }
+            // 其余变化：只换这一行，换前快照展开态与行内滚动、换后回填
+            const wasOpen = old.classList.contains('is-open');
+            const tops = [];
+            if (wasOpen) {
+                for (const sc of old.querySelectorAll('.process-row-body pre, .process-reasoning')) {
+                    tops.push(sc.scrollTop);
+                }
+            }
+            old.outerHTML = entry.build();
+            const now = children[i];
+            if (wasOpen && now) {
+                now.classList.add('is-open');
+                const head = now.querySelector('.process-row-head');
+                if (head) head.setAttribute('aria-expanded', 'true');
+                const scs = now.querySelectorAll('.process-row-body pre, .process-reasoning');
+                tops.forEach((top, j) => { if (scs[j]) scs[j].scrollTop = top; });
+            }
+        }
+    }
+    // 记录本轮的行序与版本，供下一帧比对
+    host.__elainaRows = {
+        keys: entries.map((e) => e.key),
+        versions: entries.map((e) => e.version),
+        kinds: entries.map((e) => e.kind),
+    };
+}
+
+/**
+ * 回合结束：把思考行标成完成，并**把过程持久化到消息上**。
+ *
+ * 为什么必须持久化：过程区是**追加到聊天容器末尾的临时 DOM**，而
+ *   `loadConversation` 会先 `conversationHistory.innerHTML = ''` 再把每条消息
+ *   重画一遍 —— 那些临时节点不在任何消息里，于是**整体消失**。
+ *   用户的表现就是"聊了几轮之后，之前对话的思考记录不见了"：
+ *   切个会话、刷新页面、甚至自动重载都会让它没掉。
+ *   而注释一直写着"历史消息回看时还要看得到"，实际做不到。
+ *
+ * 所以收尾时把这一轮的记录挂到**它所依附的那条消息**上（`msg.turnTrace`），
+ *   重画时由 renderMessage 一并还原（见 restoreTurnProcessFor）。
+ *   存的是**数据**不是 HTML：HTML 依赖当时的展开状态与主题，存下来会越用越脏。
+ */
 function finishTurnTrace() {
     if (!activeTurnTrace) return;
     activeTurnTrace.done = true;
     renderTurnProcess();
+    // 挂到锚点消息上（锚点就是开这一轮时给的那个消息 id）
+    const anchorId = activeTurnAnchorId;
+    if (anchorId) {
+        try {
+            const conv = typeof getCurrentConversation === 'function' ? getCurrentConversation() : null;
+            const msg = conv && Array.isArray(conv.messages)
+                ? conv.messages.find((m) => String(m.id) === String(anchorId))
+                : null;
+            if (msg) {
+                // 只留渲染需要的最小形状：思考段 / 工具行 / 阶段输出，都是数据
+                msg.turnTrace = {
+                    timeline: activeTurnTrace.timeline,
+                    reasoning: activeTurnTrace.reasoning,
+                    tools: activeTurnTrace.tools,
+                    phases: activeTurnTrace.phases,
+                    done: true,
+                    startedAt: activeTurnTrace.startedAt,
+                };
+                if (typeof saveConversations === 'function') saveConversations();
+            }
+        } catch (e) { /* 持久化失败不该影响回合收尾 */ }
+    }
+}
+
+/**
+ * 重画一条消息时，把它当年那一轮的过程区一并还原出来。
+ *
+ * 由 renderMessage 的调用方（loadConversation 的循环）在渲染后调用。
+ * 走的是同一个 renderTurnProcess 逻辑，只是把"数据源"换成消息上存的那份 ——
+ * 所以外观、折叠、展开态恢复全都天然一致，不存在两套渲染。
+ */
+function restoreTurnProcessFor(message) {
+    const saved = message && message.turnTrace;
+    if (!saved || !Array.isArray(saved.timeline) || !saved.timeline.length) return;
+    const el = document.getElementById(`msg-${safeAttrId(message.id)}`);
+    if (!el) return;
+    // 已经还原过（同一条消息被重复渲染）就不再插第二份
+    if (document.getElementById(`turn-process-${safeAttrId(message.id)}`)) return;
+    const prevTrace = activeTurnTrace;
+    const prevAnchor = activeTurnAnchorId;
+    try {
+        activeTurnTrace = saved;
+        activeTurnAnchorId = String(message.id);
+        const host = renderTurnProcess();
+        // 过程区默认排在正文之后（历史回看时正文才是主角）。
+        //   这里显式确保它紧跟在这条消息后面，而不是跑到列表末尾。
+        const hostEl = document.getElementById(`turn-process-${safeAttrId(message.id)}`);
+        if (hostEl && hostEl.previousSibling !== el) {
+            if (el.nextSibling) el.parentNode.insertBefore(hostEl, el.nextSibling);
+            else el.parentNode.appendChild(hostEl);
+        }
+    } catch (e) { /* 还原失败不该挡住消息渲染 */ }
+    finally {
+        activeTurnTrace = prevTrace;
+        activeTurnAnchorId = prevAnchor;
+    }
 }
 
 function removeThinkingMessage() {

@@ -1,17 +1,10 @@
 /* ========================================================================
  * 基础设施：原生适配 / chat API 抽象 / 本机中转
  *
- * 本文件由 web/index.html 的主脚本按分区拆分而来（保持原始加载顺序）。
- * 拆分前提：主脚本是全局作用域，拆分后各文件共享同一全局词法环境，
- * 因此顶层 function / const / let 互相可见，调用点无需修改。
- *
- * 包含分区：
- *   · 原生（Capacitor APK）Live2D 模型存储适配
- *   · 统一 chat API 调用抽象
- *   · 本机中转
+ * 经典脚本：顶层 function/const 共享全局词法环境，加载顺序由 index.html 决定。
  * ======================================================================== */
 
-// ===== 主脚本前言（原 index.html 内联脚本开头）=====
+// ========================================================================
 // 兼容旧 WebView（Chromium < 86 无 Element.replaceChildren，会导致发送流程
 // 在 consumePendingComposerImage -> renderPendingComposerImage 处抛 TypeError，
 // 请求根本发不出去）。仅在缺失时注入，不影响新设备行为。
@@ -25,7 +18,6 @@ if (window.Element && !Element.prototype.replaceChildren) {
     };
 }
 
-const BYOK_CLIENT = true;
 const DEEPSEEK_DIRECT_BASE_URL = 'https://api.deepseek.com/v1';
 
 
@@ -48,20 +40,48 @@ const IS_MOBILE_DEVICE = (function () {
     return false;
 })();
 let nativeModelRootReady = false;
+/**
+ * 模型数据根（相对 Directory.Data 的路径）。
+ *
+ * 由内嵌服务回报的 modStatic 决定（播种目标与它同一份判据）：
+ *   · 已启用的 live2d-models 声明了 /live2d/models → 插件目录（mods/<目录名>/models，
+ *     与桌面版同一布局，node 侧的迁移也把存量模型挪到这里）；
+ *   · 插件没装 / 没启用 / node 起不来 → 旧位置 live2d/models（原生兜底复刻只认它）。
+ *
+ * **所有**读写模型数据目录的地方（播种 / 列表 / 上传 / 删除）都走这一个变量 ——
+ * 列表接口读哪、资源 base 指哪、上传写哪，三处必须同一处，否则"列表里有、
+ * 加载 404"这种分叉只是时间问题。
+ */
+let nativeModelRelRoot = 'live2d/models';
 
 function nativeFs() {
     return window.Capacitor?.Plugins?.Filesystem || null;
 }
 
-// 初始化本地模型目录并暴露 WebView 可访问的 base URL
+// 初始化本地模型目录并暴露 WebView 可访问的 base URL。
+// 播种目标由内嵌服务回报的 modStatic 决定（见 nativeModelRelRoot 的说明），
+// 所以这里要先等 __nodeReadyPromise —— node 起不来时它很快失败，
+// __nodeModStatic 保持 undefined → 按旧位置走，兜底链路照常。
 async function initNativeLive2dStorage() {
     if (!IS_NATIVE_APP) return;
     try {
         const fs = nativeFs();
         if (!fs) return;
+        await window.__nodeReadyPromise;
+        const entry = (Array.isArray(window.__nodeModStatic) ? window.__nodeModStatic : [])
+            .find((s) => s && s.url === '/live2d/models');
+        if (entry && entry.relPath !== undefined) {
+            const rel = String(entry.relPath).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+            // 宁可少一次播种，也不要往错的地方灌 40MB：路径不合法就整个跳过
+            if (!rel || rel.split('/').some((seg) => !seg || seg === '.' || seg === '..')) {
+                console.warn('[Native] modStatic 的模型目录路径不合法，跳过模型初始化:', entry.relPath);
+                return;
+            }
+            nativeModelRelRoot = rel;
+        }
         const dir = (fs.Directory && fs.Directory.Data) ? fs.Directory.Data : 'DATA';
-        try { await fs.mkdir({ path: 'live2d/models', directory: dir, recursive: true }); } catch (e) { /* 已存在则忽略 */ }
-        const res = await fs.getUri({ path: 'live2d/models', directory: dir });
+        try { await fs.mkdir({ path: nativeModelRelRoot, directory: dir, recursive: true }); } catch (e) { /* 已存在则忽略 */ }
+        const res = await fs.getUri({ path: nativeModelRelRoot, directory: dir });
         // file:///... → WebView 可访问的 https://localhost/_capacitor_file_/...
         if (window.Capacitor.convertFileSrc) {
             window.__nativeModelBase = window.Capacitor.convertFileSrc(res.uri) + '/';
@@ -106,7 +126,7 @@ async function seedBundledLive2dModels() {
         // 存储写满）会留下半套文件，目录非空但模型是坏的 —— 只判非空的话这种坏状态
         // 永远修不回来。所以按清单逐项核对：缺的、以及字节数对不上的，都补种。
         const existing = new Map();
-        for (const f of await nativeCollectModelFiles(fs, dir, 'live2d/models/' + name)) {
+        for (const f of await nativeCollectModelFiles(fs, dir, nativeModelRelRoot + '/' + name)) {
             existing.set(f.rel, f.size);
         }
         const pending = [];
@@ -126,7 +146,7 @@ async function seedBundledLive2dModels() {
                 const res = await fetch('/live2d/models/' + encodeURIComponent(name) + '/' + encoded);
                 if (!res.ok) continue;
                 const bytes = new Uint8Array(await res.arrayBuffer());
-                await nativeWriteFile('live2d/models/' + name + '/' + rel, dir, bytes);
+                await nativeWriteFile(nativeModelRelRoot + '/' + name + '/' + rel, dir, bytes);
                 written++;
             } catch (e) {
                 console.warn('[Native] 内置模型文件写入失败:', rel, e);
@@ -300,13 +320,13 @@ async function nativeLive2dFetch(url, options) {
     try {
         if (url === '/api/live2d/models' && method === 'GET') {
             let entries;
-            try { entries = await fs.readdir({ path: 'live2d/models', directory: dir }); } catch (e) { entries = { files: [] }; }
+            try { entries = await fs.readdir({ path: nativeModelRelRoot, directory: dir }); } catch (e) { entries = { files: [] }; }
             const models = [];
             for (const e of (entries.files || [])) {
                 if (e.type && e.type !== 'directory') continue;
                 const modelName = e.name;
                 try {
-                    const files = (await nativeCollectModelFiles(fs, dir, 'live2d/models/' + modelName)).map(f => f.rel);
+                    const files = (await nativeCollectModelFiles(fs, dir, nativeModelRelRoot + '/' + modelName)).map(f => f.rel);
                     // model3.json / vtube.json 优先取根目录下的，避免纹理等子目录里的同名文件抢走
                     const pickRoot = (pred) => files.find(f => !f.includes('/') && pred(f)) || files.find(pred) || null;
                     const modelJson = pickRoot(f => f.toLowerCase().endsWith('.model3.json'));
@@ -355,7 +375,7 @@ async function nativeLive2dFetch(url, options) {
             const modelFile = files.find(f => f.name.toLowerCase().endsWith('.model3.json'));
             if (!modelFile) return makeRes(400, { ok: false, message: 'zip 内没有 .model3.json（需 Cubism3 模型）' });
             const safeId = 'model_' + Date.now().toString(36);
-            const baseDir = 'live2d/models/' + safeId;
+            const baseDir = nativeModelRelRoot + '/' + safeId;
             // 去掉 zip 内的顶层目录（若有）
             const topDir = (() => {
                 const first = files[0].name;
@@ -376,7 +396,7 @@ async function nativeLive2dFetch(url, options) {
         }
         const delMatch = String(url).match(/^\/api\/live2d\/models\/([^/]+)$/);
         if (delMatch && method === 'DELETE') {
-            await fs.rmdir({ path: 'live2d/models/' + delMatch[1], directory: dir, recursive: true });
+            await fs.rmdir({ path: nativeModelRelRoot + '/' + delMatch[1], directory: dir, recursive: true });
             return json({ ok: true, deleted: delMatch[1] });
         }
         return makeRes(404, { ok: false, message: 'Not found' });
@@ -472,7 +492,10 @@ async function nativeReadModManifest(fs, dir, modId) {
         entry: (m && m.entry) || 'index.js',
         scripts: Array.isArray(m && m.scripts) ? m.scripts.filter((s) => typeof s === 'string' && s) : [],
         styles: Array.isArray(m && m.styles) ? m.styles : [],
-        defaultEnabled: !(m && m.defaultEnabled === false),
+        // 默认关闭（与 web/js/mods.js 的 isModEnabled 同语义）：只有显式写
+        //   `"defaultEnabled": true` 才算默认开，漏写/写别的都算关 ——
+        //   插件会改动界面，不该在用户不知情时生效。
+        defaultEnabled: (m && m.defaultEnabled === true),
         after: Array.isArray(m && m.after) ? m.after : [],
         hidden: m ? m.hidden === true : false,
         hasManifest: Boolean(m),
@@ -673,11 +696,195 @@ async function nativePluginsFetch(url, options) {
     }
 }
 
-// 原生模式下拦截 /api/live2d/* 与 /api/plugins/* 请求
+// 原生模式下拦截 /api/live2d/* 与 /api/plugins/* 请求；内嵌 Node（回环服务）就绪后
+// 再按前缀清单把一部分 /api/* 转发给它（日志、mod 服务端半边），转发不了的一律走
+// 原有本地实现 —— "node 不可用"是默认形态（构建开关默认关），兜底链路必须永远先成立。
 if (IS_NATIVE_APP) {
     const nativeOrigFetch = window.fetch.bind(window);
+
+    // ── 内嵌 Node 转发 ─────────────────────────────────────────────────
+    //
+    // 转发清单 = 固定清单（日志接口，bootstrap 自己实现）+ 动态清单（已装载插件的
+    // 路由前缀，来自 /api/ping 的 modRoutes）。固定清单在前端写死没问题 —— 那些
+    // 接口就是为手机端加的；插件路由**不能**写死（宿主不认识任何具体插件），
+    // 只能按 node 报告的清单转发。
+    const NODE_FIXED_PREFIXES = ['/api/logs/', '/api/client-log', '/api/mods/status'];
+    // 转发超时：普通请求 30s；上传放宽到 5 分钟（200MB 上限按慢网络也要走得完，
+    // 否则大模型包必被砍）。调用方自带 AbortSignal 时透传 —— 它自己管超时。
+    const NODE_TIMEOUT_MS = 30000;
+    const NODE_UPLOAD_TIMEOUT_MS = 300000;
+    let nodeFailCount = 0;
+    let nodeDown = false;
+
+    /** 段边界匹配：/api/live2d 命中 /api/live2d/...，不命中 /api/live2dfoo */
+    function nodeRouteHit(u) {
+        for (const p of NODE_FIXED_PREFIXES) {
+            if (u === p || u.startsWith(p.endsWith('/') ? p : p + '/')) return true;
+        }
+        const modRoutes = Array.isArray(window.__nodeRoutePrefixes) ? window.__nodeRoutePrefixes : [];
+        for (const p of modRoutes) {
+            if (typeof p !== 'string') continue;
+            if (u === p || u.startsWith(p + '/')) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 连续失败后确认 node 是否真掉线：ping 通 = 只是瞬时抖动，重置计数；
+     * ping 不通 = 掉线，停用转发（不清 __nodeBase —— 万一是误判，下次启动还能恢复；
+     * 本会话内让请求明确走本地实现，而不是每次白等 30s 超时）。
+     */
+    async function markNodeDownIfDead() {
+        try {
+            const res = await nativeOrigFetch(window.__nodeBase + '/api/ping', { cache: 'no-store' });
+            if (res.ok) { nodeFailCount = 0; return; }
+        } catch (e) { /* ping 也失败 → 掉线 */ }
+        nodeDown = true;
+        window.__nodeRoutePrefixes = [];
+        console.warn('[Native] 内嵌服务连续失败且 ping 不通，已停用转发（本次会话走本地实现，重启应用可恢复）');
+    }
+
+    /** 把一条 /api/* 请求原样透传给回环服务。body/headers/method 一律不动（上传是原始 File 字节，转 JSON 就废了） */
+    async function forwardToNode(u, options) {
+        const opts = options || {};
+        if (opts.signal) return nativeOrigFetch(window.__nodeBase + u, opts);
+        const isUpload = u === '/api/live2d/upload' || u.startsWith('/api/live2d/upload');
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(),
+            isUpload ? NODE_UPLOAD_TIMEOUT_MS : NODE_TIMEOUT_MS);
+        try {
+            return await nativeOrigFetch(window.__nodeBase + u, { ...opts, signal: controller.signal });
+        } finally {
+            clearTimeout(timer);
+        }
+    }
+
+    // ── navigator.sendBeacon 补丁（只劫持 /api/client-log）──────────────
+    //
+    // 为什么必须补：sendBeacon 不走 window.fetch，拦截器拦不到它 —— 相对地址在
+    // 手机上必然 404，前端报错转发在手机上整个失效。为什么不能简单换成
+    // fetch(…, keepalive)：两个硬约束 ——
+    //   ① keepalive 请求体上限 64KiB 且全局共享，一批 20 条 × 2000 字中文（UTF-8
+    //     3 字节/字）≈ 120KB 必超，浏览器直接拒发（不会截断）；
+    //   ② Blob 带 application/json 的 Content-Type 属于非安全列表，跨源触发 OPTIONS
+    //     预检，而 beacon 的典型场景是页面卸载 —— 预检常常来不及回来，请求静默丢失。
+    // 所以：Content-Type 用 text/plain（安全列表，免预检；bootstrap 侧解析不看它），
+    // 按**字节**分批（每批 ≤ 48KiB，给头部留余量），node 未就绪时先入内存环形队列
+    // （启动最初几秒的前端报错恰是最需要日志的时刻），就绪后**串行**冲刷（并发会
+    // 抢同一份 keepalive 配额）。
+    const nativeOrigBeacon = typeof navigator.sendBeacon === 'function'
+        ? navigator.sendBeacon.bind(navigator) : null;
+    let beaconKick = null;
+    if (nativeOrigBeacon) {
+        const BEACON_QUEUE_MAX = 100;
+        const BEACON_BATCH_BYTES = 48 * 1024;
+        const beaconQueue = [];
+        let beaconDroppedCount = 0;
+        let beaconBusy = false;
+        const beaconEncoder = new TextEncoder();
+
+        const beaconEnqueue = (items) => {
+            for (const it of items) {
+                while (beaconQueue.length >= BEACON_QUEUE_MAX) {
+                    beaconQueue.shift();
+                    beaconDroppedCount++;
+                }
+                beaconQueue.push({
+                    level: String((it && it.level) || 'log'),
+                    text: String((it && it.text) || ''),
+                    page: String((it && it.page) || ''),
+                });
+            }
+        };
+
+        async function beaconFlush() {
+            if (beaconBusy) return;
+            beaconBusy = true;
+            try {
+                while (beaconQueue.length && window.__nodeBase && !nodeDown) {
+                    const batch = [];
+                    let bytes = 2;          // JSON 骨架 "{}" 与分隔符的余量
+                    while (beaconQueue.length) {
+                        const itemBytes = beaconEncoder.encode(JSON.stringify(beaconQueue[0])).length + 1;
+                        if (batch.length && bytes + itemBytes > BEACON_BATCH_BYTES) break;
+                        bytes += itemBytes;
+                        batch.push(beaconQueue.shift());
+                    }
+                    try {
+                        await forwardToNode('/api/client-log', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'text/plain' },
+                            body: JSON.stringify({ items: batch }),
+                            keepalive: true,
+                        });
+                    } catch (e) {
+                        nodeFailCount++;                 // beacon 失败同样是 node 故障的信号
+                        beaconQueue.unshift(...batch);   // 本批塞回去，下轮再试
+                        break;
+                    }
+                }
+                if (beaconDroppedCount > 0) {
+                    console.warn('[Native] 前端日志队列溢出，丢弃了 ' + beaconDroppedCount + ' 条最旧记录');
+                    beaconDroppedCount = 0;
+                }
+            } finally {
+                beaconBusy = false;
+            }
+        }
+
+        /** 异步解出 beacon 载荷里的 items 入队（sendBeacon 是同步签名，内容只能异步读） */
+        const queueBeaconPayload = (data) => {
+            Promise.resolve().then(async () => {
+                let text = '';
+                if (typeof data === 'string') text = data;
+                else if (data && typeof data.text === 'function') text = await data.text();
+                else return;
+                let items = null;
+                try {
+                    const parsed = JSON.parse(text);
+                    items = parsed && Array.isArray(parsed.items) ? parsed.items : null;
+                } catch (e) { items = null; }
+                if (items && items.length) {
+                    beaconEnqueue(items);
+                    beaconFlush();
+                }
+            }).catch(() => { /* 上报链路绝不能影响应用本身 */ });
+        };
+
+        beaconKick = beaconFlush;
+
+        navigator.sendBeacon = function (url, data) {
+            const path = typeof url === 'string' ? url.split('?')[0] : '';
+            if (path === '/api/client-log') {
+                queueBeaconPayload(data);   // 未就绪时入队，就绪后由 __nodeReadyPromise 触发冲刷
+                return true;
+            }
+            return nativeOrigBeacon(url, data);
+        };
+    }
+
     window.fetch = async (input, options) => {
         const u = typeof input === 'string' ? input : String((input && input.url) || input);
+        // 内嵌 Node 转发：命中清单（固定清单 + 插件路由）且 node 就绪。
+        // 只对绝对路径匹配 —— http(s):// 与 _capacitor_file_ 的完整 URL 一律放行，
+        // 别劫持引擎/图片请求（那些不走 /api）。
+        if (window.__nodeBase && !nodeDown && u.startsWith('/api/') && nodeRouteHit(u)) {
+            try {
+                const res = await forwardToNode(u, options);
+                nodeFailCount = 0;
+                return res;
+            } catch (e) {
+                nodeFailCount++;
+                // /api/live2d/* 有原生兜底 → 运行中也回落（不比现状差不能只覆盖启动快照）；
+                // 其它前缀没有本地实现，回落只会掩盖真实故障 → 原样抛回调用方。
+                if (u === '/api/live2d' || u.startsWith('/api/live2d/')) {
+                    console.warn('[Native] 转发内嵌服务失败，回落本地实现:', u, (e && e.message) || e);
+                    return nativeLive2dFetch(u, options || {});
+                }
+                if (nodeFailCount >= 3) await markNodeDownIfDead();
+                throw e;
+            }
+        }
         if (u.startsWith('/api/live2d/')) return nativeLive2dFetch(u, options || {});
         // 插件管理（安装/列表/删除）：电脑版由 serve.mjs 提供，
         //   手机版在这里原生实现（见 nativePluginsFetch 的说明）。
@@ -688,6 +895,103 @@ if (IS_NATIVE_APP) {
         }
         return nativeOrigFetch(input, options);
     };
+
+    // ── 内嵌 Node 就绪链（独立链，不复用播种/插件根那两条）──────────────
+    //
+    // 与 __nativeSeedPromise / __nativeModsRootPromise 同一套模式：开机调一次
+    // start()（幂等）→ 轮询 status 到 ready → 轮询 /api/ping 到 mod 装载有结论
+    // （modsLoaded）→ 才把路由清单缓存下来。**必须等结论**而不是"ping 通就算"：
+    // HTTP listen 回调返回后就能 accept，而 loadAll 发生在它之后 —— 先到的 ping
+    // 必然看到空清单，把它当终态缓存下来就永远是空的，且日志里没有任何报错。
+    // 失败（超时 / lastError / 插件不存在）时 __nodeBase 保持 undefined，
+    // 一切照现状跑。
+    window.__nodeReadyPromise = (async () => {
+        try {
+            // Capacitor 插件是**异步**注入到 window.Capacitor.Plugins 的：
+            // 页面脚本执行时它常常还没注册完。一上来就取会拿到 undefined，
+            // 于是"插件不可用"被 catch 吞掉、之后只剩 status 轮询 ——
+            // 表现是服务起着却从没收到过 start，Node 永远不启动。
+            // 所以先等它出现（最多 5 秒），拿不到才判定本版没有内嵌 Node。
+            const node = await waitForNodePlugin(5000);
+            if (!node || typeof node.start !== 'function' || typeof node.status !== 'function') {
+                throw new Error('ElainaNode 插件不可用（构建未启用内嵌 Node）');
+            }
+            await node.start();   // 幂等；只调一次，不依赖停止后重启（行为未验证）
+            const startedAt = Date.now();
+            let state = null;
+            while (Date.now() - startedAt < 20000) {
+                state = await node.status();
+                if (state && state.ready && Number(state.port) > 0) break;
+                if (state && state.started === false && state.lastError) {
+                    throw new Error(String(state.lastError));
+                }
+                await new Promise((resolve) => setTimeout(resolve, 200));
+            }
+            if (!(state && state.ready && Number(state.port) > 0)) {
+                throw new Error('等内嵌服务就绪超时（20s）');
+            }
+            const base = 'http://127.0.0.1:' + Number(state.port);
+            const routes = await waitForNodeRoutes(base);
+            window.__nodeBase = base;
+            window.__nodeRoutePrefixes = routes.modRoutes;
+            window.__nodeModStatic = routes.modStatic;
+            console.log('[Native] 内嵌服务就绪 ' + base
+                + (routes.modRoutes.length ? '（插件路由：' + routes.modRoutes.join(' ') + '）' : ''));
+        } catch (e) {
+            console.warn('[Native] 内嵌服务不可用（已回落本地实现）', (e && e.message) || e);
+        }
+    })();
+
+    /** 轮询等 Capacitor 把 ElainaNode 插件注册进来（超时返回 null，不是错误） */
+    function waitForNodePlugin(timeoutMs) {
+        const deadline = Date.now() + timeoutMs;
+        return new Promise((resolve) => {
+            const tick = () => {
+                const plugin = window.Capacitor?.Plugins?.ElainaNode;
+                if (plugin && typeof plugin.start === 'function') { resolve(plugin); return; }
+                if (Date.now() >= deadline) { resolve(null); return; }
+                setTimeout(tick, 100);
+            };
+            tick();
+        });
+    }
+
+    /**
+     * 轮询 /api/ping 直到 mod 装载有结论。两种"没有"必须分开：
+     *   · 字段不存在 → 本版 bootstrap 无 mod 装载能力，空清单就是终态（预期，不 warn）；
+     *   · 字段存在但 10s 内没变 true → 装载卡住/崩了，缓存空清单 + warn 一行
+     *     （此时插件路由全走原生兜底，功能仍在，但值得看一眼日志）。
+     */
+    async function waitForNodeRoutes(base) {
+        const deadline = Date.now() + 10000;
+        let sawField = false;
+        while (Date.now() < deadline) {
+            let info = null;
+            try {
+                const res = await nativeOrigFetch(base + '/api/ping', { cache: 'no-store' });
+                if (res.ok) info = await res.json();
+            } catch (e) { /* 还没 listen 完 / 瞬时失败，继续轮询 */ }
+            if (info) {
+                if (!('modsLoaded' in info)) {
+                    return { modRoutes: [], modStatic: [] };
+                }
+                sawField = true;
+                if (info.modsLoaded === true) {
+                    return {
+                        modRoutes: Array.isArray(info.modRoutes)
+                            ? info.modRoutes.filter((p) => typeof p === 'string') : [],
+                        modStatic: Array.isArray(info.modStatic) ? info.modStatic : [],
+                    };
+                }
+            }
+            await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        if (sawField) console.warn('[Native] mod 装载未在 10s 内给出结论，本次按原生兜底');
+        return { modRoutes: [], modStatic: [] };
+    }
+
+    // 就绪的第一件事：把攒着的前端日志冲出去（启动最初几秒的报错恰是最需要的）
+    window.__nodeReadyPromise.then(() => { if (beaconKick) beaconKick(); });
 }
 if (IS_NATIVE_APP) {
     // 顺序不能反：先建目录并拿到 base URL（nativeModelRootReady），再种内置模型。
@@ -1356,7 +1660,6 @@ let lastSpeechTime = 0;
 let silenceTimer = null;
 let pausedSubmitTimer = null;
 let cloudFinalAsrAvailable = false;
-let asrFallbackNotified = false;
 let todayQuote = null;
 
 function generateId() {
@@ -1408,21 +1711,6 @@ function inferApiErrorCode(status, payload, rawText = '') {
     if (status >= 500) return 'UPSTREAM_UNAVAILABLE';
     if (status === 400) return 'BAD_REQUEST';
     return 'REQUEST_FAILED';
-}
-
-async function readApiErrorResponse(response, fallbackMessage = '请求失败') {
-    let rawText = '';
-    let payload = null;
-    try { rawText = await response.text(); } catch {}
-    if (rawText) {
-        try { payload = JSON.parse(rawText); } catch {}
-    }
-    const code = inferApiErrorCode(response.status, payload, rawText);
-    const message = String(payload?.message || payload?.error?.message || payload?.error || fallbackMessage).trim();
-    return new ClientApiError(code, message, {
-        status: response.status,
-        retryable: Boolean(payload?.retryable)
-    });
 }
 
 function toClientApiError(error) {
@@ -1477,7 +1765,14 @@ function getClientErrorPresentation(error) {
             };
         }
         case 'REQUEST_TIMEOUT':
-            return { title: '请求超时', message: '服务商响应超时，请稍后再试。' };
+            return {
+                title: '模型响应超时',
+                message: (apiError.message ? apiError.message + '\n\n' : '')
+                    + '等待太久没有收到模型数据，连接已自动断开。常见原因与对策：'
+                    + '\n· 网络不稳或服务商繁忙：稍等片刻再发一次通常就好；'
+                    + '\n· 开了思考的模型（尤其高强度）首字可能要等一两分钟，连续超时可先关思考或换更快的模型；'
+                    + '\n· 换一个服务商地址（中转站拥堵时最容易这样）。'
+            };
         case 'BAD_REQUEST': {
             const detail = String(apiError.message || '').trim();
             // 只有"本次真的带了图片"或"服务商的话本身就在说图片"，才提图片原因。
@@ -1941,7 +2236,10 @@ async function streamJsonFromDevice(url, body, headers = {}, options = {}) {
         return { ok: response.ok, status: response.status, rawText, payload };
     }
 
-    const { payload } = await window.ChatStream.consumeStream(response, format, onDelta);
+    // 空闲超时贯穿整个读流阶段：headers 到达只代表「连上了」，之后逐块读取
+    // 的间隙同样可能卡死 —— fetchWithTimeout 的计时在拿到 headers 后就结束，
+    // 覆盖不到这里。每收到一块数据计时器自动续期（见 readChunkWithIdleTimeout）。
+    const { payload } = await window.ChatStream.consumeStream(response, format, onDelta, timeoutMs);
     return { ok: true, status: response.status, rawText: JSON.stringify(payload), payload };
 }
 
@@ -1980,6 +2278,11 @@ async function requestChatJson(endpoint, body, headers, opts = {}, format = 'ope
     } catch (error) {
         // 用户主动点「停止」不算失败，绝不能重试 —— 否则停止按钮会立刻又发一次请求
         if (error?.name === 'AbortError') throw error;
+        // 超时不走「流式失败退回非流式」：那条路是为「网关不支持流式」准备的
+        // （对方立刻拒绝，回退是补救）；超时意味着等了很久都没有数据，
+        // 再退回非流式只会让用户把同一个等待原样再经历一遍 ——
+        // 原样上抛交给上层的重试链路更诚实。
+        if (error?.code === 'REQUEST_TIMEOUT') throw error;
         // 已经吐出过内容就不回退，把错误原样抛给上层（半截回复留在界面上）
         if (sawDelta) throw error;
         console.warn(`[Chat] ${format} 流式不可用，退回非流式：${error?.message || error}`);
@@ -2142,9 +2445,13 @@ function extractTextContent(content) {
     return String(content ?? '');
 }
 
-function normalizeChatReply(content, reasoningContent = '') {
+function normalizeChatReply(content, reasoningContent = '', toolCalls = []) {
     const text = stripThinkTags(extractTextContent(content));
     const reasoning = String(reasoningContent || '').trim();
+    // "只调工具、一个字不说"是**合法**回复（模型先动手、再开口）。
+    //   把它当空回复抛错，等于在收尾那一步把工具通道当场废掉 —— 而这条路上
+    //   正文为空恰恰是最常见的情形之一。
+    if (!text && Array.isArray(toolCalls) && toolCalls.length) return '';
     if (!text) {
         if (reasoning) {
             throw new ClientApiError('EMPTY_MODEL_OUTPUT', '模型只返回了思考内容，没有生成可见回复，请重试或缩短输出。');
@@ -2153,7 +2460,6 @@ function normalizeChatReply(content, reasoningContent = '') {
     }
     return text;
 }
-
 /* ---------- OpenAI 官方 Responses 接口（/v1/responses）----------
    它和 chat/completions 不是同一套协议，必须单独适配，不能靠改个路径蒙混：
      · 系统提示走顶层 instructions，不是 messages 里的一条
@@ -2239,6 +2545,31 @@ async function callChatAPI(messages, opts = {}, settings = state.settings) {
     // 统一在这里合并，三种格式都受益：Anthropic / Responses 的转换器本来就会把
     // system 收拢成单条，合并后行为不变；openai-compatible 是原样透传，正是需要这一层的地方。
     const normalized = mergeLeadingSystemMessages(messages);
+    // 回复侧元信息（工具调用 / 停止原因 / 是否降级）走**调用方传进来的容器**：
+    // 返回值的形状是"正文文本"，全库多处调用点（记忆摘要、翻译、连接测试…）
+    // 只关心它，不该为一个字段把那些地方全卷进来。
+    // 这里先给初值：否则走 Anthropic / Responses 时上层会拿到 undefined，
+    // 还得各自兜一次默认值。
+    if (opts.replyInfo) {
+        opts.replyInfo.toolCalls = [];
+        opts.replyInfo.finishReason = '';
+        opts.replyInfo.toolsSkipped = false;
+        // 思考正文的**兜底通道**。
+        //
+        //   流式路径上思考是随增量一段段进来的（onDelta → appendTurnReasoning），
+        //   时间线当场就拿到了。但 requestChatJson 在"流式一个字都没吐就失败"时
+        //   会**静默退回非流式** —— 那时 onDelta 再也不触发，而思考仍然躺在响应体
+        //   里（openai-compatible 的 reasoning_content / anthropic 的 thinking block /
+        //   responses 的 reasoning item）。
+        //
+        //   没有这个通道的话，退回一次就等于"这一轮没有思考"：用户看到的是
+        //   思考内容**时有时无**，而原因（换了条传输路径）完全不可见。
+        //   探针实测同一份请求：流式拿到 1398 字思考，非流式响应里也有 2437 字，
+        //   但只返回正文的写法会让那 2437 字被直接丢弃。
+        //
+        //   所以这里先给空串，由各 provider 解析出思考后填进来，调用方据此补送。
+        opts.replyInfo.reasoning = '';
+    }
     // 输出上限在这里统一算一次，三种格式都受益 —— 让「模型名后缀是否要求保底」这个判据
     // 只有一处，而不是散在三个格式函数里（见 resolveOutputTokenLimit 的说明）。
     // 注意 providers 里那个老模型名 → deepseek-flash 的映射也**不含** `-thinking` 后缀，

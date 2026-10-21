@@ -158,18 +158,3 @@ export function readWebFile(rel) {
     const p = path.join(WEB, rel);
     try { return readFileSync(p, 'utf8'); } catch { return ''; }
 }
-
-/**
- * 取"某段逻辑"的源码切片，用于 `html.slice(indexOf(a), indexOf(b))` 这类断言。
- *
- * 拆分之后，原本相邻的两段代码可能落在不同文件里，`indexOf(b)` 可能落在
- * `indexOf(a)` 之前（或找不到），于是 slice 得到空串、断言静默失败。
- * 这个函数保证：b 找不到时退化为"从 a 到文本末尾"，并在 b 在 a 之前时给出提示。
- */
-export function sliceBetween(text, startMarker, endMarker) {
-    const a = text.indexOf(startMarker);
-    if (a < 0) return '';
-    if (!endMarker) return text.slice(a);
-    const b = text.indexOf(endMarker, a);
-    return b < 0 ? text.slice(a) : text.slice(a, b);
-}

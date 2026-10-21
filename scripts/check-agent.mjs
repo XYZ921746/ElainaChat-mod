@@ -17,7 +17,7 @@ import { statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readWebFile } from './frontend-sources.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
 
 const JAVA_DIR = path.join(ROOT, '..', 'android-app', 'android', 'app', 'src', 'main', 'java', 'com', 'elainachat', 'opensource');
@@ -217,9 +217,9 @@ async function caseContinue(c) {
     // 判据是「**白名单**」而不是「数量等于 N」：数量断言会误伤新加的合法成功路径，
     // 而且挡不住"把一处合法调用换成一处非法调用、数量不变"这种改动。
     const ALLOWED_CONTINUE_SITES = [
-        { re: /insertAgentResult\(resultText, \{ continueLoop: true \}\)/, label: '文件操作成功' },
-        { re: /insertAgentResult\(opResult, \{ continueLoop: true \}\)/, label: '手机操作成功' },
-        { re: /insertAgentResult\('命令执行结果：\\n' \+ text, \{ continueLoop: true \}\)/, label: '电脑命令成功' },
+        { re: /insertAgentResult\(resultText, \{ continueLoop: true, asContext: true \}\)/, label: '文件操作成功' },
+        { re: /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true \}\)/, label: '手机操作成功' },
+        { re: /insertAgentResult\('命令执行结果：\\n' \+ text, \{ continueLoop: true, asContext: true \}\)/, label: '电脑命令成功' },
     ];
     const continueLines = html.split('\n')
         .filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*'))
@@ -236,11 +236,51 @@ async function caseContinue(c) {
     c.ok(continueLines.length === ALLOWED_CONTINUE_SITES.length,
         `续跑调用点数量与白名单一致（${ALLOWED_CONTINUE_SITES.length} 处）`,
         `实际 ${continueLines.length} 处`);
-    c.ok(/insertAgentResult\(resultText, \{ continueLoop: true \}\)/.test(html),
+    c.ok(/insertAgentResult\(resultText, \{ continueLoop: true, asContext: true \}\)/.test(html),
         '文件操作成功处开启续跑');
     c.ok(/const opResult = await execPhoneOperation\(parsed\);/.test(html)
-        && /insertAgentResult\(opResult, \{ continueLoop: true \}\)/.test(html),
+        && /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true \}\)/.test(html),
         '手机操作成功处开启续跑');
+    // 成功结果必须是"上下文"而不是一个新的聊天气泡：
+    //   失败那一刻由 explainAgentFailure 让角色自己开口，对话里只有正文；
+    //   成功那一刻若再插一条可见的「【AI 操作结果】」，同一件事就会出现两次，
+    //   而且结果排在正文前面，看起来像"它先报了个工单、再跟你说话"。
+    c.ok(/asContext === true/.test(insertFn) && /if \(asContext\) msg\.hidden = true;/.test(insertFn),
+        '★ 成功结果标记 hidden（只进过程区，不占聊天气泡）');
+    c.ok(/if \(!asContext && state\.currentConversationId === conv\.id\) renderMessage\(msg\);/.test(insertFn),
+        '★ asContext 时**不**渲染可见气泡');
+    const visibleSites = continueLines.filter((l) => !/asContext: true/.test(l));
+    c.ok(visibleSites.length === 0,
+        '★ 所有开启续跑的成功路径都带 asContext: true',
+        visibleSites.length ? '漏了：\n      ' + visibleSites.map((l) => l.trim()).join('\n      ') : '');
+
+    // ── 可见性规则：用户**亲手做过的决定**只进过程区，用户**不知道的失败**必须可见 ──
+    //
+    //   用户实测反馈"【AI 操作结果】应该待在思考过程里面"。规则按"用户知不知道"划线，
+    //   而不是按"成功/失败"划 —— 因为他刚点了「不允许」时那件事他已经知道了，
+    //   再往聊天区插一条回执只是复述他刚做的决定；而"操作失败"是他不知道的事，
+    //   藏进可折叠区就变成了隐瞒。
+    const DECIDED_BY_USER = [
+        { re: /已取消写入：你没有允许新建这个文件[^)]*\)?[^;]*asContext: true/, label: '拒绝新建文件' },
+        { re: /已取消写入：目标文件已存在，而你没有允许覆盖它[\s\S]{0,200}?asContext: true/, label: '拒绝覆盖文件' },
+        { re: /已取消删除：用户没有允许[\s\S]{0,80}?asContext: true/, label: '拒绝删除' },
+        { re: /已跳过这条命令：用户没有允许[\s\S]{0,120}?asContext: true/, label: '拒绝危险命令' },
+        { re: /已跳过「' \+ parsed\.action \+ '」：用户没有允许这一步[\s\S]{0,120}?asContext: true/, label: '拒绝手机操作' },
+        { re: /已停止：用户中止了操作，剩余步骤没有执行。[^;]*asContext: true/, label: '用户按停止' },
+    ];
+    const missingDecided = DECIDED_BY_USER.filter((d) => !d.re.test(html)).map((d) => d.label);
+    c.ok(missingDecided.length === 0,
+        '★ 用户亲手拒绝/停止的结果只进过程区（不再复述他刚做的决定）',
+        missingDecided.length ? '漏了：' + missingDecided.join('、') : '');
+    // 反向：用户**不知道**的失败必须留在可见处，不能被顺手收进过程区
+    const MUST_STAY_VISIBLE = [
+        { re: /insertAgentResult\('手机操作失败：' \+ [^;]*\);/, label: '手机操作失败' },
+        { re: /insertAgentResult\('操作失败：' \+ shortReason/, label: '文件操作失败' },
+    ];
+    const hiddenFailures = MUST_STAY_VISIBLE.filter((d) => !d.re.test(html)).map((d) => d.label);
+    c.ok(hiddenFailures.length === 0,
+        '★ 用户不知道的失败仍显示在聊天区（不许藏进可折叠区）',
+        hiddenFailures.length ? '被藏了：' + hiddenFailures.join('、') : '');
     c.ok(!/已跳过[^)]*continueLoop: true/.test(html), '「已跳过」类结果不续跑');
     c.ok(!/已取消写入[^)]*continueLoop: true/.test(html), '「已取消写入」不续跑');
     c.ok(!/操作失败[^)]*continueLoop: true/.test(html), '失败说明不续跑');
@@ -331,7 +371,9 @@ async function caseContinue(c) {
     }
     // 自动重试一次：后台网络抖动/限流是最常见的失败原因，一次重试就能救回来
     {
-        const calls = (loopFn.match(/callAI\(AGENT_CONTINUE_PROMPT\)/g) || []).length;
+        // 判据放宽到"调用点带上 AGENT_CONTINUE_PROMPT，后面还可以跟别的实参"——
+        // 工具通道会在这句后面再传一组请求选项（见 agent.js 的 agentToolOptions）。
+        const calls = (loopFn.match(/callAI\(AGENT_CONTINUE_PROMPT/g) || []).length;
         c.ok(calls >= 2, '★ 续跑失败会**自动重试一次**（抖动/限流能自愈）', `callAI 调用点 ${calls} 处`);
         c.ok(/await new Promise\(\(r\) => setTimeout\(r, \d+\)\)/.test(loopFn),
             '★ 重试前先等一会儿（立刻重试往往撞上同一个瞬时故障）');
@@ -379,7 +421,8 @@ async function caseContinue(c) {
     c.ok(/AGENT_FAILURE_MAX_RETRY/.test(html), '失败重试预算仍在');
     c.ok(/explainAgentFailure/.test(html), 'explainAgentFailure 仍在');
     const failFn = extractFn('explainAgentFailure');
-    c.ok(/callAI\(prompt\)/.test(failFn), '失败路径仍然会调 callAI（AI 自己解释+纠正）');
+    // 判据同上：调用点带 prompt 即可，实参后面还可能跟一组请求选项（工具通道）
+    c.ok(/callAI\(prompt/.test(failFn), '失败路径仍然会调 callAI（AI 自己解释+纠正）');
 
     // 九、续跑产出的回复必须真的显示出来
     //
@@ -415,6 +458,165 @@ async function caseContinue(c) {
     c.ok(relativeDeviceCalls.length === 0,
         '全项目没有"用设备层出口打同源 /api/ 接口"的写法',
         relativeDeviceCalls.join('\n      '));
+
+    // ---- 执行实现必须**返回结果对象**，不能裸 return ----
+    //
+    //   这些实现是经 ElainaOps.invoke → runToolCalls 调用的，而那里写作
+    //     `await invoke(...) || { ok:false, text:'没有返回结果' }`
+    //   —— 裸 return 得到 undefined，于是模型在上下文里收到的是「没有返回结果」。
+    //   现场：用户点「允许新建」之外的路径（拒绝 / 平台不支持）时，
+    //   界面上写着"完成"，模型却读到"失败"，下一句就向用户道歉说文件没建成。
+    //   文件其实好好地在桌面上。
+    const agentSrc2 = readWebFile('js/agent.js');
+    const voiceSrc2 = readWebFile('js/voice.js');
+    const uiSrc2 = readWebFile('js/ui.js');
+    // extractFnFrom 按大括号配平取值，遇到注释/字符串里的大括号会跑偏
+    // （实测一度算出"82 处裸 return"这种明显不可能的计数）。
+    // 这两个函数的范围改用**下一个顶层 async function** 作边界，判据稳定。
+    const fnBody = (src, name) => {
+        const at = src.indexOf('async function ' + name + '(');
+        if (at < 0) return '';
+        const rest = src.slice(at + 1);
+        const nextAt = rest.search(/\nasync function /);
+        return nextAt < 0 ? src.slice(at) : src.slice(at, at + 1 + nextAt);
+    };
+    for (const fnName of ['doAgentFile', 'doAgentCommand']) {
+        const body = fnBody(agentSrc2, fnName);
+        const bare = (body.match(/\n\s+return;\s*\n/g) || []);
+        c.ok(bare.length === 0,
+            '★ ' + fnName + ' 没有裸 return（否则模型收到「没有返回结果」把成功读成失败）',
+            bare.length ? '仍有 ' + bare.length + ' 处裸 return' : '');
+    }
+    c.ok(/return \{ ok: false, text: '用户没有允许新建这个文件/.test(fileFn),
+        '★ 拒绝新建时返回明确结果（不是 undefined）');
+    c.ok(/return \{ ok: false, text: '用户没有允许覆盖/.test(fileFn),
+        '★ 拒绝覆盖时返回明确结果');
+    c.ok(/return \{ ok: false, text: '用户没有允许删除/.test(fileFn),
+        '★ 拒绝删除时返回明确结果');
+
+    // ---- 同一个动作只能记**一行**过程 ----
+    //
+    //   工具通道里 runToolCalls 已经记过一行（标题「调用 save_file」、参数是 JSON）。
+    //   实现若再记一行，时间线上同一个动作会显示成两条：一条有参数、一条没有，
+    //   用户看到的是"做了两件事"，其中一件还常常是失败的。
+    c.ok(/async function doAgentFile\(action, \{ path, content \} = \{\}, access, traceItem\)/.test(agentSrc2),
+        '★ doAgentFile 接受外层 traceItem（复用那一行）');
+    c.ok(/const ownTrace = !traceItem;/.test(agentSrc2),
+        '★ 只在没有外层记录时才自己建行（标签通道）');
+    c.ok(/Object\.assign\(\{\}, ctx, \{ traceItem \}\)/.test(agentSrc2),
+        '★ runToolCalls 经 ctx 把 traceItem 交给实现');
+    c.ok(/doAgentFile\('write', args, ctx\.access, ctx\.traceItem\)/.test(agentSrc2),
+        '★ setExec 把 traceItem 传给实现');
+
+    // ---- 参数形状必须两条通道一致（都是 JSON）----
+    //
+    //   写成「路径：…\n内容长度：…」这种中文散文，时间线就没法按键值渲染，
+    //   同一步在工具通道（JSON）与标签通道（散文）下长得完全不一样。
+    c.ok(!/路径：\$\{path\}/.test(fileFn),
+        '★ 参数不再写成中文散文（否则时间线无法按键值渲染）');
+    c.ok(/args: JSON\.stringify\(action === 'write'/.test(fileFn),
+        '★ 文件操作参数用 JSON（与工具通道同形）');
+
+    // ---- 「先做，再统一说」----
+    //
+    //   模型常在正文里先写结论、再发调用（"喏，文件已经在那儿了" + save_file）。
+    //   那段话若在工具执行前就渲染出去，用户先看到"已经建好了"，随后看到失败。
+    c.ok(/else pendingToolReplyMessageId = aiMessage\.id;/.test(voiceSrc2),
+        '★★ 有工具调用时正文先压着不渲染（先做，再开口）');
+    c.ok(/function revealPendingToolReply\(anySucceeded\)/.test(voiceSrc2),
+        '★★ 有统一的"工具跑完再开口"入口');
+    c.ok(/if \(!anySucceeded\) return;/.test(voiceSrc2),
+        '★★ 这一批全失败时压住正文（不替模型把"已经建好了"说圆）');
+    c.ok(/agentMarkPendingReply\(anySucceeded\)/.test(agentSrc2),
+        '★★ 收尾只记账（成功与否留给续跑决定），不抢着把正文放出来');
+    c.ok(/let anySucceeded = false/.test(agentSrc2) && /if \(result\.ok\) anySucceeded = true/.test(agentSrc2),
+        '★★ 逐条跟踪是否真的做成（任一成功即可开口）');
+
+    // ---- 「先做，再用结果统一开口」（对齐 DSH 的 agent loop）----
+    //
+    //   DSH 把**每一步都当成一次独立模型调用**：发 tool_call 那一步的正文只是中间产物，
+    //   循环继续、工具结果进会话、再调一次模型，用户最终看到的是"知道结果之后"那一句。
+    //   本应用若反过来做（先放正文、再另起一条说结果），得到的是两条接不上的气泡，
+    //   而且第一句写在结果之前、没有依据。
+    //
+    //   所以：工具跑完后**只记账、不渲染**；等续跑回来再决定
+    //     · 有新正文 → replacePendingToolReply() 取代那句"动手前"的话
+    //     · 没新正文 → revealPendingToolReply() 兜底放出（免得"做完了却一声不吭"）
+    c.ok(/function agentMarkPendingReply\(/.test(voiceSrc2), '★★ 有"先记账不渲染"的入口');
+    c.ok(/function replacePendingToolReply\(/.test(voiceSrc2),
+        '★★ 续跑的新正文会取代那句"动手前"的话（不是并排两条）');
+    c.ok(/function settlePendingToolReply\(/.test(voiceSrc2),
+        '★★ 有统一的收尾决定（取代 or 兜底放出）');
+    c.ok(/settlePendingToolReply\(true\)/.test(agentSrc2),
+        '★★ 续跑拿到正文时走"取代"分支');
+    c.ok(/settlePendingToolReply\(false\)/.test(agentSrc2),
+        '★★ 续跑没正文时走"兜底放出"分支（收尾与续跑失败两处）');
+    // 取代时必须先确认那句话**没被显示过** —— 删掉屏幕上已有的内容是篡改用户刚读到的
+    c.ok(/getElementById\(`msg-\$\{safeAttrId\(id\)\}`\)\) return false;/.test(voiceSrc2),
+        '★★ 已经显示过的那句话不删（不篡改用户刚读到的内容）');
+
+    // ---- 衔接质量：续跑提示词必须要求"接着上一句讲" ----
+    //
+    //   只管规则不管语感的话，模型会重新开场（"好的，我来帮你在桌面创建文件"），
+    //   读者看到的就是同一件事被交代两遍、第二遍还像刚知道似的。
+    const continuePrompt = (agentSrc2.split('const AGENT_CONTINUE_PROMPT')[1] || '').split('let agentContinueUsed')[0];
+    c.ok(/衔接上一句/.test(continuePrompt),
+        '★★ 续跑提示词要求"接着上一句讲"（否则会重新开场）');
+    c.ok(/不要重新开场/.test(continuePrompt), '★★ 明确禁止重新开场/复述任务');
+    c.ok(/中间的一步/.test(continuePrompt),
+        '★★ 说明"只是中间一步就别收尾说话，直接输出下一步操作"');
+
+    // ---- exec 实现必须**返回结果对象** ----
+    //
+    //   ★★ 这是"文件建成了、过程区却写着失败"的根因。
+    //
+    //   这些实现经 ElainaOps.invoke → runToolCalls 调用，而 runToolCalls 会把
+    //   返回值的 `ok` 直接写进过程行。它们过去**只有副作用、没有任何返回值**
+    //   （连成功路径也是这样），于是即便文件真的写成功，模型收到的也是
+    //   "没有返回结果"，而刚标记成 ok 的过程行被**覆盖成 error** ——
+    //   用户看到"文件在桌面上，过程区写着失败"。
+    //
+    //   ⚠️ 判据锚"这个函数里有没有返回值"，不是"有没有某个字符串"：
+    //   上一轮的断言只查了拒绝分支的 `return {`，漏掉成功路径同样缺返回值，
+    //   于是修过一次问题还在。
+    const fnBodyOf = (src, name) => {
+        const at = src.indexOf('async function ' + name + '(');
+        if (at < 0) return '';
+        const rest = src.slice(at + 1);
+        const nextAt = rest.search(/\n(async )?function /);
+        return nextAt < 0 ? src.slice(at) : src.slice(at, at + 1 + nextAt);
+    };
+    for (const fnName of ['doAgentFile', 'doAgentCommand', 'runAgentPhoneOperation', 'runManualMemorySummary']) {
+        const body = fnBodyOf(agentSrc2, fnName);
+        c.ok(body.length > 0, '找得到 ' + fnName + ' 的函数体');
+        const bare = (body.match(/\n\s+return;\s*\n/g) || []).length;
+        c.ok(bare === 0, '★★ ' + fnName + ' 没有裸 return', bare ? '仍有 ' + bare + ' 处' : '');
+        c.ok(/return \{ ok: true/.test(body), '★★ ' + fnName + ' 成功路径返回结果对象');
+        c.ok(/return \{ ok: false/.test(body), '★★ ' + fnName + ' 失败路径返回结果对象');
+    }
+    // 兜底防护：实现若又漏写 return，也不许把"已成 ok 的行"覆盖成失败
+    c.ok(/const traced = traceItem && traceItem\.state === 'ok';/.test(agentSrc2),
+        '★★ 漏写返回值时以过程行为准（不许把成功覆盖成失败）');
+
+    // ---- 过程区必须**持久化到消息上** ----
+    //
+    //   ★★ 这是"聊了几轮之后，之前对话的思考记录不见了"的根因。
+    //
+    //   过程区是追加到聊天容器末尾的**临时 DOM**，而 loadConversation 会先
+    //   `conversationHistory.innerHTML = ''` 再重画每条消息 —— 那些临时节点
+    //   不在任何消息里，于是整体消失。切会话、刷新页面、自动重载都会触发。
+    //   （注释一直写着"历史消息回看时还要看得到"，实际做不到。）
+    c.ok(/msg\.turnTrace = \{/.test(uiSrc2), '★★ 收尾时把过程挂到消息上');
+    c.ok(/function restoreTurnProcessFor\(message\)/.test(uiSrc2), '★★ 有还原函数');
+    c.ok(/restoreTurnProcessFor\(message\)/.test(uiSrc2), '★★ 重画消息时调用还原');
+    // 存**数据**而不是 HTML：HTML 依赖当时的展开态与主题，存下来会越用越脏
+    c.ok(/timeline: activeTurnTrace\.timeline/.test(uiSrc2)
+        && /tools: activeTurnTrace\.tools/.test(uiSrc2),
+        '★★ 存的是数据（timeline/tools/phases），不是 HTML 字符串');
+    c.ok(!/turnTrace\s*===\s*[^;]*innerHTML/.test(uiSrc2), '★★ 没有把 innerHTML 存进去');
+    // 重复渲染不许插第二份
+    c.ok(/turn-process-\$\{safeAttrId\(message\.id\)\}`\)\) return;/.test(uiSrc2),
+        '★★ 重复渲染不会插第二份过程区');
 
     // 十一、用户消息不得绕过 AI 直接触发操作
     //
@@ -1469,6 +1671,197 @@ async function caseTags(c) {
     }
 }
 
+// 8. 操作注册表：一份操作定义，两条通道共用
+//
+// 为什么必须有这个检查：注册表是**操作定义的唯一来源**，两条触发通道
+// （正文标签、原生 function calling）都读它。一旦它允许"技能"（用户上传的
+// SKILL.md）注册成**可执行**条目，"装一个 zip"就等于"给自己发执行能力" ——
+// 这条边界只能靠测试钉住，注释挡不住。
+// ────────────────────────────────────────────────────────────
+
+async function caseOps(c) {
+    const src = readFileSync(path.join(ROOT, 'web', 'js', 'agent-ops.js'), 'utf8');
+    const sandbox = { console };
+    sandbox.window = sandbox;
+    sandbox.globalThis = sandbox;
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+    const O = sandbox.window.ElainaOps;
+    c.ok(Boolean(O), 'agent-ops.js 已就绪（ElainaOps）');
+    if (!O) return;
+
+    // 1. 可执行条目：声明 + 执行实现
+    O.define({
+        name: 'demo_write', tool: 'demo_write', ns: 'file', desc: '写一个演示文件',
+        schema: { type: 'object', properties: { path: { type: 'string' } } },
+        risk: 'sensitive', available: () => true,
+    });
+    let got = null;
+    O.setExec('demo_write', (args) => { got = args; return { ok: true, text: 'done' }; });
+    const r = await O.invoke('demo_write', { path: 'x' }, {});
+    c.ok(r && r.ok === true && got && got.path === 'x', 'invoke 走注册的执行实现', JSON.stringify(r));
+
+    // 2. 工具声明形状：必须是 tools[].function 那一层
+    const tools = O.toolsForAccess();
+    const t = tools.find((x) => x.function && x.function.name === 'demo_write');
+    c.ok(Boolean(t && t.type === 'function' && t.function.description && t.function.parameters),
+        'toolsForAccess 产出 tools[].function 形状');
+
+    // 3. 此刻不可用的操作：既不进工具清单，也不进能力索引
+    O.define({
+        name: 'demo_hidden', tool: 'demo_hidden', ns: 'file', desc: '此刻不可用',
+        schema: { type: 'object', properties: {} }, available: () => false, hints: ['写文件'],
+    });
+    c.ok(!O.toolsForAccess().some((x) => x.function.name === 'demo_hidden'), '不可用的操作不被写进工具清单');
+    c.ok(!O.indexLines().some((l) => l.startsWith('demo_hidden ')), '不可用的操作不出现在能力索引里');
+
+    // 4. 能力索引：与工具清单同源（但元工具不进索引）
+    O.define({
+        name: 'demo_meta', tool: 'demo_meta', ns: 'app', indexHidden: true, desc: '只在工具清单里出现的元工具',
+        schema: { type: 'object', properties: {} }, available: () => true,
+    });
+    c.ok(O.toolsForAccess().some((x) => x.function.name === 'demo_meta'), '★ 元工具进工具清单');
+    c.ok(!O.indexLines().some((l) => l.startsWith('demo_meta ')),
+        '★ 元工具不进 L1 能力索引（标签通道没有它可调用，写进索引等于教模型输出没人处理的标签）');
+    c.ok(O.indexLines().length === O.availableOps().filter((o) => !o.indexHidden).length,
+        '索引行数 = 当前可索引的操作数（两处同源）', O.indexLines().length + '/' + O.availableOps().length);
+    c.ok(O.indexLines().every((l) => /^\S+ — /.test(l)), '索引格式统一（工具名 — 一句话）', O.indexLines().join(' | '));
+
+    // 4a. 意图预注入的判据（降级到标签通道时靠它挑说明书，见 agent.js 的 agentIntentManualText）
+    O.define({
+        name: 'demo_hint', tool: 'demo_hint', ns: 'file', desc: '带关键词的操作',
+        schema: { type: 'object', properties: {} }, available: () => true, hints: ['写文件'],
+    });
+    c.ok(O.opsForIntent('帮我在桌面上写文件 a.txt').some((o) => o.name === 'demo_hint'),
+        'opsForIntent 按**条目自己的** hints 命中用户这句话');
+    c.ok(!O.opsForIntent('今天天气真好').some((o) => o.name === 'demo_hint'),
+        '未命中关键词时不挑它（避免把压下去的说明书又全量塞回来）');
+    c.ok(!O.opsForIntent('写文件').some((o) => o.name === 'demo_hidden'),
+        '不可用的操作不会被挑出来发说明书');
+
+    // 4b. 按工具名也能取到条目（标签通道给内部 name、工具通道给 ASCII 工具名，
+    //     两个名字之间只在本文件里维护一份映射）
+    c.ok(O.resolve('demo_write')?.name === 'demo_write' && O.resolve('demo_write')?.tool === 'demo_write',
+        '内部 name 与工具名都能 resolve');
+    c.ok(O.resolve('不存在的东西') === null, 'resolve 未知项返回 null');
+
+    // 5. ★ 红线：技能条目（纯知识）永远不能执行
+    O.registerKnowledge('示例技能', '一段给 AI 的说明');
+    const k = O.list('knowledge')[0];
+    c.ok(Boolean(k && k.kind === 'knowledge' && !k.schema), '技能条目是 kind:knowledge（没有 schema）');
+    const bad = await O.invoke(k.name, { hello: 1 }, {});
+    c.ok(Boolean(bad && bad.ok === false), '★ 技能条目不能被 invoke 执行（装技能 ≠ 获得执行能力）', JSON.stringify(bad));
+    c.ok(!O.toolsForAccess().some((x) => x.function.name === k.name), '技能条目不出现在工具清单里');
+    // 但技能**要进** L1 能力索引：模型得先知道"有这么一份资料"才会去查它（见 agent_help）。
+    //   索引里带 `skill:` 前缀与工具名一眼可分，且它进索引不等于它能执行 ——
+    //   上面那条"不能 invoke"才是边界。
+    c.ok(O.indexLines().some((l) => l.startsWith(k.name + ' — ')),
+        '★ 技能条目进 L1 能力索引（只披露"有这份资料"，不是给它执行能力）', O.indexLines().join(' | '));
+
+    // 6. 注册期把关：重名、非 ASCII 工具名都当场拒绝
+    const rejected = [];
+    try { O.define({ name: 'demo_write', tool: 'demo_write_2' }); } catch { rejected.push('重名'); }
+    try { O.define({ name: 'demo_x', tool: '演示工具' }); } catch { rejected.push('非 ASCII'); }
+    try { O.setExec('还没注册的操作', () => {}); } catch { rejected.push('未注册就挂实现'); }
+    try { O.setManual('还没注册的操作', '说明'); } catch { rejected.push('未注册就挂说明书'); }
+    c.ok(rejected.length === 4, '重名 / 非 ASCII 工具名 / 未注册就挂实现或说明书 全部被拒', rejected.join(','));
+
+    // 6b. 说明书：只在被问到（agent_help）时下发，且真实路径来自运行时探测
+    {
+        let manual = '（没有说明书）';
+        O.setManual('demo_write', () => '真实路径：D:\\桌面2');
+        manual = O.manualFor('demo_write');
+        c.ok(manual.includes('D:\\桌面2'), 'manualFor 返回该项说明书（收函数：真实路径是运行时探测的）', manual);
+        c.ok(O.manualFor('demo_meta') === '', '没挂说明书的条目返回空串（不抛）');
+    }
+
+    // 7. 接线：标签通道改走注册表，且两条通道共用同一批执行实现
+    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
+    const expectOps = ['file_ls', 'file_read', 'file_write', 'file_delete', 'pc_command', 'phone', 'app_memory', 'agent_help'];
+    const noDecl = expectOps.filter((n) => !agentSrc.includes("name: '" + n + "'"));
+    c.ok(noDecl.length === 0, 'agent.js 声明了全部电脑 / 手机 / 应用操作', noDecl.join(','));
+    const noWire = [
+        "ElainaOps.invoke('file_ls'", "ElainaOps.invoke('file_write'", "ElainaOps.invoke('file_delete'",
+        "ElainaOps.invoke('file_' + action", "ElainaOps.invoke('pc_command'", "ElainaOps.invoke('phone'",
+        "ElainaOps.invoke('app_memory')",
+    ].filter((s) => !agentSrc.includes(s));
+    c.ok(noWire.length === 0, '标签分发全部经 ElainaOps.invoke（不再直接调执行函数）', noWire.join(' / '));
+    const execCount = (agentSrc.match(/ElainaOps\.setExec\(/g) || []).length;
+    c.ok(execCount === expectOps.length, '每个操作都挂了执行实现（setExec 条数一致）', execCount + '/' + expectOps.length);
+
+    // 8. 接线：请求侧带工具、回复侧按通道分流、隐藏消息与各条出口的过滤
+    //
+    // 这几条只能靠"源码里有没有那句话"来钉：它们跨 4 个文件，而且任一条漏掉都不会
+    //   当场报错 —— 表现是"模型调了工具却没人执行"或"聊天记录里多出一段没人说过的文本"，
+    //   都是要跑一整轮对话才看得见的故障。
+    const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
+    const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
+    const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const unwired = [
+        [agentSrc, 'insertToolResult(', 'agent.js 有 insertToolResult（结果以 role:tool 回灌）'],
+        [agentSrc, 'async function runToolCalls(', 'agent.js 有 runToolCalls（执行工具调用）'],
+        [voiceSrc, 'agentToolOptions()', 'voice.js 用共享构造器取"这一轮的工具选项"'],
+        [voiceSrc, 'runToolCalls(repliedToolCalls', 'voice.js 在回复带 tool_calls 时执行它们'],
+        [voiceSrc, 'if (!repliedToolCalls.length) window.ElainaTags.drive(response)',
+            '★ 一回合只走一条通道：有工具调用就不再解析标签（两条都跑＝同一个动作执行两次）'],
+        [agentSrc, 'raw = await callAI(AGENT_CONTINUE_PROMPT, agentToolOpt || undefined)',
+            '★ 续跑也带工具（不带的话多步任务到第二步就没工具可用了）'],
+        [agentSrc, 'raw = await callAI(prompt, agentToolOpt || undefined)',
+            '★ 失败解释也带工具（它常被用来"换个路径再试一次"）'],
+        [uiSrc, 'message.hidden === true) return', '隐藏消息不进可见渲染'],
+        [dataSrc, "if (m.role === 'tool')", '历史映射原样带下 role:tool（含 tool_call_id）'],
+        [dataSrc, 'entry.tool_calls = m.toolCalls', '历史映射原样带下 assistant 的 tool_calls'],
+        [dataSrc, 'm && m.hidden !== true', '记忆摘要跳过隐藏消息（不让工具结果汇进长期记忆）'],
+        // 备份/导入是"整份对话对象"落盘与读回：hidden 必须原样保留，否则导入一份
+        // 做到一半的对话时，工具消息会因为没有这个标记而**冒到聊天记录里**。
+        // （导出侧不需要过滤：备份就是数据本身，可见与否由渲染侧决定。）
+        [coreSrc, 'hidden: m ? m.hidden === true : false', '★ 对话读回时保留 hidden 标记（否则导入后工具消息会冒出来）'],
+    ].filter(([src, needle]) => !src.includes(needle)).map(([, , label]) => label);
+    c.ok(unwired.length === 0, '★ 工具通道接线完整（请求侧 / 分流 / 各处隐藏过滤）', unwired.join(' / '));
+
+    // 8b2. 注册顺序：顶层 setManual / setExec 打到**还没注册**的条目会直接抛错，
+    //   而顶层抛错会**中断本文件的后续代码** —— 表现是"后半段功能全没挂上"，
+    //   排查时只看到一条与症状毫不相干的 "setManual 的操作还没注册"。用顺序断言钉住它。
+    {
+        const defineAt = agentSrc.indexOf("name: 'agent_help'");
+        const manualAt = agentSrc.indexOf("ElainaOps.setManual('agent_help'");
+        c.ok(defineAt > 0 && manualAt > 0 && defineAt < manualAt,
+            '★ agent_help 先 define 再 setManual（顺序反了会顶层抛错并中断本文件后续代码）',
+            'define@' + defineAt + ' / setManual@' + manualAt);
+    }
+
+    // 8c. 标签通道"退为降级"：只有**真的用上工具**之后才停止教标签写法
+    const fallbackRules = [
+        [agentSrc, 'agentToolsProven = true', '★ 判据是"真的执行过一次工具调用"（不是"发出去过 tools"）'],
+        [agentSrc, 'function shouldTeachTags(', '有"提示词要不要教标签"的统一判据'],
+        [dataSrc, "typeof shouldTeachTags === 'function'", 'data.js 按该判据决定教不教标签写法'],
+        // 降级通道上没有 agent_help 可调（它本身是个工具），说明书只能靠宿主按意图挑着发
+        [agentSrc, 'function agentIntentManualText(', '有"按用户这句话挑说明书"的统一判据'],
+        [agentSrc, 'ElainaOps.opsForIntent(userText)', '判据取自 registry 的条目（不另立关键词表）'],
+        [dataSrc, 'agentIntentManualText(text)', 'data.js 在降级通道按意图注入说明书（分层 / legacy 两条路）'],
+    ].filter(([src, needle]) => !src.includes(needle)).map(([, , label]) => label);
+    c.ok(fallbackRules.length === 0, '★ 标签退为降级通道的判据接线完整', fallbackRules.join(' / '));
+
+    // 9. 提示词：能力清单由注册表生成（不是手写的第二份），且"做完怎么交代"有统一守则
+    const promptRules = [
+        [dataSrc, 'ElainaOps.indexLines()', '★ 提示词里的能力清单由注册表生成（手写第二份必然漏改）'],
+        [agentSrc, 'function agentToolConductText(', '★ 跨能力的"工具使用守则"单列一段（不散进各能力说明）'],
+        // 判据用**要素**而不是一整段连续字面：这条守则的措辞会随用户体验反馈调整，
+        //   钉死整句会让"改了一句自然的话"就判红（本次就撞到了）。要钉的是"这三样必须被点名禁止"。
+        [agentSrc, '不要出现', '守则点明正文里不许出现内部细节（工具名/参数/JSON/命令回显）'],
+        [agentSrc, '工具名、参数名、JSON', '守则点名的内部细节包含工具名、参数名、JSON'],
+        [agentSrc, '用**一两句自己的话**讲清结果', '守则要求操作结果用角色口吻交代（世界内包装，不讲机制）'],
+        // ★ 用户实测的两个失败模式，各钉一条：
+        //   ① AI 不主动调用：用户说"建个文件"，它先反问文件名、或者只说"我可以帮你做"。
+        //      守则里必须有一条**什么时候该动手**的判据。
+        [agentSrc, '## 什么时候动手', '守则给出「什么时候该动手」的触发判据（否则 AI 只会用嘴回答）'],
+        //   ② 说了却不动手：正文写"喏，给你建好了"，但压根没发调用 —— 用户去看，什么都没有。
+        [agentSrc, '说了要做，就必须真的发调用', '守则把「说」与「做」绑死（不许提前领功）'],
+    ].filter(([src, needle]) => !src.includes(needle)).map(([, , label]) => label);
+    c.ok(promptRules.length === 0, '★ 提示词接线完整（索引由注册表生成 + 守则统一）', promptRules.join(' / '));
+}
+
 // 按命令行参数过滤用例（便于只跑其中一段）
 const only = process.argv[2];
 const allCases = [
@@ -1479,11 +1872,12 @@ const allCases = [
     { name: '手机操作标签', fn: casePhone },
     { name: 'strict 路由决策表', fn: caseStrictRoute },
     { name: '标签协议解耦', fn: caseTags },
+    { name: '操作注册表', fn: caseOps },
 ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 
 await runChecks({
-    title: 'AI Agent（权限 / 续跑 / 悬浮窗 / 路径 / 手机 / 路由 / 标签）',
+    title: 'AI Agent（权限 / 续跑 / 悬浮窗 / 路径 / 手机 / 路由 / 标签 / 操作注册表）',
     usage: 'node scripts/check-agent.mjs [用例名子串]',
     cases,
 });

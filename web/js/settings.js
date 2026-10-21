@@ -1,19 +1,5 @@
 /* ========================================================================
  * 设置与运维：状态机 / 设置 / 悬浮窗 / 副屏监视 / 日志 / 数据 / 密码
- *
- * 本文件由 web/index.html 的主脚本按分区拆分而来（保持原始加载顺序）。
- * 拆分前提：主脚本是全局作用域，拆分后各文件共享同一全局词法环境，
- * 因此顶层 function / const / let 互相可见，调用点无需修改。
- *
- * 包含分区：
- *   · 状态机 UI
- *   · 设置
- *   · 操作悬浮窗（APK 独有）
- *   · 副屏监视窗
- *   · 日志设置（服务端）
- *   · 我的数据（导出 / 导入 / 位置）
- *   · 访问密码（局域网鉴权）
- *   · 问候打字机
  * ======================================================================== */
 
 // ==================== 状态机 UI ====================
@@ -1103,31 +1089,64 @@ async function refreshModsList() {
         el.addEventListener('change', async () => {
             const id = el.getAttribute('data-mod-id');
             // setEnabled 是 async 的：必须 await 之后再刷新，否则读到旧 state
-            if (window.ElainaMods) {
-                // 开关要处理"插件不在注册表里"这种情况：
-                //   setEnabled 对**不在注册表里**的插件会直接 `return false` —— 而注册表
-                //   只在页面启动时建立。于是刚装好、还没被扫到的插件：开关设上了、紧接着
-                //   列表重绘又按状态把它拨回去，看上去就是"按启动按钮没反应 /
-                //   点了像启动了又关掉 / 弹回原位"。
-                //   这里的处理：先重扫一次再重试；仍失败就**如实说**并把开关拨回去 ——
-                //   绝不显示"已启用（立即生效）"这种假状态。
-                let ok = await window.ElainaMods.setEnabled(id, el.checked);
-                if (ok === false && typeof window.ElainaMods.reload === 'function') {
-                    try { await window.ElainaMods.reload(); } catch (e) { /* 下面照常汇报 */ }
-                    ok = await window.ElainaMods.setEnabled(id, el.checked);
-                }
-                if (ok === false) {
-                    if (hint) {
-                        hint.textContent = '这个插件当前没能启用（加载器没认到它）。刷新页面后再试一次。';
-                        hint.className = 'text-[11px] text-red-500';
-                    }
-                    el.checked = !el.checked;   // 把开关拨回去，别留一个假状态
-                    void refreshModsList();
+            if (!window.ElainaMods) return;
+            // 启用前记一份快照：成功后对比出"这次连带打开了哪些前置"，
+            //   不说的话用户会以为插件列表"自己动了"
+            const before = el.checked
+                ? new Map(window.ElainaMods.list().map((p) => [p.id, p.enabled])) : null;
+            // 停用被依赖的插件：有正在运行的依赖方 → 弹窗说明并把开关拨回去。
+            //
+            //   拒绝本身发生在 ElainaMods.setEnabled 内部（这里是**先查**，
+            //   为了把「谁在用」说给用户听 —— 只拿到 false 的话用户不知道差在哪）。
+            if (!el.checked && typeof window.ElainaMods.dependentsOf === 'function') {
+                const using = window.ElainaMods.dependentsOf(id);
+                if (using.length) {
+                    const names = using.map((p) => '「' + (p.name || p.id) + '」').join('、');
+                    showCustomAlert(names + ' 正在使用这个插件。如需关闭，请先关闭 ' + names + '。', '不能关闭');
+                    el.checked = true;   // 拨回去，不留"看起来关了"的假状态
                     return;
                 }
             }
+            // 开关要处理"插件不在注册表里"这种情况：
+            //   setEnabled 对**不在注册表里**的插件会直接 `return false` —— 而注册表
+            //   只在页面启动时建立。于是刚装好、还没被扫到的插件：开关设上了、紧接着
+            //   列表重绘又按状态把它拨回去，看上去就是"按启动按钮没反应"。
+            //   这里的处理：先重扫一次再重试。
+            //   拒绝启动（前置拉不起来）**不走重试** —— 重扫救不了缺前置，
+            //   原因已经写在条目上（下面按条目状态说明），重试只会白等一遍。
+            let ok = await window.ElainaMods.setEnabled(id, el.checked);
+            if (ok === false && typeof window.ElainaMods.reload === 'function') {
+                const st0 = window.ElainaMods.list().find((p) => p.id === id);
+                if (!(st0 && st0.error)) {
+                    try { await window.ElainaMods.reload(); } catch (e) { /* 下面照常汇报 */ }
+                    ok = await window.ElainaMods.setEnabled(id, el.checked);
+                }
+            }
+            // 结果以**条目状态**为准（setEnabled 对"启用后加载失败"也返回 true，
+            //   只看返回值会把"没起来"说成"已启用（立即生效）"这种假状态）
+            const st = window.ElainaMods.list().find((p) => p.id === id);
+            const failed = ok === false
+                || (el.checked && (!st || !st.enabled || st.state === 'error' || st.state === 'blocked'));
+            if (failed) {
+                if (hint) {
+                    hint.textContent = st && st.error
+                        ? '没有' + (el.checked ? '启动 ' : '停用 ') + id + '：' + st.error
+                        : '这个插件当前没能' + (el.checked ? '启用' : '停用') + '（加载器没认到它）。刷新页面后再试一次。';
+                    hint.className = 'text-[11px] text-red-500';
+                }
+                el.checked = !el.checked;   // 把开关拨回去，别留一个假状态
+                void refreshModsList();
+                return;
+            }
             if (hint) {
-                hint.textContent = '已' + (el.checked ? '启用' : '停用') + ' ' + id + '（立即生效）';
+                let msg = '已' + (el.checked ? '启用 ' : '停用 ') + id + '（立即生效）';
+                if (el.checked && before) {
+                    const pulled = window.ElainaMods.list().filter((p) => p.enabled && !before.get(p.id));
+                    if (pulled.length) {
+                        msg += '，连同前置 ' + pulled.map((p) => p.name || p.id).join('、') + ' 一起打开';
+                    }
+                }
+                hint.textContent = msg;
                 hint.className = 'text-[11px] text-indigo-500';
             }
             void refreshModsList();
@@ -1188,6 +1207,17 @@ async function refreshModsList() {
             ev.stopPropagation();
             const id = el.getAttribute('data-mod-id');
             const name = el.getAttribute('data-mod-name') || id;
+            // 删除被依赖的插件：有正在运行的依赖方 → 弹窗说明，不走删除确认。
+            //   （删目录救不回来 —— 关掉只是停用，随时能再开，所以顺序必须是
+            //   "先关依赖方、再删"，这里把这个顺序告诉用户。）
+            if (window.ElainaMods && typeof window.ElainaMods.dependentsOf === 'function') {
+                const using = window.ElainaMods.dependentsOf(id);
+                if (using.length) {
+                    const names = using.map((p) => '「' + (p.name || p.id) + '」').join('、');
+                    showCustomAlert(names + ' 正在使用这个插件。如需卸载，请先关闭 ' + names + '。', '不能卸载');
+                    return;
+                }
+            }
             const okToGo = await showCustomConfirm(
                 '删除插件「' + name + '」？\n\n'
                 + '会把插件目录和安装包一起删掉（下次打开设置不会再出现）。\n'
@@ -1939,23 +1969,6 @@ function startGreetingTyping() {
     }, 45);
 }
 
-
-
-/**
- * 绑定插件列表的拖拽排序。
- *
- * 实现放在 mods.js 里（window.__elainaBindFlatDragSort），这里只是转发。
- *   本文件在 mods.js 之前加载，所以只能在使用时取（那时 mods.js 早已执行完）。
- */
-function bindModsDragSort(box, onDone) {
-    const impl = window.__elainaBindFlatDragSort;
-    if (typeof impl !== 'function') {
-        console.warn('[Mods] 拖拽实现未加载（mods.js 未就绪），插件列表拖动排序不可用');
-        return () => {};
-    }
-    return impl(box, onDone);
-}
-
 /**
  * 分组版拖拽：统一列表模型 —— 平铺插件与分栏同等级，混排。
  *
@@ -2188,6 +2201,12 @@ async function refreshSkillsList() {
         box.innerHTML = '';
         return;
     }
+    // 列表拿到就把技能同步进操作注册表（见 agent.js 的 syncSkillKnowledge）——
+    //   让它在这里调一次，是为了"刚装完 / 刚卸完"能当场反映到模型看到的能力索引里，
+    //   而不是等下次刷新页面。技能只会注册成 kind:'knowledge'（纯资料），**永不可执行**。
+    void syncSkillKnowledge();
+    // 注：这里**不会**出现系统级条目（内置 Agent 能力），因为那些只由代码注册、
+    //   不落盘到 skills/ —— 换句话说"系统级自动隐藏"是结构上成立的，不需要过滤一遍。
 
     if (!skills.length) {
         box.innerHTML = '<div class="text-[11px] text-indigo-300 py-2 text-center">还没有技能。'

@@ -201,41 +201,6 @@ ConvertTo-Json -InputObject @($list) -Compress -Depth 3
     }
 }
 
-/**
- * 汇总"当前在干什么"，供拼进提示词。
- *
- * 把前台窗口与进程列表压成一小段文本 —— 提示词要省 token，
- * 不该把整份进程表塞进去。
- *
- * @returns {{ ok: boolean, summary?: string, foreground?: object, processes?: array, reason?: string }}
- */
-export function activitySummary() {
-    const fg = readForegroundWindow();
-    const ps = listProcesses(20);
-    if (!fg.ok && !ps.ok) {
-        return { ok: false, reason: fg.reason || ps.reason || '无法读取' };
-    }
-
-    const lines = [];
-    if (fg.ok) {
-        lines.push('当前前台窗口：' + (fg.title || '(无标题)'));
-        const body = String(fg.text || '').trim();
-        if (body) lines.push('窗口内可见文本（截断）：\n' + body.slice(0, 1200));
-    }
-    if (ps.ok) {
-        // 只列名字与内存，且去掉常见后台进程噪音
-        const noisy = /^(svchost|conhost|dllhost|RuntimeBroker|SearchIndexer|ctfmon|Taskmgr)$/i;
-        const top = ps.processes.filter((p) => !noisy.test(p.name)).slice(0, 12);
-        lines.push('占用内存较高的进程：' + top.map((p) => p.name + '(' + p.memMB + 'MB)').join('、'));
-    }
-    return {
-        ok: true,
-        summary: lines.join('\n'),
-        foreground: fg.ok ? { title: fg.title, textLength: String(fg.text || '').length } : null,
-        processes: ps.ok ? ps.processes : [],
-    };
-}
-
 export const __test__ = { MAX_WINDOW_TEXT, CMD_TIMEOUT, decode };
 
 // ============================================================================

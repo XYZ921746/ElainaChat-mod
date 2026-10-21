@@ -32,7 +32,7 @@
 // "文件已经在 mods/ 目录里了，服务端自己去发现" —— 因为用户可能是
 // 直接用文件管理器把 zip 拷进去的，没有经过浏览器。
 
-import { readdir, stat, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { readdir, stat, mkdir, writeFile, readFile, rm, rename } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -217,10 +217,17 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         const { files } = unzip(buf, { allowScripts: true });
 
         const targetDir = path.join(modsDir, id);
-        // 先清空旧目录：重装时不清会留下上一次安装残留的文件，那些文件没有清单条目、
-        // 「删插件」也删不到它们。
-        await rm(targetDir, { recursive: true, force: true });
-        await mkdir(targetDir, { recursive: true });
+        // 先写到**临时目录**，全部条目落盘后再整体改名成正式目录。
+        //
+        // 为什么不能直接写 targetDir：`/mods/index.json` 与 `/api/plugins` 每次
+        //   请求都会 scanAndSync()，而扫描认的是"目录存在就算已安装"。直接往
+        //   mods/<id>/ 里逐个写文件的话，中途那一刻目录已经存在、index.js 还没写完 ——
+        //   这时前端读到清单就会去请求 `/mods/<id>/index.js`，拿到 404 并**当场把
+        //   插件标成加载失败、自动停用**（用户看到的就是"装完就报脚本加载失败"）。
+        //   临时目录名以 `.` 开头，会被扫描器的 isSafeModDirName 直接跳过，天然不会被认成插件。
+        const stagingDir = path.join(modsDir, `.installing-${id}-${process.pid}-${Date.now()}`);
+        await rm(stagingDir, { recursive: true, force: true });
+        await mkdir(stagingDir, { recursive: true });
 
         // zip 内可能有一层与插件同名的顶层目录 —— 去掉它，把文件平铺到插件目录
         const topCandidates = new Set(files.map((f) => f.name.split('/')[0]));
@@ -235,9 +242,9 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
             if (!rel || rel.endsWith('/')) continue;
             if (isUnsafeEntryName(rel)) { skipped.push(f.name); continue; }
 
-            const outPath = path.join(targetDir, rel);
+            const outPath = path.join(stagingDir, rel);
             // 双保险：解析后的绝对路径必须仍在插件目录内
-            if (outPath !== targetDir && !outPath.startsWith(targetDir + path.sep)) {
+            if (outPath !== stagingDir && !outPath.startsWith(stagingDir + path.sep)) {
                 skipped.push(f.name);
                 continue;
             }
@@ -248,7 +255,7 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
             }
             total += f.data.length;
             if (total > MOD_MAX_BYTES) {
-                await rm(targetDir, { recursive: true, force: true }).catch(() => {});
+                await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
                 throw new Error('插件解压后超过 ' + Math.round(MOD_MAX_BYTES / 1024 / 1024) + 'MB 上限');
             }
             await mkdir(path.dirname(outPath), { recursive: true });
@@ -256,8 +263,20 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
             written++;
         }
         if (!written) {
-            await rm(targetDir, { recursive: true, force: true }).catch(() => {});
+            await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
             throw new Error('zip 内没有可用文件');
+        }
+        // 全部条目落盘后才把临时目录改名成正式目录：改名（rename）在同一卷上是
+        //   原子的，扫描器要么看不到这个插件，要么看到的就是**完整**的一份 ——
+        //   不存在"目录在、index.js 还没写完"的中间态。
+        // 重装语义：先清空旧目录再改名，否则会留下上一次安装的残留文件
+        //   （那些文件没有清单条目，「删插件」也删不到它们）。
+        try {
+            await rm(targetDir, { recursive: true, force: true });
+            await rename(stagingDir, targetDir);
+        } catch (err) {
+            await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
+            throw err;
         }
         if (skipped.length) log('插件 ' + id + ' 跳过 ' + skipped.length + ' 个不安全/不允许的条目');
         return { id, written, skipped: skipped.length };
@@ -281,6 +300,24 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
     async function scanAndSync() {
         await mkdir(modsDir, { recursive: true }).catch(() => {});
         const entries = await readdir(modsDir, { withFileTypes: true }).catch(() => []);
+
+        // 清掉**安装中途留下的临时目录**（`.installing-*`）。
+        //
+        //   为什么需要：安装是先写临时目录再原子改名（见 writePluginFiles），
+        //   而进程若在中途被杀（用户关窗口、断电），那份临时目录就留在磁盘上 ——
+        //   隐藏、不会被扫成插件（isSafeModDirName 跳过 `.` 开头），但会白占
+        //   几十 MB，且用户永远看不见它。扫描时顺手清掉是最省事的时机。
+        const stale = [];
+        for (const e of entries) {
+            if (e.isDirectory() && e.name.startsWith('.installing-')) stale.push(e.name);
+        }
+        if (stale.length) {
+            for (const name of stale) {
+                await rm(path.join(modsDir, name), { recursive: true, force: true }).catch(() => {});
+            }
+            log('清理了 ' + stale.length + ' 个安装未完成的临时目录');
+            entries.splice(0, entries.length, ...await readdir(modsDir, { withFileTypes: true }).catch(() => []));
+        }
 
         const installed = [];   // { id, dir }
         const zips = [];
@@ -383,7 +420,10 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
                 // 硬塞进一个文件只会越来越难维护（Live2D 插件就是这么拆的）。
                 scripts: Array.isArray(m.scripts) ? m.scripts.filter((s) => typeof s === 'string' && s) : [],
                 styles: Array.isArray(m.styles) ? m.styles : [],
-                defaultEnabled: m.defaultEnabled !== false,
+                // 默认关闭（与 web/js/mods.js 的 isModEnabled 同语义）：只有显式写
+                //   `"defaultEnabled": true` 才算默认开，漏写/写别的都算关 ——
+                //   插件会改动界面，不该在用户不知情时生效。
+                defaultEnabled: m.defaultEnabled === true,
                 after: Array.isArray(m.after) ? m.after : [],
                 hidden: m.hidden === true,
                 // 前端 host API 的能力组（AGENTS.md D18 / 表 A22）：原样搬运。
@@ -474,19 +514,73 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
      * 如果只删目录，紧接着的 scanAndSync() 会立刻把它重新解压装回来 ——
      * 用户点「卸载」，mod 转一圈又出现了，看起来像卸载功能坏了。
      * （这个坑是端到端测试抓到的：断言"目录已删除"时发现它又回来了。）
+     *
+     * ── 目录名 ≠ 插件 id ──────────────────────────────────────────────
+     *
+     * 清单里的 `id` 来自 manifest（如 `galgame`），而**目录名**是安装时的包名
+     * （如 `galgame-1.0.0`）—— 两者是各自独立的字段，可以不一致（见表 A9）。
+     * 所以删目录**不能**用 id 直接拼路径：拼出来的 `mods/galgame` 不存在，
+     * 而 `rm(..., { force: true })` 对不存在的路径是**静默成功**的 ——
+     * 接口会回 `{ok:true}`、界面提示"已删除"，插件却原封不动，
+     * 用户点多少次都一样，且没有任何报错可循。
+     *
+     * 因此必须先在磁盘上**按 id 反查真实目录**（同名目录优先，否则读各目录的
+     * manifest 比对 id）；查不到就**明确报错**，不假装成功。
+     *
+     * 同理，删完之后要**确认目录真的没了**：文件被占用时 Windows 会留下半删
+     * 目录，此时继续返回成功又是一次无声的谎报。
      */
     async function uninstall(id) {
         if (!MOD_ID_RE.test(id)) throw new Error('插件名不合法');
-        const dir = path.join(modsDir, id);
-        // 双保险：目录必须真的在 modsDir 下
-        if (!dir.startsWith(modsDir + path.sep)) throw new Error('路径越界');
-        await rm(dir, { recursive: true, force: true });
-        // 连同安装包一起删（大小写两种扩展名都试）
+        const dir = await findModDirById(id);
+        if (!dir) throw new Error('没有找到插件「' + id + '」的目录（可能已经被删掉了）');
+        // 双保险：解析后的路径必须真的在 modsDir 下
+        const resolved = path.resolve(dir);
+        if (resolved !== modsDir && !resolved.startsWith(modsDir + path.sep)) {
+            throw new Error('路径越界');
+        }
+        await rm(resolved, { recursive: true, force: true });
+        // 删完要确认真的没了 —— 文件被占用时 Windows 会留下半删状态，
+        //   那时继续往下走只会让用户以为卸载成功了。
+        if (await stat(resolved).then(() => true, () => false)) {
+            throw new Error('插件目录没能删掉（可能有程序正在占用其中的文件）：' + resolved);
+        }
+        // 连同安装包一起删（大小写两种扩展名都试）——
+        //   包名与 id 也可能不一致，所以按"归一到同一个 id"来判断。
         for (const ext of ['.zip', '.ZIP']) {
-            await rm(path.join(modsDir, id + ext), { force: true }).catch(() => {});
+            const zips = await readdir(modsDir).catch(() => []);
+            for (const z of zips) {
+                if (!z.toLowerCase().endsWith(ext.toLowerCase())) continue;
+                if (normalizeModId(z) !== id && z.slice(0, -ext.length) !== id) continue;
+                await rm(path.join(modsDir, z), { force: true }).catch(() => {});
+            }
         }
         await scanAndSync();
         return true;
+    }
+
+    /**
+     * 按插件 id 在 modsDir 里找出**实际目录**。
+     *
+     * 匹配顺序（先便宜后贵）：
+     *   ① 同名目录（绝大多数情况：id 与目录名一致）；
+     *   ② 每个目录的 manifest.json 里 `id` 字段 —— 这才是权威来源，
+     *      因为目录名是安装时的包名（`galgame-1.0.0`），id 由 manifest 决定。
+     *
+     * @returns {Promise<string|null>} 绝对路径；找不到返回 null
+     */
+    async function findModDirById(id) {
+        const entries = await readdir(modsDir, { withFileTypes: true }).catch(() => []);
+        const dirs = entries.filter((e) => e.isDirectory() && isSafeModDirName(e.name)).map((e) => e.name);
+        if (dirs.includes(id)) return path.join(modsDir, id);
+        for (const name of dirs) {
+            try {
+                const raw = await readFile(path.join(modsDir, name, 'manifest.json'), 'utf8');
+                const m = JSON.parse(raw);
+                if (String(m && m.id || '').trim() === id) return path.join(modsDir, name);
+            } catch { /* 没有 manifest 或不是合法 JSON —— 跳过 */ }
+        }
+        return null;
     }
 
     return { scanAndSync, uninstall, extractPluginZip, installFromBuffer, readReadme, MOD_ID_RE };

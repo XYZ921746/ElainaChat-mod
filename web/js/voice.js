@@ -1,15 +1,5 @@
 /* ========================================================================
  * 语音：识别 / 输入处理 / 停止按钮 / TTS
- *
- * 本文件由 web/index.html 的主脚本按分区拆分而来（保持原始加载顺序）。
- * 拆分前提：主脚本是全局作用域，拆分后各文件共享同一全局词法环境，
- * 因此顶层 function / const / let 互相可见，调用点无需修改。
- *
- * 包含分区：
- *   · 语音识别
- *   · 输入处理
- *   · AI 输出中的「停止」按钮
- *   · TTS（多服务商：MiMo / MiniMax / 千问 / 通用 OpenAI）
  * ======================================================================== */
 
 // ==================== 语音识别 ====================
@@ -183,19 +173,6 @@ async function safeStartRecognition(maxTries = 3) {
         }
     }
     console.warn('[Voice] recognition 连续重试仍失败');
-    return false;
-}
-
-// 语音识别仅支持 Chrome 等 Chromium 内核浏览器（Firefox/Safari 无此 API）
-function isChromiumBrowser() {
-    try {
-        const ua = String(navigator.userAgent || '');
-        if (/Chrome|Chromium|Edg|CriOS/i.test(ua)) return true;
-        const data = navigator.userAgentData;
-        if (data && Array.isArray(data.brands)) {
-            return data.brands.some(b => /Chromium/i.test(String(b.brand || '')));
-        }
-    } catch { /* ignore */ }
     return false;
 }
 
@@ -384,7 +361,13 @@ function isBadCloudFinalText(text, fallbackTranscript) {
 
 async function fetchWithTimeout(url, options, timeoutMs, signal = null) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // 超时必须与「外部主动中止」区分开：两者都经 controller.abort() 变成
+    // AbortError，而下游把 AbortError 一律按「用户点了停止」安静收尾 ——
+    // 超时被这样吞掉后，用户等了几分钟却一个提示都没有。这里记下触发者，
+    // 内部计时器到点（且外部信号并未中止）时改抛带 REQUEST_TIMEOUT 码的
+    // 错误，让它走正常的报错与重试链路；用户停止仍抛 AbortError 原样上抛。
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
     // 两个中止来源要**都**接上：内部超时用 controller，
     // 外部（用户点「停止」/ 流式回退）用调用方传进来的 signal。
     // 只认 options.signal 是不够的 —— options 里的 signal 会被下面
@@ -399,6 +382,14 @@ async function fetchWithTimeout(url, options, timeoutMs, signal = null) {
     }
     try {
         return await fetch(url, { ...options, signal: controller.signal });
+    } catch (error) {
+        if (timedOut && !(externalSignal && externalSignal.aborted)) {
+            const seconds = Math.round(Number(timeoutMs) / 1000);
+            throw new ClientApiError('REQUEST_TIMEOUT',
+                '等待 ' + seconds + ' 秒没有收到模型数据，连接已按超时断开（timeout）。',
+                { retryable: true });
+        }
+        throw error;
     } finally {
         clearTimeout(timer);
         if (externalSignal) externalSignal.removeEventListener('abort', abortFromExternal);
@@ -839,20 +830,6 @@ function cancelListening() {
     updateUI();
 }
 
-function stopListening() {
-    if (isLocalAudioAsrMode()) {
-        closeLocalAsr(true);
-        return;
-    }
-    if (browserRecognition) {
-        try {
-            browserRecognition.stop();
-        } catch (e) {
-            console.error('Failed to stop recognition:', e);
-        }
-    }
-}
-
 
 // ==================== 输入处理 ====================
 
@@ -1120,6 +1097,128 @@ function updateThinkingModeHint() {
 // 两者不交叉。
 
 let streamedReplyText = '';
+// 这一轮有没有从**流**里收到过思考增量。
+//   用途只有一个：收尾时判断要不要拿非流式响应里的思考去补时间线（见 callAI 之后那段）。
+//   为什么需要它：requestChatJson 在"流式一个字都没吐就失败"时会静默退回非流式，
+//   那条路上 onDelta 再也不触发 —— 思考仍在响应体里，但没人把它交给时间线。
+let streamedReasoningSeen = false;
+// 这一轮"带了工具调用、正文先压着没渲染"的那条 AI 消息 id。
+//   工具全部跑完后由 runToolCalls 收尾时把它显示出来（见 commitAiMessageOnce 里的说明）。
+//   为空表示没有需要补显示的正文（普通回合、或模型一个字都没说）。
+let pendingToolReplyMessageId = null;
+
+/**
+ * 把"等工具跑完再开口"的那条正文显示出来。
+ *
+ * 由 runToolCalls 在整批工具执行完之后调用（见那里的收尾段）。
+ *
+ * ── 与 DSH 的对照（这是本函数存在的理由）──────────────────────────────
+ *
+ * DSH 的 agent loop 把**每一步都当成一次独立模型调用**：
+ *   模型发 tool_call 那一步的正文只是「中间产物」，它从不把那段话当最终回复；
+ *   循环继续，工具结果进会话，**再调一次模型**，用户最终看到的是
+ *   "已经知道结果"之后写的那句话。
+ *
+ * 本应用原来是反过来的：动手前那句话先渲染出去，工具跑完再**另起一条**
+ * 消息说结果 —— 于是「我来做」和「好了」是两条独立气泡，接不上，
+ * 而且先说的那句在结果出来之前就已经可见。
+ *
+ * 现在的做法贴住 DSH 的语义：
+ *   · 这句话**先压着**（不渲染），工具跑完再决定要不要显示；
+ *   · 若模型随后还会基于结果重新开口（续跑），那条新回复会**取代**它
+ *     （见 replacePendingToolReply）—— 用户看到的始终是"知道结果之后"的那句话。
+ *
+ * @param {boolean} anySucceeded 这一批里有没有真的做成一件事。
+ *   false 时**压住不显示**：那段正文是模型在动手之前写的结论
+ *   （"喏，已经弄好了"），而这批操作一件都没成 —— 显示出去就是替它撒谎。
+ */
+function revealPendingToolReply(anySucceeded) {
+    const id = pendingToolReplyMessageId;
+    if (!id) return;
+    pendingToolReplyMessageId = null;
+    if (!anySucceeded) return;
+    const conv = getCurrentConversation();
+    if (!conv || state.currentConversationId !== conv.id) return;
+    if (state.notesMode || state.diaryMode) return;
+    if (document.getElementById(`msg-${safeAttrId(id)}`)) return;   // 已经渲染过
+    const msg = (conv.messages || []).find((m) => String(m.id) === String(id));
+    if (!msg || msg.hidden) return;
+    renderMessage(msg);
+    if (typeof elements !== 'undefined' && elements.conversationHistory) {
+        elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
+    }
+}
+
+/**
+ * 续跑拿到"基于结果"的新正文时，用**它取代**那条"动手前"的正文。
+ *
+ * 为什么不是两条都留：那是两句话在讲同一件事，前一句还不知道结果
+ * （"我来做"），后一句才知道（"好了"）。两条并排出现，读者会以为
+ * AI 说了两遍，而且顺序上第一句是**没有依据**的 —— 它写在结果之前。
+ * DSH 里根本不会出现这个问题：那一步的正文从不作为最终回复呈现。
+ *
+ * 做法：把动手前那条从对话里**移除**（它从未对用户可见，也不需要留在上下文里 ——
+ * 真正的结果已经以 tool 消息的形式在会话里了），只保留新这条。
+ * 若动手前那条已经被显示过（用户已经看见），则**不**移除 —— 把已经出现在
+ * 屏幕上的话删掉，等于篡改他刚读到的内容。
+ *
+ * @returns {boolean} 是否发生了取代
+ */
+function replacePendingToolReply() {
+    const id = pendingToolReplyMessageId;
+    if (!id) return false;
+    pendingToolReplyMessageId = null;
+    const conv = getCurrentConversation();
+    if (!conv) return false;
+    // 已经渲染给用户看过 → 不删（删掉屏幕上已有的内容是不诚实的）
+    if (document.getElementById(`msg-${safeAttrId(id)}`)) return false;
+    const before = (conv.messages || []).length;
+    conv.messages = conv.messages.filter((m) => String(m.id) !== String(id));
+    if (conv.messages.length === before) return false;
+    saveConversations();
+    return true;
+}
+
+/**
+ * 记下"这一轮还有一段话压着没说出来"，以及这一批操作到底成没成。
+ *
+ * 由 runToolCalls 在整批工具执行完之后调用（取代了"就地放出来"的做法）。
+ *
+ * 为什么要留到续跑才决定（对齐 DSH 的语义）：
+ *   DSH 的 agent loop 把每一步都当成一次独立模型调用 —— 发 tool_call 那一步的正文
+ *   只是中间产物，循环继续、工具结果进会话、**再调一次模型**，用户最终看到的是
+ *   "已经知道结果"之后写的那句话。反过来做（先放正文、再另起一条说结果）会得到
+ *   两条接不上的气泡，而且第一句写在结果之前、没有依据。
+ *
+ * 所以这里只记账，不渲染。放出/取代在续跑收尾处决定：
+ *   · 续跑回了正文 → replacePendingToolReply() 取代它；
+ *   · 续跑没回正文 → revealPendingToolReply() 兜底放出，免得"做完了却一声不吭"。
+ *
+ * @param {boolean} anySucceeded 这一批里有没有真做成一件事
+ */
+function agentMarkPendingReply(anySucceeded) {
+    if (!pendingToolReplyMessageId) return;
+    pendingToolReplySucceeded = Boolean(anySucceeded);
+}
+
+let pendingToolReplySucceeded = false;
+
+/** 这条压着的正文能不能放出来（工具全失败时它是"动手前写的结论"，不能放） */
+function canRevealPendingToolReply() {
+    return Boolean(pendingToolReplyMessageId) && pendingToolReplySucceeded;
+}
+
+/** 续跑结束了：要么用新正文取代它，要么（没新正文时）把它兜底放出来 */
+function settlePendingToolReply(hasNewReply) {
+    if (!pendingToolReplyMessageId) return;
+    if (hasNewReply) {
+        // 新回复已经基于结果写好了 —— 那条"动手前"的话就该退场
+        replacePendingToolReply();
+        return;
+    }
+    // 续跑没给出正文：兜底放出来（否则用户看到"操作做完了，AI 一声不吭"）
+    revealPendingToolReply(canRevealPendingToolReply());
+}
 let streamingPreviewEl = null;
 let streamingPreviewScheduled = false;
 // 打字机式渐进显示：已经"吐"给预览气泡的字符数（见 renderStreamingReplyPreview）。
@@ -1241,7 +1340,9 @@ function renderStreamingReplyPreview() {
     revealedCount = Math.min(revealedCount, text.length);
     revealedCount = Math.min(text.length, revealedCount + step);
     if (target) target.textContent = text.slice(0, revealedCount);
-    elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
+    // 贴底跟随（用户在底部才滚）：这里每帧都会执行，无条件滚底会把
+    //   "打字期间往上翻历史"的用户每帧拽回底部。与过程区共用同一份实现。
+    stickChatScrollToBottom();
     if (revealedCount < text.length) scheduleStreamingReplyRender();
 }
 
@@ -1487,7 +1588,13 @@ async function handleUserInput(message, conversation) {
             //   只有第 2 段的**正文**才进气泡（第 1 段正文是隐藏的中间产物，
             //   由 data 层拦住，不会走到这里）。
             onDelta: (chunk) => {
-                if (chunk.kind === 'reasoning') { appendTurnReasoning(chunk.text, chunk.phase); return; }
+                if (chunk.kind === 'reasoning') {
+                    // 记下"这一轮确实从流里收到过思考"，供收尾时对账：
+                    //   一条都没收到才需要拿非流式响应里的正文补（见下面 replyInfo.reasoning）。
+                    streamedReasoningSeen = true;
+                    appendTurnReasoning(chunk.text, chunk.phase);
+                    return;
+                }
                 if (chunk.kind !== 'text') return;
                 streamedReplyText += chunk.text;
                 scheduleStreamingReplyRender();
@@ -1496,7 +1603,66 @@ async function handleUserInput(message, conversation) {
             // 各存一条，用户可以在过程区里分别展开对照。
             onPhase: (phase) => { recordTurnPhase(phase); }
         };
-        const rawResponse = await callAI(message.text, aiRequestOptions);
+        // 工具通道：这一轮请求带上**当前可用**的工具清单（档位/开关/平台都已在
+        // toolsForAccess 里收窄），并把"回复侧元信息"的容器交出去 —— 回来时从它读
+        // 这次回复有没有 tool_calls。构造器在 agent.js（agentToolOptions），两处各写一份必然走样。
+        const agentToolOpt = agentToolOptions();
+        // 思考回传用的容器**独立于工具清单**：
+        //   agentToolOptions() 在"没有可用工具"时返回 null（权限关着、手机没启用、
+        //   供应商不认 tools），而思考跟工具没有关系 —— 关掉 Agent 权限不该连带
+        //   让思考再也显示不出来。所以这里自己备一个，有工具时复用它那个。
+        const replyInfo = (agentToolOpt && agentToolOpt.replyInfo) || {};
+        const requestOpts = Object.assign({}, aiRequestOptions, agentToolOpt || {}, { replyInfo });
+        // 可重试失败（超时 / 网络抖动 / 限流 / 上游 5xx）自动再试一次，重试过程
+        // 写在思考气泡上 —— 静默重试会让「等了很久又重新等一遍」看起来像卡死，
+        // 直接放弃则把一次瞬时故障变成用户看得见的失败，都不如说一声。
+        // 只重试一次：连着失败多半是持续性原因（额度 / Key / 服务商故障），
+        // 闷头重试只会白烧额度；那时的报错文案由 showClientApiError 负责。
+        const RETRYABLE_CHAT_CODES = new Set([
+            'REQUEST_TIMEOUT', 'NETWORK_ERROR', 'RATE_LIMITED', 'UPSTREAM_RATE_LIMITED', 'UPSTREAM_UNAVAILABLE',
+        ]);
+        let rawResponse = null;
+        let didRetry = false;
+        streamedReasoningSeen = false;
+        for (let attempt = 0; ; attempt++) {
+            try {
+                rawResponse = await callAI(message.text, requestOpts);
+                break;
+            } catch (chatError) {
+                // 用户停止优先于一切重试判断（按了停止还自己再发一次是倒行逆施）
+                if (chatError?.name === 'AbortError' || replyAbort.signal.aborted) throw chatError;
+                const retryable = chatError instanceof ClientApiError && RETRYABLE_CHAT_CODES.has(chatError.code);
+                if (!retryable || attempt >= 1) {
+                    if (didRetry) chatError.message = String(chatError.message || chatError.code || '')
+                        + '（已自动重试 1 次，仍失败）';
+                    throw chatError;
+                }
+                didRetry = true;
+                console.warn('[Chat] 请求失败（' + chatError.code + '），自动重试 1 次：', chatError.message);
+                updateThinkingMessageText('模型响应不稳定（' + (chatError.message || chatError.code) + '），正在自动重试…');
+                // 限流时等久一点再重发，立刻重发只会撞在同一个限流窗口上
+                await new Promise((r) => setTimeout(r, chatError.code === 'RATE_LIMITED' ? 2000 : 1000));
+                if (replyAbort.signal.aborted) throw chatError;
+                // 重试是全新一次请求：流式状态必须清零，否则上一次的半截增量
+                // 会留在预览与过程区里，与新回复拼出重复内容。
+                streamedReasoningSeen = false;
+                resetStreamingReplyPreview();
+            }
+        }
+        // 思考对账：**只有流里一条都没收到**时才用响应体里的补。
+        //
+        //   为什么必须补：requestChatJson 在流式还没吐出任何内容就失败时会静默退回
+        //   非流式（见那里的注释）。那条路上 onDelta 不再触发，于是思考明明在响应体里
+        //   （openai-compatible 的 reasoning_content / anthropic 的 thinking block /
+        //   responses 的 reasoning item），却没有任何东西把它交给时间线 ——
+        //   用户看到的是"这次没有思考"，而真实原因是换了条传输路径。
+        //
+        //   为什么只在没收到时才补：流式成功时这些增量已经逐段进了时间线，
+        //   再补一遍会让同一段思考出现两次。
+        if (!streamedReasoningSeen) {
+            const fallbackReasoning = String(replyInfo.reasoning || '').trim();
+            if (fallbackReasoning) appendTurnReasoning(fallbackReasoning, null);
+        }
         const parsedReply = wantsJp ? splitVoiceReply(rawResponse) : { displayText: rawResponse, voiceJp: '' };
         const response = parsedReply.displayText;
         // **不要**在这里无条件收掉流式预览。
@@ -1507,7 +1673,13 @@ async function handleUserInput(message, conversation) {
         //   用户看到的是"字打完 → 消失 → 等 → 又出现"。
         //   所以交给 commitAiMessageOnce 在渲染正式消息前收（见下），
         //   预览正好无缝交接给正式气泡。
-        finishTurnTrace();
+        // ⚠️ 这里**不能**收尾过程区：工具调用是在下面的 commitAiMessageOnce 里才执行的
+        //   （协议要求 assistant 的 tool_calls 之后才紧跟结果）。在这里 finishTurnTrace 会把
+        //   done 提前置位，而那时 tools 还是空的 —— 没开思考的回合因此整个过程区被跳过
+        //   （renderTurnProcess 在"无思考、无工具、无阶段"时直接 return），
+        //   于是"即使没开思考，工具调用成功也要显示"这条要求落空：用户只看到气泡，看不到它动了什么。
+        //   收尾改由 commitAiMessageOnce 在 runToolCalls 排上之后负责（见那里）；
+        //   本回合**没有**工具调用时，才在这里立刻收尾。
 
         const t1 = performance.now();
         console.log(`[TIMING] 文字模型完成: ${Math.round(t1 - t0)}ms`);
@@ -1532,11 +1704,28 @@ async function handleUserInput(message, conversation) {
         //   而 drive() 是全部 [操作:] 标签的唯一分发器（文件/命令/手机/记忆）。
         //   于是"Live2D 不在"就等于"整个 Agent 系统失效 + 标签漏给用户看"。
         //   现在剥离与分发都归宿主，Live2D 只提供表现（表情/动作/口型）。
+        // 这一回合走哪条通道：**回复里有工具调用就走工具，否则才解析标签**。
+        //   两条都跑会让同一个动作执行两次 —— 模型偶尔既发工具调用、又在正文里写标签。
+        const repliedToolCalls = (agentToolOpt && agentToolOpt.replyInfo
+            && Array.isArray(agentToolOpt.replyInfo.toolCalls)) ? agentToolOpt.replyInfo.toolCalls : [];
+        if (repliedToolCalls.length) {
+            // 调用本身要挂到这条 AI 消息上：下一次请求必须带上它 ——
+            //   OpenAI 要求 assistant 的 tool_calls 后面紧跟对应的结果，缺了会被上游拒收。
+            aiMessage.toolCalls = repliedToolCalls;
+            // 模型只说"我去做"、一个字没写时，这条消息不该在聊天记录里占一个空气泡；
+            //   但它**必须**留在消息数组里（协议顺序），所以标 hidden。
+            if (!String(response).trim()) aiMessage.hidden = true;
+        }
         if (window.ElainaTags) {
-            window.ElainaTags.drive(response);
+            // 剥离永远要做：即便走工具通道，正文里万一混了标签也不能漏给用户。
             const stripped = window.ElainaTags.strip(response);
             if (stripped !== response) aiMessage.text = stripped;
+            if (!repliedToolCalls.length) window.ElainaTags.drive(response);
         }
+        // 本回合没有工具调用 → 过程区这时就是最终内容，立刻收尾（与原来同一时机）。
+        //   有工具调用时**不**在这里收尾：tool_calls 还没执行（见 commitAiMessageOnce），
+        //   提前收尾会让工具行永远显示不出来（见上面那段说明）。
+        if (!repliedToolCalls.length) finishTurnTrace();
         // 定时任务：AI 回复中的 [任务:...] 标签 → 创建未来任务
         extractAndCreateTasks(response);
 
@@ -1573,11 +1762,34 @@ async function handleUserInput(message, conversation) {
             renderFolderList();
             updateCurrentConversationTitle();
             removeThinkingMessage();
-            if (state.currentConversationId === conversation.id && !state.notesMode && !state.diaryMode && !document.getElementById(`msg-${safeAttrId(aiMessage.id)}`)) {
-                renderMessage(aiMessage);
+            if (state.currentConversationId === conversation.id && !aiMessage.hidden
+                && !state.notesMode && !state.diaryMode && !document.getElementById(`msg-${safeAttrId(aiMessage.id)}`)) {
+                // 这一轮带工具调用 → **先不显示正文**，等工具跑完再统一开口。
+                //
+                //   为什么必须这样：模型常在同一个回复里**先说结论、再发调用**
+                //   （实测："喏，文件已经在那儿了" + save_file）。那段话在工具执行前
+                //   就渲染出去了，于是用户先看到"已经建好了"，随后工具失败 ——
+                //   界面上变成"它说成功了，但下面那行写着失败"，而模型自己也只能
+                //   在续跑里尴尬地道歉。先说后做，顺序本身就是错的。
+                //
+                //   做法：正文照旧进 conversation.messages（协议要求 assistant 的
+                //   tool_calls 必须有对应消息，不能删），但**先不渲染**；等这一批工具
+                //   全部执行完，由 runToolCalls 收尾时统一显示。结果确定之后再说话，
+                //   说的才可能是真话。
+                //
+                //   注意只能延迟、不能丢弃：如果工具全成功，用户要看到的正是这段话。
+                if (!repliedToolCalls.length) renderMessage(aiMessage);
+                else pendingToolReplyMessageId = aiMessage.id;
             }
             state.voiceState = 'idle';
             updateUI();
+
+            // 工具调用要在**这条消息入队之后**才执行：结果是以 role:'tool' 追加到后面的，
+            //   协议要求它紧跟 assistant 的 tool_calls —— 顺序反了上游会拒收。
+            // （这个函数是幂等的，多次调用只会触发一次。）
+            if (repliedToolCalls.length) {
+                void runToolCalls(repliedToolCalls, { access: currentAgentAccess() });
+            }
 
             if (state.settings.autoMemory) {
                 const userCount = conversation.messages.filter(m => m.role === 'user').length;
@@ -1860,17 +2072,6 @@ async function saveCachedTtsAudio(key, pcmBuffer, sampleRate, format = 'pcm') {
     }
 }
 
-function mergePcmChunks(chunks) {
-    const totalLength = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-    const merged = new Uint8Array(totalLength);
-    let offset = 0;
-    chunks.forEach(chunk => {
-        merged.set(chunk, offset);
-        offset += chunk.byteLength;
-    });
-    return merged.buffer;
-}
-
 // 真实语音音量 → Live2D 嘴型（VAD 简化）：播放 TTS 时分析音量驱动模型说话
 //
 // 宿主只负责**报出音量**，谁需要谁订阅（`ElainaMods.on('voice-energy', …)`）。
@@ -1966,42 +2167,6 @@ async function playCachedPcm(record, onStart, onEnd, session) {
             reject(error);
         }
     });
-}
-
-class PCMStreamPlayer {
-    constructor(sampleRate, session) {
-        this.ctx = getAudioContext();
-        this.sampleRate = sampleRate;
-        this.session = session;
-        this.nextStartTime = 0;
-        this.ended = false;
-    }
-    enqueue(bytes) {
-        if (this.ended || this.ctx.state === 'closed' || !isVoiceSessionActive(this.session)) return;
-        const buffer = new ArrayBuffer(bytes.length);
-        const view = new Int16Array(buffer);
-        for (let i = 0; i < bytes.length; i += 2) {
-            view[i / 2] = (bytes[i] | (bytes[i + 1] << 8));
-        }
-        const audioBuffer = this.ctx.createBuffer(1, view.length, this.sampleRate);
-        const channel = audioBuffer.getChannelData(0);
-        for (let i = 0; i < view.length; i++) {
-            channel[i] = view[i] / 32768;
-        }
-        const source = this.ctx.createBufferSource();
-        this.session.audioSources.add(source);
-        source.buffer = audioBuffer;
-        attachVoiceEnergyAnalyser(source, this.ctx);
-        source.connect(this.ctx.destination);
-        source.onended = () => this.session.audioSources.delete(source);
-        const now = this.ctx.currentTime;
-        if (this.nextStartTime < now) this.nextStartTime = now;
-        source.start(this.nextStartTime);
-        this.nextStartTime += audioBuffer.duration;
-    }
-    finalize() {
-        this.ended = true;
-    }
 }
 
 
@@ -2317,45 +2482,6 @@ async function speakTextDashscope(text, onStart, options = {}) {
         console.error('[DashScope TTS] error:', error);
         throw toClientApiError(error);
     }
-}
-
-function useBrowserTTS(text, onStart, onEnd, session = null) {
-    const playbackPromise = new Promise(resolve => {
-        if (session && !isVoiceSessionActive(session)) { resolve({ cancelled: true }); return; }
-        if ('speechSynthesis' in window) {
-            window.speechSynthesis.cancel();
-
-            const utterance = new SpeechSynthesisUtterance(text);
-            const voices = window.speechSynthesis.getVoices();
-            const isJapanese = /[\u3040-\u30ff]/.test(text);
-            utterance.lang = isJapanese ? 'ja-JP' : 'zh-CN';
-            utterance.rate = 0.95;
-            utterance.pitch = 1;
-            utterance.volume = Math.max(0, Math.min(1, Number(state.settings.ttsVolume ?? 1)));
-
-            const voice = voices.find(v => v.lang.startsWith(isJapanese ? 'ja' : 'zh'));
-            if (voice) utterance.voice = voice;
-
-            utterance.onstart = () => {
-                if ((!session || isVoiceSessionActive(session)) && onStart) {
-                    try { onStart(); } catch (e) { console.error('Browser TTS onStart error:', e); }
-                }
-            };
-            const finish = () => {
-                if (!session || isVoiceSessionActive(session)) {
-                    if (onEnd) onEnd();
-                }
-                resolve();
-            };
-            utterance.onend = finish;
-            utterance.onerror = finish;
-            window.speechSynthesis.speak(utterance);
-        } else {
-            if (onEnd) onEnd();
-            resolve();
-        }
-    });
-    return session ? Promise.race([playbackPromise, session.cancelPromise]) : playbackPromise;
 }
 
 if ('speechSynthesis' in window) {

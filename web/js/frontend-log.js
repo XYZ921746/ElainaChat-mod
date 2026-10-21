@@ -1,11 +1,5 @@
-// 前端日志转发
-// 从 web/index.html 拆分而来（原内联 <script> 块）。
-// 保持原样：用 IIFE 包裹，不向全局泄漏任何名字。
-
-    /* ===== 前端日志转发 =====
-       浏览器里的报错平时只在控制台可见。手机上一旦出问题（语音起不来、模型加载失败），
-       根本没法去看控制台。这里把 error / warn / 未捕获异常转发到服务端，
-       直接显示在启动窗口里，和请求日志对照着看。 */
+// 前端日志转发：把 error / warn / 未捕获异常发到服务端，显示在启动窗口里。
+// IIFE 包裹，不向全局泄露任何名字。
     (function () {
         if (window.__logRelayInstalled) return;
         window.__logRelayInstalled = true;

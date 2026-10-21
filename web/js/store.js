@@ -1,36 +1,13 @@
-// 统一数据存储层：**data/ 是唯一权威存储**，localStorage 不再保存任何业务数据。
+// 统一数据存储层：data/ 是唯一权威存储，localStorage 不保存业务数据。
 //
-// ── 为什么要有这一层────────────────────────────────────
+// 读永远同步命中内存缓存：初始化（主题、设置、会话）是同步的，改成异步会让
+// 首屏闪默认色、且要串行 await 一大片调用点。写走防抖后落 data/。
 //
-// 症状："删除 data 分区后重新打开还是有数据"。
+// 两个后端：Web 走 /api/store；APK 走 Capacitor Filesystem 的应用私有目录
+// （那就是 APK 的 data/）。
 //
-// 根因：两套存储并存、而**localStorage 才是真身**，就会出现"删了还在"：
-//   · data-sync.js 启动时先把服务端 data/store.json 灌进 localStorage；
-//   · 之后每次写 localStorage 再防抖推回服务端；
-//   · 服务端缺、本机有的键还会**反向补推**（data-sync.js 第 ② 步）。
-// 于是删掉 data/ 后重启，localStorage 里的数据又被推回去 —— 看起来"删了还在"。
-//
-// 所以把关系倒过来：**内存缓存 + data/ 后端**，localStorage 完全不参与业务数据。
-//
-// ── 为什么用「内存缓存 + 同步读写」而不是全异步 ──────────────────────────
-//
-// 应用的初始化是**同步**的：theme.js 在脚本求值时就同步读主题（防首屏闪烁），
-// init 里 loadSettings/loadConversations 等也是同步函数。
-// 若把读改成异步，这些地方要全部改成 async 并串行 await —— 改动面极大，
-// 而且主题会在启动瞬间闪一下默认色。
-//
-// 所以：**读永远同步命中内存缓存**，代价是启动时要有一次"填缓存"的动作。
-// 这一层负责把"填缓存"这件事做到最早、最快。
-//
-// ── 两个后端 ────────────────────────────────────────────────────────────
-//
-//   Web（有本地服务）：同步 XHR 拉 GET /api/store 填缓存 —— 同步读取，
-//     零闪烁、零风险；写走防抖 POST /api/store，落 data/store.json + 分类文件。
-//   APK（无本地服务）：Capacitor Filesystem 读写应用私有目录下的 store.json ——
-//     那就是 APK 的 "data/"。启动时 await 一次读完（init() 是 async 的）。
-//
-// 对外 API 刻意与 localStorage 形似（getItem/setItem/removeItem），
-// 这样替换调用点时是机械改动，不引入新的心智负担。
+// 对外 API 刻意与 localStorage 形似（getItem/setItem/removeItem），替换调用点
+// 时是机械改动。
 (function () {
     'use strict';
 

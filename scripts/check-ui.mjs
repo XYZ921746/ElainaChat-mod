@@ -625,15 +625,25 @@ async function caseTheme(c) {
             '★ 默认主题走 removeAttribute（不设属性 → 覆盖规则一条都不生效）');
         c.ok(/tpl === 'elaina'/.test(js), '默认主题 elaina 被显式识别（不设 data-theme-template）');
         // 内置模板（4 预设 + 自定义）
-        const ids = [...js.matchAll(/\{\s*id:\s*'(\w+)',\s*name:/g)].map((m) => m[1]);
-        // ★★ 2026-10：从 7 套回到 5 套 —— 「星屑之日」已随生日模块**移出宿主**，
-        //   改由插件 mods/birthday 在启用时用 `host.theme()` 注册（见 theme.js 的
-        //   MOD_TEMPLATES / registerTemplate）。所以它不再是"内置模板"：不装/不启用
-        //   那个插件时，主题选择器里就没有它。本次检查只数**内置**的那几套。
+        // ★ 只从 TEMPLATES 数组里取：别处出现同样形状的 { id, name } 条目时，
+        //   全局扫会把它们混进模板清单（数出比实际多）。
+        const tplBlock = (js.match(/const TEMPLATES = \[[\s\S]*?\n\s*\];/) || [''])[0];
+        c.ok(tplBlock.length > 0, '能取到 TEMPLATES 数组');
+        const ids = [...tplBlock.matchAll(/\{\s*id:\s*'(\w+)',\s*name:/g)].map((m) => m[1]);
+        // 「星屑之日」由插件 mods/birthday 在启用时用 `host.theme()` 注册，
+        // 不属于内置模板；这里只数**内置**的那几套。
         c.ok(ids.length === 5, '定义了 5 套内置模板（4 预设 + 自定义），实得 ' + ids.length, ids.join(','));
-        for (const id of ['elaina', 'ios', 'claude', 'sakura', 'custom']) {
+        for (const id of ['elaina', 'mist', 'amber', 'plum', 'custom']) {
             c.ok(ids.includes(id), '含模板 ' + id);
         }
+        // 旧模板 id 不再存在：存量用户存着它们时会回落到默认主题。
+        for (const id of ['ios', 'claude', 'sakura']) {
+            c.ok(!ids.includes(id), '旧模板 id 已移除：' + id);
+        }
+        // 深色只有一套中性色：基调用一个属性切换多套，等于"设置里选了没生效"
+        // 的另一种形态 —— 属性还在写、脚本没了，所以这里钉住它不回来。
+        c.ok(!/data-dark-base/.test(js), 'theme.js 不再写 data-dark-base（深色只有一套中性色）');
+        c.ok(!/DARK_BASES/.test(js), 'theme.js 不再定义 DARK_BASES');
     }
 
     console.log('\n=== 3. 覆盖权重（踩过的坑）===');
@@ -652,28 +662,46 @@ async function caseTheme(c) {
             c.ok(css.includes(v + ':'), '★ 覆盖 ' + v);
         }
 
-        // ★★★ 颜色值必须与上游一致（第二版是"自己猜颜色"，导致看着难受）
+        // ★★★ 三套浅色主题的关键色必须与设计稿一致
         //
-        // 上游那套配色是成体系调过的：主色柔和（#7aa7f0 而非饱和的 #007aff）、
-        // 正文不是纯黑（#253040）、卡片底带冷调（#f7f9fc 而非纯白）。
-        // 这些细节决定"看着舒不舒服"，所以逐个钉住。
-        const upstreamColors = [
-            ['#7aa7f0', '主按钮（上游 --pixso-green，柔和蓝）'],
-            ['#4f7cf0', '主按钮深色（--pixso-green-dark）'],
-            ['#dce2ea', '页面外框（--pixso-canvas）'],
-            ['#253040', '正文（--pixso-brown，不是纯黑）'],
-            ['#566070', '次要文字（--pixso-brown-soft）'],
-            ['#f7f9fc', '卡片底（--pixso-cream，带冷调不是纯白）'],
-            ['#e9eef5', '面板底（--pixso-panel）'],
-            ['#d5dce6', '边框（--pixso-line）'],
-            ['#0d1015', '深色页面底'],
-            ['#dfe6f0', '深色正文'],
-            ['#0a84ff', '深色主色'],
-            ['#1c232d', '深色侧栏竖栏渐变起'],
+        // 这些值是成体系定下来的：画布带色相、卡片留暖白、正文接近深墨，
+        // 主色与强调色一冷一暖。逐个钉住，防止以后"顺手调一下"把关系破坏掉。
+        const themeColors = [
+            ['#9fb0c7', '雾蓝 · 画布'],
+            ['#627ea8', '雾蓝 · 主色'],
+            ['#f7f8f9', '雾蓝 · 卡片底'],
+            ['#2f3a48', '雾蓝 · 正文'],
+            ['#c2a084', '琥珀 · 画布'],
+            ['#a4713c', '琥珀 · 主色'],
+            ['#faf5ed', '琥珀 · 卡片底'],
+            ['#3d2b1f', '琥珀 · 正文'],
+            ['#b2a0c2', '暮紫 · 画布'],
+            ['#86699f', '暮紫 · 主色'],
+            ['#faf6fb', '暮紫 · 卡片底'],
+            ['#362a41', '暮紫 · 正文'],
         ];
-        for (const [hex, label] of upstreamColors) {
-            c.ok(css.includes(hex), '★ 配色照抄上游：' + label + ' = ' + hex);
+        for (const [hex, label] of themeColors) {
+            c.ok(css.includes(hex), '★ 主题配色：' + label + ' = ' + hex);
         }
+
+        // ★ 深色唯一一套中性色的关键值
+        const darkNeutralColors = [
+            ['#12100d', '画布'],
+            ['#191612', '外壳'],
+            ['#211d18', '面板'],
+            ['#242019', '卡片底'],
+            ['#f1ece3', '正文'],
+        ];
+        for (const [hex, label] of darkNeutralColors) {
+            c.ok(css.includes(hex), '★ 深色中性色：' + label + ' = ' + hex);
+        }
+        // 已移除的两套基调不该留下残影
+        c.ok(!/data-dark-base/.test(css), 'themes.css 不再有 data-dark-base 选择器');
+
+        // ★ 深色不再有写死的冷蓝：气泡藏青渐变、文字高亮蓝都不该回来
+        c.ok(!/#0a84ff/i.test(css), '★ 深色不再写死 iOS 蓝 #0a84ff');
+        c.ok(!/#5ca8ff/i.test(css), '★ 深色文字高亮不再写死 #5ca8ff');
+        c.ok(!/rgba\(\s*30\s*,\s*46\s*,\s*80/.test(css), '★ 深色 AI 气泡不再写死藏青渐变');
 
         // ★ 侧栏竖栏不能复用文字色变量
         //   宿主里 #sidebar::before 用的是 var(--pixso-brown)（文字色），
@@ -722,8 +750,8 @@ async function caseTheme(c) {
 
         // 深色与模板正交
         c.ok(/html\[data-theme="dark"\]/.test(css), '有 html[data-theme="dark"] 规则');
-        c.ok(/html\[data-theme-template="ios"\]/.test(css) && /html\[data-theme-template="sakura"\]/.test(css),
-            '四套液态玻璃模板都有变量定义');
+        c.ok(/html\[data-theme-template="mist"\]/.test(css) && /html\[data-theme-template="plum"\]/.test(css),
+            '三套浅色模板都有变量定义');
 
         // ========================================================================
         // ★★ 主题变量完整性 + 硬编码白色防护（2026-10 用户报"深色下顶栏还是白的"）
@@ -759,11 +787,15 @@ async function caseTheme(c) {
         for (const v of ['--pixso-canvas', '--pixso-cream', '--pixso-surface', '--pixso-panel', '--pixso-panel-soft', '--pixso-line']) {
             c.ok(darkBlock.includes(v + ':'), '★ 深色块覆盖了 ' + v);
         }
+        // ★ 深色中性色只有这一块：所有"面"与文字色阶都必须在这里给齐
+        for (const v of ['--tpl-rail-1', '--tpl-rail-2', '--tpl-text-1', '--tpl-text-6', '--tpl-primary-deeper', '--lg-bg']) {
+            c.ok(darkBlock.includes(v + ':'), '★ 深色块覆盖了 ' + v);
+        }
 
         // ② 每套主题模板块也要覆盖"面"级变量（否则切主题后外壳仍是上个主题的白）
         //   ★ 2026-10：`stardust` 已随生日插件移出宿主（见第 2 段的说明），
         //     所以这里只查还留在 themes.css 里的这几套。
-        for (const tpl of ['ios', 'claude', 'sakura']) {
+        for (const tpl of ['mist', 'amber', 'plum']) {
             const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
             c.ok(block.length > 0, `存在主题块 ${tpl}`);
             c.ok(block.includes('--pixso-surface:'), `★ 主题 ${tpl} 定义了 --pixso-surface（漏了会导致外壳不跟随主题）`);
@@ -774,7 +806,7 @@ async function caseTheme(c) {
         //   踩坑经过：TTS 设置里加了一段警示文案（用 `style="color:#b45309"`，
         //   该写法由 #settingsPanel 的规则映射到 `var(--pixso-warn)`）。
         //   浏览器实测发现它在**默认主题**下是深棕 #4c3123、而且**深色下也不变色** ——
-        //   因为 `--pixso-warn` 只在 ios/claude/sakura 三个模板块与深色块里定义了，
+        //   因为 `--pixso-warn` 只在三套浅色模板块与深色块里定义了，
         //   **:root（也就是默认的 elaina 外观）漏了它**。
         //   取不到值时 `var()` 落回继承色，"警示"语义直接丢掉（看起来跟普通说明一样）。
         //
@@ -804,7 +836,7 @@ async function caseTheme(c) {
                     `★★ :root 定义了 ${v}（漏了 → 默认主题下警示文案落回继承色、深色也不提亮）`);
             }
             // 每个模板块 + 深色块也都要有（与面级变量同样的要求）
-            for (const tpl of ['ios', 'claude', 'sakura']) {
+            for (const tpl of ['mist', 'amber', 'plum']) {
                 const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
                 c.ok(block.includes('--pixso-warn:'), `★ 主题 ${tpl} 定义了 --pixso-warn`);
             }
@@ -854,7 +886,7 @@ async function caseTheme(c) {
         c.ok(/--pixso-warn-bg:/.test(css) && /--pixso-warn-line:/.test(css),
             '★ 警示色有配套的底与描边变量');
         // 每套内置主题 + 深色块都要有警示色，否则某套主题下会退回 :root 的浅色值
-        for (const tpl of ['ios', 'claude', 'sakura']) {
+        for (const tpl of ['mist', 'amber', 'plum']) {
             const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
             c.ok(block.includes('--pixso-warn:'), `★ 主题 ${tpl} 定义了 --pixso-warn`);
         }
@@ -1227,7 +1259,8 @@ async function caseTheme(c) {
 
     console.log('\n=== 4. 同步（APK 端要用）===');
     {
-        const sync = readFileSync(path.join(ROOT, 'scripts', 'sync-web.mjs'), 'utf8');
+        // 打包工具住在 dist/Android/scripts/（与其它 Android 打包内容放在一起）
+        const sync = readFileSync(path.join(ROOT, 'dist', 'Android', 'scripts', 'sync-web.mjs'), 'utf8');
         c.ok(/collectCssFiles/.test(sync), '★ sync-web.mjs 会同步 web/css/（否则 APK 里主题切换无效）');
         c.ok(/theme\.js/.test(sync) || /collectJsFiles/.test(sync),
             'js/ 是自动发现的，theme.js 会被带上');

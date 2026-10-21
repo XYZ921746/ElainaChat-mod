@@ -56,6 +56,8 @@ async function caseStreamAndCot(c) {
     const providers = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js'), 'utf8');
     const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
     const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
+    // 6h 用例要看 doAgentCommand / doAgentFile 的确认分支（等待提示与计时重置）
+    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
     // ★★ 2026-10：本地中继（含它那套流式超时/透传行为）搬进了 server/relay.mjs，
     //   成为电脑端与手机端**共用**的一份实现。所以下面第 6c 节要在新文件里找，
     //   而不是在 serve.mjs 里 —— 搬走之后留了一份转发壳，细节全在那边。
@@ -241,6 +243,60 @@ async function caseStreamAndCot(c) {
             const r = await CS.consumeStream(sseResponse(sse), 'openai-responses');
             c.ok(r.text === '答复' && r.reasoning === '摘要', 'openai-responses：摘要与正文分流正确');
         }
+        // 工具调用（function calling）：参数是**跨块片段**，必须按 index 累积后再 parse
+        {
+            const ev = (delta, finish) => 'data: ' + JSON.stringify({
+                choices: [finish ? { delta, finish_reason: finish } : { delta }],
+            }) + '\n\n';
+            const sse = ev({ content: '我去写。' })
+                + ev({ tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'save_file', arguments: '' } }] })
+                + ev({ tool_calls: [{ index: 0, function: { arguments: '{"path": "D:\\\\a.txt", ' } }] })
+                + ev({ tool_calls: [{ index: 0, function: { arguments: '"content": "hi"}' } }] })
+                + ev({}, 'tool_calls');
+            const r = await CS.consumeStream(sseResponse(sse), 'openai-compatible');
+            const msg = r.payload?.choices?.[0]?.message || {};
+            c.ok(r.text === '我去写。', '工具调用不影响正文增量（正文照常回回调）');
+            c.ok(r.finishReason === 'tool_calls', '停止原因被带下来（finish_reason=tool_calls）', r.finishReason);
+            c.ok(Array.isArray(msg.tool_calls) && msg.tool_calls.length === 1,
+                '合成结果里带 tool_calls（与非流式响应同构）', JSON.stringify(msg.tool_calls));
+            const call = msg.tool_calls?.[0] || {};
+            c.ok(call.function?.name === 'save_file', '工具名从首片累积得到', call.function?.name);
+            let args = null;
+            try { args = JSON.parse(call.function?.arguments || '{}'); } catch { args = null; }
+            c.ok(Boolean(args) && args.path === 'D:\\a.txt' && args.content === 'hi',
+                '★ 跨块参数被拼成合法 JSON（arguments 逐片累积，不能逐片解析）', call.function?.arguments);
+            c.ok(r.toolCalls?.length === 1 && r.toolCalls[0].function?.name === 'save_file',
+                'consumeStream 另外单独返回解析好的调用（收尾那步要用）');
+        }
+        // 同时多路调用：片段交错时按 index 各归各路
+        {
+            const ev = (delta) => 'data: ' + JSON.stringify({ choices: [{ delta }] }) + '\n\n';
+            const sse = ev({ tool_calls: [{ index: 0, id: 'a', function: { name: 'list_files', arguments: '{}' } }] })
+                + ev({ tool_calls: [{ index: 1, id: 'b', function: { name: 'read_file', arguments: '{"path":' } }] })
+                + ev({ tool_calls: [{ index: 0, function: { arguments: '' } }] })
+                + ev({ tool_calls: [{ index: 1, function: { arguments: '"D:\\\\b.txt"}' } }] });
+            const r = await CS.consumeStream(sseResponse(sse), 'openai-compatible');
+            const calls = r.payload?.choices?.[0]?.message?.tool_calls || [];
+            c.ok(calls.length === 2 && calls[0].function.name === 'list_files' && calls[1].function.name === 'read_file',
+                '多路调用按 index 各归各路（交错片段不串味）', JSON.stringify(calls.map((x) => x.function.name)));
+            let p2 = null;
+            try { p2 = JSON.parse(calls[1]?.function?.arguments || '{}'); } catch { p2 = null; }
+            c.ok(Boolean(p2) && p2.path === 'D:\\b.txt', '第二路参数片段同样拼完整', calls[1]?.function?.arguments);
+        }
+        // Anthropic 的工具调用：id/name 在 content_block_start，参数走 input_json_delta
+        {
+            const ev = (payload) => 'data: ' + JSON.stringify(payload) + '\n\n';
+            const sse = ev({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'toolu_1', name: 'save_file' } })
+                + ev({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"content":' } })
+                + ev({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '"hi"}' } })
+                + ev({ type: 'message_delta', delta: { stop_reason: 'tool_use' } });
+            const r = await CS.consumeStream(sseResponse(sse), 'anthropic');
+            const block = (r.payload?.content || []).find((b) => b.type === 'tool_use');
+            c.ok(Boolean(block) && block.name === 'save_file', 'anthropic：合成 tool_use block', JSON.stringify(block));
+            c.ok(Boolean(block && block.input && block.input.content === 'hi'), 'anthropic：参数片段拼成 input 对象', JSON.stringify(block?.input));
+            c.ok(r.toolCalls?.length === 1 && r.toolCalls[0].id === 'toolu_1',
+                'anthropic：调用同样被单独返回（两条协议共用同一份累积与拼装）');
+        }
         // 多字节字符被网络分块切断
         {
             const full = 'data: {"choices":[{"delta":{"content":"中文"}}]}\n\n';
@@ -402,6 +458,36 @@ async function caseStreamAndCot(c) {
     c.ok(/scheduleTurnProcessRender/.test(ui) && /requestAnimationFrame/.test(ui),
         '★ 流式增量按帧合并渲染（逐 token 重建 DOM 会明显卡顿）');
 
+    // ==================================================== 5d. 时间线外观（参考 DSH 的步骤流）
+    //
+    // 用户要的是"思考、工具调用、结果在同一条流里，一步步往下走"，而不是一堆并列卡片。
+    // 这里钉住让那个观感成立的三件事 —— 它们都属于"改样式时容易被顺手删掉"的部分。
+    console.log('\n=== 5d. 时间线外观 ===');
+    {
+        c.ok(/const dur = processDurationLabel\(ms\)/.test(ui),
+            '工具行带耗时（哪一步慢是用户唯一能判断"是不是卡住"的信息）');
+        c.ok(/process-row-duration/.test(ui), '耗时有独立元素渲染出来');
+        // 耗时阈值必须是 100ms 级：Agent 单步常在几十~几百毫秒，
+        // 用"1 秒"当门槛等于绝大多数步骤都不显示 —— 那这个字段就白加了。
+        const durFn = (ui.split('function processDurationLabel')[1] || '').split('\nfunction ')[0];
+        c.ok(/n < 100\)/.test(durFn) && !/n < 1000\) return ''/.test(durFn),
+            '★ 耗时阈值是 100ms（不是 1 秒，否则多数步骤都不显示）');
+        // 参数拆成键值：整行 JSON 会把 path / command 埋进花括号里
+        c.ok(/function processArgEntries/.test(ui) && /function processArgsHtml/.test(ui),
+            '★ 参数拆成键值行（path / command 这类值才浮得出来）');
+        c.ok(/process-arg-key/.test(ui) && /process-arg-value/.test(ui),
+            '键与值分别有独立元素（值才能对齐成一列）');
+        c.ok(/process-arg-block/.test(ui), '长值（文件内容/命令）单独占行');
+        // 渲染侧要真的接上这三个新字段，否则函数写了也白写
+        c.ok(/ms: t\.ms/.test(ui), '工具行把 ms 传给渲染');
+        c.ok(/processArgsHtml\(t\.args\)/.test(ui), '工具行参数走键值渲染（不是整行 pre）');
+        // 竖线与节点由 CSS 画（结构上不需要额外容器）
+        c.ok(/\.turn-process::before/.test(indexHtml) || /\.turn-process\s*\{[\s\S]{0,200}?padding-left/.test(indexHtml),
+            '★ 过程区左侧画竖线（把各步串成一条流）');
+        c.ok(/\.process-row::before/.test(indexHtml), '★ 每行有节点圆点（钉在竖线上）');
+        c.ok(/data-kind="think"\]::before/.test(indexHtml), '思考行的节点空心/虚线（与工具行区分）');
+    }
+
     // ============================================================ 6. 流式正文预览
     console.log('\n=== 6. 流式正文预览 ===');
     c.ok(/function renderStreamingReplyPreview/.test(voice), '有流式正文预览渲染');
@@ -410,11 +496,24 @@ async function caseStreamAndCot(c) {
     c.ok(/chunk\.kind === 'reasoning'/.test(voice), '思考增量归到思考行');
     c.ok(/beginTurnTrace\(message\.id\)/.test(voice), '每轮回复开启一个回合记录');
     c.ok(/finishTurnTrace\(\)/.test(voice), '回复完成时收尾回合记录');
-    // ★ 最终内容必须走原来的完整路径（标签剥离、任务抽取要作用在完整文本上）
-    c.ok(/const rawResponse = await callAI\(message\.text, aiRequestOptions\)/.test(voice),
+    // ★ 最终内容必须走原来的完整路径（标签剥离、任务抽取要作用在完整文本上）。
+    //   判据放宽到"callAI 的返回值就是正文、且仍带着那套请求选项"—— 工具通道会在这组
+    //   选项上再挂 tools/replyInfo（见 voice.js），但"正文来自完整返回值"这一点没变。
+    //   判据要锚定**不变量**（正文来自 callAI 的完整返回值），而不是某个变量名：
+    //   agent 相关选项是在 aiRequestOptions 之上叠加的（变量名会变），
+    //   改名不该让这条断言误红。赋值语句不带 const：请求外面包着"可重试失败自动
+    //   再试一次"的循环，正文来自**最后一次成功**的 callAI 返回值。
+    c.ok(/rawResponse = await callAI\(message\.text,\s*requestOpts\)/.test(voice),
         '★ 仍以 callAI 的**完整**返回值作为正文来源（流式只负责先让用户看见）');
+    // requestOpts 必须真的由 aiRequestOptions 派生 —— 否则就是另起了一套请求选项，
+    // 思考/语音/中断器等设置会被悄悄丢掉。
+    c.ok(/const requestOpts = Object\.assign\(\{\}, aiRequestOptions/.test(voice),
+        '★ requestOpts 由 aiRequestOptions 派生（不另起一套请求选项）');
     {
-        const fin = voice.slice(voice.indexOf('} finally {', voice.indexOf('const rawResponse = await callAI')));
+        // 锚定 handleUserInput 自己的 finally：主请求外面包了重试循环后，
+        // "await callAI" 不再是定位 finally 的可靠坐标 —— 函数名才是。
+        const fnStart = voice.indexOf('async function handleUserInput');
+        const fin = voice.slice(voice.indexOf('} finally {', fnStart));
         c.ok(/removeStreamingReplyPreview\(\)/.test(fin.slice(0, 400)),
             '★ finally 里收掉预览（失败/停止路径也要清干净，否则留下幽灵气泡）');
     }
@@ -445,6 +544,16 @@ async function caseStreamAndCot(c) {
         c.ok(/pass1OnDelta/.test(body) && /chunk\.kind === 'reasoning'/.test(body),
             '★★ 第一段仍把**思考**增量透出去（只放 reasoning，不放 text）');
         c.ok(/phase: 1/.test(body), '★ 第一段的思考带 phase=1 标记（与第二段分开，不混成一段）');
+        // ── 第一段必须带上工具通道 ──────────────────────────────────────────
+        // 多步任务「要不要动手」的决策发生在第一段（它拿着完整上下文与用户意图）。
+        // 缺了这对透传，开着第三人称时模型收不到工具声明 —— 工具通道整条失效，
+        // 只剩正文标签兜底，用户看到的就是"AI 不调用工具"。
+        {
+            const pass1Call = body.slice(body.indexOf('const pass1 = await callChatAPI'));
+            const p1seg = pass1Call.slice(0, pass1Call.indexOf('const pass1Text'));
+            c.ok(/tools: options\.tools \|\| null/.test(p1seg) && /replyInfo: options\.replyInfo \|\| null/.test(p1seg),
+                '★★ 第一段（GM）透传 tools/replyInfo（第三人称模式下工具通道的唯一入口）');
+        }
         c.ok(/return await generateThirdPersonReply\(text, options\)/.test(dataSrc),
             'callAI 在第三人称开启时提前 return（所以这条路上必须自己接好 onDelta）');
         // ── 第二段：正文与思考都照收 ──
@@ -603,8 +712,195 @@ async function caseStreamAndCot(c) {
             '★ 客户端区分普通/思考两档超时（思考模式首字延迟常超 2 分钟）');
         c.ok(/opts\.thinking \? CHAT_TIMEOUT_THINKING_MS : CHAT_TIMEOUT_DEFAULT_MS/.test(core),
             '★ callChatAPI 按 thinking 开关选超时预算');
+
+        // ==================================================== 6d. 退回非流式后思考不能丢
+        //
+        // ★★ 这是"思考内容时有时无"的根因（真实模型实测确认）。
+        //
+        //    requestChatJson 在"流式一个字都没吐就失败"时会**静默退回非流式**。
+        //    那条路上 onDelta 再也不会触发 —— 思考明明就在响应体里
+        //    （openai-compatible 的 reasoning_content / anthropic 的 thinking block /
+        //    responses 的 reasoning item），却没有任何东西把它交给时间线。
+        //    用户看到的是"这一轮没有思考"，而真实原因是换了条传输路径，
+        //    界面上完全没有线索。
+        //
+        //    实测同一份请求：流式拿到 1398 字思考；非流式响应体里有 2437 字，
+        //    但只返回正文的写法会让那 2437 字被直接丢弃。
+        console.log('\n=== 6d. 退回非流式时思考不丢 ===');
+        {
+            // ① 兜底通道存在
+            c.ok(/opts\.replyInfo\.reasoning = ''/.test(core),
+                '★★ replyInfo 有 reasoning 兜底字段（非流式响应的思考往这里放）');
+            // ② 三个 provider 都要回填，漏一个就有一家会"没有思考"
+            const providersSrc = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js'), 'utf8');
+            const filled = (providersSrc.match(/reportReplyInfo\(opts, \{[^}]*reasoning[^}]*\}\)/g) || []).length;
+            c.ok(filled >= 3, '★★ 三个 provider 都把思考回填进 replyInfo（找到 ' + filled + ' 处）');
+            // ③ 收尾时补送 —— 且**只在流里一条都没收到时**补（否则思考会出现两遍）
+            c.ok(/let streamedReasoningSeen = false/.test(voice),
+                'voice.js 记录"流里有没有收到过思考"');
+            c.ok(/if \(!streamedReasoningSeen\) \{[\s\S]{0,220}?appendTurnReasoning\(fallbackReasoning/.test(voice),
+                '★★ 没收到流式思考时，用响应体里的补进时间线（否则退回一次就丢一次）');
+            c.ok(/if \(fallbackReasoning\) appendTurnReasoning/.test(voice),
+                '空思考不补（不产生空思考段）');
+            // ④ 容器必须独立于工具清单：关掉 Agent 权限时 agentToolOptions() 返回 null，
+            //    而思考跟工具无关，不该被连带废掉。
+            c.ok(/const replyInfo = \(agentToolOpt && agentToolOpt\.replyInfo\) \|\| \{\}/.test(voice),
+                '★★ replyInfo 容器独立于工具清单（关 Agent 权限也照样有思考）');
+        }
         c.ok(/opts\.timeoutMs/.test(core) && /Number\.isFinite\(opts\.timeoutMs\)/.test(core),
             '★ 调用方显式传的 timeoutMs 优先（不被默认值覆盖）');
+    }
+
+    // ============================================================ 6e. 超时要有下文：提示 + 重试，不许静默
+    //
+    // ★★ 三条真实故障（用户报"没有模型超时和重试的提示"）：
+    //    ⓐ fetchWithTimeout 超时 → AbortError → handleUserInput 把**任何** AbortError
+    //       按"用户点了停止"安静收尾 —— 用户等 2~5 分钟后一个提示都没有。
+    //       修法：超时改抛 REQUEST_TIMEOUT（可重试），用户停止仍抛 AbortError。
+    //    ⓑ 流式拿到 headers 之后、逐块读流的间隙卡死（上游挂起/连接半断），
+    //       fetch 的超时管不到这一段 —— 界面永远转圈。修法：readSse 按块间空闲计时。
+    //    ⓒ 主聊天路径没有任何重试：一次瞬时故障（超时/网络抖动/限流）直接变成
+    //       用户看得见的失败。修法：可重试错误自动再试一次，且把状态写在思考气泡上。
+    console.log('\n=== 6e. 超时/重试的可见性（不许静默）===');
+    {
+        // ⓐ 超时与"用户停止"必须分得开
+        const ftw = voice.slice(voice.indexOf('async function fetchWithTimeout'), voice.indexOf('async function', voice.indexOf('async function fetchWithTimeout') + 10));
+        c.ok(/let timedOut = false/.test(ftw) && /timedOut = true/.test(ftw),
+            '★ fetchWithTimeout 记录"是内部计时器触发"（与外部 signal 中止区分）');
+        c.ok(/new ClientApiError\('REQUEST_TIMEOUT'/.test(ftw),
+            '★★ 超时抛 REQUEST_TIMEOUT（不再伪装成 AbortError 被当作用户停止静默吞掉）');
+        c.ok(/error\?\.code === 'REQUEST_TIMEOUT'\) throw error/.test(core),
+            '★★ requestChatJson 对超时不再"退回非流式"（退回只会让用户把同一个等待再经历一遍）');
+        // ⓑ 读流阶段的空闲超时
+        c.ok(/function readChunkWithIdleTimeout/.test(streamSrc),
+            '★ 流式读取有按块间空闲计时的包装（fetch 超时管不到拿到 headers 之后）');
+        c.ok(/await readChunkWithIdleTimeout\(reader, idleTimeoutMs\)/.test(streamSrc),
+            '★ readSse 的每个读取都经空闲超时包装（每块数据自动续期）');
+        c.ok(/async function consumeStream\(response, format, onDelta, idleTimeoutMs = 0\)/.test(streamSrc)
+            && /\}, idleTimeoutMs\);/.test(streamSrc),
+            '★ consumeStream 把空闲上限透传给 readSse');
+        c.ok(/consumeStream\(response, format, onDelta, timeoutMs\)/.test(core),
+            '★ streamJsonFromDevice 把客户端超时预算传进读流阶段');
+        // ⓒ 主聊天路径的自动重试
+        c.ok(/RETRYABLE_CHAT_CODES/.test(voice),
+            '★ 有"哪些失败值得再试一次"的白名单（超时/网络/限流/上游 5xx）');
+        const retryLoop = voice.slice(voice.indexOf('for (let attempt = 0; ; attempt++)'), voice.indexOf('const parsedReply'));
+        c.ok(/chatError\?\.name === 'AbortError' \|\| replyAbort\.signal\.aborted\) throw chatError/.test(retryLoop),
+            '★★ 用户停止优先于重试（按了停止绝不自己再发一次）');
+        c.ok(/updateThinkingMessageText\(/.test(retryLoop),
+            '★★ 重试前把状态写进思考气泡（静默重试看起来像卡死）');
+        c.ok(/streamedReasoningSeen = false;[\s\S]{0,120}resetStreamingReplyPreview\(\)/.test(retryLoop),
+            '★ 重试是全新请求：上一次的半截流式状态清零（否则新旧回复拼出重复内容）');
+        c.ok(/function updateThinkingMessageText/.test(ui),
+            '★ ui 层实现 updateThinkingMessageText（思考气泡文案可更新）');
+    }
+
+    // ============================================================ 6f. 流式期间过程区的展开交互
+    //
+    // ★★ 用户报"思考内容经常打不开"。根因：流式期间过程区每帧 innerHTML 整体重建，
+    //    用户按下到松开之间行元素已被替换 —— 浏览器只在 mousedown/mouseup 目标
+    //    一致时才派发 click，绑在被替换元素上的内联 onclick 一个事件都收不到。
+    //    表现是"AI 正在思考/输出时怎么点都没反应"，流式一停又能点开。
+    //    修法：展开交互走容器上的 pointerup 委托（容器本身从不被重建）。
+    console.log('\n=== 6f. 流式期间过程区可展开（pointerup 委托）===');
+    {
+        c.ok(/function onTurnProcessPointerUp/.test(ui),
+            '★ 过程区有 pointerup 委托入口（click 在每帧重建下收不到）');
+        c.ok(/host\.addEventListener\('pointerup', onTurnProcessPointerUp\)/.test(ui),
+            '★★ 委托绑在不被重建的容器上（流式期间点击始终有效）');
+        c.ok(/pointerWired/.test(ui), '★ 委托只绑一次（防重复，本函数每帧都会走到）');
+        const rowHtml = ui.slice(ui.indexOf('function processRowHtml'), ui.indexOf('function onTurnProcessPointerUp'));
+        c.ok(!/onclick="toggleProcessRow/.test(rowHtml),
+            '★★ 过程行不再用内联 onclick（重建期间它一个事件都收不到）');
+        c.ok(/onkeydown="if\(event\.key==='Enter'\|\|event\.key===' '\)/.test(rowHtml),
+            '★ 键盘 Enter/Space 仍可展开（键盘事件即时派发，不受重建影响）');
+    }
+
+    // ============================================================ 6g. 流式期间的滚动不被打扰
+    //
+    // ★★ 用户实测两条（2026-10-19）：
+    //    ⓐ "生成过程中打开思考内容时无法滑动，一滑就立马回到最上面" ——
+    //       思考正文/结果 pre 有 max-height+overflow:auto，用户展开后往下看；
+    //       而 renderTurnProcess 每帧 innerHTML 重建，把这些元素的 scrollTop
+    //       静默重置为 0。修法：与 .is-open 快照同一思路，按行 key 快照滚动位置、
+    //       重建后回填。
+    //    ⓑ 同一场景下"往上翻聊天历史"也被打扰 —— 末尾无条件
+    //       scrollTop = scrollHeight 把每帧增量都变成一次"拽回底部"。
+    //       修法：stick-to-bottom（只有本来就贴底时才跟滚）。
+    console.log('\n=== 6g. 流式期间的滚动（行内位置保留 + 贴底才跟随）===');
+    {
+        c.ok(/const scrollMemory = new Map\(\)/.test(ui),
+            '★★ 重建前快照各行详情的滚动位置（否则一滑就被弹回最上面）');
+        c.ok(/scrollMemory\.set\(k, tops\)/.test(ui) && /scrollers\[i\]\.scrollTop = top/.test(ui),
+            '★★ 重建后按行 key 回填滚动位置（行没了就跳过）');
+        c.ok(/distance < 80/.test(ui) && /hist\.scrollTop = hist\.scrollHeight/.test(ui),
+            '★★ 聊天区只在距底 < 80px 时才自动滚（翻历史不再被拽回底部）');
+    }
+
+    // ============================================================ 6h. 确认等待不算耗时
+    //
+    // ★★ 用户实测："agent 操作时间过长"（一条删除命令显示 20s）。构成其实是：
+    //    服务端正确拒绝（needApproval）→ 用户在弹窗上犹豫 ~17 秒 → 真执行 ~2.7 秒。
+    //    耗时从第一次发请求起算，把"等用户做决定"也算了进去 —— 正常的确认流程
+    //    被显示成性能问题。修法：等待期在过程行上说明"正在等用户确认"；
+    //    用户点了允许那一刻重置计时。
+    console.log('\n=== 6h. 确认等待不算耗时（重置计时 + 等待可见）===');
+    {
+        c.ok(/patch\.resetTimer === true/.test(ui) && /item\.startedAt = Date\.now\(\)/.test(ui),
+            '★★ updateTurnTool 支持 resetTimer（用户犹豫的时间不是执行耗时）');
+        const cmdSeg = agentSrc.slice(agentSrc.indexOf('async function doAgentCommand'));
+        c.ok(/正在等用户确认/.test(cmdSeg),
+            '★ 命令确认等待期在过程行上说明（分得清"卡住"与"在等我决定"）');
+        c.ok(/resetTimer: true/.test(cmdSeg),
+            '★ 用户允许后重置计时（等待 17 秒不再显示成"命令跑了 20 秒"）');
+        const fileSeg = agentSrc.slice(agentSrc.indexOf('async function doAgentFile'), agentSrc.indexOf('async function doAgentCommand'));
+        c.ok((fileSeg.match(/正在等用户确认/g) || []).length >= 3,
+            '★ 文件写入的三个确认分支（覆盖/新建/删除）同样有等待提示');
+        c.ok((fileSeg.match(/resetTimer: true/g) || []).length >= 3,
+            '★ 三个确认分支同样在用户允许后重置计时');
+    }
+
+    // ============================================================ 6i. 过程区增量渲染（修"思考越长越卡"）
+    //
+    // ★★ 用户实测："思考内容过长（内部滚动条出现后）就开始卡顿"。
+    //    根因：renderTurnProcess 每帧 `host.innerHTML = 全部内容` ——
+    //    对全部思考文本做 6 趟正则转义 + 整块 HTML 解析 + 全部节点重建，
+    //    每帧成本 O(思考总长)，越长越卡（rAF 合并只压频率，不降单帧成本）。
+    //    修法：条目描述符（key + O(1) 版本号 + 惰性 build）+ 两路应用：
+    //      · 快路径：版本没变跳过；思考行文本变长 → appendData(增量)，
+    //        元素不动（展开态/滚动天然保留）；其它变化只换那一行；
+    //      · 慢路径（首次/行集变化）：整体重建（原行为，一次性成本）。
+    //    功能验证（jsdom，跑真实 ui.js）：追加增量后行节点身份不变、
+    //    展开态保留、工具行更新不波及思考行、无变化渲染零触碰 —— 全过。
+    console.log('\n=== 6i. 过程区增量渲染（每帧成本 O(增量) 而不是 O(总长)）===');
+    {
+        c.ok(/function applyTurnProcessEntries\(/.test(ui),
+            '★★ 有独立的应用函数（描述符 → DOM，快/慢两条路径）');
+        c.ok(/prev\.versions\[i\] === entry\.version/.test(ui),
+            '★★ 版本没变的行直接跳过（O(1) 比对，不重建不比对 HTML）');
+        c.ok(/node\.appendData\(entry\.text\.slice\(node\.data\.length\)\)/.test(ui)
+            && /entry\.text\.startsWith\(node\.data\)/.test(ui),
+            '★★ 思考行文本变长走 appendData(增量)（元素不动，成本与总长无关）');
+        c.ok(/host\.insertAdjacentHTML\('beforeend', entry\.build\(\)\)/.test(ui),
+            '★ 新行追加到末尾（时间线只增长）');
+        c.ok(/old\.outerHTML = entry\.build\(\)/.test(ui),
+            '★ 单行变化只换那一行（换前快照展开态与行内滚动）');
+        // 版本号的来源：工具行靠 rev 计数，思考行靠 状态+长度
+        c.ok(/rev = \(item\.rev \|\| 0\) \+ 1/.test(ui),
+            '★ updateTurnTool 每次改动自增 rev（版本判据精确到每次更新）');
+        c.ok(/\(t\.rev \|\| 0\) \+/.test(ui) && /\(live \? 'running' : 'ok'\) \+ '#' \+ item\.text\.length/.test(ui),
+            '★ 工具行版本含 rev、思考行版本含状态+长度（都是 O(1)）');
+        // 数据与 DOM 严格同源：段首空白只在建段时去一次，显示层不再整体 trim
+        c.ok(/text: text\.replace\(\//.test(ui) && /escapeHtml\(item\.text\)/.test(ui),
+            '★ 思考正文不整体 trim（前缀对齐是 appendData 的硬前提）');
+        c.ok(/item\.text\.slice\(0, 200\)\.split\('/.test(ui),
+            '★ firstLine 只取有界前缀计算（旧写法 split 整段是每帧 O(n)）');
+        // 慢路径保留：整体重建仍带展开态/滚动快照回填（6g 那几条断言的就是它）
+        c.ok(/host\.innerHTML = entries\.map\(\(e\) => e\.build\(\)\)\.join\(''\)/.test(ui),
+            '★ 慢路径仍是整体重建（首次渲染 / 思考开关切换 / 行序不符时）');
+        // 贴底跟随抽出共用：过程区与流式正文预览两处调用同一份
+        c.ok(/function stickChatScrollToBottom\(\)/.test(ui) && /stickChatScrollToBottom\(\);/.test(voice),
+            '★ 贴底跟随抽出为共用函数（流式正文预览不再无条件滚底）');
     }
 
     // ============================================================ 7. 设置界面
