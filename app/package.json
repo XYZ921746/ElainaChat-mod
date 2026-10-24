@@ -1,0 +1,10 @@
+{
+  "name": "elainachat-mod",
+  "version": "2.0.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "main": "web/serve.mjs",
+  "scripts": {
+    "start": "node start.mjs"
+  }
+}

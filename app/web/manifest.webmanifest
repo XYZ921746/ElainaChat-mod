@@ -1,0 +1,35 @@
+{
+    "name": "ElainaChat Mod",
+    "short_name": "ElainaChat",
+    "description": "本地 AI 角色聊天 · 插件优先 · BYOK 直连",
+    "lang": "zh-CN",
+    "dir": "ltr",
+    "id": "/",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "orientation": "any",
+    "theme_color": "#9fb0c7",
+    "background_color": "#9fb0c7",
+    "categories": ["productivity", "entertainment"],
+    "icons": [
+        {
+            "src": "/icons/icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/icons/icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "any"
+        },
+        {
+            "src": "/icons/icon-512-maskable.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}

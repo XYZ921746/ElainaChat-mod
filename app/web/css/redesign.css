@@ -1,0 +1,1781 @@
+/* ============================================================================
+ * Redesign 视觉层
+ *
+ * 只覆盖外观，不改业务 DOM：所有规则挂在 html.rd 下，保证高于旧的
+ * Tailwind 工具类与内联样式；组件仍通过既有 id / class 与脚本通信。
+ * ========================================================================== */
+
+/* ---------- 全局与外壳 ---------- */
+
+html.rd {
+    color-scheme: light;
+    background: var(--rd-body-bg) !important;
+}
+
+html.rd[data-theme="dark"] { color-scheme: dark; }
+
+html.rd body {
+    background: var(--rd-body-bg) !important;
+    color: var(--rd-text);
+    font-family: var(--rd-font-ui);
+    min-height: 100%;
+}
+
+html.rd body::before,
+html.rd body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+}
+
+html.rd body::before {
+    background:
+        radial-gradient(760px 620px at 8% -8%, var(--rd-glow-1), transparent 62%),
+        radial-gradient(720px 620px at 104% 104%, var(--rd-glow-2), transparent 62%);
+}
+
+html.rd body::after {
+    background-image: var(--rd-stars);
+    opacity: var(--rd-stars-opacity);
+}
+
+html.rd ::selection { background: var(--rd-selection); }
+
+html.rd ::-webkit-scrollbar { width: 6px; height: 6px; }
+html.rd ::-webkit-scrollbar-track { background: transparent; }
+html.rd ::-webkit-scrollbar-thumb { background: var(--rd-scroll); border-radius: 99px; }
+html.rd { scrollbar-color: var(--rd-scroll) transparent; }
+
+html.rd #appShell {
+    position: relative;
+    z-index: 1;
+    background: var(--rd-frame-bg) !important;
+    border: 1px solid var(--rd-frame-border);
+    border-radius: var(--rd-frame-radius) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+    overflow: hidden;
+}
+
+html.rd h1,
+html.rd h2,
+html.rd h3,
+html.rd .page-secondary-title,
+html.rd .diary-group-title,
+html.rd #currentConversationTitle,
+html.rd #greetingText {
+    font-family: var(--rd-font-display);
+    letter-spacing: var(--rd-letter);
+}
+
+/* ---------- 通用工具类 → 主题 token ---------- */
+
+html.rd body .text-indigo-950,
+html.rd body .text-indigo-900,
+html.rd body .text-indigo-800 { color: var(--rd-text) !important; }
+html.rd body .text-indigo-700,
+html.rd body .text-indigo-600 { color: var(--rd-text-2) !important; }
+html.rd body .text-indigo-500,
+html.rd body .text-indigo-400,
+html.rd body .text-indigo-300,
+html.rd body .text-indigo-200 { color: var(--rd-text-3) !important; }
+html.rd body .text-pink-500,
+html.rd body .text-pink-600,
+html.rd body .text-pink-800,
+html.rd body .text-fuchsia-500,
+html.rd body .text-violet-500,
+html.rd body .text-violet-400 { color: var(--rd-accent) !important; }
+html.rd body .text-amber-500,
+html.rd body .text-amber-600 { color: var(--rd-warn) !important; }
+html.rd body .text-red-500,
+html.rd body .text-red-600 { color: var(--rd-danger) !important; }
+html.rd body .text-emerald-600 { color: var(--rd-ok) !important; }
+html.rd body .text-slate-500,
+html.rd body .text-slate-600 { color: var(--rd-text-2) !important; }
+
+html.rd body .bg-white\/40,
+html.rd body .bg-white\/45,
+html.rd body .bg-white\/50,
+html.rd body .bg-white\/55,
+html.rd body .bg-white\/60,
+html.rd body .bg-white\/70 { background-color: var(--rd-hover) !important; }
+html.rd body .bg-pink-50,
+html.rd body .bg-indigo-100 { background-color: var(--rd-accent-soft) !important; }
+html.rd body .bg-slate-100 { background-color: var(--rd-surface-2) !important; }
+html.rd body .bg-emerald-100 { background-color: var(--rd-ok-soft) !important; }
+html.rd body .bg-amber-100 { background-color: var(--rd-warn-bg) !important; }
+html.rd body .bg-red-50 { background-color: var(--rd-danger-soft) !important; }
+
+html.rd body .border-white\/50,
+html.rd body .border-white\/55,
+html.rd body .border-white\/60 { border-color: var(--rd-border) !important; }
+html.rd body .border-indigo-100 { border-color: var(--rd-border) !important; }
+
+html.rd .hover\:bg-white\/40:hover,
+html.rd .hover\:bg-white\/50:hover,
+html.rd .hover\:bg-white\/60:hover,
+html.rd .hover\:bg-white\/70:hover { background-color: var(--rd-hover) !important; }
+
+html.rd .bubble-user .text-indigo-950,
+html.rd .bubble-user .text-indigo-900,
+html.rd .bubble-user .text-indigo-800,
+html.rd .bubble-user .text-indigo-700,
+html.rd .bubble-user .text-indigo-600,
+html.rd .bubble-user .text-indigo-500,
+html.rd .bubble-user .text-indigo-400,
+html.rd .bubble-user .text-indigo-300,
+html.rd .bubble-user .text-pink-500,
+html.rd .bubble-user .text-amber-500 { color: var(--rd-user-text) !important; }
+
+html.rd .ai-voice-card,
+html.rd .ai-voice-player { color: var(--rd-text) !important; }
+
+/* ---------- 玻璃面板 / 按钮 / 输入 ---------- */
+
+html.rd .glass-panel {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+    backdrop-filter: var(--rd-blur);
+    -webkit-backdrop-filter: var(--rd-blur);
+}
+
+html.rd .glass-button {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    color: var(--rd-text-2) !important;
+    box-shadow: none !important;
+}
+
+html.rd .glass-button::before { display: none !important; }
+
+html.rd .btn-primary {
+    background: var(--rd-accent, #8a6a1f) !important;
+    border: 1px solid transparent !important;
+    color: var(--rd-accent-contrast) !important;
+    border-radius: var(--rd-radius-sm) !important;
+    box-shadow: var(--rd-btn-shadow) !important;
+}
+
+html.rd .btn-primary::before { display: none !important; }
+
+html.rd .btn-primary:hover {
+    filter: brightness(1.06);
+    transform: translateY(-1px);
+    background: var(--rd-accent) !important;
+}
+
+html.rd .btn-secondary {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    color: var(--rd-text-2) !important;
+    border-radius: var(--rd-radius-sm) !important;
+    box-shadow: none !important;
+}
+
+html.rd .btn-secondary:hover {
+    background: var(--rd-hover) !important;
+    color: var(--rd-text) !important;
+    border-color: var(--rd-border-strong) !important;
+}
+
+html.rd .modal-input,
+html.rd .modal-textarea,
+html.rd #settingsPanel select,
+html.rd #settingsPanel input[type="text"],
+html.rd #settingsPanel input[type="url"],
+html.rd #settingsPanel input[type="password"],
+html.rd #settingsPanel input[type="number"],
+html.rd #settingsPanel textarea {
+    background: var(--rd-input) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 9px !important;
+    color: var(--rd-text) !important;
+    box-shadow: none !important;
+}
+
+html.rd .modal-input::placeholder,
+html.rd .modal-textarea::placeholder { color: var(--rd-text-3) !important; }
+
+html.rd .modal-input:focus,
+html.rd .modal-textarea:focus,
+html.rd #settingsPanel select:focus,
+html.rd #settingsPanel input:focus,
+html.rd #settingsPanel textarea:focus {
+    border-color: var(--rd-accent) !important;
+    box-shadow: 0 0 0 3px var(--rd-accent-soft) !important;
+    outline: none !important;
+}
+
+html.rd input[type="checkbox"],
+html.rd input[type="radio"] { accent-color: var(--rd-accent); }
+
+html.rd .modal-overlay {
+    background: var(--rd-overlay) !important;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+html.rd .modal-panel,
+html.rd #settingsPanel {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border-strong) !important;
+    border-radius: var(--rd-radius-lg) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+    color: var(--rd-text);
+}
+
+html.rd[data-theme-template="glass"] .modal-panel,
+html.rd[data-theme-template="glass"] #settingsPanel { background: rgba(255, 255, 255, .94) !important; }
+html.rd[data-theme-template="glass"][data-theme="dark"] .modal-panel,
+html.rd[data-theme-template="glass"][data-theme="dark"] #settingsPanel { background: rgba(21, 29, 39, .96) !important; }
+html.rd[data-theme-template="mist"] .modal-panel,
+html.rd[data-theme-template="mist"] #settingsPanel { background: rgba(255, 255, 255, .94) !important; }
+html.rd[data-theme-template="mist"][data-theme="dark"] .modal-panel,
+html.rd[data-theme-template="mist"][data-theme="dark"] #settingsPanel { background: rgba(20, 35, 46, .96) !important; }
+
+html.rd .modal-label {
+    color: var(--rd-text) !important;
+    font-weight: 600;
+    letter-spacing: .01em;
+}
+
+/* ---------- 侧栏：竖向导航 + 对话列表 ---------- */
+
+html.rd #sidebar {
+    width: var(--rd-sidebar-w) !important;
+    flex: 0 0 var(--rd-sidebar-w) !important;
+    height: 100% !important;
+    background: var(--rd-list-bg) !important;
+    border: 0 !important;
+    border-right: 1px solid var(--rd-border) !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    overflow: hidden;
+}
+
+html.rd #sidebar::before { display: none !important; }
+
+html.rd #sidebar > div:not(.sidebar-rail) {
+    width: calc(100% - var(--rd-rail-w)) !important;
+    margin-left: var(--rd-rail-w) !important;
+    position: relative;
+    z-index: 1;
+}
+
+html.rd .sidebar-rail {
+    position: absolute !important;
+    inset: 0 auto 0 0 !important;
+    width: var(--rd-rail-w) !important;
+    height: 100% !important;
+    margin: 0 !important;
+    padding: 14px 0 12px !important;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: var(--rd-rail-bg) !important;
+    border-right: 1px solid var(--rd-rail-border, rgba(0, 0, 0, .12)) !important;
+    z-index: 3 !important;
+    overflow: visible;
+}
+
+html.rd .sidebar-rail-logo {
+    width: 40px !important;
+    height: 40px !important;
+    flex: 0 0 40px;
+    margin: 0 0 16px !important;
+    border-radius: 12px !important;
+    display: grid;
+    place-items: center;
+    color: var(--rd-accent-contrast) !important;
+    background: var(--rd-accent) !important;
+    box-shadow: var(--rd-btn-shadow);
+}
+
+html.rd .sidebar-rail-logo svg { width: 22px !important; height: 22px !important; }
+
+html.rd .sidebar-rail-btn {
+    width: 44px !important;
+    height: 44px !important;
+    flex: 0 0 44px;
+    border-radius: 12px !important;
+    color: var(--rd-rail-text) !important;
+    background: transparent !important;
+    position: relative;
+    transition: background .16s, color .16s;
+}
+
+html.rd .sidebar-rail-btn:hover {
+    color: var(--rd-rail-active-text) !important;
+    background: var(--rd-rail-active) !important;
+}
+
+html.rd .sidebar-rail-btn.active {
+    color: var(--rd-rail-active-text) !important;
+    background: var(--rd-rail-active) !important;
+}
+
+html.rd .sidebar-rail-btn.active::before {
+    content: "";
+    position: absolute;
+    left: -10px;
+    top: 13px;
+    width: 3px;
+    height: 18px;
+    border-radius: 0 3px 3px 0;
+    background: var(--rd-accent);
+}
+
+html.rd .sidebar-rail-btn svg { width: 20px !important; height: 20px !important; }
+html.rd .sidebar-rail-spacer { flex: 1 1 auto; min-height: 12px; }
+html.rd .rail-badge { background: var(--rd-accent) !important; color: var(--rd-accent-contrast) !important; border-color: var(--rd-rail-bg) !important; }
+
+html.rd #sidebarBrand {
+    height: 64px !important;
+    padding: 14px 18px 12px !important;
+    border-bottom: 1px solid var(--rd-border) !important;
+    background: transparent !important;
+    gap: 10px !important;
+}
+
+html.rd #sidebarBrand > div:first-child { display: none !important; }
+html.rd #sidebarBrandTitle {
+    color: var(--rd-text) !important;
+    font-size: 18px !important;
+    font-weight: 600 !important;
+    letter-spacing: var(--rd-letter);
+}
+html.rd #convCountLabel {
+    color: var(--rd-text-3) !important;
+    font-size: 10.5px !important;
+    margin-top: 2px;
+}
+
+html.rd #mobileSidebarClose {
+    width: 30px;
+    height: 30px;
+    display: none !important;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--rd-text-3);
+    background: transparent;
+    border: 0;
+}
+html.rd #mobileSidebarClose:hover { background: var(--rd-hover); color: var(--rd-text); }
+html.rd #mobileSidebarClose svg { width: 16px; height: 16px; }
+
+html.rd #sidebarActions {
+    padding: 12px 14px 10px !important;
+    gap: 8px !important;
+    grid-template-columns: minmax(0, 1fr) 38px !important;
+}
+
+html.rd #sidebarActions .btn-primary,
+html.rd #sidebarActions .glass-button {
+    height: 38px;
+    padding: 0 12px;
+    font-size: 12px !important;
+    border-radius: var(--rd-radius-sm) !important;
+}
+
+html.rd #newConversationBtn {
+    background: var(--rd-accent) !important;
+    color: var(--rd-accent-contrast) !important;
+    box-shadow: var(--rd-btn-shadow) !important;
+}
+
+html.rd #sidebarActions #newCategoryBtn {
+    width: 38px !important;
+    padding: 0 !important;
+    gap: 0 !important;
+    font-size: 0 !important;
+    overflow: hidden;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-2) !important;
+    border: 1px solid var(--rd-border) !important;
+}
+
+html.rd #newCategoryBtn svg { width: 16px !important; height: 16px !important; }
+
+html.rd #sidebarSearchWrap { padding: 0 14px 10px !important; }
+
+html.rd .sidebar-search-field {
+    position: relative;
+    background: var(--rd-input) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-sm) !important;
+    box-shadow: none !important;
+}
+
+html.rd .sidebar-search-field:focus-within {
+    border-color: var(--rd-accent) !important;
+    box-shadow: 0 0 0 3px var(--rd-accent-soft) !important;
+}
+
+html.rd #sidebarSearchInput {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    color: var(--rd-text) !important;
+    padding-left: 32px !important;
+    font-size: 12px !important;
+    height: 36px;
+}
+html.rd #sidebarSearchInput::placeholder { color: var(--rd-text-3) !important; }
+html.rd .sidebar-search-icon { color: var(--rd-text-3) !important; left: 11px !important; width: 15px !important; height: 15px !important; }
+html.rd #sidebarSearchClear { color: var(--rd-text-3) !important; }
+
+html.rd #folderList {
+    padding: 2px 10px 12px !important;
+}
+
+html.rd #folderList [data-folder-id] {
+    color: var(--rd-text-3) !important;
+    padding: 13px 8px 6px !important;
+    font-size: 10px !important;
+    font-weight: 600 !important;
+    letter-spacing: .12em !important;
+    text-transform: uppercase;
+    background: transparent !important;
+}
+
+html.rd #folderList [data-folder-id]:hover { background: transparent !important; color: var(--rd-text-2) !important; }
+html.rd #folderList [data-folder-id] span { color: inherit !important; }
+html.rd #folderList [data-folder-id] svg { color: var(--rd-text-3) !important; width: 13px !important; height: 13px !important; }
+
+html.rd .conversation-pinned-label {
+    color: var(--rd-accent) !important;
+    padding: 12px 8px 6px !important;
+    font-size: 10px !important;
+    letter-spacing: .12em !important;
+    text-transform: uppercase;
+}
+
+html.rd .conversation-item {
+    margin: 1px 0;
+    padding: 9px 10px 9px 12px !important;
+    border-radius: var(--rd-radius-sm) !important;
+    border: 1px solid transparent !important;
+    background: transparent !important;
+    color: var(--rd-text) !important;
+    transition: background .15s, border-color .15s;
+}
+
+html.rd .conversation-item:hover { background: var(--rd-hover) !important; }
+
+html.rd #folderList .conversation-item.sidebar-item-active {
+    background: var(--rd-active) !important;
+    border-color: var(--rd-active-border) !important;
+    box-shadow: inset 2px 0 0 var(--rd-accent) !important;
+    border-radius: var(--rd-radius-sm) !important;
+}
+
+html.rd .conversation-item .text-indigo-900 { color: var(--rd-text) !important; font-weight: 500 !important; }
+html.rd .conversation-item .text-indigo-300 { color: var(--rd-text-3) !important; }
+html.rd .conversation-item .text-\[11px\] { font-size: 10px !important; }
+html.rd .conversation-pin-icon { color: var(--rd-accent) !important; }
+html.rd .conversation-inline-actions button:hover { background: var(--rd-hover) !important; }
+html.rd .conversation-inline-actions svg { color: var(--rd-text-3) !important; }
+html.rd .conversation-inline-actions svg.text-pink-500,
+html.rd .conversation-inline-actions svg.text-amber-500 { color: var(--rd-accent) !important; }
+
+html.rd #sidebarModSlot { padding: 0 14px !important; }
+
+html.rd #sidebarFooter {
+    padding: 11px 16px !important;
+    border-top: 1px solid var(--rd-border) !important;
+    color: var(--rd-text-3) !important;
+    background: transparent !important;
+    font-size: 10px !important;
+}
+
+/* ---------- 顶栏 ---------- */
+
+html.rd #mainContent {
+    background: var(--rd-bg) !important;
+    margin-left: 0 !important;
+}
+
+html.rd #mainContent > header {
+    flex: 0 0 var(--rd-header-h) !important;
+    min-height: var(--rd-header-h) !important;
+    margin: 0 !important;
+    padding: 0 22px !important;
+    gap: 12px !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--rd-border) !important;
+    border-radius: 0 !important;
+    background: var(--rd-topbar-bg) !important;
+    box-shadow: none !important;
+    backdrop-filter: var(--rd-blur);
+    -webkit-backdrop-filter: var(--rd-blur);
+}
+
+html.rd #mainContent > header #currentConversationTitle {
+    color: var(--rd-text) !important;
+    max-width: 280px !important;
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    letter-spacing: var(--rd-letter);
+}
+
+html.rd #mainContent > header .quote-chip {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 999px !important;
+    box-shadow: none !important;
+    color: var(--rd-text-2) !important;
+    min-height: 30px !important;
+    max-width: min(460px, 100%) !important;
+    padding: 0 12px !important;
+}
+
+html.rd #mainContent > header .quote-chip .text-indigo-800,
+html.rd #mainContent > header .quote-chip .text-indigo-300 { color: var(--rd-text-2) !important; }
+html.rd #mainContent > header .quote-chip .text-pink-500 { color: var(--rd-accent) !important; }
+html.rd #quoteLikeBtn,
+html.rd #quoteFavBtn { color: var(--rd-text-3) !important; }
+
+html.rd .header-memory-btn {
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 10px !important;
+    gap: 6px !important;
+    color: var(--rd-text-2) !important;
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 8px !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+}
+html.rd .header-memory-btn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; transform: none; }
+html.rd .header-memory-btn.is-running { color: var(--rd-accent) !important; border-color: var(--rd-accent-border) !important; }
+html.rd .header-memory-btn svg { width: 15px !important; height: 15px !important; }
+html.rd #announceStatusDot { background: var(--rd-accent) !important; }
+
+html.rd .header-theme-switch {
+    height: 32px;
+    padding: 3px !important;
+    gap: 2px !important;
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 999px !important;
+    box-shadow: none !important;
+}
+html.rd .header-theme-switch .theme-seg {
+    width: 26px !important;
+    height: 25px !important;
+    border-radius: 999px !important;
+    color: var(--rd-text-3) !important;
+}
+html.rd .header-theme-switch .theme-seg:hover { color: var(--rd-text) !important; background: var(--rd-hover) !important; }
+html.rd .header-theme-switch .theme-seg.is-active { color: var(--rd-accent) !important; background: var(--rd-accent-soft) !important; }
+html.rd .header-theme-switch .theme-seg svg { width: 14px !important; height: 14px !important; }
+
+html.rd #showSidebar { color: var(--rd-text-2) !important; border-radius: 8px; }
+html.rd #showSidebar:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+
+html.rd #announcePanel {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border-strong) !important;
+    border-radius: var(--rd-radius-md) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+    overflow: hidden;
+}
+html.rd .announce-panel-head { border-bottom: 1px solid var(--rd-border) !important; }
+html.rd .announce-panel-title { color: var(--rd-text) !important; }
+html.rd .announce-item { border-top: 1px solid var(--rd-border) !important; }
+html.rd .announce-item b { color: var(--rd-text) !important; }
+html.rd .announce-item p,
+html.rd .announce-item small { color: var(--rd-text-3) !important; }
+
+/* ---------- 对话区 ---------- */
+
+html.rd #conversationHistory {
+    padding: 24px 28px 20px !important;
+    background: transparent !important;
+}
+
+html.rd .message-item {
+    max-width: min(1200px, 100%);
+    margin: 0 auto 30px !important;
+    position: relative;
+    padding-left: 46px;
+}
+
+html.rd .message-item-user { padding-left: 0; padding-right: 46px; }
+
+html.rd .message-item::before {
+    position: absolute;
+    top: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--rd-font-display);
+    font-size: 13px;
+    font-weight: 700;
+    border: 1px solid var(--rd-avatar-ai-border);
+    background: var(--rd-avatar-ai-bg);
+    color: var(--rd-avatar-ai-fg);
+    box-shadow: var(--rd-shadow-1);
+}
+
+html.rd .message-item-ai::before { content: "E"; left: 0; }
+html.rd .message-item-user::before {
+    content: "旅";
+    right: 0;
+    background: var(--rd-avatar-user-bg);
+    color: var(--rd-avatar-user-fg);
+    border-color: var(--rd-avatar-user-border);
+}
+
+html.rd .message-item > .flex { margin-bottom: 0 !important; }
+html.rd .message-item-user > .flex { flex-direction: row-reverse; }
+html.rd .message-item > .flex > .flex-1 { max-width: min(85%, 900px); }
+html.rd .message-item-user > .flex > .flex-1 { max-width: min(85%, 900px); }
+/* index.html 基础层的 id 选择器规则给用户行写了 justify-content: flex-end
+   （那是普通正向行时代的"靠右"）。行改成 row-reverse 后 flex-end 落到左边，
+   短消息会悬在左侧 —— 用同权重选择器扳回主轴起点（反向行里即靠右）。 */
+html.rd #conversationHistory > .message-item-user > .flex { justify-content: flex-start; }
+
+html.rd .bubble-ai,
+html.rd .bubble-user {
+    padding: 12px 16px !important;
+    border: 1px solid transparent !important;
+    box-shadow: var(--rd-shadow-1) !important;
+    backdrop-filter: none !important;
+}
+
+html.rd .bubble-ai {
+    background: var(--rd-ai-bubble, #fbf7ee) !important;
+    border-color: var(--rd-ai-border) !important;
+    border-radius: 4px var(--rd-radius-md) var(--rd-radius-md) var(--rd-radius-md) !important;
+    color: var(--rd-text) !important;
+}
+
+html.rd .bubble-user {
+    background: var(--rd-user-bubble, #241f18) !important;
+    border-color: var(--rd-user-border) !important;
+    border-radius: var(--rd-radius-md) 4px var(--rd-radius-md) var(--rd-radius-md) !important;
+    color: var(--rd-user-text) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+}
+
+html.rd .bubble-ai p,
+html.rd .bubble-ai .rmd-p,
+html.rd .bubble-ai .text-indigo-950,
+html.rd .bubble-ai .text-indigo-900,
+html.rd .bubble-ai .text-indigo-800 { color: var(--rd-text) !important; }
+html.rd .bubble-ai .text-indigo-700,
+html.rd .bubble-ai .text-indigo-600,
+html.rd .bubble-ai .text-indigo-500,
+html.rd .bubble-ai .text-indigo-400,
+html.rd .bubble-ai .text-indigo-300 { color: var(--rd-text-2) !important; }
+html.rd .bubble-ai .text-pink-600 { color: var(--rd-accent) !important; }
+
+html.rd .bubble-user p,
+html.rd .bubble-user .rmd-p,
+html.rd .bubble-user .text-indigo-950,
+html.rd .bubble-user .text-indigo-900,
+html.rd .bubble-user .text-indigo-800,
+html.rd .bubble-user .text-indigo-700,
+html.rd .bubble-user .text-indigo-600,
+html.rd .bubble-user .text-indigo-500,
+html.rd .bubble-user .text-indigo-400,
+html.rd .bubble-user .text-indigo-300,
+html.rd .bubble-user .text-xs { color: var(--rd-user-text) !important; }
+html.rd .bubble-user .text-amber-500 { color: #ffd166 !important; }
+
+html.rd .bubble-ai p,
+html.rd .bubble-user p { font-size: 14px !important; line-height: 1.75 !important; font-weight: 400 !important; }
+
+html.rd .bubble-ai .rmd-quote,
+html.rd .bubble-user .rmd-quote {
+    background: var(--rd-accent-soft) !important;
+    border-left: 2px solid var(--rd-accent) !important;
+    color: var(--rd-text-2) !important;
+    border-radius: 0 8px 8px 0 !important;
+}
+
+html.rd .bubble-user .rmd-quote {
+    background: rgba(255, 255, 255, .12) !important;
+    border-left-color: rgba(255, 255, 255, .45) !important;
+    color: inherit !important;
+}
+
+html.rd .bubble-ai .rmd-code,
+html.rd .bubble-user .rmd-code,
+html.rd .bubble-ai code,
+html.rd .bubble-user code {
+    background: var(--rd-surface-2) !important;
+    color: var(--rd-text) !important;
+    border-color: var(--rd-border) !important;
+}
+
+html.rd .bubble-user .rmd-code,
+html.rd .bubble-user code {
+    background: rgba(255, 255, 255, .14) !important;
+    color: inherit !important;
+}
+
+html.rd .bubble-ai .rmd-table th,
+html.rd .bubble-ai .rmd-table td { border-color: var(--rd-border) !important; }
+
+html.rd .ai-speaker-name {
+    display: inline;
+    min-height: 0;
+    padding: 0 !important;
+    background: transparent !important;
+    color: var(--rd-text) !important;
+    border-radius: 0 !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    letter-spacing: .01em;
+}
+
+html.rd .bubble-ai .text-xs,
+html.rd .bubble-user .text-xs { font-size: 10px !important; font-weight: 400 !important; }
+html.rd .bubble-ai .text-xs { color: var(--rd-text-3) !important; }
+html.rd .bubble-user .text-xs { color: rgba(255, 255, 255, .62) !important; }
+
+html.rd .message-action-btn {
+    padding: 4px 7px !important;
+    border-radius: 7px !important;
+    color: var(--rd-text-3) !important;
+    background: transparent !important;
+}
+html.rd .message-action-btn:hover { color: var(--rd-accent) !important; background: var(--rd-hover) !important; }
+html.rd .bubble-user .message-action-btn { color: rgba(255, 255, 255, .62) !important; }
+html.rd .bubble-user .message-action-btn:hover { color: #fff !important; background: rgba(255, 255, 255, .14) !important; }
+html.rd .message-action-btn svg { width: 14px; height: 14px; }
+
+html.rd .message-image { border-radius: 10px; }
+
+html.rd .ai-voice-player {
+    background: var(--rd-surface-2) !important;
+    box-shadow: inset 0 0 0 1px var(--rd-border) !important;
+    border-radius: 10px !important;
+}
+html.rd .ai-voice-player:hover { background: var(--rd-hover) !important; }
+html.rd .voice-duration { color: var(--rd-text-2) !important; }
+html.rd .voice-waveform i { background: var(--rd-accent) !important; }
+
+html.rd #thinking-bubble {
+    max-width: min(1200px, 100%);
+    margin: 0 auto 30px !important;
+    padding-left: 46px;
+    position: relative;
+}
+html.rd #thinking-bubble .pixso-chat-avatar { display: none !important; }
+
+html.rd #thinking-bubble::before {
+    content: "E";
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    font-family: var(--rd-font-display);
+    font-size: 13px;
+    font-weight: 700;
+    border: 1px solid var(--rd-avatar-ai-border);
+    background: var(--rd-avatar-ai-bg);
+    color: var(--rd-avatar-ai-fg);
+}
+html.rd #thinking-bubble .bubble-ai { background: var(--rd-ai-bubble) !important; }
+html.rd .thinking-label { color: var(--rd-text-2) !important; }
+html.rd .thinking-dot { background: var(--rd-accent) !important; }
+
+/* ---------- 初始页 ---------- */
+
+html.rd #initialState {
+    padding: 40px 28px 32px !important;
+    background: transparent !important;
+}
+
+html.rd #initialState::before {
+    content: "灰之魔女 · 旅途继续";
+    font-size: 10px;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--rd-accent);
+    font-weight: 600;
+    margin-bottom: 14px;
+}
+
+html.rd #greetingText {
+    color: var(--rd-text) !important;
+    font-size: clamp(28px, 3.2vw, 40px) !important;
+    line-height: 1.25 !important;
+    letter-spacing: var(--rd-letter) !important;
+    font-weight: 600 !important;
+    max-width: 760px !important;
+}
+
+html.rd .greeting-subtitle {
+    color: var(--rd-text-3) !important;
+    font-size: 13px !important;
+    margin-top: 8px !important;
+    font-weight: 400 !important;
+}
+
+html.rd .initial-composer { margin-top: 28px !important; max-width: 660px !important; }
+
+html.rd .initial-composer-shell,
+html.rd .conversation-composer {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border-strong) !important;
+    border-radius: var(--rd-radius-lg) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+    backdrop-filter: var(--rd-blur);
+    -webkit-backdrop-filter: var(--rd-blur);
+    padding: 8px 8px 8px 10px !important;
+    min-height: 56px !important;
+    gap: 7px !important;
+}
+
+html.rd .initial-composer-shell:focus-within,
+html.rd .conversation-composer:focus-within {
+    border-color: var(--rd-accent) !important;
+    box-shadow: var(--rd-shadow-2), 0 0 0 3px var(--rd-accent-soft) !important;
+}
+
+html.rd #initialTextInput,
+html.rd #textInput {
+    color: var(--rd-text) !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    font-size: 14px !important;
+    min-height: 38px !important;
+    padding: 8px 2px !important;
+}
+
+html.rd #initialTextInput::placeholder,
+html.rd #textInput::placeholder { color: var(--rd-text-3) !important; }
+
+html.rd .composer-more-btn,
+html.rd .initial-conversation-mic-btn,
+html.rd .conversation-mic-btn {
+    width: 36px !important;
+    height: 36px !important;
+    border-radius: 9px !important;
+    color: var(--rd-text-2) !important;
+    background: transparent !important;
+    border: 0 !important;
+    flex: 0 0 36px;
+}
+html.rd .composer-more-btn:hover,
+html.rd .initial-conversation-mic-btn:hover,
+html.rd .conversation-mic-btn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+html.rd .composer-more-btn svg { width: 19px !important; height: 19px !important; }
+html.rd .initial-conversation-mic-btn svg,
+html.rd .conversation-mic-btn svg { width: 17px !important; height: 17px !important; }
+
+html.rd .initial-composer-shell .btn-primary,
+html.rd .conversation-composer .btn-primary,
+html.rd #conversationSendBtn,
+html.rd #initialSendBtn {
+    min-height: 38px !important;
+    height: 38px;
+    padding: 0 14px !important;
+    border-radius: 10px !important;
+    background: var(--rd-accent) !important;
+    color: var(--rd-accent-contrast) !important;
+    box-shadow: var(--rd-btn-shadow) !important;
+    font-size: 12px !important;
+}
+
+html.rd #conversationSendBtn { width: 38px !important; padding: 0 !important; }
+
+html.rd #initialSendBtn .composer-state-icon,
+html.rd #conversationSendBtn .composer-state-icon { width: 15px; height: 15px; }
+html.rd .composer-send-transition.is-hidden { display: none !important; }
+
+html.rd #inputBar {
+    padding: 0 28px 14px !important;
+    background: linear-gradient(180deg, transparent, var(--rd-bg) 38%) !important;
+}
+
+html.rd .conversation-composer { max-width: min(1200px, 100%) !important; margin: 0 auto !important; }
+
+html.rd .composer-more-menu {
+    /* 雾蓝/石墨主题的 surface 带透明度，菜单浮在消息上时下面的文字会透出来。
+       先铺一层 surface 再垫一层实色 bg，保留玻璃感但保证可读。 */
+    background: linear-gradient(var(--rd-surface), var(--rd-surface)), var(--rd-bg) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    padding: 6px !important;
+}
+html.rd .composer-menu-label { color: var(--rd-text-3) !important; font-size: 10px !important; letter-spacing: .12em; text-transform: uppercase; }
+html.rd .composer-menu-row { color: var(--rd-text) !important; border-radius: 8px !important; }
+html.rd .composer-menu-row:hover { background: var(--rd-hover) !important; }
+html.rd .composer-menu-icon { background: var(--rd-accent-soft) !important; color: var(--rd-accent) !important; border-radius: 8px !important; }
+html.rd .composer-menu-title { color: var(--rd-text) !important; font-size: 12px !important; }
+html.rd .composer-menu-hint { color: var(--rd-text-3) !important; font-size: 10px !important; }
+html.rd .composer-memory-status { color: var(--rd-accent) !important; }
+
+html.rd .mic-btn { background: var(--rd-accent) !important; color: var(--rd-accent-contrast) !important; box-shadow: var(--rd-btn-shadow) !important; }
+html.rd .floating-mic-surface { background: var(--rd-surface) !important; border-color: var(--rd-border) !important; }
+html.rd .floating-voice-status { color: var(--rd-text) !important; }
+html.rd .floating-voice-status small { color: var(--rd-text-3) !important; }
+html.rd .floating-dock-btn { background: var(--rd-surface-2) !important; border-color: var(--rd-border) !important; color: var(--rd-text-2) !important; }
+
+/* ---------- 语笺 ---------- */
+
+html.rd .page-secondary-header {
+    flex: 0 0 auto !important;
+    min-height: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 24px 28px 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    display: flex;
+    align-items: flex-end;
+    gap: 14px;
+}
+
+html.rd .page-secondary-copy { min-width: 0; }
+html.rd .page-secondary-title {
+    color: var(--rd-text) !important;
+    font-size: 26px !important;
+    font-weight: 600 !important;
+    line-height: 1.2 !important;
+}
+html.rd .page-secondary-subtitle { color: var(--rd-text-3) !important; font-size: 12px !important; margin-top: 4px !important; }
+
+html.rd .page-secondary-back {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 0 11px;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 8px !important;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-2) !important;
+    font-size: 11.5px;
+}
+html.rd .page-secondary-back:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+
+html.rd #notesPage > .flex-1 {
+    padding: 16px 28px 30px !important;
+}
+
+html.rd .notes-toolbar {
+    max-width: 1120px;
+    margin: 0 auto 16px !important;
+    gap: 10px !important;
+    flex-wrap: wrap;
+}
+
+html.rd .notes-tabs {
+    padding: 3px !important;
+    gap: 2px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 999px !important;
+    background: var(--rd-surface-2) !important;
+}
+
+html.rd .notes-tab {
+    padding: 6px 13px !important;
+    border: 0 !important;
+    border-radius: 999px !important;
+    background: transparent !important;
+    color: var(--rd-text-3) !important;
+    font-size: 11.5px !important;
+    font-weight: 500 !important;
+    box-shadow: none !important;
+}
+
+html.rd .notes-tab.tab-active {
+    background: var(--rd-surface) !important;
+    color: var(--rd-text) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+}
+
+html.rd .notes-search-wrap { width: 228px; margin-left: auto; }
+html.rd #notesSearch {
+    height: 34px;
+    padding-left: 32px !important;
+    background: var(--rd-input) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-sm) !important;
+    color: var(--rd-text) !important;
+    font-size: 11.5px !important;
+}
+html.rd #notesSearch:focus { border-color: var(--rd-accent) !important; box-shadow: 0 0 0 3px var(--rd-accent-soft) !important; }
+html.rd #notesSearch + svg { color: var(--rd-text-3) !important; }
+html.rd #notesCount { color: var(--rd-text-3) !important; font-size: 11px !important; }
+
+html.rd #notesGrid {
+    max-width: 1120px;
+    margin: 0 auto;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+}
+
+html.rd .note-card {
+    min-height: 170px !important;
+    padding: 16px 17px 14px 19px !important;
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+    color: var(--rd-text) !important;
+    position: relative;
+    overflow: hidden;
+    transition: transform .18s, border-color .18s, box-shadow .18s;
+}
+html.rd .note-card::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--rd-accent);
+    opacity: .55;
+}
+html.rd .note-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--rd-border-strong) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+}
+html.rd .note-role-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 20px;
+    padding: 0 8px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    border: 1px solid transparent;
+}
+html.rd .note-role-user { color: var(--rd-text-2) !important; background: var(--rd-surface-2) !important; border-color: var(--rd-border) !important; }
+html.rd .note-role-ai { color: var(--rd-accent) !important; background: var(--rd-accent-soft) !important; border-color: var(--rd-accent-border) !important; }
+html.rd .note-role-quote { color: var(--rd-accent-contrast) !important; background: var(--rd-accent) !important; }
+html.rd .note-card-text {
+    color: var(--rd-text) !important;
+    font-family: var(--rd-font-display);
+    font-size: 14.5px !important;
+    font-weight: 500 !important;
+    line-height: 1.75 !important;
+}
+html.rd .note-card-meta { color: var(--rd-text-3) !important; font-size: 10.5px !important; }
+html.rd .note-remove-btn { color: var(--rd-text-3) !important; }
+html.rd .note-remove-btn:hover { color: var(--rd-danger) !important; background: var(--rd-danger-soft) !important; }
+html.rd #notesEmpty { color: var(--rd-text-3) !important; }
+html.rd #notesEmpty p { color: var(--rd-text-3) !important; }
+
+html.rd #favoriteDetailCard { width: min(520px, 100%) !important; }
+html.rd #detailTypeBadge { background: var(--rd-accent) !important; color: var(--rd-accent-contrast) !important; }
+html.rd #detailText { color: var(--rd-text) !important; }
+html.rd #detailRole,
+html.rd #detailTimestamp { color: var(--rd-text-3) !important; }
+html.rd #detailContextSection { border-top-color: var(--rd-border) !important; }
+html.rd #detailConvTitle { color: var(--rd-text-2) !important; }
+
+/* ---------- 旅行日记 ---------- */
+
+html.rd .diary-toolbar { padding: 14px 28px 0 !important; }
+html.rd .diary-count { color: var(--rd-text-3) !important; font-size: 11px !important; }
+
+html.rd #diaryGrid {
+    position: relative;
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 18px 28px 34px 52px !important;
+    display: block !important;
+}
+html.rd #diaryGrid::before {
+    content: "";
+    position: absolute;
+    left: 29px;
+    top: 24px;
+    bottom: 30px;
+    width: 1px;
+    background: var(--rd-border);
+}
+
+html.rd .diary-group-head {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 22px 0 12px;
+    padding: 0 !important;
+    color: var(--rd-text-2) !important;
+    background: var(--rd-bg) !important;
+    border: 0 !important;
+    font-family: var(--rd-font-display);
+    font-size: 13.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: .04em;
+}
+html.rd .diary-group-head:first-child { margin-top: 0; }
+html.rd .diary-group-dot {
+    position: absolute;
+    left: -27px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--rd-accent);
+    box-shadow: 0 0 0 4px var(--rd-accent-soft);
+}
+html.rd .diary-group-title { color: var(--rd-text-2) !important; }
+html.rd .diary-group-count { color: var(--rd-text-3) !important; font-size: 10px; font-family: var(--rd-font-ui); }
+html.rd .diary-group-enter {
+    margin-left: auto;
+    padding: 4px 9px;
+    border: 1px solid var(--rd-border);
+    border-radius: 7px;
+    background: var(--rd-surface);
+    color: var(--rd-text-3);
+    font-size: 10px;
+    font-family: var(--rd-font-ui);
+}
+html.rd .diary-group-enter:hover { color: var(--rd-text); border-color: var(--rd-border-strong); }
+html.rd .diary-group-head.is-focused { color: var(--rd-accent) !important; }
+
+html.rd .diary-card {
+    margin-bottom: 12px !important;
+    padding: 16px 18px !important;
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+    transition: transform .18s, border-color .18s, box-shadow .18s;
+}
+html.rd .diary-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--rd-border-strong) !important;
+    box-shadow: var(--rd-shadow-2) !important;
+}
+html.rd .diary-card-date { color: var(--rd-accent) !important; font-size: 10.5px !important; font-weight: 600 !important; letter-spacing: .04em; }
+html.rd .diary-card-text {
+    margin-top: 6px !important;
+    color: var(--rd-text-2) !important;
+    font-size: 13px !important;
+    line-height: 1.75 !important;
+}
+html.rd .diary-essences { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+html.rd .diary-essence {
+    padding: 2px 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px;
+    color: var(--rd-text-3);
+    background: var(--rd-surface-2);
+    font-size: 9.5px;
+}
+html.rd #diaryEmpty { color: var(--rd-text-3) !important; }
+
+/* ---------- 成就 ---------- */
+
+html.rd #achievementsOverlay { z-index: 100001; }
+html.rd #achievementsOverlay .modal-panel { width: min(760px, 100%) !important; max-height: 88dvh !important; }
+html.rd #achievementsOverlay .modal-panel > div:first-child {
+    padding: 16px 20px !important;
+    border-bottom: 1px solid var(--rd-border) !important;
+    background: transparent !important;
+}
+html.rd .ach-title-icon { font-size: 17px; }
+html.rd #achievementsOverlay .text-base.font-bold { color: var(--rd-text) !important; font-family: var(--rd-font-display); font-size: 16px !important; }
+html.rd .ach-count {
+    color: var(--rd-accent) !important;
+    background: var(--rd-accent-soft) !important;
+    border: 1px solid var(--rd-accent-border);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 999px;
+}
+html.rd #achCloseBtn { color: var(--rd-text-3) !important; }
+html.rd #achCloseBtn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+html.rd #achCategoriesBtn { font-size: 11px !important; }
+
+html.rd #achList {
+    padding: 18px 20px 22px !important;
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+html.rd .ach-card {
+    display: flex;
+    gap: 11px;
+    align-items: flex-start;
+    padding: 13px !important;
+    border-radius: var(--rd-radius-md) !important;
+    border: 1px solid var(--rd-border) !important;
+    background: var(--rd-surface-2) !important;
+    opacity: .58;
+    transition: opacity .2s, transform .15s, border-color .2s;
+}
+html.rd .ach-card.is-unlocked { opacity: 1; border-color: var(--rd-accent-border) !important; background: var(--rd-accent-soft) !important; }
+html.rd .ach-card.is-unlocked:hover { transform: translateY(-2px); }
+html.rd .ach-card.is-memorial.is-unlocked { border-color: var(--rd-accent) !important; box-shadow: inset 0 0 0 1px var(--rd-accent-border); }
+html.rd .ach-icon {
+    width: 38px !important;
+    height: 38px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 11px;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-3) !important;
+    font-size: 19px !important;
+}
+html.rd .ach-card.is-unlocked .ach-icon { color: var(--rd-accent) !important; background: var(--rd-surface) !important; }
+html.rd .ach-name { color: var(--rd-text) !important; font-size: 12.5px !important; font-weight: 600 !important; }
+html.rd .ach-desc { color: var(--rd-text-3) !important; font-size: 10.5px !important; line-height: 1.55 !important; }
+html.rd .ach-detail {
+    background: var(--rd-surface) !important;
+    border-left: 2px solid var(--rd-accent) !important;
+    color: var(--rd-text-2) !important;
+    border-radius: 0 7px 7px 0;
+    font-size: 11px !important;
+}
+html.rd .ach-when { color: var(--rd-text-3) !important; font-size: 10px !important; }
+
+/* ---------- 插件市场 ---------- */
+
+html.rd #marketOverlay { z-index: 100001; }
+html.rd #marketOverlay .modal-panel { width: min(760px, 100%) !important; max-height: 88dvh !important; }
+html.rd #marketOverlay .modal-panel > div:first-child {
+    padding: 15px 18px !important;
+    border-bottom: 1px solid var(--rd-border) !important;
+}
+html.rd #marketOverlay .text-sm.font-bold { color: var(--rd-text) !important; font-family: var(--rd-font-display); font-size: 16px !important; }
+html.rd #marketRefreshBtn,
+html.rd .mod-act {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    color: var(--rd-text-2) !important;
+    border-radius: 7px !important;
+}
+html.rd #marketClose { color: var(--rd-text-3) !important; }
+html.rd #marketHint { color: var(--rd-text-3) !important; font-size: 10.5px !important; }
+html.rd #marketHint b { color: var(--rd-text-2) !important; }
+html.rd #marketList { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px !important; }
+html.rd #marketList .mod-card {
+    padding: 13px !important;
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+}
+html.rd #marketList .mod-card:hover { border-color: var(--rd-border-strong) !important; box-shadow: var(--rd-shadow-2) !important; }
+html.rd #marketList .mod-card .text-indigo-800 { color: var(--rd-text) !important; }
+html.rd #marketList .mod-card .text-indigo-400,
+html.rd #marketList .mod-card .text-indigo-300 { color: var(--rd-text-3) !important; }
+html.rd .market-install-btn { font-size: 10.5px !important; }
+html.rd #marketSearch,
+html.rd #marketUrl { height: 32px !important; font-size: 11px !important; }
+html.rd #marketOverlay .text-\[11px\] { color: var(--rd-text-3) !important; }
+html.rd #marketOverlay .btn-secondary { font-size: 10.5px !important; }
+html.rd #marketPrereqToggle { color: var(--rd-text-3) !important; }
+
+/* ---------- 设置 ---------- */
+
+html.rd #settingsOverlay { z-index: 100001; }
+
+/* 情景演绎舞台（galgame）必须盖过上面的整页层：
+   舞台自带 z-index 是 45 / 950，按旧版"弹窗最高 50+"的尺度定的；
+   本设计把设置/成就/市场抬到 100001 后，从「设置 → 插件 → 打开情景演绎」
+   进舞台就成了"设置页挡在舞台前面"。 */
+html.rd #galgameLayer,
+html.rd #live2d-call-host { z-index: 100012; }
+
+@media (min-width: 981px) {
+    html.rd #settingsOverlay {
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 16px !important;
+    }
+}
+
+html.rd #settingsTopBar > #closeSettings {
+    position: absolute !important;
+    top: 16px !important;
+    right: 12px !important;
+    transform: none !important;
+}
+
+html.rd #settingsPanel {
+    display: grid !important;
+    grid-template-columns: 190px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    width: min(1080px, 96vw) !important;
+    max-width: 1080px !important;
+    height: min(820px, 92dvh) !important;
+    max-height: 92dvh !important;
+    overflow: hidden;
+}
+
+html.rd #settingsTopBar {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+    padding: 20px 12px !important;
+    border: 0 !important;
+    border-right: 1px solid var(--rd-border) !important;
+    background: var(--rd-surface-2) !important;
+    position: relative;
+    flex: none !important;
+}
+
+html.rd #settingsTopBar::before {
+    content: "设置";
+    display: block;
+    padding: 0 10px 12px;
+    color: var(--rd-text);
+    font-family: var(--rd-font-display);
+    font-size: 18px;
+    font-weight: 600;
+    letter-spacing: var(--rd-letter);
+}
+
+html.rd #settingsTabNav {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    min-height: 0;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    justify-content: flex-start !important;
+}
+
+html.rd .settings-tab-btn {
+    width: 100%;
+    justify-content: flex-start !important;
+    padding: 9px 12px !important;
+    border-radius: 9px !important;
+    color: var(--rd-text-2) !important;
+    background: transparent !important;
+    border: 0 !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    text-align: left;
+    opacity: 1 !important;
+}
+html.rd .settings-tab-btn::before { display: none !important; }
+html.rd .settings-tab-btn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+html.rd .settings-tab-btn.active { background: var(--rd-accent-soft) !important; color: var(--rd-accent) !important; font-weight: 600 !important; }
+
+html.rd #closeSettings {
+    position: absolute !important;
+    top: 16px;
+    right: 12px;
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    color: var(--rd-text-3) !important;
+    background: transparent !important;
+}
+html.rd #closeSettings:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+html.rd #closeSettings svg { color: inherit !important; }
+html.rd .settings-close-mobile { display: none !important; }
+
+html.rd #settingsContent {
+    grid-column: 2;
+    padding: 22px 26px 30px !important;
+    overflow-y: auto !important;
+    background: transparent !important;
+}
+
+html.rd #settingsContent .settings-tab-panel > section,
+html.rd #settingsContent .settings-tab-panel > div.mb-4 {
+    background: var(--rd-surface) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+    box-shadow: var(--rd-shadow-1) !important;
+    padding: 18px 20px !important;
+    margin-bottom: 14px !important;
+}
+html.rd #settingsContent .settings-tab-panel > section:hover,
+html.rd #settingsContent .settings-tab-panel > div.mb-4:hover { box-shadow: var(--rd-shadow-1) !important; transform: none !important; }
+html.rd #settingsContent .modal-label { color: var(--rd-text) !important; font-size: 13px !important; font-weight: 600 !important; }
+html.rd #settingsContent .modal-label span:first-child { color: var(--rd-accent) !important; }
+html.rd #settingsContent .text-xs.font-semibold { color: var(--rd-text) !important; }
+html.rd #settingsContent .text-\[11px\],
+html.rd #settingsContent .text-indigo-300,
+html.rd #settingsContent .text-indigo-400 { color: var(--rd-text-3) !important; }
+html.rd #settingsContent .border-b,
+html.rd #settingsContent .border-t { border-color: var(--rd-border) !important; }
+html.rd #settingsContent .btn-secondary { font-size: 11px !important; }
+html.rd #settingsContent .btn-primary { font-size: 11px !important; }
+html.rd #settingsContent input[type="range"] { accent-color: var(--rd-accent); }
+
+html.rd #themePickerBox {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 10px !important;
+    margin-bottom: 4px !important;
+}
+html.rd .theme-tpl-card {
+    flex: 0 0 auto;
+    width: 150px;
+    padding: 8px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 11px !important;
+    background: var(--rd-surface) !important;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .16s, box-shadow .16s, transform .16s;
+}
+html.rd .theme-tpl-card:hover { border-color: var(--rd-border-strong) !important; transform: translateY(-1px); }
+html.rd .theme-tpl-card.is-active { border-color: var(--rd-accent) !important; box-shadow: 0 0 0 3px var(--rd-accent-soft) !important; }
+html.rd .theme-tpl-preview {
+    display: flex;
+    gap: 3px;
+    height: 62px;
+    padding: 5px;
+    border-radius: 7px;
+    background: var(--rd-surface-2);
+    overflow: hidden;
+}
+html.rd .theme-tpl-preview i { display: block; flex: 1; border-radius: 3px; }
+html.rd .theme-tpl-name {
+    display: block;
+    margin-top: 7px;
+    color: var(--rd-text) !important;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+html.rd #themeSettingsSection > .text-\[11px\] { color: var(--rd-text-3) !important; }
+html.rd #themeCustomEditor { display: none !important; }
+
+html.rd #settingsContent .log-panel,
+html.rd #settingsContent .log-list {
+    background: var(--rd-surface-2) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 8px !important;
+    color: var(--rd-text-2) !important;
+}
+html.rd #settingsContent .log-line { border-color: var(--rd-border) !important; }
+html.rd #settingsContent .log-time { color: var(--rd-text-3) !important; }
+html.rd #settingsContent .log-level.warn,
+html.rd #settingsContent .log-line.warn { color: var(--rd-warn) !important; }
+html.rd #settingsContent .log-level.error,
+html.rd #settingsContent .log-line.error { color: var(--rd-danger) !important; }
+
+html.rd #settingsContent .plugin-card,
+html.rd #settingsContent .mod-card {
+    background: var(--rd-surface-2) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+}
+html.rd #settingsContent .plugin-error,
+html.rd #settingsContent .mod-error {
+    background: var(--rd-danger-soft) !important;
+    border-color: var(--rd-danger-border) !important;
+    color: var(--rd-danger) !important;
+}
+
+/* ---------- 其他浮层 ---------- */
+
+html.rd #notesOverlay .modal-panel,
+html.rd #categoriesModalOverlay .modal-panel,
+html.rd #screenWatchPanel .modal-panel,
+html.rd #marketOverlay .modal-panel { color: var(--rd-text); }
+
+html.rd .modal-panel .text-indigo-950,
+html.rd .modal-panel .text-indigo-900,
+html.rd .modal-panel .text-indigo-800 { color: var(--rd-text) !important; }
+html.rd .modal-panel .text-indigo-700,
+html.rd .modal-panel .text-indigo-600,
+html.rd .modal-panel .text-indigo-500,
+html.rd .modal-panel .text-indigo-400,
+html.rd .modal-panel .text-indigo-300 { color: var(--rd-text-2) !important; }
+html.rd .modal-panel .border-white\/50,
+html.rd .modal-panel .border-white\/60 { border-color: var(--rd-border) !important; }
+
+html.rd #categoriesModal .glass-panel,
+html.rd #categoriesModalOverlay .glass-panel {
+    background: var(--rd-surface-2) !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: var(--rd-radius-md) !important;
+}
+
+html.rd #screenWatchPanel .bg-slate-900\/95 { background: #0b0d12 !important; }
+
+/* ---------- 主题特化 ---------- */
+
+html.rd[data-theme-template="majo"] .sidebar-rail-logo {
+    background: linear-gradient(135deg, #e0c789, #ad8a43) !important;
+    color: #1b160e !important;
+}
+
+html.rd[data-theme="dark"] .sidebar-rail-logo {
+    background: linear-gradient(135deg, #dcc38a, #a9853f) !important;
+    color: #171208 !important;
+}
+
+html.rd[data-theme-template="olive"] .sidebar-rail-logo {
+    background: var(--rd-accent) !important;
+    color: var(--rd-accent-contrast) !important;
+    border-radius: 10px !important;
+}
+
+html.rd[data-theme-template="olive"] .sidebar-rail-btn.active::before { display: none; }
+
+html.rd[data-theme-template="mist"] .sidebar-rail-logo,
+html.rd[data-theme-template="glass"] .sidebar-rail-logo {
+    background: var(--rd-accent) !important;
+    color: var(--rd-accent-contrast) !important;
+}
+
+html.rd[data-theme-template="mist"] #sidebar,
+html.rd[data-theme-template="mist"] #mainContent > header,
+html.rd[data-theme-template="mist"] .modal-panel,
+html.rd[data-theme-template="mist"] .note-card,
+html.rd[data-theme-template="mist"] .diary-card,
+html.rd[data-theme-template="mist"] .ach-card,
+html.rd[data-theme-template="mist"] #settingsContent .settings-tab-panel > section,
+html.rd[data-theme-template="glass"] #sidebar,
+html.rd[data-theme-template="glass"] #mainContent > header,
+html.rd[data-theme-template="glass"] .modal-panel,
+html.rd[data-theme-template="glass"] .note-card,
+html.rd[data-theme-template="glass"] .diary-card,
+html.rd[data-theme-template="glass"] .ach-card,
+html.rd[data-theme-template="glass"] #settingsContent .settings-tab-panel > section {
+    backdrop-filter: var(--rd-blur);
+    -webkit-backdrop-filter: var(--rd-blur);
+}
+
+html.rd[data-theme-template="majo"] .bubble-ai,
+html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
+    border-color: var(--rd-ai-border) !important;
+}
+
+/* ---------- 响应式 ---------- */
+
+@media (max-width: 1240px) {
+    html.rd #notesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+    html.rd #marketList { grid-template-columns: 1fr !important; }
+}
+
+@media (max-width: 1000px) {
+    html.rd .quote-chip { display: none !important; }
+}
+
+@media (max-width: 980px) {
+    html.rd #notesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+}
+
+@media (max-width: 980px) {
+    html.rd {
+        --rd-sidebar-w: min(360px, 92vw);
+        --rd-rail-w: 64px;
+        --rd-header-h: 58px;
+    }
+
+    html.rd #appShell {
+        border-radius: 0 !important;
+        border: 0 !important;
+        box-shadow: none !important;
+    }
+
+    html.rd #sidebar {
+        left: 0 !important;
+        top: 0 !important;
+        bottom: 0 !important;
+        width: var(--rd-sidebar-w) !important;
+        border-radius: 0 20px 20px 0 !important;
+        box-shadow: var(--rd-shadow-2) !important;
+    }
+
+    html.rd .sidebar-rail { padding: 12px 0 10px !important; }
+    html.rd .sidebar-rail-logo { width: 36px !important; height: 36px !important; flex-basis: 36px; margin-bottom: 12px !important; }
+    html.rd .sidebar-rail-btn { width: 42px !important; height: 42px !important; flex-basis: 42px; }
+    html.rd .sidebar-rail-btn.active::before { left: -8px; }
+
+    html.rd #sidebarBrand { height: 58px !important; padding: 10px 14px !important; }
+    html.rd #sidebarBrandTitle { font-size: 16px !important; }
+    html.rd #mobileSidebarClose { display: inline-flex !important; }
+    html.rd #sidebarActions { padding: 10px 12px 8px !important; }
+    html.rd #sidebarSearchWrap { padding: 0 12px 8px !important; }
+    html.rd #folderList { padding: 2px 8px 10px !important; }
+
+    html.rd #mainContent > header {
+        margin: 0 !important;
+        border-radius: 0 !important;
+        border: 0 !important;
+        border-bottom: 1px solid var(--rd-border) !important;
+        background: var(--rd-topbar-bg) !important;
+        box-shadow: none !important;
+        padding: 0 12px !important;
+        gap: 8px !important;
+    }
+
+    html.rd #currentConversationTitle { max-width: 150px !important; font-size: 15px !important; }
+    html.rd .header-memory-btn { padding: 0 7px !important; }
+    html.rd .header-memory-btn span { display: none !important; }
+    html.rd .header-memory-btn svg { width: 16px !important; height: 16px !important; }
+    html.rd .header-theme-switch { display: inline-flex !important; }
+    html.rd .header-theme-switch .theme-seg { width: 24px !important; height: 23px !important; }
+
+    html.rd #conversationHistory { padding: 16px 14px 16px !important; }
+    html.rd .message-item > .flex > .flex-1 { max-width: 88% !important; }
+    html.rd .message-item { padding-left: 42px; }
+    html.rd .message-item-user { padding-left: 0; padding-right: 42px; }
+    html.rd .message-item::before { width: 30px; height: 30px; font-size: 12px; }
+
+    html.rd #initialState { padding: 28px 16px 24px !important; }
+    html.rd #greetingText { font-size: 30px !important; }
+    html.rd #inputBar { padding: 0 12px 10px !important; }
+    html.rd .conversation-composer { border-radius: var(--rd-radius-md) !important; min-height: 52px !important; }
+
+    html.rd .page-secondary-header { padding: 18px 16px 0 !important; }
+    html.rd .page-secondary-title { font-size: 23px !important; }
+    html.rd #notesPage > .flex-1 { padding: 14px 14px 28px !important; }
+    html.rd .notes-search-wrap { width: 100%; margin-left: 0; }
+    html.rd #notesSearch { width: 100%; }
+    html.rd #notesCount { margin-left: auto; }
+
+    html.rd .diary-toolbar { padding: 12px 16px 0 !important; }
+    html.rd #diaryGrid { padding: 16px 16px 30px 44px !important; }
+    html.rd #diaryGrid::before { left: 21px; }
+    html.rd .diary-group-dot { left: -27px; }
+
+    html.rd #settingsPanel {
+        grid-template-columns: 1fr !important;
+        grid-template-rows: auto minmax(0, 1fr) !important;
+        width: 100vw !important;
+        max-width: 100vw !important;
+        height: 100dvh !important;
+        max-height: 100dvh !important;
+        border-radius: 0 !important;
+        border: 0 !important;
+    }
+
+    html.rd #settingsTopBar {
+        flex-direction: row !important;
+        align-items: center !important;
+        padding: 10px 12px !important;
+        gap: 6px !important;
+        border-right: 0 !important;
+        border-bottom: 1px solid var(--rd-border) !important;
+        overflow: hidden;
+    }
+
+    html.rd #settingsTopBar::before { display: none; }
+
+    html.rd #settingsTabNav {
+        flex-direction: row !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        gap: 4px !important;
+        scrollbar-width: none;
+        width: auto !important;
+        max-width: none !important;
+        flex: 1 1 auto;
+    }
+    html.rd #settingsTabNav::-webkit-scrollbar { display: none; }
+    html.rd .settings-tab-btn { width: auto; flex: none; padding: 7px 10px !important; font-size: 11.5px !important; }
+
+    html.rd #closeSettings { position: static !important; margin-left: auto; flex: 0 0 auto; }
+    html.rd #settingsTopBar > #closeSettings {
+        position: static !important;
+        top: auto !important;
+        right: auto !important;
+        transform: none !important;
+        margin-left: auto;
+    }
+    html.rd .settings-close-desktop { display: none !important; }
+    html.rd .settings-close-mobile { display: block !important; }
+
+    html.rd #settingsContent { grid-column: 1; padding: 16px 14px 26px !important; }
+
+    html.rd #achList { grid-template-columns: 1fr !important; padding: 14px !important; }
+    html.rd #achievementsOverlay .modal-panel,
+    html.rd #marketOverlay .modal-panel { width: 100% !important; max-height: 92dvh !important; }
+    html.rd #marketList { grid-template-columns: 1fr !important; }
+    html.rd .modal-panel { border-radius: var(--rd-radius-md) !important; }
+}
+
+@media (max-width: 720px) {
+    html.rd .quote-chip { display: none !important; }
+    html.rd #headerAnnounceBtn span,
+    html.rd #headerInstallBtn span { display: none !important; }
+    html.rd #headerMemoryBtn span { display: none !important; }
+}
+
+@media (max-width: 620px) {
+    html.rd #notesGrid { grid-template-columns: 1fr !important; }
+    html.rd .message-item,
+    html.rd .message-item-user { padding-left: 0 !important; padding-right: 0 !important; }
+    html.rd .message-item::before { display: none !important; }
+    html.rd .message-item > .flex > .flex-1,
+    html.rd .message-item-user > .flex > .flex-1 { max-width: 94% !important; }
+    html.rd #thinking-bubble { padding-left: 0 !important; }
+    html.rd #thinking-bubble::before { display: none !important; }
+    html.rd #greetingText { font-size: 27px !important; }
+    html.rd .page-secondary-header { align-items: flex-start; flex-wrap: wrap; }
+    html.rd .page-secondary-back { margin-left: 0; }
+    html.rd .diary-group-enter { display: none; }
+    html.rd #themePickerBox { grid-template-columns: 1fr; }
+    html.rd .theme-tpl-card { width: calc(50% - 5px); }
+    html.rd #inputBar { padding: 0 10px 8px !important; }
+    html.rd .initial-composer-shell { min-height: 50px !important; }
+    html.rd .composer-hint { display: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.rd *,
+    html.rd *::before,
+    html.rd *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+    }
+}
+
+/* ---------- 圆形主题切换（View Transitions） ----------
+   新主题从最近一次点击处圆形铺开盖住旧主题；
+   不支持该 API、启动时刻与"减少动态效果"下由 JS 侧直接走瞬时切换。 */
+::view-transition-old(root),
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+::view-transition-new(root) { animation: rd-theme-reveal .42s ease-out; }
+@keyframes rd-theme-reveal {
+    from { clip-path: circle(0px at var(--rd-theme-x, 50%) var(--rd-theme-y, 50%)); }
+    to { clip-path: circle(var(--rd-theme-r, 150vmax) at var(--rd-theme-x, 50%) var(--rd-theme-y, 50%)); }
+}
+@media (prefers-reduced-motion: reduce) {
+    ::view-transition-new(root) { animation: none; }
+}
+
+/* ---------- 插件开关反馈 ----------
+   光晕从被拨动的开关中心散开，由 settings.js 运行时生成（WAAPI），
+   不走这里的 keyframes —— 卡片自身的 box-shadow/背景被 #tab-mods 的
+   !important 规则压死，挂在上面的阴影动画一概出不来。
+   这里只保留减少动态效果时的静态描边。 */
+html.rd .mod-card.rd-ripple-static {
+    outline: 3px solid rgba(211, 179, 106, .65);
+    outline: 3px solid color-mix(in srgb, var(--color-primary) 65%, transparent);
+}

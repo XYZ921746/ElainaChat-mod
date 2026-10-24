@@ -1,0 +1,735 @@
+/* ============================================================================
+ * 主题变量层
+ *
+ * 四套主题共用同一套结构，只换 token；旧组件继续通过 --pixso-* 取色，
+ * 所以这里同时维护两套名字：--rd-* 给新结构，--pixso-* 给既有规则。
+ * 变量全部由 html 继承，切换 data-theme-template / data-theme 即时生效。
+ * ========================================================================== */
+
+html.rd {
+    --rd-sidebar-w: 380px;
+    --rd-rail-w: 76px;
+    --rd-header-h: 64px;
+
+    --pixso-canvas: var(--rd-bg);
+    --pixso-cream: var(--rd-surface);
+    --pixso-surface: var(--rd-surface);
+    --pixso-panel: var(--rd-panel);
+    --pixso-panel-soft: var(--rd-surface-2);
+    --pixso-brown: var(--rd-text);
+    --pixso-brown-soft: var(--rd-text-2);
+    --pixso-brown-dark: var(--rd-accent-strong);
+    --pixso-green: var(--rd-accent);
+    --pixso-green-dark: var(--rd-accent-strong);
+    --pixso-orange: var(--rd-accent-2);
+    --pixso-line: var(--rd-border);
+    --pixso-shadow: var(--rd-shadow-2);
+    --pixso-warn: var(--rd-warn);
+    --pixso-warn-soft: var(--rd-warn-strong);
+    --pixso-warn-bg: var(--rd-warn-bg);
+    --pixso-warn-line: var(--rd-warn-border);
+    --chat-liquid-background: var(--rd-body-bg);
+
+    --color-primary: var(--rd-accent);
+    --color-primary-soft: var(--rd-accent-soft);
+    --color-secondary: var(--rd-accent-2);
+    --color-secondary-soft: var(--rd-accent-2-soft);
+    --color-accent: var(--rd-accent-2);
+    --color-neutral-50: var(--rd-surface);
+    --color-neutral-100: var(--rd-surface-2);
+    --color-neutral-200: var(--rd-border);
+    --color-neutral-300: var(--rd-border-strong);
+    --color-neutral-400: var(--rd-text-3);
+    --color-neutral-500: var(--rd-text-2);
+    --color-neutral-600: var(--rd-text-2);
+    --color-neutral-700: var(--rd-text);
+    --color-neutral-800: var(--rd-text);
+    --color-neutral-900: var(--rd-text);
+    --color-border-soft: var(--rd-border);
+    --color-surface-muted: var(--rd-surface-2);
+
+    --text-heading: var(--rd-text);
+    --text-body: var(--rd-text);
+    --text-secondary: var(--rd-text-2);
+    --text-muted: var(--rd-text-3);
+    --text-glass-heading: var(--rd-text);
+    --text-glass-body: var(--rd-text);
+    --text-glass-muted: var(--rd-text-2);
+    --ink: var(--rd-text);
+
+    --tpl-primary: var(--rd-accent);
+    --tpl-primary-deep: var(--rd-accent-strong);
+    --tpl-primary-deeper: var(--rd-accent-strong);
+    --tpl-primary-soft: var(--rd-accent-soft);
+    --tpl-tint: var(--rd-accent-soft);
+    --tpl-rail: var(--rd-rail-bg);
+    --tpl-rail-1: var(--rd-rail-bg);
+    --tpl-rail-2: var(--rd-rail-bg-2);
+    --tpl-rail-ink: var(--rd-rail-text);
+    --tpl-text-1: var(--rd-text);
+    --tpl-text-2: var(--rd-text-2);
+    --tpl-text-3: var(--rd-text-3);
+    --tpl-text-4: var(--rd-text-3);
+    --tpl-text-5: var(--rd-text-3);
+    --tpl-text-6: var(--rd-text-3);
+
+    --lg-primary: var(--rd-accent);
+    --lg-primary-deep: var(--rd-accent-strong);
+    --lg-primary-soft: var(--rd-accent-soft);
+    --lg-accent-2: var(--rd-accent-2);
+    --lg-bg: var(--rd-bg);
+    --lg-ink: var(--rd-text);
+    --lg-ink-soft: var(--rd-text-2);
+    --lg-text-muted: var(--rd-text-3);
+    --lg-surface: var(--rd-surface);
+    --lg-shadow: var(--rd-shadow-2);
+}
+
+/* ==================== 1 · 暗夜魔女书房（默认 · 浅色） ==================== */
+html.rd {
+    --rd-bg: #f4eee1;
+    --rd-body-bg:
+        radial-gradient(900px 700px at 14% -12%, #fcf6e8 0%, transparent 56%),
+        radial-gradient(900px 720px at 102% 108%, #e7dcc7 0%, transparent 58%),
+        #f4eee1;
+    --rd-surface: #fbf7ee;
+    --rd-surface-2: #f1e8d7;
+    --rd-surface-3: #e9ddc9;
+    --rd-panel: #efe7d7;
+    --rd-list-bg: #efe7d7;
+    --rd-topbar-bg: rgba(244, 238, 225, .9);
+    --rd-rail-bg: #241f18;
+    --rd-rail-bg-2: #1a1610;
+    --rd-rail-text: rgba(240, 230, 210, .55);
+    --rd-rail-active: rgba(211, 179, 106, .16);
+    --rd-rail-active-text: #e7d4a4;
+    --rd-text: #241f18;
+    --rd-text-2: #5a5041;
+    --rd-text-3: #8b7f6b;
+    --rd-accent: #8a6a1f;
+    --rd-accent-strong: #6f5315;
+    --rd-accent-soft: rgba(138, 106, 31, .1);
+    --rd-accent-border: rgba(138, 106, 31, .22);
+    --rd-accent-contrast: #fff9ec;
+    --rd-accent-2: #5c6f8a;
+    --rd-accent-2-soft: rgba(92, 111, 138, .12);
+    --rd-border: rgba(74, 56, 32, .13);
+    --rd-border-strong: rgba(74, 56, 32, .26);
+    --rd-hover: rgba(90, 70, 40, .055);
+    --rd-active: rgba(138, 106, 31, .08);
+    --rd-active-border: rgba(138, 106, 31, .16);
+    --rd-input: rgba(255, 255, 255, .55);
+    --rd-user-bubble: linear-gradient(135deg, #3a3327, #241f18);
+    --rd-user-text: #f6efdf;
+    --rd-user-border: rgba(255, 255, 255, .08);
+    --rd-ai-bubble: rgba(255, 255, 255, .64);
+    --rd-ai-border: rgba(74, 56, 32, .09);
+    --rd-shadow-1: 0 1px 2px rgba(60, 45, 20, .05), 0 6px 18px rgba(60, 45, 20, .045);
+    --rd-shadow-2: 0 22px 60px rgba(60, 45, 20, .16);
+    --rd-btn-shadow: 0 2px 8px rgba(138, 106, 31, .18);
+    --rd-frame-bg: #f4eee1;
+    --rd-frame-border: rgba(74, 56, 32, .18);
+    --rd-frame-radius: 20px;
+    --rd-radius-sm: 9px;
+    --rd-radius-md: 13px;
+    --rd-radius-lg: 18px;
+    --rd-font-ui: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --rd-font-display: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+    --rd-letter: .012em;
+    --rd-glow-1: rgba(178, 144, 74, .2);
+    --rd-glow-2: rgba(96, 120, 154, .1);
+    --rd-stars: none;
+    --rd-stars-opacity: 0;
+    --rd-overlay: rgba(20, 15, 8, .35);
+    --rd-toast-bg: #2a241c;
+    --rd-toast-fg: #f6efdf;
+    --rd-ok: #5f8a5b;
+    --rd-ok-soft: rgba(95, 138, 91, .14);
+    --rd-warn: #a6761f;
+    --rd-warn-strong: #8a5f12;
+    --rd-warn-bg: rgba(255, 247, 237, .75);
+    --rd-warn-border: #e8cf9e;
+    --rd-danger: #a7473f;
+    --rd-danger-soft: rgba(167, 71, 63, .08);
+    --rd-danger-border: rgba(167, 71, 63, .24);
+    --rd-selection: rgba(138, 106, 31, .24);
+    --rd-scroll: rgba(74, 56, 32, .18);
+    --rd-avatar-ai-bg: #2a241c;
+    --rd-avatar-ai-fg: #d3b36a;
+    --rd-avatar-ai-border: rgba(138, 106, 31, .3);
+    --rd-avatar-user-bg: #ede1c9;
+    --rd-avatar-user-fg: #5a4a2e;
+    --rd-avatar-user-border: rgba(74, 56, 32, .15);
+    --rd-blur: none;
+}
+
+html.rd[data-theme="dark"] {
+    --rd-bg: #0b0e15;
+    --rd-body-bg:
+        radial-gradient(900px 720px at 18% -12%, #18202e 0%, transparent 56%),
+        radial-gradient(1000px 820px at 102% 104%, #141a26 0%, transparent 58%),
+        #0b0e15;
+    --rd-surface: #121722;
+    --rd-surface-2: #171e2a;
+    --rd-surface-3: #1d2534;
+    --rd-panel: #121722;
+    --rd-list-bg: #0d1119;
+    --rd-topbar-bg: rgba(11, 14, 21, .85);
+    --rd-rail-bg: #070a10;
+    --rd-rail-bg-2: #04060a;
+    --rd-rail-text: rgba(240, 232, 216, .48);
+    --rd-rail-active: rgba(211, 179, 106, .14);
+    --rd-rail-active-text: #e5cf9a;
+    --rd-text: #f0e8d8;
+    --rd-text-2: #b6ac98;
+    --rd-text-3: #7f7767;
+    --rd-accent: #d3b36a;
+    --rd-accent-strong: #b8954e;
+    --rd-accent-soft: rgba(211, 179, 106, .12);
+    --rd-accent-border: rgba(211, 179, 106, .24);
+    --rd-accent-contrast: #191307;
+    --rd-accent-2: #8fa9c9;
+    --rd-accent-2-soft: rgba(143, 169, 201, .12);
+    --rd-border: rgba(214, 190, 140, .11);
+    --rd-border-strong: rgba(214, 190, 140, .23);
+    --rd-hover: rgba(255, 255, 255, .04);
+    --rd-active: rgba(211, 179, 106, .08);
+    --rd-active-border: rgba(211, 179, 106, .16);
+    --rd-input: rgba(255, 255, 255, .03);
+    --rd-user-bubble: linear-gradient(135deg, #c9a45f, #a9853f);
+    --rd-user-text: #1a1408;
+    --rd-user-border: rgba(255, 255, 255, .12);
+    --rd-ai-bubble: rgba(255, 255, 255, .045);
+    --rd-ai-border: rgba(214, 190, 140, .09);
+    --rd-shadow-1: 0 1px 2px rgba(0, 0, 0, .2), 0 6px 18px rgba(0, 0, 0, .14);
+    --rd-shadow-2: 0 24px 64px rgba(0, 0, 0, .55);
+    --rd-btn-shadow: 0 2px 10px rgba(0, 0, 0, .28);
+    --rd-frame-bg: #0b0e15;
+    --rd-frame-border: rgba(214, 190, 140, .16);
+    --rd-frame-radius: 20px;
+    --rd-glow-1: rgba(211, 179, 106, .13);
+    --rd-glow-2: rgba(108, 138, 188, .1);
+    --rd-stars:
+        radial-gradient(1px 1px at 12% 18%, rgba(255, 246, 220, .65), transparent 100%),
+        radial-gradient(1px 1px at 28% 9%, rgba(255, 246, 220, .38), transparent 100%),
+        radial-gradient(1px 1px at 44% 26%, rgba(255, 246, 220, .5), transparent 100%),
+        radial-gradient(1px 1px at 63% 12%, rgba(255, 246, 220, .32), transparent 100%),
+        radial-gradient(1px 1px at 78% 30%, rgba(255, 246, 220, .5), transparent 100%),
+        radial-gradient(1px 1px at 91% 16%, rgba(255, 246, 220, .34), transparent 100%),
+        radial-gradient(1px 1px at 7% 58%, rgba(255, 246, 220, .3), transparent 100%),
+        radial-gradient(1px 1px at 36% 72%, rgba(255, 246, 220, .4), transparent 100%),
+        radial-gradient(1px 1px at 70% 64%, rgba(255, 246, 220, .28), transparent 100%);
+    --rd-stars-opacity: .5;
+    --rd-overlay: rgba(4, 6, 10, .64);
+    --rd-toast-bg: #1b2230;
+    --rd-toast-fg: #f0e8d8;
+    --rd-ok: #7bbd82;
+    --rd-ok-soft: rgba(123, 189, 130, .13);
+    --rd-warn: #d9b06a;
+    --rd-warn-strong: #c39a56;
+    --rd-warn-bg: rgba(217, 176, 106, .1);
+    --rd-warn-border: rgba(217, 176, 106, .26);
+    --rd-danger: #e2857d;
+    --rd-danger-soft: rgba(226, 133, 125, .08);
+    --rd-danger-border: rgba(226, 133, 125, .22);
+    --rd-selection: rgba(211, 179, 106, .24);
+    --rd-scroll: rgba(214, 190, 140, .18);
+    --rd-avatar-ai-bg: #1a2130;
+    --rd-avatar-ai-fg: #d3b36a;
+    --rd-avatar-ai-border: rgba(211, 179, 106, .3);
+    --rd-avatar-user-bg: #2a2419;
+    --rd-avatar-user-fg: #e5cf9a;
+    --rd-avatar-user-border: rgba(211, 179, 106, .2);
+    --rd-font-display: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+    --rd-letter: .012em;
+}
+
+/* ==================== 2 · 暖米绿（原版本色） ==================== */
+html.rd[data-theme-template="olive"] {
+    --rd-bg: #f8f5f2;
+    --rd-body-bg:
+        radial-gradient(900px 720px at 88% -12%, rgba(189, 199, 154, .3) 0%, transparent 56%),
+        radial-gradient(1000px 820px at 24% 104%, rgba(205, 178, 163, .22) 0%, transparent 58%),
+        #f8f5f2;
+    --rd-surface: #ffffff;
+    --rd-surface-2: #f1e8e5;
+    --rd-surface-3: #e9ddda;
+    --rd-panel: #f1e8e5;
+    --rd-list-bg: #f1e8e5;
+    --rd-topbar-bg: rgba(248, 245, 242, .92);
+    --rd-rail-bg: #2c2117;
+    --rd-rail-bg-2: #221910;
+    --rd-rail-text: rgba(246, 239, 223, .5);
+    --rd-rail-active: rgba(167, 187, 108, .18);
+    --rd-rail-active-text: #e9edcf;
+    --rd-text: #4c3123;
+    --rd-text-2: #765e52;
+    --rd-text-3: #a48e84;
+    --rd-accent: #738746;
+    --rd-accent-strong: #5f6e38;
+    --rd-accent-soft: rgba(115, 135, 70, .1);
+    --rd-accent-border: rgba(115, 135, 70, .28);
+    --rd-accent-contrast: #ffffff;
+    --rd-accent-2: #e07a45;
+    --rd-accent-2-soft: rgba(224, 122, 69, .1);
+    --rd-border: #e6d8cb;
+    --rd-border-strong: #d9c7c0;
+    --rd-hover: #f1e8e5;
+    --rd-active: rgba(167, 187, 108, .1);
+    --rd-active-border: rgba(115, 135, 70, .26);
+    --rd-input: #fbf8f1;
+    --rd-user-bubble: #4c3123;
+    --rd-user-text: #f8f5f2;
+    --rd-user-border: transparent;
+    --rd-ai-bubble: #ffffff;
+    --rd-ai-border: #eaddc9;
+    --rd-shadow-1: 0 1px 2px rgba(76, 49, 35, .06);
+    --rd-shadow-2: 0 18px 44px rgba(67, 47, 36, .14);
+    --rd-btn-shadow: 0 1px 2px rgba(115, 135, 70, .22);
+    --rd-frame-bg: #ffffff;
+    --rd-frame-border: #e6d8cb;
+    --rd-frame-radius: 14px;
+    --rd-radius-sm: 8px;
+    --rd-radius-md: 12px;
+    --rd-radius-lg: 16px;
+    --rd-font-ui: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --rd-font-display: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --rd-letter: -.012em;
+    --rd-glow-1: rgba(189, 199, 154, .3);
+    --rd-glow-2: rgba(205, 178, 163, .24);
+    --rd-stars: none;
+    --rd-stars-opacity: 0;
+    --rd-overlay: rgba(50, 38, 22, .32);
+    --rd-toast-bg: #4c3123;
+    --rd-toast-fg: #f8f5f2;
+    --rd-ok: #6f9a3f;
+    --rd-ok-soft: rgba(111, 154, 63, .14);
+    --rd-warn: #b45309;
+    --rd-warn-strong: #9a3412;
+    --rd-warn-bg: #fdf3e6;
+    --rd-warn-border: #fed7aa;
+    --rd-danger: #c2453c;
+    --rd-danger-soft: #fdf2f1;
+    --rd-danger-border: #efd2cf;
+    --rd-selection: rgba(115, 135, 70, .25);
+    --rd-scroll: #d9c7c0;
+    --rd-avatar-ai-bg: #4c3123;
+    --rd-avatar-ai-fg: #f8f5f2;
+    --rd-avatar-ai-border: transparent;
+    --rd-avatar-user-bg: #e9ddda;
+    --rd-avatar-user-fg: #4c3123;
+    --rd-avatar-user-border: transparent;
+    --rd-blur: none;
+}
+
+html.rd[data-theme-template="olive"][data-theme="dark"] {
+    --rd-bg: #1a1712;
+    --rd-body-bg:
+        radial-gradient(900px 720px at 88% -12%, rgba(167, 187, 108, .07) 0%, transparent 56%),
+        radial-gradient(1000px 820px at 24% 104%, rgba(205, 178, 163, .05) 0%, transparent 58%),
+        #1a1712;
+    --rd-surface: #221e17;
+    --rd-surface-2: #2a251c;
+    --rd-surface-3: #332d21;
+    --rd-panel: #1d1a13;
+    --rd-list-bg: #1d1a13;
+    --rd-topbar-bg: rgba(26, 23, 18, .9);
+    --rd-rail-bg: #12100b;
+    --rd-rail-bg-2: #0c0a07;
+    --rd-rail-text: rgba(237, 228, 211, .46);
+    --rd-rail-active: rgba(167, 187, 108, .14);
+    --rd-rail-active-text: #d6e0b0;
+    --rd-text: #ede4d3;
+    --rd-text-2: #b3a68d;
+    --rd-text-3: #7d7462;
+    --rd-accent: #a7bb6c;
+    --rd-accent-strong: #b9cc82;
+    --rd-accent-soft: rgba(167, 187, 108, .13);
+    --rd-accent-border: rgba(167, 187, 108, .26);
+    --rd-accent-contrast: #232a0d;
+    --rd-accent-2: #ff9a6b;
+    --rd-accent-2-soft: rgba(255, 154, 107, .11);
+    --rd-border: rgba(214, 203, 168, .12);
+    --rd-border-strong: rgba(214, 203, 168, .24);
+    --rd-hover: rgba(255, 255, 255, .05);
+    --rd-active: rgba(167, 187, 108, .1);
+    --rd-active-border: rgba(167, 187, 108, .2);
+    --rd-input: rgba(255, 255, 255, .04);
+    --rd-user-bubble: #a7bb6c;
+    --rd-user-text: #232a0d;
+    --rd-user-border: transparent;
+    --rd-ai-bubble: rgba(255, 255, 255, .05);
+    --rd-ai-border: rgba(214, 203, 168, .1);
+    --rd-shadow-1: 0 1px 2px rgba(0, 0, 0, .2);
+    --rd-shadow-2: 0 20px 50px rgba(0, 0, 0, .5);
+    --rd-btn-shadow: 0 1px 2px rgba(0, 0, 0, .3);
+    --rd-frame-bg: #1a1712;
+    --rd-frame-border: rgba(214, 203, 168, .14);
+    --rd-frame-radius: 14px;
+    --rd-glow-1: rgba(167, 187, 108, .12);
+    --rd-glow-2: rgba(205, 178, 163, .08);
+    --rd-stars: none;
+    --rd-stars-opacity: 0;
+    --rd-overlay: rgba(8, 6, 3, .62);
+    --rd-toast-bg: #332d21;
+    --rd-toast-fg: #ede4d3;
+    --rd-ok: #9cc069;
+    --rd-ok-soft: rgba(156, 192, 105, .13);
+    --rd-warn: #d9a75f;
+    --rd-warn-strong: #c3924a;
+    --rd-warn-bg: rgba(217, 167, 95, .1);
+    --rd-warn-border: rgba(217, 167, 95, .26);
+    --rd-danger: #ff8b82;
+    --rd-danger-soft: rgba(255, 139, 130, .08);
+    --rd-danger-border: rgba(255, 139, 130, .22);
+    --rd-selection: rgba(167, 187, 108, .26);
+    --rd-scroll: #4a4230;
+    --rd-avatar-ai-bg: #332d21;
+    --rd-avatar-ai-fg: #d6e0b0;
+    --rd-avatar-ai-border: rgba(167, 187, 108, .26);
+    --rd-avatar-user-bg: #35301f;
+    --rd-avatar-user-fg: #d8cfb8;
+    --rd-avatar-user-border: transparent;
+}
+
+/* ==================== 3 · 雾蓝日系 ==================== */
+html.rd[data-theme-template="mist"] {
+    --rd-bg: #eef5fa;
+    --rd-body-bg:
+        radial-gradient(900px 700px at 10% -8%, #f9fdff 0%, transparent 58%),
+        radial-gradient(820px 680px at 100% 20%, #f7eef1 0%, transparent 58%),
+        radial-gradient(900px 760px at 50% 110%, #e6f2f9 0%, transparent 60%),
+        #eef5fa;
+    --rd-surface: rgba(255, 255, 255, .78);
+    --rd-surface-2: rgba(255, 255, 255, .56);
+    --rd-surface-3: rgba(214, 232, 242, .62);
+    --rd-panel: #e6f0f7;
+    --rd-list-bg: #e6f0f7;
+    --rd-topbar-bg: rgba(238, 245, 250, .78);
+    --rd-rail-bg: #2b4658;
+    --rd-rail-bg-2: #1d3545;
+    --rd-rail-text: rgba(255, 255, 255, .58);
+    --rd-rail-active: rgba(255, 255, 255, .15);
+    --rd-rail-active-text: #ffffff;
+    --rd-text: #2a3d4a;
+    --rd-text-2: #5c7280;
+    --rd-text-3: #8199a7;
+    --rd-accent: #4d8fb4;
+    --rd-accent-strong: #3b7597;
+    --rd-accent-soft: rgba(77, 143, 180, .1);
+    --rd-accent-border: rgba(77, 143, 180, .22);
+    --rd-accent-contrast: #ffffff;
+    --rd-accent-2: #c07d92;
+    --rd-accent-2-soft: rgba(226, 169, 184, .16);
+    --rd-border: rgba(84, 124, 150, .15);
+    --rd-border-strong: rgba(84, 124, 150, .3);
+    --rd-hover: rgba(255, 255, 255, .55);
+    --rd-active: rgba(77, 143, 180, .1);
+    --rd-active-border: rgba(77, 143, 180, .18);
+    --rd-input: rgba(255, 255, 255, .65);
+    --rd-user-bubble: linear-gradient(135deg, #6aa6c9, #4d8fb4);
+    --rd-user-text: #ffffff;
+    --rd-user-border: transparent;
+    --rd-ai-bubble: rgba(255, 255, 255, .78);
+    --rd-ai-border: rgba(255, 255, 255, .9);
+    --rd-shadow-1: 0 2px 10px rgba(70, 120, 150, .06);
+    --rd-shadow-2: 0 20px 50px rgba(70, 120, 150, .17);
+    --rd-btn-shadow: 0 4px 12px rgba(77, 143, 180, .22);
+    --rd-frame-bg: rgba(255, 255, 255, .5);
+    --rd-frame-border: rgba(255, 255, 255, .55);
+    --rd-frame-radius: 24px;
+    --rd-radius-sm: 11px;
+    --rd-radius-md: 16px;
+    --rd-radius-lg: 22px;
+    --rd-font-ui: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --rd-font-display: "Noto Serif SC", "Songti SC", "SimSun", Georgia, serif;
+    --rd-letter: .02em;
+    --rd-glow-1: rgba(122, 178, 210, .28);
+    --rd-glow-2: rgba(226, 169, 184, .22);
+    --rd-stars: none;
+    --rd-stars-opacity: 0;
+    --rd-overlay: rgba(30, 60, 80, .28);
+    --rd-toast-bg: #2b4658;
+    --rd-toast-fg: #ffffff;
+    --rd-ok: #4f9e7a;
+    --rd-ok-soft: rgba(79, 158, 122, .13);
+    --rd-warn: #b07c2c;
+    --rd-warn-strong: #94651f;
+    --rd-warn-bg: rgba(255, 247, 235, .8);
+    --rd-warn-border: #edcd9b;
+    --rd-danger: #bf5f63;
+    --rd-danger-soft: rgba(191, 95, 99, .08);
+    --rd-danger-border: rgba(191, 95, 99, .22);
+    --rd-selection: rgba(77, 143, 180, .22);
+    --rd-scroll: rgba(84, 124, 150, .25);
+    --rd-avatar-ai-bg: #ffffff;
+    --rd-avatar-ai-fg: #4d8fb4;
+    --rd-avatar-ai-border: rgba(77, 143, 180, .25);
+    --rd-avatar-user-bg: #e2a9b8;
+    --rd-avatar-user-fg: #ffffff;
+    --rd-avatar-user-border: transparent;
+    --rd-blur: blur(14px) saturate(1.15);
+}
+
+html.rd[data-theme-template="mist"][data-theme="dark"] {
+    --rd-bg: #0d1a23;
+    --rd-body-bg:
+        radial-gradient(900px 700px at 8% -10%, #17303f 0%, transparent 58%),
+        radial-gradient(800px 660px at 100% 22%, #2a1f2b 0%, transparent 58%),
+        radial-gradient(900px 760px at 50% 112%, #112531 0%, transparent 60%),
+        #0d1a23;
+    --rd-surface: rgba(22, 38, 49, .8);
+    --rd-surface-2: rgba(30, 50, 63, .7);
+    --rd-surface-3: #23394a;
+    --rd-panel: #0f1e28;
+    --rd-list-bg: #0f1e28;
+    --rd-topbar-bg: rgba(13, 26, 35, .82);
+    --rd-rail-bg: #08141c;
+    --rd-rail-bg-2: #050e13;
+    --rd-rail-text: rgba(232, 244, 250, .52);
+    --rd-rail-active: rgba(143, 195, 222, .14);
+    --rd-rail-active-text: #c6e6f5;
+    --rd-text: #e8f2f7;
+    --rd-text-2: #a9c1cf;
+    --rd-text-3: #718d9c;
+    --rd-accent: #8fc3de;
+    --rd-accent-strong: #6ea9c7;
+    --rd-accent-soft: rgba(143, 195, 222, .12);
+    --rd-accent-border: rgba(143, 195, 222, .22);
+    --rd-accent-contrast: #0b1a24;
+    --rd-accent-2: #d99bb0;
+    --rd-accent-2-soft: rgba(217, 155, 176, .1);
+    --rd-border: rgba(160, 200, 225, .12);
+    --rd-border-strong: rgba(160, 200, 225, .24);
+    --rd-hover: rgba(255, 255, 255, .045);
+    --rd-active: rgba(143, 195, 222, .08);
+    --rd-active-border: rgba(143, 195, 222, .16);
+    --rd-input: rgba(255, 255, 255, .04);
+    --rd-user-bubble: linear-gradient(135deg, #5a94b6, #3f7898);
+    --rd-user-text: #ffffff;
+    --rd-user-border: transparent;
+    --rd-ai-bubble: rgba(255, 255, 255, .06);
+    --rd-ai-border: rgba(160, 200, 225, .1);
+    --rd-shadow-1: 0 2px 10px rgba(0, 0, 0, .18);
+    --rd-shadow-2: 0 22px 54px rgba(0, 0, 0, .5);
+    --rd-btn-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+    --rd-frame-bg: rgba(13, 26, 35, .72);
+    --rd-frame-border: rgba(160, 200, 225, .14);
+    --rd-frame-radius: 24px;
+    --rd-glow-1: rgba(90, 150, 185, .17);
+    --rd-glow-2: rgba(200, 130, 150, .12);
+    --rd-stars: none;
+    --rd-stars-opacity: 0;
+    --rd-overlay: rgba(3, 10, 15, .64);
+    --rd-toast-bg: #16303f;
+    --rd-toast-fg: #e8f2f7;
+    --rd-ok: #63c59c;
+    --rd-ok-soft: rgba(99, 197, 156, .12);
+    --rd-warn: #d9b06a;
+    --rd-warn-strong: #c39a56;
+    --rd-warn-bg: rgba(217, 176, 106, .1);
+    --rd-warn-border: rgba(217, 176, 106, .24);
+    --rd-danger: #ec8f88;
+    --rd-danger-soft: rgba(236, 143, 136, .08);
+    --rd-danger-border: rgba(236, 143, 136, .22);
+    --rd-selection: rgba(143, 195, 222, .24);
+    --rd-scroll: rgba(160, 200, 225, .18);
+    --rd-avatar-ai-bg: #16303f;
+    --rd-avatar-ai-fg: #8fc3de;
+    --rd-avatar-ai-border: rgba(143, 195, 222, .25);
+    --rd-avatar-user-bg: #3a657e;
+    --rd-avatar-user-fg: #ffffff;
+    --rd-avatar-user-border: transparent;
+}
+
+/* ==================== 4 · 石墨玻璃 ==================== */
+html.rd[data-theme-template="glass"] {
+    --rd-bg: #eef1f7;
+    --rd-body-bg:
+        radial-gradient(900px 700px at 8% -10%, #e5eaff 0%, transparent 56%),
+        radial-gradient(860px 700px at 100% 100%, #e2f6f3 0%, transparent 58%),
+        #eef1f7;
+    --rd-surface: rgba(255, 255, 255, .66);
+    --rd-surface-2: rgba(255, 255, 255, .5);
+    --rd-surface-3: rgba(230, 236, 246, .8);
+    --rd-panel: rgba(255, 255, 255, .46);
+    --rd-list-bg: rgba(255, 255, 255, .46);
+    --rd-topbar-bg: rgba(246, 248, 252, .75);
+    --rd-rail-bg: #171c28;
+    --rd-rail-bg-2: #10141d;
+    --rd-rail-text: rgba(255, 255, 255, .52);
+    --rd-rail-active: rgba(255, 255, 255, .1);
+    --rd-rail-active-text: #ffffff;
+    --rd-text: #19202e;
+    --rd-text-2: #57647a;
+    --rd-text-3: #8792a4;
+    --rd-accent: #465fd0;
+    --rd-accent-strong: #354bb0;
+    --rd-accent-soft: rgba(70, 95, 208, .1);
+    --rd-accent-border: rgba(70, 95, 208, .22);
+    --rd-accent-contrast: #ffffff;
+    --rd-accent-2: #48b8b0;
+    --rd-accent-2-soft: rgba(72, 184, 176, .12);
+    --rd-border: rgba(30, 45, 80, .11);
+    --rd-border-strong: rgba(30, 45, 80, .22);
+    --rd-hover: rgba(255, 255, 255, .6);
+    --rd-active: rgba(70, 95, 208, .08);
+    --rd-active-border: rgba(70, 95, 208, .18);
+    --rd-input: rgba(255, 255, 255, .7);
+    --rd-user-bubble: linear-gradient(135deg, #2a3550, #3c4a6b);
+    --rd-user-text: #ffffff;
+    --rd-user-border: rgba(255, 255, 255, .12);
+    --rd-ai-bubble: rgba(255, 255, 255, .7);
+    --rd-ai-border: rgba(255, 255, 255, .8);
+    --rd-shadow-1: 0 2px 10px rgba(60, 80, 120, .06);
+    --rd-shadow-2: 0 22px 54px rgba(60, 80, 120, .16);
+    --rd-btn-shadow: 0 6px 16px rgba(70, 95, 208, .22);
+    --rd-frame-bg: rgba(255, 255, 255, .4);
+    --rd-frame-border: rgba(255, 255, 255, .55);
+    --rd-frame-radius: 22px;
+    --rd-radius-sm: 10px;
+    --rd-radius-md: 14px;
+    --rd-radius-lg: 18px;
+    --rd-font-ui: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --rd-font-display: "Outfit Variable", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --rd-letter: -.01em;
+    --rd-glow-1: rgba(120, 150, 255, .28);
+    --rd-glow-2: rgba(90, 210, 195, .18);
+    --rd-stars: none;
+    --rd-stars-opacity: 0;
+    --rd-overlay: rgba(20, 30, 50, .3);
+    --rd-toast-bg: #1d2433;
+    --rd-toast-fg: #ffffff;
+    --rd-ok: #3c9c76;
+    --rd-ok-soft: rgba(60, 156, 118, .12);
+    --rd-warn: #a8761c;
+    --rd-warn-strong: #8c6214;
+    --rd-warn-bg: #fbf6ea;
+    --rd-warn-border: #ecd9b3;
+    --rd-danger: #bd4b45;
+    --rd-danger-soft: rgba(189, 75, 69, .08);
+    --rd-danger-border: rgba(189, 75, 69, .22);
+    --rd-selection: rgba(70, 95, 208, .22);
+    --rd-scroll: rgba(60, 80, 120, .2);
+    --rd-avatar-ai-bg: #ffffff;
+    --rd-avatar-ai-fg: #465fd0;
+    --rd-avatar-ai-border: rgba(70, 95, 208, .2);
+    --rd-avatar-user-bg: #2a3550;
+    --rd-avatar-user-fg: #ffffff;
+    --rd-avatar-user-border: transparent;
+    --rd-blur: blur(18px) saturate(1.2);
+}
+
+html.rd[data-theme-template="glass"][data-theme="dark"] {
+    --rd-bg: #0b0d12;
+    --rd-body-bg:
+        radial-gradient(900px 700px at 6% -10%, #151b2b 0%, transparent 56%),
+        radial-gradient(860px 700px at 100% 104%, #0d2020 0%, transparent 58%),
+        #0b0d12;
+    --rd-surface: rgba(255, 255, 255, .045);
+    --rd-surface-2: rgba(255, 255, 255, .07);
+    --rd-surface-3: rgba(255, 255, 255, .1);
+    --rd-panel: rgba(13, 16, 22, .68);
+    --rd-list-bg: rgba(13, 16, 22, .68);
+    --rd-topbar-bg: rgba(11, 13, 18, .72);
+    --rd-rail-bg: #07090d;
+    --rd-rail-bg-2: #04060a;
+    --rd-rail-text: rgba(238, 240, 245, .5);
+    --rd-rail-active: rgba(164, 184, 255, .12);
+    --rd-rail-active-text: #dbe4ff;
+    --rd-text: #eef0f5;
+    --rd-text-2: #a9b1c2;
+    --rd-text-3: #737d91;
+    --rd-accent: #a4b8ff;
+    --rd-accent-strong: #7f98f0;
+    --rd-accent-soft: rgba(164, 184, 255, .12);
+    --rd-accent-border: rgba(164, 184, 255, .22);
+    --rd-accent-contrast: #10131c;
+    --rd-accent-2: #7ce2d6;
+    --rd-accent-2-soft: rgba(124, 226, 214, .1);
+    --rd-border: rgba(255, 255, 255, .08);
+    --rd-border-strong: rgba(255, 255, 255, .16);
+    --rd-hover: rgba(255, 255, 255, .05);
+    --rd-active: rgba(164, 184, 255, .08);
+    --rd-active-border: rgba(164, 184, 255, .16);
+    --rd-input: rgba(255, 255, 255, .04);
+    --rd-user-bubble: linear-gradient(135deg, rgba(164, 184, 255, .3), rgba(124, 226, 214, .16));
+    --rd-user-text: #eef3ff;
+    --rd-user-border: rgba(164, 184, 255, .18);
+    --rd-ai-bubble: rgba(255, 255, 255, .05);
+    --rd-ai-border: rgba(255, 255, 255, .07);
+    --rd-shadow-1: 0 2px 12px rgba(0, 0, 0, .2);
+    --rd-shadow-2: 0 24px 60px rgba(0, 0, 0, .55);
+    --rd-btn-shadow: 0 2px 12px rgba(100, 130, 255, .22);
+    --rd-frame-bg: rgba(11, 13, 18, .72);
+    --rd-frame-border: rgba(255, 255, 255, .08);
+    --rd-frame-radius: 22px;
+    --rd-glow-1: rgba(120, 150, 255, .15);
+    --rd-glow-2: rgba(90, 220, 200, .1);
+    --rd-stars:
+        radial-gradient(1px 1px at 15% 22%, rgba(220, 230, 255, .4), transparent 100%),
+        radial-gradient(1px 1px at 42% 8%, rgba(220, 230, 255, .28), transparent 100%),
+        radial-gradient(1px 1px at 68% 18%, rgba(220, 230, 255, .34), transparent 100%),
+        radial-gradient(1px 1px at 88% 36%, rgba(220, 230, 255, .22), transparent 100%);
+    --rd-stars-opacity: .35;
+    --rd-overlay: rgba(4, 6, 10, .62);
+    --rd-toast-bg: #171c26;
+    --rd-toast-fg: #eef0f5;
+    --rd-ok: #6dd3a8;
+    --rd-ok-soft: rgba(109, 211, 168, .12);
+    --rd-warn: #d9b06a;
+    --rd-warn-strong: #c39a56;
+    --rd-warn-bg: rgba(217, 176, 106, .1);
+    --rd-warn-border: rgba(217, 176, 106, .24);
+    --rd-danger: #ec8f88;
+    --rd-danger-soft: rgba(236, 143, 136, .08);
+    --rd-danger-border: rgba(236, 143, 136, .2);
+    --rd-selection: rgba(164, 184, 255, .24);
+    --rd-scroll: rgba(255, 255, 255, .14);
+    --rd-avatar-ai-bg: rgba(164, 184, 255, .14);
+    --rd-avatar-ai-fg: #c9d4ff;
+    --rd-avatar-ai-border: rgba(164, 184, 255, .24);
+    --rd-avatar-user-bg: #2b3447;
+    --rd-avatar-user-fg: #dbe4ff;
+    --rd-avatar-user-border: rgba(255, 255, 255, .1);
+}
+
+/* 插件注册的主题：把插件给的 --pixso-* 映射回新结构 token */
+html.rd[data-theme-template]:not([data-theme="dark"]):not([data-theme-template="olive"]):not([data-theme-template="mist"]):not([data-theme-template="glass"]) {
+    --rd-bg: var(--pixso-canvas);
+    --rd-surface: var(--pixso-cream);
+    --rd-surface-2: var(--pixso-panel-soft);
+    --rd-panel: var(--pixso-panel);
+    --rd-list-bg: var(--pixso-panel);
+    --rd-text: var(--pixso-brown);
+    --rd-text-2: var(--pixso-brown-soft);
+    --rd-text-3: var(--pixso-brown-soft);
+    --rd-accent: var(--pixso-green);
+    --rd-accent-strong: var(--pixso-green-dark);
+    --rd-accent-2: var(--pixso-orange);
+    --rd-border: var(--pixso-line);
+    --rd-rail-bg: var(--tpl-rail, var(--pixso-brown));
+    --rd-rail-bg-2: var(--tpl-rail, var(--pixso-brown));
+    --rd-rail-text: var(--tpl-rail-ink, rgba(255, 255, 255, .6));
+    --rd-frame-bg: var(--pixso-surface);
+    --rd-frame-border: var(--pixso-line);
+}
+
+/* 原生 <select> 弹层：color-scheme 在部分 Chromium 下仍按默认白底画 option */
+html.rd select option,
+html.rd select optgroup {
+    background-color: var(--rd-surface);
+    color: var(--rd-text);
+}
+
+html.rd[data-theme="dark"] select option,
+html.rd[data-theme="dark"] select optgroup {
+    background-color: var(--rd-surface);
+    color: var(--rd-text);
+}
+
+html.rd:not([data-theme="dark"]) select option,
+html.rd:not([data-theme="dark"]) select optgroup {
+    background-color: var(--rd-surface);
+    color: var(--rd-text);
+}

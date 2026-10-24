@@ -1,180 +1,91 @@
-# ElainaChat Mod
+# ElainaChat 前端重构原型
 
-一个以插件（Mod）为核心的开源 AI 角色聊天应用：程序本体只有文字聊天 + Agent 能力，角色怎么呈现、界面长什么样，全部交给可装可卸的扩展包决定。
+独立于 `ElainaChat-mod` 的前端重构目录。这里有两个版本，原项目始终只读：
 
-> 上游说明：本项目基于 KaimeranFeran/ElainaChat-Open（MIT 协议）二次开发。上游采用 MIT（宽松许可，允许再许可），因此本项目整体以 GPLv3 发布，原作者的版权声明继续保留（见文末「许可与致谢」）。本项目处于测试状态，可能存在未知问题。
+- **根目录**：纯静态高保真原型，使用演示数据，用来对比四套视觉与交互。
+- **`app/`**：可运行替换版。后端、真实前端逻辑、插件、技能和一份数据快照都已复制到 `app/`，新界面已接上真实后端；布局已按本目录原型的方案改为全屏。默认端口 **4100**，不会影响原项目 3999。
+
+### 启动可运行版本
+
+```bash
+cd app
+node start.mjs
+# 浏览器打开 http://127.0.0.1:4100
+```
+
+Windows 也可以双击 `app/启动.bat`。详细说明见 [app/README.md](app/README.md)。
+
+### 预览纯静态原型
+
+```bash
+# 在 ElainaChat-redesign 目录下
+node preview.mjs
+# 浏览器打开 http://127.0.0.1:4173
+```
+
+也可以直接双击 `index.html`（无构建、无依赖，`file://` 下也能运行）。
+
+## 这一版包含什么
+
+- **完整应用外壳**：左侧窄导航 + 对话列表 + 主区，移动端切换为抽屉 + 底部导航。
+- **全部主要页面**：对话、语笺、旅行日记、成就、插件市场、设置（外观 / 角色 / 模型 / 能力 / 高级 / 插件 / 日志）。
+- **四套视觉方向**，右下角「设计实验室」可一键切换，深浅色分别调校：
+  1. 暗夜魔女书房 —— 羊皮纸、金线、夜航星点，衬线标题。
+  2. 现代极简 —— 中性灰白、细边框、大留白，接近 Claude / ChatGPT 的阅读感。
+  3. 雾蓝日系 —— 雾面玻璃、柔蓝与浅粉、圆角，轻小说氛围。
+  4. 石墨玻璃 —— 深灰底、玻璃层次、单一冷光强调色。
+- **可交互**：发消息（带演示回复）、停止生成、收藏/复制、搜索对话与语笺、插件安装/启停、分类管理、日记与语笺详情、语音通话浮层、公告、快捷键 `Esc` / `Ctrl+K`。
+- **响应式**：桌面、平板、手机三档；`prefers-reduced-motion` 下关闭动效。
+
+## 预览截图
+
+| 暗夜魔女书房 | 现代极简 |
+| --- | --- |
+| ![](screenshots/desktop-majo-chat.png) | ![](screenshots/desktop-minimal-chat.png) |
+| 雾蓝日系 · 语笺 | 石墨玻璃 · 插件市场 |
+| ![](screenshots/desktop-mist-notes.png) | ![](screenshots/desktop-glass-market.png) |
+| 设置 · 暗夜魔女书房 | 成就 · 暗夜魔女书房 |
+| ![](screenshots/desktop-majo-settings.png) | ![](screenshots/desktop-majo-achievements.png) |
+| 设计实验室 | 手机端对话 |
+| ![](screenshots/desktop-design-lab.png) | ![](screenshots/mobile-majo-chat.png) |
+| 玻璃主题弹窗 | 旅行日记 |
+| ![](screenshots/modal-glass-light.png) | ![](screenshots/desktop-majo-diary.png) |
+
+更多截图在 `screenshots/`。
 
 ## 目录
 
-- 项目亮点
-- 下载与安装
-- 扩展包（Mod / 插件）
-- 项目目录
-- 许可与致谢
-
-## 项目亮点
-
-- 可装可卸的扩展包 —— Galgame 剧情界面、桌宠、场景背景，都在应用内插件市场按需安装，卸载不留残留
-- 多套人设 —— 新建 / 复制 / 改名 / 删除并随时切换，切换时不会丢正在编辑的内容
-- 跨设备同步 + 备份互通 —— 数据分类落盘在服务端，电脑版与安卓版可互相导入备份
-- AI 能帮你干活 —— 电脑版可操作电脑文件，安卓版可操作手机（点击 / 滑动 / 输入 / 截图 / 读通知），还能安排定时任务
-- 语音 —— 云端 ASR 识别 + mimo tts 免费克隆音色（需自动key）
-- 消息渲染 —— Markdown + LaTeX
-- BYOK 直连 —— API Key 只存在你自己的设备上：没有作者网关、没有共享套餐、没有内置密钥
-- 自带访问控制 —— 密码 + 强度校验 + 三层防爆破 + HTTPS 自签证书，手机也能连
-- 隐藏彩蛋 —— 每年 10 月 17 日的「星屑之日」生日模式
-- 成就系统 —— 事件成就（如生日纪念）与进度成就两类，解锁后持久保留：删掉几段对话，已拿到的成就也不会被撤销
-
-## 下载与安装
-
-### 安卓版
-
-到 Releases 下载 `ElainaChat-mod-x.x.x-release.apk` 文件，在手机上允许「安装未知来源应用」后安装。
-
-### 电脑版
-
-到 Releases 下载最新版压缩包，解压后双击 `启动.bat` —— 需先安装 Node.js >= 20；无需 `npm install`，也无需构建。
-服务起来之后浏览器会**自动打开**；如果没打开（例如没有默认浏览器），黑色窗口里会打出地址，手动复制到浏览器即可。
-
-也可以克隆本仓库：
-
-```bash
-git clone https://github.com/XYZ921746/ElainaChat-mod.git
-cd ElainaChat-mod
-# 双击 启动.bat（会顺带打开浏览器），或：
-node web/serve.mjs
+```
+index.html          应用外壳与图标 sprite
+css/base.css        布局、组件、页面、响应式
+css/themes.css      四套主题 × 深浅色变量
+js/data.js          演示数据（对话、语笺、日记、成就、插件、日志）
+js/app.js           渲染与交互
+preview.mjs         本地静态预览服务
+screenshots/        最终效果截图
 ```
 
-浏览器打开 `http://127.0.0.1:3999`。默认端口是 **3999**；如果它被**别的程序**占用，会自动换到 4000、4001……（启动窗口里会打出实际地址，双击启动时浏览器也会自动打开正确的那个）。要是**本软件的另一个实例**已经在跑，双击启动不会再多起一个服务，直接把浏览器指到那个实例上就退出。也可以用 `PORT=xxxx node web/serve.mjs` 指定端口——显式指定时若被占用会直接报错，不自动换。
+## 预览参数
 
-### 电脑版 · 单文件 exe（完全不用装环境）
+调试或截图时可直接指定状态，不影响正常使用：
 
-在 Releases 下载 `ElainaChat-mod-<版本>-x64.exe`，**双击即用**——不需要 Node、不需要 `npm install`、不需要编译工具链，目标机器上什么都不用装。
-
-拷贝时只需拷这**一个文件**。首次启动会在它旁边解出运行目录，之后每次启动直接复用：
-
-```text
-你的文件夹/
-├─ ElainaChat-mod-1.3.4-x64.exe   # 就拷这一个
-├─ runtime/                        # 自动生成：程序本体（升级时整体替换）
-├─ data/                           # 自动生成：聊天记录 / 设置 / API Key
-├─ mods/                           # 自动生成：插件
-└─ skills/                         # 自动生成：技能
+```
+/?theme=majo|minimal|mist|glass
+  &mode=light|dark|system
+  &page=chat|notes|diary|achievements|market|settings
+  &tab=appearance|character|model|capability|advanced|plugins|logs
+  &conv=c1
 ```
 
-把整个文件夹挪到别的电脑、U 盘都能直接用。`data/` 与 `mods/` 永不随升级清空——升级只需换掉那一个 exe。
+## 与原项目的关系
 
-若把 exe 放进 `C:\Program Files` 这类没有写权限的目录，它会自动改把数据放到 `%LOCALAPPDATA%\ElainaChat-mod`（启动时会说明），功能不受影响。
+- 原项目 `D:/222/ElainaChat-mod` 只被读取，源码没有被修改；可运行版本完全在本目录的 `app/` 内。
+- 根目录原型使用演示数据，没有复制原项目的业务逻辑（`store.js`、`chat-stream.js`、`mods.js`、`host-slots.js` 等）。
+- `app/` 是**真实逻辑副本**：包含 `web/`、`server/`、`mods/`、`skills/` 和一份 `data/` 快照；四套主题直接作用在这份副本上。
+- 如果之后决定替换原项目：把 `app/web` 与 `app/server` 对齐回原仓库即可；React + Vite 重写仍然可以作为后续选项。
 
-自己打包（在仓库里）：
+## 已知边界
 
-```bash
-npm run pack:exe      # 产出 dist/ElainaChat-mod-<版本>-x64.exe
-```
-
-体积主要是一份 Node 运行时，所以每次打包后看 `dist/` 里那个文件的实际大小即可（不写死数字，它随 Node 版本浮动）。
-
-技术上用的是 Node 官方的 SEA（Single Executable Application）：把 `web/` 与 `server/` 作为资源塞进 `node.exe` 的副本，入口是一个只有几十行的启动器（`dist/Windows/launcher/launcher.cjs`）——它解包、设好目录、然后跑**原版** `serve.mjs`。所以 exe 版与浏览器版是同一份业务代码，行为一致。打包需要联网（注入工具 `postject` 经 npx 获取），但**运行**不需要网络、也不需要任何环境。
-
-浏览器版（`启动.bat` / `node web/serve.mjs`）不受影响，仍然是最省事的启动方式。
-
-### 双端能力对比
-
-| 能力 | 电脑版（Web） | 安卓版（APK） |
-|---|---|---|
-| 文字聊天 / 语音 / 主题 / 人设 | 支持 | 支持 |
-| Agent 操作电脑文件 | 支持（读写任意路径） | 不支持（手机没有“电脑文件”这个概念） |
-| Agent 操作手机 | 不支持 | 支持（点击 / 滑动 / 输入 / 截图 / 读通知等） |
-| Agent 读写手机文件 | 不支持 | 支持（工作区 + 你授权的文件夹，见下） |
-| 插件安装 / 卸载 | 支持（丢进 `mods/` 或应用内上传） | 支持（只能应用内上传，见下） |
-| 插件的服务端半边（`manifest.server`） | 支持（serve.mjs 装载） | 支持（内嵌 Node 跑在 `:node` 独立进程，与电脑端装载同一份 `server/mod-server.mjs`；内嵌服务未就绪时回落原生兜底） |
-| 软件内日志查看器 / 前端报错转发 / 日志落盘 | 支持 | 支持（内嵌 Node 实现，日志在应用数据目录 `elaina-data/logs/`；服务不可用时日志页显示空态） |
-| 数据备份 | 导出标准 zip | 导出到手机文档目录 |
-| 两者可互相导入备份 | 支持 | 支持 |
-
-「安卓能不能用电脑上的功能」——分三类看：
-
-1. 纯前端功能（聊天、语音、主题、人设、插件界面）：两端完全一样。代码是同一份，APK 只是把 `web/` 打进 WebView。
-2. 需要本地服务端的功能：APK 上没有 `serve.mjs`。其中一部分由内嵌 Node 服务承接（与电脑端共用同一批 `server/` 模块，日志接口、插件服务端半边、本地中转），一部分由原生拦截器用 Capacitor 插件替代实现（插件安装、数据存储）；Agent 操作电脑文件、执行电脑命令、`/api/data/*` 导入导出仍然只在电脑版有。
-3. 安卓独有的功能：AI 手机操作、手机文件读写、读取通知/短信/通讯录/日历 —— 这些电脑版没有（浏览器没有那层能力）。
-
-一句话：聊天与界面两端同构，但“能操作什么”是互补的 —— 电脑版能碰电脑文件，安卓版能碰手机。需要哪一端就装哪一端。
-
-## 扩展包（Mod / 插件）
-
-程序本体只有文字聊天 + Agent 能力，其余呈现方式全是扩展包，按需安装。插件**默认关闭**（含立绘、场景背景这类公共依赖），装完要手动开 —— 插件会改动界面，不该在你不知情时生效。只有插件作者在 `manifest.json` 里**显式**写 `"defaultEnabled": true` 才会默认启用。
-
-打开一个插件时，它依赖的前置插件会自动一起打开；前置没装或坏了时它会拒绝启动，并在卡片上写明缺什么、该装什么。反过来，有插件正在运行时，它依赖的那个插件不能直接关闭或卸载 —— 会弹窗提示先关掉哪个。
-
-### 怎么安装（应用内「插件市场」）
-
-1. 打开程序 → 设置 → 插件，点右上角的「✦ 插件市场」按钮
-2. 找到需要的扩展包，点「安装」—— 它会从 web 仓库下载对应的 zip 并自动装好
-3. 关掉弹窗，在插件列表里打开对应的开关
-
-市场是独立成窗的：插件栏管“本机已经装了什么”，市场管“从商店装”。两者数据源不同（本地磁盘 / 远程仓库），分开才不会让人搞不清“到底装没装”。
-
-## 项目目录
-
-```text
-ElainaChat-mod/
-├─ web/                 # 前端本体（唯一前端编辑入口）与本地服务入口
-│  ├─ index.html        # 单页骨架
-│  ├─ js/               # 前端模块：store / core / data / agent / ui / voice / settings / mods 等
-│  ├─ css/              # 主题与成就样式
-│  ├─ vendor/           # 宿主自带库：tailwind / marked / KaTeX（Live2D 引擎已移入 mods/live2d-models/）
-│  ├─ audio/            # 内置参考音频样本
-│  ├─ nodejs/           # 安卓端内嵌 Node 的引导器（电脑版不用）
-│  └─ serve.mjs         # 本地服务启动入口
-├─ server/              # 本地服务端：数据落盘 / 插件宿主 / Agent 中转
-│  ├─ store.mjs         # 数据与密钥读写（跨设备同步）
-│  ├─ mods.mjs          # 插件清单校验
-│  ├─ mod-server.mjs    # 插件的服务端半边（路由 / 上传 / 静态）
-│  ├─ relay.mjs         # 直连请求中转
-│  └─ skills.mjs        # 技能读写
-├─ scripts/             # 只放"验证"用的脚本（npm run check 跑的就是它们）
-│  ├─ check-*.mjs       # 按模块拆分的检查用例
-│  └─ check-harness.mjs # 共用运行时（断言计数 / 端口 / 等待）
-│  └─ test-browser.mjs  # 检查用的浏览器启动器
-├─ dist/                # 本地产物区（不入库）：打包工具按平台分好，见 dist/README.md
-│  ├─ Android/          # 打 APK 用：scripts/sync-web.mjs 把 web/ 同步进 ../android-app
-│  └─ Windows/          # 打 exe 用：scripts/pack-exe.mjs + launcher/launcher.cjs
-├─ skills/              # 技能目录（纯文本）
-├─ mods/                # 扩展包（Mod / 插件）本机入口，不入库
-├─ data/                # 运行时数据（chat 记录 / 设置 / 密钥 / 日志），不入库
-├─ README.md
-├─ 开发文档.md           # 架构说明、契约表与变更史
-├─ 启动.bat             # 电脑版一键启动（顺带打开浏览器）
-├─ package.json         # 元数据与 npm 脚本，运行时必需
-└─ LICENSE
-```
-
-项目根只有**程序本体 + 检查脚本 + 两套打包工具**：
-
-- 打 APK：`npm run build:apk`（`check` → `sync:web` → 在 `../android-app` 里构建）
-- 打 Windows 单文件 exe：`npm run pack:exe` → `dist/ElainaChat-mod-<版本>-x64.exe`
-
-打包工具本身的说明、依赖项目根的哪些文件、产物落在哪里，见 [dist/README.md](dist/README.md)。
-
-## 许可与致谢
-
-本项目代码采用 GNU General Public License v3.0（或更新版本，SPDX：`GPL-3.0-or-later`），全文见 LICENSE。分发或二次开发本项目的代码时，须同样以 GPLv3 开源并提供对应源码。
-
-### 上游
-
-本项目基于 KaimeranFeran/ElainaChat-Open（MIT）二次开发。保留原作者版权声明。上游采用 MIT（宽松许可，允许再许可），因此本项目整体改用 GPLv3 是合规的；原作者的版权声明保留不变。
-
-### 关于扩展包素材
-
-本仓库不包含插件、Mod、Live2D 模型等非本项目仓库内容。相关素材请各自查看对应的开源协议与许可。仓库只包含宿主程序本体，不含任何插件。
-
-### 权利边界
-
-本项目代码采用 GNU GPLv3。角色名称、角色卡内容、图片素材、Mod、Live2D 模型及第三方服务商商标的权利不因代码开源而自动转移，请按各自许可使用。
-
-- 角色名称与角色卡内容（如「伊蕾娜」「灰之魔女」等）—— 出自各自原作，权利属于原作者
-- 图片素材、Mod、Live2D 模型等 —— 见上节
-- 第三方服务商商标（DeepSeek、Anthropic、阿里云、小米等）—— 属于各自公司，本项目与它们没有隶属或合作关系
-- 仓库内的角色卡只是示例数据；换成你自己的角色请直接改
-
-如果你要基于本项目做二次开发或分发，代码部分按 GPLv3 处理即可（衍生作品须同样以 GPLv3 开源）；上述非代码内容需要你自己确认授权。
+- 模拟回复、安装状态、设置保存都只在内存 / localStorage 中，刷新后恢复演示数据。
+- 语音、真实模型请求、文件导入导出、Live2D 渲染未接入。
+- 字体通过 Google Fonts 非阻塞加载，加载失败时回落到系统字体，不影响布局。
