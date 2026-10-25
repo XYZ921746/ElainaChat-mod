@@ -480,6 +480,12 @@ const NATIVE_MOD_BLOCKED_EXT = new Set([
     '.exe', '.dll', '.bat', '.cmd', '.com', '.scr', '.msi', '.sh', '.ps1',
     '.html', '.htm', '.xhtml', '.hta', '.svg',
 ]);
+/** 插件安装路径上**允许**落盘的危险扩展名（白名单语义，与 server/zip.mjs 的
+ *  PLUGIN_EXTS 同一张表：插件确实要带自己的面板页 —— galgame 的 panel.html。
+ *  缺了这条豁免，手机端会把这些文件**静默跳过**：插件照常加载、唯独面板
+ *  404，两端行为分叉。落盘位置是 app 私有数据目录，比电脑版的静态目录
+ *  更封闭，豁免的风险面更小。.js/.ts 等脚本扩展不在黑名单里，无需在此列。 */
+const NATIVE_MOD_PLUGIN_EXTS = new Set(['.html', '.htm']);
 /** 单个插件解压后的体积上限（与 server/mods.mjs 的 MOD_MAX_BYTES 一致：64MB。
  *  之前写 20MB 且注释谎称一致 —— 同一个 30MB 的包电脑能装、手机装不上，
  *  用户无从理解。两端数值必须同源，注释必须可验证。） */
@@ -597,6 +603,33 @@ async function nativeDeletePlugin(fs, dir, modId) {
 }
 
 /**
+ * 读插件自带的说明文件（对应电脑版 GET /api/plugins/:id/readme）。
+ *
+ * 白名单与 server/mods.mjs 的 readReadme 是同一张表 —— 两端行为分叉
+ * （"电脑上读得到、手机上读不到"）是最难排查的一类问题，表必须逐项一致。
+ * Capacitor FS 没有便宜的"先 stat 再读"，这里读出来再查长度：256KB 的
+ * 上限本身挡的是"读不完的说明"，读进来再拦与先 stat 再拦效果相同。
+ */
+const NATIVE_README_NAMES = ['README.md', 'readme.md', 'README.txt', 'readme.txt', 'README', '说明.md'];
+
+async function nativeReadModReadme(fs, dir, modId) {
+    if (!NATIVE_MOD_ID_RE.test(modId)) return { ok: false, message: '插件名不合法' };
+    for (const name of NATIVE_README_NAMES) {
+        let text;
+        try {
+            const r = await fs.readFile({ path: `${NATIVE_MODS_DIR}/${modId}/${name}`, directory: dir, encoding: 'utf8' });
+            text = String(r && r.data || '');   // Capacitor readFile 回 {data}，不是裸字符串
+        } catch (e) { continue; }   // 这个名字不存在 → 试下一个
+        if (text.length > 256 * 1024) {
+            return { ok: false, message: '说明文件过大（超过 256KB），已拒绝读取' };
+        }
+        return { ok: true, name, text };
+    }
+    // 与电脑版同一句话：前端要区分"没有 README"与"读取失败"
+    return { ok: false, message: '该插件没有 README 文件' };
+}
+
+/**
  * 从内存里的 zip 安装插件到数据目录（对应电脑版 installFromBuffer）。
  *
  * 与 unzipBrowser 的分工：那个只管"解开"，这里管**全部安全判定与落盘** ——
@@ -648,7 +681,9 @@ async function nativeInstallPlugin(buf, rawName) {
         //   直接 lastIndexOf('.') 会被 `x.html::$DATA` / `x.html.` / `x.html␠`
         //   三种 Windows 写法绕过（server 端 8.42 修过的同一个洞）。
         const ext = nativeEffectiveExt(rel.split('/').pop() || '');
-        if (NATIVE_MOD_BLOCKED_EXT.has(ext)) { skipped++; continue; }
+        // 插件豁免（NATIVE_MOD_PLUGIN_EXTS）优先于黑名单：.html 对普通包是危险
+        //   扩展名，对插件是"自带面板页"—— 与电脑版 PLUGIN_EXTS 同语义
+        if (NATIVE_MOD_BLOCKED_EXT.has(ext) && !NATIVE_MOD_PLUGIN_EXTS.has(ext)) { skipped++; continue; }
         total += f.data.length;
         if (total > NATIVE_MOD_MAX_BYTES) throw new Error('插件解压后超过 ' + Math.round(NATIVE_MOD_MAX_BYTES / 1024 / 1024) + 'MB 上限');
         plan.push({ rel, data: f.data });
@@ -730,6 +765,14 @@ async function nativePluginsFetch(url, options) {
             const buf = new Uint8Array(body instanceof Blob ? await body.arrayBuffer() : await new Response(body).arrayBuffer());
             const r = await nativeInstallPlugin(buf, rawName);
             return json({ ok: true, id: r.id, files: r.written, skipped: r.skipped, message: `已安装 ${r.id}（${r.written} 个文件）` });
+        }
+        // 说明（README）：对齐电脑版 GET /api/plugins/:id/readme。
+        //   没有这条时手机端点「查看说明」直接网络失败 —— 插件管理三件套
+        //   （列表/安装/删除）原生实现了，说明这一条漏了。
+        const readmeMatch = String(url).match(/^\/api\/plugins\/([^/]+)\/readme$/);
+        if (readmeMatch && method === 'GET') {
+            const r = await nativeReadModReadme(fs, dir, decodeURIComponent(readmeMatch[1]));
+            return json(r);
         }
         // 删除：对齐电脑版 DELETE /api/plugins/:id
         const delMatch = String(url).match(/^\/api\/plugins\/([^/]+)$/);
@@ -934,11 +977,12 @@ if (IS_NATIVE_APP) {
             }
         }
         if (u.startsWith('/api/live2d/')) return nativeLive2dFetch(u, options || {});
-        // 插件管理（安装/列表/删除）：电脑版由 serve.mjs 提供，
+        // 插件管理（安装/列表/删除/说明）：电脑版由 serve.mjs 提供，
         //   手机版在这里原生实现（见 nativePluginsFetch 的说明）。
-        //   只拦这三个已知前缀，其余照常放行 —— 不然 store.js 等处的
+        //   只拦已知前缀，其余照常放行 —— 不然 store.js 等处的
         //   真实请求会被误劫持。
-        if (u === '/api/plugins' || u.startsWith('/api/plugins/install') || /^\/api\/plugins\/[^/]+$/.test(u)) {
+        if (u === '/api/plugins' || u.startsWith('/api/plugins/install')
+            || /^\/api\/plugins\/[^/]+$/.test(u) || /^\/api\/plugins\/[^/]+\/readme$/.test(u)) {
             return nativePluginsFetch(u, options || {});
         }
         return nativeOrigFetch(input, options);

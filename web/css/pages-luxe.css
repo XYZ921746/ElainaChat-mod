@@ -2021,3 +2021,18 @@ html.rd #settingsContent .memory-step-input {
     font-size: 13px !important;
     text-align: center;
 }
+
+/* ── 插件市场 · 下载悬浮窗（index.html #marketDlPanel / mod-market.js dlTasks）──
+   与市场全屏页同一套表面与文字色；进度条保持语义色（进行/成功/失败），
+   颜色本身是信息，不随主题换。 */
+html.rd #marketDlPanel {
+    background: var(--rd-surface) !important;
+    border-color: var(--rd-border) !important;
+    box-shadow: var(--rd-shadow-2, 0 12px 32px rgba(0, 0, 0, .18)) !important;
+    backdrop-filter: none;
+}
+html.rd #marketDlPanel .text-indigo-800 { color: var(--rd-text) !important; }
+html.rd #marketDlPanel .text-indigo-400 { color: var(--rd-text-2) !important; }
+html.rd #marketDlPanel .text-indigo-300 { color: var(--rd-text-2) !important; }
+html.rd #marketDlPanel .bg-black\/10 { background: var(--rd-border) !important; }
+html.rd #marketDlPanel #marketDlClear:hover { background: var(--rd-surface-2) !important; }

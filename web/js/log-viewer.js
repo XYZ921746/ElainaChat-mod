@@ -143,6 +143,170 @@
             + `<span class="log-msg">${esc(e.message)}</span></div>`;
     }
 
+    /**
+     * 导出当前过滤下的全部缓冲日志（「日志」栏工具栏的导出按钮）。
+     *
+     * 为什么要导出：手机上几百行等宽小字没法看，用户实际需要的是"把日志
+     *   发给懂的人"。分发顺序（系统选择器本身就是"是否 + 存哪里"的确认）：
+     *   ① APK：原生 ElainaExport 插件拉 **SAF「创建文档」选择器**
+     *      （ACTION_CREATE_DOCUMENT）—— 用户在系统文件管理器里自选目录和
+     *      文件名，选中即写入，无需任何存储权限。WebView 里做不到：
+     *      showSaveFilePicker 在 Android WebView 上不存在，a[download] 的
+     *      blob 会被 DownloadListener 静默丢掉（实测：UI 说"已导出"但全盘
+     *      找不到文件）。选择器打不开的极罕见环境回落固定目录：
+     *      公共 Download（Android 11+ 无需权限）→ CACHE（给出路径）。
+     *   ② 电脑：`showSaveFilePicker`（File System Access API）—— 真正的
+     *      系统"另存为"对话框，自选位置。Windows Chrome/Edge 也有
+     *      navigator.share，但桌面共享面板只有 Outlook 类目标，不选它。
+     *   ③ 手机浏览器（IS_MOBILE_DEVICE 且 canShare files）：navigator.share。
+     *   ④ 兜底：a[download]（Firefox/Safari 等无 FSA 的桌面浏览器；
+     *      下载受浏览器"每次询问"设置控制）。全部失败在状态栏说明。
+     *
+     * 过滤与页面**同一套**（级别药丸 / 模块 / 关键词 / 排除对话）——
+     *   导出"看到的"而不是"全部的"：用户排障时往往已经把范围收窄了。
+     *   要全量就把过滤清空再导。
+     *
+     * 文本格式与落盘日志对齐（`[时刻] [模块] [级别] [来源]: 正文`），但时刻
+     *   带完整日期 —— 页面上"今天几点"就够，文件是拿走的，必须自带日期。
+     *   文件头附环境信息（版本 / UA / 条数 / 过滤条件），给懂的人看的就是它。
+     */
+    async function exportLogs() {
+        const meta = el('logPageMeta');
+        const say = (t) => { if (meta) meta.textContent = t; };
+        const btn = el('logExportBtn');
+        if (btn) btn.disabled = true;
+        try {
+            const params = new URLSearchParams();
+            const lv = levelParam();
+            if (lv === '__none__') { say('所有级别都被关掉了 —— 没有可导出的内容'); return; }
+            if (lv) params.set('level', lv);
+            const tag = el('logTagSelect')?.value || '';
+            if (tag) params.set('tags', tag);
+            const search = el('logSearchInput')?.value?.trim() || '';
+            if (search) params.set('search', search);
+            params.set('limit', '3000');   // 缓冲容量（RING_CAPACITY），一次拿全
+            const res = await fetch('/api/logs/tail?' + params.toString(), { cache: 'no-store' });
+            const json = await res.json().catch(() => null);
+            if (!res.ok || !json || !json.ok) { say('导出失败：日志服务不可用'); return; }
+            const entries = (json.entries || []).slice().reverse()   // 旧 → 新
+                .filter(passesLocalFilter);
+            if (!entries.length) { say('当前过滤下没有日志可导出'); return; }
+
+            const p = (n, w = 2) => String(n).padStart(w, '0');
+            const stamp = (ts) => {
+                const d = new Date(ts);
+                return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
+                    + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+            };
+            const lines = entries.map((e) => {
+                const short = LEVEL_SHORT[e.level] || e.level;
+                return `[${stamp(e.ts)}] [${e.tag}] [${short}]` + (e.loc ? ` [${e.loc}]:` : '') + ` ${e.message}`;
+            });
+            const filters = [
+                lv && lv !== 'DEBUG' ? '级别≥' + lv : '',
+                tag ? '模块=' + tag : '',
+                search ? '关键词=' + search : '',
+                el('logHideChat')?.checked ? '已排除对话' : '',
+            ].filter(Boolean).join('，') || '无';
+            const head = [
+                'ElainaChat 运行日志导出',
+                '导出时间：' + stamp(Date.now()),
+                // 版本写在侧栏底部（"v2.0.0 · 魔女之旅"）—— 全页找 v 开头的那一个，
+                //   写死下标会因布局改动拿错元素（实测拿到过别处的 "1"）
+                '版本：' + (Array.from(document.querySelectorAll('[class*="text-[10px]"]'))
+                    .map((el) => el.textContent.trim())
+                    .find((t) => /^v\d/.test(t)) || ''),
+                '环境：' + navigator.userAgent,
+                '条数：' + lines.length + '（过滤：' + filters + '）',
+                '――――――――――――――――――――――――――',
+            ].join('\n');
+            const text = head + '\n' + lines.join('\n') + '\n';
+
+            const d = new Date();
+            const fname = 'elainachat-log-'
+                + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+                + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.txt';
+            const file = new File([text], fname, { type: 'text/plain' });
+
+            // ① APK：系统「创建文档」选择器 —— 自选保存位置（SAF，无需权限）
+            const cap = window.Capacitor;
+            const capFs = cap && cap.Plugins && cap.Plugins.Filesystem;
+            const capExport = cap && cap.Plugins && cap.Plugins.ElainaExport;
+            if (capFs && capExport && typeof capExport.saveText === 'function') {
+                const r = await capExport.saveText({ data: text, fileName: fname });
+                if (r && r.ok) { say('已保存到所选位置（' + lines.length + ' 条）'); return; }
+                if (r && r.reason === 'cancelled') { say('已取消导出'); return; }
+                // 选择器打不开等异常 → 在状态栏说明原因，落到固定目录兜底
+                say((r && r.text) || '系统选择器不可用，改存固定位置…');
+            }
+            if (capFs) {
+                const tryWrite = async (directory, path, okMsg) => {
+                    await capFs.writeFile({ path, data: text, directory, encoding: 'utf8', recursive: true });
+                    say(okMsg);
+                };
+                try {
+                    // Android 11+（API 30+）：公共 Download 创建自己的文件无需任何权限
+                    await tryWrite('EXTERNAL_STORAGE', 'Download/' + fname,
+                        '已保存到「下载」文件夹：' + fname + '（' + lines.length + ' 条）');
+                    return;
+                } catch (e) {
+                    // Android 10 及更老的权限模型写公共目录会失败 → 回落缓存，至少给得出路径
+                    try {
+                        await tryWrite('CACHE', 'log-exports/' + fname,
+                            '已导出到应用缓存：log-exports/' + fname + '（公共下载不可写：' + String((e && e.message) || e) + '）');
+                        return;
+                    } catch (e2) { /* 缓存也失败 → 落到 ②③ */ }
+                }
+            }
+
+            // ② 电脑：系统「另存为」对话框（File System Access API）
+            if (typeof window.showSaveFilePicker === 'function') {
+                try {
+                    const handle = await window.showSaveFilePicker({
+                        suggestedName: fname,
+                        types: [{ description: '文本文件', accept: { 'text/plain': ['.txt'] } }],
+                    });
+                    const w = await handle.createWritable();
+                    await w.write(file);
+                    await w.close();
+                    say('已保存到所选位置（' + lines.length + ' 条）');
+                    return;
+                } catch (e) {
+                    if (e && e.name === 'AbortError') { say('已取消导出'); return; }
+                    /* 手势丢失等异常 → 落到 ③④ */
+                }
+            }
+
+            // ③ 手机浏览器（仅移动端）：系统分享面板（桌面共享面板没有文件落点，跳过）
+            const mobile = (typeof IS_MOBILE_DEVICE !== 'undefined') && IS_MOBILE_DEVICE;
+            if (mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+                try {
+                    await navigator.share({ files: [file], title: fname });
+                    say('已通过系统分享发出 ' + fname);
+                    return;
+                } catch (e) {
+                    if (e && e.name === 'AbortError') { say('已取消分享'); return; }   // 用户关掉分享面板不算失败
+                    /* 不支持 files 的 share 会 throw —— 落到 ④ */
+                }
+            }
+            // ④ 兜底：浏览器下载（受浏览器"每次询问"设置控制）
+            try {
+                const url = URL.createObjectURL(file);
+                const a = document.createElement('a');
+                a.href = url; a.download = fname;
+                document.body.appendChild(a); a.click(); a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 5000);
+                say('已导出 ' + fname + '（' + lines.length + ' 条）');
+            } catch (e) {
+                say('导出失败：当前环境不支持保存，请截图或长按复制日志');
+            }
+        } catch (err) {
+            say('导出失败：' + String((err && err.message) || err));
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
     /** 日志区当前渲染的行数（状态栏与检查脚本都要用） */
     function renderedCount() {
         const box = el('logPageBox');
@@ -326,6 +490,7 @@
         el('logTagSelect')?.addEventListener('change', () => { lastTs = 0; lastSeq = -1; refresh(true); });
         el('logHideChat')?.addEventListener('change', () => { lastTs = 0; lastSeq = -1; refresh(true); });
         el('logRefreshBtn')?.addEventListener('click', () => { lastTs = 0; lastSeq = -1; refresh(true); });
+        el('logExportBtn')?.addEventListener('click', () => { void exportLogs(); });
         el('logClearBtn')?.addEventListener('click', () => {
             const box = el('logPageBox');
             if (box) box.innerHTML = '<div class="log-empty">（已清屏 —— 新日志会继续出现；日志文件未受影响）</div>';

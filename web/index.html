@@ -2108,13 +2108,18 @@
            于是"谁在上面"变成由 DOM 顺序决定 —— 改一下 HTML 里元素的位置就可能把对话框
            埋到别的弹窗后面。这里用 ID 选择器（优先级高于类选择器）+ !important 显式分层：
              100001 普通弹窗（设置、分类管理、移动会话…）
-             100002 实现方式面板 / 副屏监视窗（都从设置里打开，必须盖住设置；
-                    两者不会同时出现 —— 打开监视窗前会先关掉设置）
+             100002 实现方式面板 / 副屏监视窗 / 下载悬浮窗（都从设置或全局语境打开，
+                    要盖住设置页；与确认框不冲突 —— 确认框更高）
              100003 提示 / 确认对话框（要用户立刻做决定，永远在最上面 ——
                     包括盖住副屏监视窗，否则 AI 的授权确认会被画面挡住） */
         #backendPanel { z-index: 100002 !important; }
         #customModal { z-index: 100003 !important; }
         #screenWatchPanel { z-index: 100002 !important; }
+        /* 下载悬浮窗是**全局常驻件**：设置页开着也要看得见下载进度（所以必须高于
+           100001）；但卸载确认（#customModal）要压得住它，否则"确认卸载"会被
+           角落的进度条挡住。z-50 这类 utility 类压不过 .modal-overlay 的
+           !important，必须进这个阶梯。 */
+        #marketDlPanel { z-index: 100002 !important; }
         /* 插件弹窗：必须**高于主设置**（主设置本身也是 .modal-overlay，同层 100001）。
            ★ 为什么需要显式抬一档：打开插件设置时，主设置应当**留在后面当背景**，
              而不是被盖住或消失。同层时谁在上由 DOM 顺序决定 —— 显式抬一档最稳，
@@ -6474,6 +6479,9 @@
                                 <button id="logRefreshBtn" type="button" class="log-icon-btn" title="重新拉取全部日志" aria-label="刷新">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v6h6M20 20v-6h-6"/><path stroke-linecap="round" stroke-linejoin="round" d="M20 8A8 8 0 006.3 5.3L4 8m16 8l-2.3 2.7A8 8 0 014 16"/></svg>
                                 </button>
+                                <button id="logExportBtn" type="button" class="log-icon-btn" title="导出当前日志为文本文件（手机拉起分享面板，电脑直接下载）" aria-label="导出日志">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v11m0 0l-4-4m4 4l4-4M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
+                                </button>
                                 <button id="logClearBtn" type="button" class="log-icon-btn" title="清空当前显示（不删除日志文件）" aria-label="清屏">
                                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
                                 </button>
@@ -6948,6 +6956,21 @@
                 </div>
             </div>
         </div>
+    </div>
+    <!-- 下载悬浮窗：全局钉在应用右下角（不只市场里 —— 关掉市场去聊天也看得见
+         进度）。任务表由 mod-market.js 的 dlTasks 维护，「一次安装点击 = 一行」，
+         依赖包的进度也画在这里；行上可「停止」（中止这次安装）/「卸载」（装完反悔）。 -->
+    <div id="marketDlPanel" class="hidden fixed bottom-5 right-5 z-50 w-80 max-w-[calc(100vw-2.5rem)] rounded-xl border border-black/10 bg-white/95 shadow-2xl backdrop-blur" role="region" aria-label="下载进度">
+        <div id="marketDlHead" class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left" title="点一下展开/收起">
+            <span class="text-[11px] font-semibold text-indigo-800">下载</span>
+            <span id="marketDlCount" class="text-[10px] leading-none text-indigo-400"></span>
+            <span class="ml-auto flex flex-none items-center gap-1">
+                <button type="button" id="marketDlClear" class="hidden rounded px-1.5 py-0.5 text-[10px] text-indigo-400 hover:bg-black/5 hover:text-indigo-600" title="清掉已结束的行">清空</button>
+                <button type="button" id="marketDlHide" class="rounded px-1.5 py-0.5 text-[10px] text-indigo-400 hover:bg-black/5 hover:text-indigo-600" title="收起悬浮窗（开始新下载时会再出现）">✕</button>
+                <span id="marketDlCaret" class="pl-1 text-[10px] text-indigo-400">▾</span>
+            </span>
+        </div>
+        <div id="marketDlBody" class="max-h-56 space-y-2 overflow-y-auto scroll-soft px-3 pb-3"></div>
     </div>
 </body>
 </html>

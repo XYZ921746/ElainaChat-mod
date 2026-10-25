@@ -86,8 +86,15 @@
         return String(p.id) + '-' + (p.version || '0.0.0') + '.zip';
     }
 
-    /** 内置镜像源：GitHub Pages 在大陆常被墙，jsDelivr 可达性好得多 */
-    var MIRROR_INDEX_URL = 'https://cdn.jsdelivr.net/gh/XYZ921746/web@main/store/index.json';
+    /** 内置镜像源：GitHub Pages 在大陆常被墙，jsDelivr 系可达性好得多。
+     *  cdn.jsdelivr.net 在部分网络对整站连接重置（索引也取不到），所以把包镜像
+     *  那两个确定能落到包的域名（gcore / testingcf）也登记进索引候选 ——
+     *  索引与包的镜像清单不一致时，"包能下、市场却整个打不开"照样发生。 */
+    var MIRROR_INDEX_URLS = [
+        'https://cdn.jsdelivr.net/gh/XYZ921746/web@main/store/index.json',
+        'https://gcore.jsdelivr.net/gh/XYZ921746/web@main/store/index.json',
+        'https://testingcf.jsdelivr.net/gh/XYZ921746/web@main/store/index.json',
+    ];
     /**
      * 包下载镜像：把 GitHub Pages 的包地址映射到 jsDelivr 上。
      *
@@ -142,7 +149,7 @@
     }
 
     /**
-     * 商店源候选（按顺序尝试）：自定义源 → Pages → jsDelivr 镜像。
+     * 商店源候选（按顺序尝试）：自定义源 → Pages → jsDelivr 系镜像（见 MIRROR_INDEX_URLS）。
      *
      * 与公告源（data.js 的 announceSourceUrls）是同一条可达性
      *   思路：只给单点 URL 的话，源够不到的用户"整个市场都用不了"—— 多给一条镜像，
@@ -155,7 +162,7 @@
         try { custom = String(Store.getItem(URL_KEY) || '').trim(); } catch (e) { /* 忽略 */ }
         if (custom) push(custom);
         push(DEFAULT_INDEX_URL);
-        push(MIRROR_INDEX_URL);
+        for (var i = 0; i < MIRROR_INDEX_URLS.length; i++) push(MIRROR_INDEX_URLS[i]);
         return out;
     }
 
@@ -487,7 +494,7 @@
      * @param {number} total 文件总字节数（必须已知，分片边界靠它算）
      * @param {function} onProgress
      */
-    async function downloadZipSegmented(url, total, onProgress) {
+    async function downloadZipSegmented(url, total, onProgress, signal) {
         var n = segmentCountFor(total);
         var size = Math.ceil(total / n);
         var parts = new Array(n);
@@ -503,20 +510,24 @@
             var want = end - start + 1;
             var lastErr = null;
             for (var attempt = 0; attempt <= SEGMENT_RETRIES; attempt++) {
+                if (signal && signal.aborted) throw new Error('已停止');   // 停止后重试没有意义
                 // 上一次尝试已经吐出的字节要退回去（重试会重读同一段），
                 //   否则重试几次后进度会超过 100%
                 var before = 0;
+                var wd = idleWatch(signal);
                 try {
+                    wd.kick();
                     var res = await fetch(url, {
                         cache: 'no-store',
                         headers: { Range: 'bytes=' + start + '-' + end },
+                        signal: wd.signal,
                     });
                     if (res.status !== 206) {
                         // 200 = 服务端忽略了 Range，把整个文件当这一片发了回来。
                         //   不能当分片用（拼接会重复），直接放弃分片方案回退单流。
                         throw new Error('服务端不支持分片下载（HTTP ' + res.status + '）');
                     }
-                    var blob = await readStream(res, function (b) { before += b; bump(b); });
+                    var blob = await readStream(res, function (b) { before += b; bump(b); wd.kick(); });
                     if (blob.size === want) { parts[i] = blob; return; }
                     bump(-before);
                     throw new Error('分片长度不符（期望 ' + want + '，实收 ' + blob.size + '）');
@@ -526,6 +537,8 @@
                     // "不支持分片"是能力问题，重试也没用 → 立刻上抛给调用方回退单流。
                     //   其它错误（超时/断连/长度不符）才值得重试。
                     if (/不支持分片下载/.test(String(e && e.message))) throw e;
+                } finally {
+                    wd.done();
                 }
             }
             throw lastErr || new Error('分片下载失败');
@@ -538,23 +551,55 @@
     }
 
     /**
+     * 浏览器端 zip 完整性快检：文件尾部 64KB 内找 EOCD 签名（PK\x05\x06）。
+     *
+     * 为什么在客户端查：分片路径的总长在 Pages 这类源上只能信索引的 sizeBytes，
+     *   索引声明小了会拼出**尾部截断**的 zip —— 不查的话要等上传完、服务端解压
+     *   才报"unexpected end of file"，用户看不出是下载坏了还是插件坏了。
+     *   在这里当场发现就换下一个源（jsDelivr 系能读到真实 Content-Range）重下。
+     */
+    async function blobLooksCompleteZip(blob) {
+        try {
+            var tail = blob.slice(Math.max(0, blob.size - 65536));
+            var buf = new Uint8Array(await tail.arrayBuffer());
+            for (var i = buf.length - 22; i >= 0; i--) {   // EOCD 定长 22 字节起
+                if (buf[i] === 0x50 && buf[i + 1] === 0x4b && buf[i + 2] === 0x05 && buf[i + 3] === 0x06) return true;
+            }
+            return false;
+        } catch (e) { return true; }   // 检查本身失败不拦下载（交给服务端解压兜底）
+    }
+
+    /**
      * 下载一个 zip（多源回退）。
      *
      * 顺序由 packageMirrorUrls 决定（上次通的源 → 原地址 → 其余镜像）。
      *   并发解决"单流被限速"，多源解决"这条链路根本连不上" —— 两者互补，缺一不可：
      *   实测 Pages 会整条链路 20s 全超时，此时再多的并发也拿不到一个字节。
      *
+     * sizeHint 是索引里声明的包体积（sizeBytes）：跨域读不到 Content-Range 的源
+     *   （Pages）靠它才能启用分片，见 downloadZipFrom。
+     *
+     * signal 是用户「停止」的外部信号：已停止时不再尝试下一个源（否则每个源
+     *   都要陪一次立刻失败的请求才轮到退出）。
+     *
      * 每个源给一个**独立的快速失败预算**：源不通时我们希望尽快换下一个，而不是
      *   陪着它熬到默认超时（浏览器默认没有超时，一个死连接能挂几分钟）。用
      *   AbortController 给探测阶段加时限 —— 一旦探测成功（拿到 206 或 200），
-     *   时限就撤掉，正常传输不再受它影响。
+     *   时限就撤掉，正常传输交给 idleWatch 的无进展超时保护。
      */
-    async function downloadZip(url, onProgress) {
+    async function downloadZip(url, sizeHint, onProgress, signal) {
         var urls = packageMirrorUrls(url);
         var lastErr = null;
         for (var i = 0; i < urls.length; i++) {
+            if (signal && signal.aborted) throw new Error('已停止');
             try {
-                var blob = await downloadZipFrom(urls[i], onProgress);
+                var blob = await downloadZipFrom(urls[i], sizeHint, onProgress, signal);
+                if (!(await blobLooksCompleteZip(blob))) {
+                    // 截断的 zip 多半是这个源的总长取错了（见 blobLooksCompleteZip），
+                    //   换下一个源整份重下，不把坏字节交给服务端
+                    if (onProgress) onProgress(0, 0);
+                    throw new Error('下载结果不完整（zip 尾部缺失），换源重试');
+                }
                 // 记住这个源：同一次会话里后面的包直接从它开始，不必每个都先等一次超时
                 var b = baseOfPackageUrl(urls[i]);
                 if (b) lastGoodBase = b;
@@ -570,20 +615,60 @@
     /** 探测阶段的时限（毫秒）：源连不上时尽快换下一个，别陪着死连接熬 */
     var PROBE_TIMEOUT_MS = 8000;
 
-    /** 给 fetch 套一个只在"拿到响应头"之前生效的时限 */
-    async function fetchWithProbeTimeout(url, opts) {
+    /** 给 fetch 套一个只在"拿到响应头"之前生效的时限；external 供用户「停止」掐断 */
+    async function fetchWithProbeTimeout(url, opts, external) {
         var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
         var timer = null;
         var o = Object.assign({}, opts);
         if (ctrl) {
             o.signal = ctrl.signal;
+            if (external) {
+                var trip = function () { try { ctrl.abort(); } catch (e) { /* 忽略 */ } };
+                if (external.aborted) trip();
+                else external.addEventListener('abort', trip, { once: true });
+            }
             timer = setTimeout(function () { try { ctrl.abort(); } catch (e) { /* 忽略 */ } }, PROBE_TIMEOUT_MS);
+        } else if (external) {
+            o.signal = external;
         }
         try {
             return await fetch(url, o);
         } finally {
             if (timer) clearTimeout(timer);   // 响应头已到 → 时限作废，传输不再被掐
         }
+    }
+
+    /** 无进展超时（毫秒）：传输体这么久没收到任何新字节就中断这次 fetch */
+    var IDLE_TIMEOUT_MS = 20000;
+
+    /**
+     * "收字节续命"的看门狗。
+     *
+     * 为什么需要：浏览器 fetch 默认没有超时，商店源链路会出现"连得上但整条卡死"
+     *   （响应头已到、传输体一个字节都不再来）。探测时限只保到响应头，之后的
+     *   单流/分片传输若不设看门狗，按钮会永远停在某个百分比，用户只能干等。
+     *   用法：fetch 前调 kick() 起表，每收到一段数据 kick() 续命，读完 done() 撤表；
+     *   超时触发 abort() 让进行中的 read() 以异常结束，交给调用方既有的重试/换源。
+     *   external 是用户「停止」的外部信号，触发时同样掐断本次传输。
+     *   AbortController 不可用的环境退化为无保护（与不接看门狗时一致）。
+     */
+    function idleWatch(external) {
+        var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+        var timer = null;
+        if (ctrl && external) {
+            var trip = function () { try { ctrl.abort(); } catch (e) { /* 忽略 */ } };
+            if (external.aborted) trip();
+            else external.addEventListener('abort', trip, { once: true });
+        }
+        return {
+            signal: ctrl ? ctrl.signal : (external || undefined),
+            kick: function () {
+                if (!ctrl) return;
+                if (timer) clearTimeout(timer);
+                timer = setTimeout(function () { try { ctrl.abort(); } catch (e) { /* 忽略 */ } }, IDLE_TIMEOUT_MS);
+            },
+            done: function () { if (timer) clearTimeout(timer); },
+        };
     }
 
     /**
@@ -596,43 +681,61 @@
      *   ① 文件多大（分片边界靠它算）；② 服务端真的回 206（只看 Accept-Ranges
      *   声明不够，有的源声明了却回 200）；③ 这一跳链路此时通不通。
      *
+     * 总长有两个来源：Content-Range 响应头，或调用方传入的 sizeHint（索引里声明
+     *   的 sizeBytes）。跨域响应里 Content-Range 默认读不到 —— 它不在 CORS 安全
+     *   响应头里，Pages 也不发 Access-Control-Expose-Headers（jsDelivr 系发）。
+     *   只依赖这个头的话，分片在默认源上永远不会启动。分片边界自己算、长度自己
+     *   校验（blob.size === want），sizeHint 不准时会明确失败并退回单流。
+     *
      * 任何一步不成立（拿不到长度 / 非 206 / 体积太小）都**原样退回单流** ——
-     *   对不支持的源是零风险，行为与改动前一致。
+     *   对不支持的源是零风险，行为与不启用分片时一致。
      *
      * 为什么自己读流而不是 await res.blob()：要给用户看到进度 —— 一声不吭地等十几秒，
      *   用户会以为卡死了。拿不到 Content-Length（或环境不支持流式读取）时就退化成
      *   整体读，此时进度只显示已下载字节数。
      */
-    async function downloadZipFrom(url, onProgress) {
+    async function downloadZipFrom(url, sizeHint, onProgress, signal) {
         // ① 探测：1 字节 Range。206 + Content-Range 才说明分片可用
         var probe = null;
         var total = 0;
         try {
-            probe = await fetchWithProbeTimeout(url, { cache: 'no-store', headers: { Range: 'bytes=0-0' } });
+            probe = await fetchWithProbeTimeout(url, { cache: 'no-store', headers: { Range: 'bytes=0-0' } }, signal);
             if (probe.status === 206) {
                 // Content-Range: bytes 0-0/<total>
                 var m = /\/(\d+)\s*$/.exec(String(probe.headers.get('Content-Range') || ''));
-                total = m ? Number(m[1]) : 0;
+                total = m ? Number(m[1]) : (sizeHint > 0 ? sizeHint : 0);
             } else if (probe.ok) {
                 // 源不支持 Range（回了 200 整个文件）—— 这个响应体就是完整文件，
                 //   直接当单流用掉，不再多发一次请求
                 total = Number(probe.headers.get('Content-Length') || 0);
+                var wd0 = idleWatch(signal);
                 var got0 = 0;
-                var blob0 = await readStream(probe, function (b) {
-                    got0 += b;
-                    if (onProgress) onProgress(got0, total);
-                });
-                return new Blob([blob0], { type: 'application/zip' });
+                try {
+                    wd0.kick();
+                    var blob0 = await readStream(probe, function (b) {
+                        wd0.kick();
+                        got0 += b;
+                        if (onProgress) onProgress(got0, total);
+                    });
+                    return new Blob([blob0], { type: 'application/zip' });
+                } finally {
+                    wd0.done();
+                }
             }
-        } catch (e) { probe = null; /* 探测失败：走下面的单流，让它报真正的错 */ }
+        } catch (e) {
+            if (signal && signal.aborted) throw new Error('已停止');   // 用户停止不算"探测失败"
+            probe = null; /* 探测失败：走下面的单流，让它报真正的错 */
+        }
         if (probe && probe.body && typeof probe.body.cancel === 'function') {
             try { await probe.body.cancel(); } catch (e) { /* 忽略 */ }
         }
 
         if (total > MIN_SEGMENT_BYTES && segmentCountFor(total) > 1) {
+            if (signal && signal.aborted) throw new Error('已停止');
             try {
-                return await downloadZipSegmented(url, total, onProgress);
+                return await downloadZipSegmented(url, total, onProgress, signal);
             } catch (e) {
+                if (signal && signal.aborted) throw new Error('已停止');   // 停止不走回退，直接上抛
                 // 分片走不通（源中途改口、或网络让所有分片都失败）→ 退回单流再试一次。
                 //   不在这里吞错：单流也失败时抛出的是单流的错，那才是用户该看到的。
                 if (onProgress) onProgress(0, 0);
@@ -640,15 +743,23 @@
         }
 
         // ② 单流（原行为）：小包、不支持分片的源、或分片方案失败了
-        var res = await fetch(url, { cache: 'no-store' });
-        if (!res.ok) throw new Error('下载失败：HTTP ' + res.status);
-        var total2 = Number(res.headers.get('Content-Length') || 0) || total;
-        var got = 0;
-        var blob = await readStream(res, function (b) {
-            got += b;
-            if (onProgress) onProgress(got, total2);
-        });
-        return new Blob([blob], { type: 'application/zip' });
+        if (signal && signal.aborted) throw new Error('已停止');
+        var wd = idleWatch(signal);
+        try {
+            wd.kick();
+            var res = await fetch(url, { cache: 'no-store', signal: wd.signal });
+            if (!res.ok) throw new Error('下载失败：HTTP ' + res.status);
+            var total2 = Number(res.headers.get('Content-Length') || 0) || total || (sizeHint > 0 ? sizeHint : 0);
+            var got = 0;
+            var blob = await readStream(res, function (b) {
+                wd.kick();
+                got += b;
+                if (onProgress) onProgress(got, total2);
+            });
+            return new Blob([blob], { type: 'application/zip' });
+        } finally {
+            wd.done();
+        }
     }
 
     /**
@@ -695,11 +806,218 @@
         return out;
     }
 
-    /** 从市场安装一个插件（含其依赖）→ 下载 → 复用上传安装协议 → 刷新两栏 */
-    async function installFromMarket(p, btn) {
+    /* ── 下载悬浮窗（全局右下角）──────────────────────────────────────────
+     *
+     * 为什么要有：进度原先只画在「用户点的那颗按钮」上 —— 依赖包在按钮上永远
+     *   看不见，一次装多个时更是长时间无变化；换源/重试期间界面完全静止，
+     *   用户只能干等。悬浮窗按「一次安装点击 = 一行任务」展示：阶段、百分比、
+     *   字节数、失败原因；钉在**应用**右下角而非市场弹窗里 —— 关掉市场去聊天
+     *   也看得见，行上还能「停止」（中止这次安装）与「卸载」（装完反悔）。
+     *
+     * 任务表只活在内存：页面刷新即清空 —— 下载本就不能跨刷新续传，
+     *   把已死的任务留在窗上是骗人。
+     */
+    var dlTasks = new Map();      // id → task（Map 保持插入序，即展示序）
+    var dlSeq = 0;
+    var dlOpen = true;            // 折叠态只存内存：每次打开市场都该能一眼看到进度
+    var dlRenderQueued = false;   // 合帧标记：进度回调每收一段数据就触发一次
+    var dlDismissed = false;      // 点 ✕ 收起悬浮窗：只影响显示，下载照跑，新任务时自动回来
+
+    function dlTaskNew(title, pid, p) {
+        var id = ++dlSeq;
+        dlTasks.set(id, {
+            id: id, title: title, pid: pid || '', p: p || null,
+            phase: 'prep', note: '', got: 0, tot: 0, doneAt: 0,
+            stopped: false,
+            ctrl: (typeof AbortController === 'function') ? new AbortController() : null,
+        });
+        dlDismissed = false;   // 收起过也不影响：新一轮下载必须让用户看得见
+        dlRender();
+        return id;
+    }
+
+    function dlTaskPatch(id, patch) {
+        var t = dlTasks.get(id);
+        if (!t) return;
+        for (var k in patch) t[k] = patch[k];
+        dlRender();
+    }
+
+    /** 收束一个任务：phase ∈ done / error / stopped。行都**不自动消失** ——
+     *  成功行上还有「卸载」这个事后动作，失败/停止行有原因要回看；
+     *  想清屏用行上的 ✕、头部「清空」或整个悬浮窗的 ✕。 */
+    function dlTaskDone(id, phase, note) {
+        var t = dlTasks.get(id);
+        if (!t) return;
+        t.phase = phase;
+        t.note = note || '';
+        t.doneAt = Date.now();
+        dlRender();
+    }
+
+    /** 清掉所有已结束（成功/失败/已停止）的行；进行中的不许动 */
+    function dlDropFinished() {
+        var n = 0;
+        dlTasks.forEach(function (t) {
+            if (t.phase === 'done' || t.phase === 'error' || t.phase === 'stopped') { dlTasks.delete(t.id); n++; }
+        });
+        if (n) dlRender();
+    }
+
+    /** 用户点「停止」：先置 stopped（catch 据此归类成「已停止」而非失败），再掐断在途请求 */
+    function dlStop(id) {
+        var t = dlTasks.get(id);
+        if (!t || t.stopped) return;
+        t.stopped = true;
+        if (t.ctrl) { try { t.ctrl.abort(); } catch (e) { /* 忽略 */ } }
+        dlTaskPatch(id, { note: '正在停止…' });
+    }
+
+    /** 用户点「继续」：接着上次的中断点把这次安装跑完。
+     *  已装好的包不会重下（installFromMarket 重新解析依赖时按"已装"跳过）；
+     *  停止时正在下的那一个包没有断点信息，会从头下载 —— HTTP 下载中途的字节
+     *  不落盘，跨停止的断点续传要做缓存与校验，代价远超收益。 */
+    function dlResume(id) {
+        var t = dlTasks.get(id);
+        if (!t || t.phase !== 'stopped' || !t.p) return;
+        t.stopped = false;
+        t.ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+        dlTaskPatch(id, { phase: 'prep', note: '', got: 0, tot: 0 });
+        void installFromMarket(t.p, null, id);
+    }
+
+    /** 从悬浮窗卸载这次装上的主插件：与插件栏删除同一条链（依赖方检查 + DELETE + forget）。
+     *  只卸主插件、不动依赖 —— 依赖是共享底座，别的插件可能正指着它。 */
+    async function dlUninstall(id) {
+        var t = dlTasks.get(id);
+        if (!t || t.phase !== 'done' || !t.pid) return;
+        if (window.ElainaMods && typeof window.ElainaMods.dependentsOf === 'function') {
+            var using = window.ElainaMods.dependentsOf(t.pid);
+            if (using.length) {
+                var names = using.map(function (u) { return '「' + (u.name || u.id) + '」'; }).join('、');
+                if (typeof showCustomAlert === 'function') {
+                    showCustomAlert(names + ' 正在使用这个插件。如需卸载，请先关闭 ' + names + '。', '不能卸载');
+                } else {
+                    dlTaskDone(id, 'error', '不能卸载：' + names + ' 正在使用它');
+                }
+                return;
+            }
+        }
+        var okToGo = (typeof showCustomConfirm === 'function')
+            ? await showCustomConfirm('卸载插件「' + t.title + '」？\n\n会把插件目录和安装包一起删掉；要再用得重新下载。', '卸载插件')
+            : true;
+        if (!okToGo) return;
+        dlTaskPatch(id, { phase: 'uninstall', note: '' });
+        try {
+            var res = await fetch('/api/plugins/' + encodeURIComponent(t.pid), { method: 'DELETE' });
+            var data = await res.json().catch(function () { return null; });
+            if (!res.ok || !data || data.ok === false) throw new Error((data && data.message) || ('HTTP ' + res.status));
+            if (window.ElainaMods && typeof window.ElainaMods.forget === 'function') window.ElainaMods.forget(t.pid);
+            dlTaskDone(id, 'done', '已卸载（依赖的公共资源包保留）');
+            if (typeof refreshModsList === 'function') void refreshModsList();
+            void refreshMarketList();
+        } catch (err) {
+            dlTaskDone(id, 'error', '卸载失败：' + String((err && err.message) || err));
+        }
+    }
+
+    /** 渲染合帧：直写 DOM 会在大包下载时被字节回调刷成幻灯片，也浪费 */
+    function dlRender() {
+        if (dlRenderQueued) return;
+        dlRenderQueued = true;
+        setTimeout(function () { dlRenderQueued = false; dlRenderNow(); }, 120);
+    }
+
+    function dlPhaseText(t) {
+        if (t.phase === 'prep') return '准备中…';
+        if (t.phase === 'install') return '安装中…';
+        if (t.phase === 'uninstall') return '卸载中…';
+        if (t.phase === 'done') return '✅ 已完成';
+        if (t.phase === 'error') return '❌ 失败';
+        if (t.phase === 'stopped') return '⏹ 已停止';
+        if (t.tot > 0) return '下载 ' + Math.min(100, Math.floor(t.got / t.tot * 100)) + '%';
+        return '下载中 · 已下 ' + (fmtSize(t.got) || '0 KB');
+    }
+
+    function dlRowHtml(t) {
+        var pct = (t.tot > 0) ? Math.min(100, Math.floor(t.got / t.tot * 100)) : -1;
+        var barCls = 'h-full rounded-full transition-[width] duration-150 ';
+        var barStyle = '';
+        if (t.phase === 'done') { barCls += 'bg-emerald-500'; barStyle = 'width:100%'; }
+        else if (t.phase === 'error') { barCls += 'bg-red-400'; barStyle = 'width:100%'; }
+        else if (t.phase === 'stopped') { barCls += 'bg-slate-400'; barStyle = 'width:100%'; }
+        else if (t.phase === 'install') { barCls += 'bg-indigo-400 animate-pulse'; barStyle = 'width:100%'; }
+        else if (t.phase === 'uninstall') { barCls += 'bg-amber-400 animate-pulse'; barStyle = 'width:100%'; }
+        else if (pct >= 0) { barCls += 'bg-indigo-400'; barStyle = 'width:' + pct + '%'; }
+        else { barCls += 'bg-indigo-300 animate-pulse'; barStyle = 'width:100%'; }   // 总长未知：跳动脉冲
+
+        var note = String(t.note || '');
+        if (t.phase === 'download') {
+            note += (t.tot > 0)
+                ? ' · ' + (fmtSize(t.got) || '0 KB') + ' / ' + fmtSize(t.tot)
+                : ' · 已下 ' + (fmtSize(t.got) || '0 KB');
+        }
+        var noteCls = 'text-[10px] leading-relaxed mt-0.5 ' + (t.phase === 'error' ? 'text-red-500' : 'text-indigo-400');
+        // 行内动作：进行中给「停止」；成功给「卸载 + ✕」；已停止给「继续 + ✕」；失败只给 ✕
+        var act = '';
+        if (t.phase === 'prep' || t.phase === 'download' || t.phase === 'install') {
+            act = '<button type="button" data-dl-stop="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-red-400 hover:text-red-600" title="停止这次安装（已装上的包会留下）">停止</button>';
+        } else if (t.phase === 'done') {
+            act = '<button type="button" data-dl-un="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-400 hover:text-indigo-600" title="卸载这次装上的主插件（公共资源包保留）">卸载</button>'
+                + '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-300 hover:text-indigo-600" title="从列表移掉这一行">✕</button>';
+        } else if (t.phase === 'stopped') {
+            act = '<button type="button" data-dl-go="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-emerald-600 hover:text-emerald-700" title="接着装完（已装好的包不会重新下载）">继续</button>'
+                + '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-300 hover:text-indigo-600" title="从列表移掉这一行">✕</button>';
+        } else {
+            act = '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-300 hover:text-indigo-600" title="从列表移掉这一行">✕</button>';
+        }
+        return '<div class="market-dl-row" data-dl-id="' + t.id + '">'
+            + '<div class="flex items-baseline gap-2">'
+              + '<span class="truncate text-[11px] font-semibold text-indigo-800">' + esc(t.title) + '</span>'
+              + '<span class="flex-none text-[10px] text-indigo-400">' + esc(dlPhaseText(t)) + '</span>'
+              + '<span class="ml-auto flex flex-none items-center gap-0.5">' + act + '</span>'
+            + '</div>'
+            + (note ? '<div class="' + noteCls + '">' + esc(note) + '</div>' : '')
+            + '<div class="mt-1 h-1 overflow-hidden rounded-full bg-black/10"><div class="' + barCls + '" style="' + barStyle + '"></div></div>'
+            + '</div>';
+    }
+
+    function dlRenderNow() {
+        var panel = $('marketDlPanel');
+        var body = $('marketDlBody');
+        if (!panel || !body) return;
+        if (!dlTasks.size || dlDismissed) {
+            panel.classList.add('hidden');
+            body.innerHTML = '';
+            return;
+        }
+        panel.classList.remove('hidden');
+        var running = 0, finished = 0;
+        dlTasks.forEach(function (t) {
+            if (t.phase === 'done' || t.phase === 'error' || t.phase === 'stopped') finished++; else running++;
+        });
+        var count = $('marketDlCount');
+        if (count) count.textContent = running
+            ? (running + ' 个进行中' + (finished ? ' · ' + finished + ' 个已结束' : ''))
+            : (finished + ' 个已结束');
+        var clearBtn = $('marketDlClear');
+        if (clearBtn) clearBtn.classList.toggle('hidden', !finished);
+        var caret = $('marketDlCaret');
+        if (caret) caret.textContent = dlOpen ? '▾' : '▸';
+        var head = $('marketDlHead');
+        if (head) head.setAttribute('aria-expanded', dlOpen ? 'true' : 'false');
+        body.innerHTML = Array.from(dlTasks.values()).map(dlRowHtml).join('');
+        body.classList.toggle('hidden', !dlOpen);
+    }
+
+    /** 从市场安装一个插件（含其依赖）→ 下载 → 复用上传安装协议 → 刷新两栏。
+     *  reuseDlId：从悬浮窗「继续」进来时复用原任务行，不再新开一行。 */
+    async function installFromMarket(p, btn, reuseDlId) {
         var name = packageNameOf(p);
         var label = btn ? btn.textContent : '';
         if (btn) { btn.disabled = true; btn.textContent = '准备中…'; }
+        var dlId = reuseDlId || dlTaskNew(p.name || p.id, p.id, p);
+        var tsk = dlTasks.get(dlId);
         try {
             if (!p.downloadUrl) throw new Error('索引里这条没有 downloadUrl');
 
@@ -718,6 +1036,7 @@
 
             var done = [];
             for (var i = 0; i < queue.length; i++) {
+                if (tsk && tsk.stopped) break;   // 用户点过停止：后面的包（含本体）不再装
                 var item = queue[i];
                 var cur = item.plugin;
                 var isMain = cur.id === p.id;
@@ -732,20 +1051,27 @@
 
                 var pkgName = packageNameOf(cur);
                 setHint(prefix + '正在下载 ' + (cur.name || cur.id) + ' …', 'text-indigo-400');
-                var blob = await downloadZip(cur.downloadUrl, function (got, tot) {
-                    if (!btn || !isMain) return;   // 进度只画在用户点的那颗按钮上
-                    var shown;
-                    if (tot) shown = Math.floor(got / tot * 100) + '%';
-                    else shown = fmtSize(got) || (Math.round(got / 1024) + ' KB');
-                    btn.textContent = '下载 ' + shown;
-                });
+                var pkgBytes = Number(cur.sizeBytes) || 0;
+                dlTaskPatch(dlId, { phase: 'download', note: prefix + (cur.name || cur.id), got: 0, tot: pkgBytes });
+                var blob = await downloadZip(cur.downloadUrl, pkgBytes, function (got, tot) {
+                    // 按钮只画主插件的进度；悬浮窗每个包都画（依赖包在按钮上永远看不见）
+                    if (btn && isMain) {
+                        var shown;
+                        if (tot) shown = Math.floor(got / tot * 100) + '%';
+                        else shown = fmtSize(got) || (Math.round(got / 1024) + ' KB');
+                        btn.textContent = '下载 ' + shown;
+                    }
+                    dlTaskPatch(dlId, { got: got, tot: tot || pkgBytes });
+                }, tsk && tsk.ctrl ? tsk.ctrl.signal : undefined);
                 if (btn && isMain) btn.textContent = '安装中…';
+                dlTaskPatch(dlId, { phase: 'install', note: prefix + (cur.name || cur.id) });
                 setHint(prefix + '正在安装 ' + (cur.name || cur.id) + ' …', 'text-indigo-400');
 
                 var res = await fetch('/api/plugins/install?name=' + encodeURIComponent(pkgName), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/zip' },
                     body: blob,
+                    signal: tsk && tsk.ctrl ? tsk.ctrl.signal : undefined,   // 停止要能掐断上传
                 });
                 var data = await res.json().catch(function () { return null; });
                 if (!res.ok || !data || !data.ok) {
@@ -773,12 +1099,20 @@
             setHint((reloaded ? '✅ 已安装并已加载 ' : '✅ 已安装 ')
                 + (p.name || p.id) + extra
                 + (reloaded ? '，已生效。' : '，刷新页面后生效。'), 'text-emerald-600');
+            dlTaskDone(dlId, 'done', (reloaded ? '已安装并已加载' : '已安装，刷新页面后生效') + extra);
             // 插件栏那份清单必须跟着刷新，否则用户切过去看不到刚装的插件
             if (typeof refreshModsList === 'function') void refreshModsList();
             await refreshMarketList();
         } catch (err) {
+            // 用户主动停止 ≠ 失败：行收成「已停止」，按钮回原样，别标红吓人
+            var stopped = !!(tsk && tsk.stopped);
             if (btn) { btn.disabled = false; btn.textContent = label; }
-            setHint('安装失败：' + String((err && err.message) || err), 'text-red-500');
+            dlTaskDone(dlId, stopped ? 'stopped' : 'error',
+                stopped ? '已停止；点「继续」接着装，已装好的包不会重下' : String((err && err.message) || err));
+            setHint(stopped
+                ? '已停止安装 ' + (p.name || p.id) + '。已装上的包保留，想续装再点一次安装。'
+                : '安装失败：' + String((err && err.message) || err),
+                stopped ? 'text-amber-600' : 'text-red-500');
         }
     }
 
@@ -794,6 +1128,8 @@
         if (!overlay) return;
         overlay.classList.remove('hidden');
         overlay.classList.add('flex');
+        dlDismissed = false;   // 悬浮窗是全局的：进市场 = 想管下载，收起态要解开
+        dlRender();            // 下载中重开市场：任务行要立即反映当前进度
         void refreshMarketList();
     }
 
@@ -842,6 +1178,27 @@
 
         // 「插件」栏里的入口按钮（见 index.html 插件卡片标题行的那排按钮）
         $('modsMarketBtn')?.addEventListener('click', openMarket);
+
+        // 下载悬浮窗：停止/卸载/单行移除/清空/收起/折叠。事件委托 —— 行是整批
+        //   innerHTML 重建的，逐个绑定会在每次进度刷新后失效（与 marketList 同套路）
+        var dlPanel = $('marketDlPanel');
+        if (dlPanel) {
+            dlPanel.addEventListener('click', function (ev) {
+                var t = ev.target;
+                if (!t || !t.closest) return;
+                var go = t.closest('[data-dl-go]');
+                if (go) { dlResume(Number(go.getAttribute('data-dl-go'))); return; }
+                var stop = t.closest('[data-dl-stop]');
+                if (stop) { dlStop(Number(stop.getAttribute('data-dl-stop'))); return; }
+                var un = t.closest('[data-dl-un]');
+                if (un) { void dlUninstall(Number(un.getAttribute('data-dl-un'))); return; }
+                var x = t.closest('[data-dl-x]');
+                if (x) { dlTasks.delete(Number(x.getAttribute('data-dl-x'))); dlRender(); return; }
+                if (t.closest('#marketDlClear')) { dlDropFinished(); return; }
+                if (t.closest('#marketDlHide')) { dlDismissed = true; dlRender(); return; }
+                if (t.closest('#marketDlHead')) { dlOpen = !dlOpen; dlRender(); }
+            });
+        }
 
         // 关闭：✕ / 点遮罩 / Esc —— 与其它弹窗（插件 README、插件设置）同一套习惯
         $('marketClose')?.addEventListener('click', closeMarket);
