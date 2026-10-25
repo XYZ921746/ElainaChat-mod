@@ -339,12 +339,22 @@
                 else document.documentElement.setAttribute('data-theme-template', tpl);
                 // DIY 主题的变量是运行时算的，切走时要清掉注入的样式、切回来要重新注入
                 applyCustomTheme();
+                // 选中框必须在这里更新：走 View Transitions 时 mutate 是异步执行的，
+                //   在外面同步调 markPicker 读到的还是旧主题的属性 —— 表现就是
+                //   "颜色变了、框还停在上一张卡"，快速连点时框还会错位。
+                markPicker();
             };
             if (prevTpl !== tpl) radialTransition(mutate);
             else mutate();
             Store.setItem(TPL_KEY, tpl);
+            // View Transitions 在快速连点时的跳过语义不一致：被跳过的过渡其回调
+            //   执行与否、与后一个过渡回调的先后都可能变 —— 实测会出现"颜色已切到
+            //   最后点的那套、选中框停在倒数第二套"。属性写入与 markPicker 都可能
+            //   落在中间态，所以在动画时窗（.42s 揭示）内外各补一次同步，
+            //   保证 UI 必然收敛到最后一次点击的主题。markPicker 幂等，重复调用无副作用。
+            requestAnimationFrame(markPicker);
+            window.setTimeout(markPicker, 520);
         } catch (e) { /* 忽略 */ }
-        markPicker();
         return tpl;
     }
 

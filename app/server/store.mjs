@@ -10,13 +10,19 @@
 //    2. 人设卡/聊天记录没法单独分享或备份；
 //    3. 用户看不出"哪些文件是我的数据"。
 //
-//  现在按用途分文件，**人设卡与聊天记录都是一条一个文件**：
-//    data/store.json              设置 / API Key / UI 偏好（小、稳定、几乎不变）
-//    data/characters/index.json     人设卡顺序 + 当前选中
-//    data/characters/<id>.json      每张人设卡（可单独拷走分享）
-//    data/conversations/index.json  对话顺序 + 分类
-//    data/conversations/<id>.json   每个对话（可单独分享）
-//    data/memory/<类目>.json        记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
+//  现在按用途分文件，**人设卡与聊天记录都是一条一个文件**；目录分两层：
+//    data/main/  —— 主 data：软件级的所有记录
+//      store.json                设置 / API Key / UI 偏好（小、稳定、几乎不变）
+//      characters/index.json     人设卡顺序 + 当前选中
+//      characters/<id>.json      每张人设卡（可单独拷走分享）
+//      memory/<类目>.json        记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
+//      voice-samples/            音色参考样本
+//    data/conversations/ —— 对话 data：单个对话的所有记录
+//      index.json                对话顺序 + 分类
+//      <id>.json                 每个对话（可单独分享）
+//
+//  布局迁移：旧版本把 store.json / characters/ / memory/ / voice-samples/
+//  直接放在 data/ 顶层 —— migrateIfNeeded 开头会把它们收进 main/（幂等）。
 //
 //  关键设计：前端一行都不用改
 //  ----------------------------
@@ -54,6 +60,9 @@ const MEMORY_CATEGORIES = ['diary', 'promise', 'preference', 'plan', 'motivation
 const CHARACTERS_DIR = 'characters';
 const CONVERSATIONS_DIR = 'conversations';
 const MEMORY_DIR = 'memory';
+// 主 data 目录：软件级记录（设置/人设/记忆/音色样本）都住这里；
+// conversations/ 是与它平级的"对话 data"，见文件头部的布局图。
+const MAIN_DIR = 'main';
 
 // 参考音频：整段 base64 不许再住在 store.json 里。
 //
@@ -79,12 +88,14 @@ export const BACKUP_FORMAT = 'elainachat-backup';
 export const BACKUP_VERSION = 2;   // v1 = 单 JSON；v2 = zip（本版）
 
 export function createStore({ dataDir, log = () => {} }) {
-    const STORE_FILE = path.join(dataDir, 'store.json');
-    const charsDir = path.join(dataDir, CHARACTERS_DIR);
+    // main/ = 主 data；conversations/ = 对话 data（与 main/ 平级，见文件头布局图）
+    const mainDir = path.join(dataDir, MAIN_DIR);
+    const STORE_FILE = path.join(mainDir, 'store.json');
+    const charsDir = path.join(mainDir, CHARACTERS_DIR);
     const charsIndex = path.join(charsDir, 'index.json');
     const convDir = path.join(dataDir, CONVERSATIONS_DIR);
     const convIndex = path.join(convDir, 'index.json');
-    const memoryDir = path.join(dataDir, MEMORY_DIR);
+    const memoryDir = path.join(mainDir, MEMORY_DIR);
 
     let cache = null;
     // 缓存对应的 data/ 目录 mtime（见 loadStore 的说明）。
@@ -323,7 +334,7 @@ export function createStore({ dataDir, log = () => {} }) {
         try { parsed = JSON.parse(settings); } catch { return; }   // 非法 JSON：原样保留，不碰
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
 
-        const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+        const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
         await mkdir(sampleDir, { recursive: true });
 
         let changed = false;
@@ -381,7 +392,7 @@ export function createStore({ dataDir, log = () => {} }) {
             if (!value.startsWith('file:')) continue;
             if (value !== `file:${slot}`) { delete parsed[field]; changed = true; continue; }   // 未知槽位，丢弃
 
-            const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+            const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
             let bytes = null;
             let meta = null;
             for (const ext of ['.wav', '.mp3', '.bin']) {
@@ -403,14 +414,16 @@ export function createStore({ dataDir, log = () => {} }) {
         if (changed) obj[SETTINGS_KEY] = JSON.stringify(parsed);
     }
 
-    /** data/ 目录的 mtime（毫秒）；目录不存在返回 -1（表示"没有数据"） */
+    /**
+     * data/ 布局的时间戳；目录不存在返回 -1（表示"没有数据"）。
+     * 三个目录一起盯：main/ 与 conversations/ 里的外部改动（手工编辑、
+     * 从备份恢复）不一定 touch data/ 顶层的 mtime，只看顶层会漏。
+     */
     async function dataDirStamp() {
-        try {
-            const st = await stat(dataDir);
-            return st.mtimeMs;
-        } catch {
-            return -1;   // 目录被删掉了
-        }
+        const parts = await Promise.all([dataDir, mainDir, convDir].map(async (d) => {
+            try { return (await stat(d)).mtimeMs; } catch { return -1; }
+        }));
+        return parts.join(',');
     }
 
     /**
@@ -474,6 +487,37 @@ export function createStore({ dataDir, log = () => {} }) {
 
     // ------------------------------------------------------------ 迁移
     /**
+     * 老 data 的目录布局适配：把还住在 data/ 顶层的软件级记录收进 main/。
+     *
+     * 只在"旧位置存在、新位置不存在"时 rename —— 幂等，迁移过的启动直接跳过；
+     * conversations/ 本来就在顶层（对话 data 与主 data 平级），不动它。
+     * 必须跑在下面的键值迁移**之前**：那一步读的 STORE_FILE 已指向 main/store.json，
+     * 不先搬过去的话老 store.json 里的分类键会被漏掉。
+     */
+    async function moveIntoMain() {
+        const moves = [
+            ['store.json', path.join(dataDir, 'store.json'), STORE_FILE],
+            [CHARACTERS_DIR, path.join(dataDir, CHARACTERS_DIR), charsDir],
+            [MEMORY_DIR, path.join(dataDir, MEMORY_DIR), memoryDir],
+            [VOICE_SAMPLES_DIR, path.join(dataDir, VOICE_SAMPLES_DIR), path.join(mainDir, VOICE_SAMPLES_DIR)],
+        ];
+        for (const [label, from, to] of moves) {
+            try {
+                const oldExists = await stat(from).then(() => true, () => false);
+                const newExists = await stat(to).then(() => true, () => false);
+                if (oldExists && !newExists) {
+                    await mkdir(path.dirname(to), { recursive: true });
+                    await rename(from, to);
+                    log('info', `[store] 目录整理：${label} 已收进 main/`);
+                }
+            } catch (err) {
+                log('warn', `[store] 目录整理失败（${label}，数据留在原位，不影响读取）：`
+                    + (err && err.message ? err.message : err));
+            }
+        }
+    }
+
+    /**
      * 从旧的"全部挤在 store.json"迁移到分类文件。
      *
      * 只在检测到 store.json 里**还留着分类键**时才动手；迁移完这些键会从
@@ -482,6 +526,7 @@ export function createStore({ dataDir, log = () => {} }) {
      * @returns 迁移了哪些类目（空数组 = 无需迁移）
      */
     async function migrateIfNeeded() {
+        await moveIntoMain();
         const legacy = normalize(await readJson(STORE_FILE));
         const moved = [];
 
@@ -676,7 +721,7 @@ export function createStore({ dataDir, log = () => {} }) {
             }
         }
 
-        // 记忆：一类目一文件（与磁盘结构一致，用户解压后能直接看）
+        // 记忆：一类目一文件（备份 zip 的目录自成一格，不必与磁盘一一对应）
         try {
             const names = (await readdir(memoryDir)).filter((n) => n.endsWith('.json'));
             for (const name of names.sort()) {
@@ -685,9 +730,9 @@ export function createStore({ dataDir, log = () => {} }) {
             }
         } catch { /* 没有记忆目录就跳过 */ }
 
-        // 参考音频：音频本体 + 元数据（与磁盘结构一致，解压后能直接听）
+        // 参考音频：音频本体 + 元数据（解压后能直接听）
         try {
-            const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+            const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
             for (const name of (await readdir(sampleDir)).sort()) {
                 if (!VOICE_SAMPLE_FILE_RE.test(name)) continue;
                 const raw = await readFile(path.join(sampleDir, name));
@@ -813,7 +858,7 @@ export function createStore({ dataDir, log = () => {} }) {
 
             // 参考音频：备份里的音频文件落回 voice-samples/，
             // 设置里对应的 `file:<槽位>` 引用才能成立。
-            const sampleDir = path.join(dataDir, VOICE_SAMPLES_DIR);
+            const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
             for (const f of files) {
                 const base = f.name.replace(/\\/g, '/');
                 if (!base.startsWith(VOICE_SAMPLES_DIR + '/')) continue;

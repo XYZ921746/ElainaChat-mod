@@ -294,7 +294,13 @@ html.rd .sidebar-rail-logo {
     box-shadow: var(--rd-btn-shadow);
 }
 
-html.rd .sidebar-rail-logo svg { width: 22px !important; height: 22px !important; }
+html.rd .sidebar-rail-logo img {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: inherit;
+    object-fit: cover;
+    display: block;
+}
 
 html.rd .sidebar-rail-btn {
     width: 44px !important;
@@ -600,8 +606,9 @@ html.rd #conversationHistory {
 }
 
 html.rd .message-item {
-    max-width: min(1200px, 100%);
-    margin: 0 auto 30px !important;
+    /* 消息行铺满内容区：伊蕾娜消息贴左、用户消息贴右，宽屏下不再缩在居中柱里 */
+    max-width: 100%;
+    margin: 0 0 30px !important;
     position: relative;
     padding-left: 46px;
 }
@@ -613,7 +620,8 @@ html.rd .message-item::before {
     top: 0;
     width: 32px;
     height: 32px;
-    border-radius: 50%;
+    /* 头像统一用应用图标那套圆角方块，不用圆形 */
+    border-radius: 10px;
     display: grid;
     place-items: center;
     font-family: var(--rd-font-display);
@@ -625,13 +633,26 @@ html.rd .message-item::before {
     box-shadow: var(--rd-shadow-1);
 }
 
-html.rd .message-item-ai::before { content: "E"; left: 0; }
+html.rd .message-item-ai::before {
+    content: "";
+    left: 0;
+    border: 0;
+    /* 伊蕾娜头像用应用图标（与侧栏 logo / PWA 安装同一份素材），取景与左上角 logo 一致：全图 cover */
+    background: var(--rd-avatar-ai-bg) url("/icons/icon-192.png") center / cover no-repeat;
+}
 html.rd .message-item-user::before {
-    content: "旅";
+    /* 首字与头像都由用户资料下发（CSS 变量，见 data.js 的 applyUserProfileToUi）；
+       没设头像时回落到首字 + 主题底色 */
+    content: var(--rd-user-initial, "旅");
     right: 0;
     background: var(--rd-avatar-user-bg);
     color: var(--rd-avatar-user-fg);
     border-color: var(--rd-avatar-user-border);
+}
+html.rd.rd-has-user-avatar .message-item-user::before {
+    content: "";
+    border: 0;
+    background: var(--rd-avatar-user-bg) var(--rd-user-avatar) center / cover no-repeat;
 }
 
 html.rd .message-item > .flex { margin-bottom: 0 !important; }
@@ -766,33 +787,45 @@ html.rd .voice-duration { color: var(--rd-text-2) !important; }
 html.rd .voice-waveform i { background: var(--rd-accent) !important; }
 
 html.rd #thinking-bubble {
-    max-width: min(1200px, 100%);
-    margin: 0 auto 30px !important;
+    max-width: 100%;
+    margin: 0 0 30px !important;
     padding-left: 46px;
     position: relative;
 }
 html.rd #thinking-bubble .pixso-chat-avatar { display: none !important; }
 
 html.rd #thinking-bubble::before {
-    content: "E";
+    content: "";
     position: absolute;
     left: 0;
     top: 0;
     width: 32px;
     height: 32px;
-    border-radius: 50%;
+    border-radius: 10px;
     display: grid;
     place-items: center;
-    font-family: var(--rd-font-display);
-    font-size: 13px;
-    font-weight: 700;
-    border: 1px solid var(--rd-avatar-ai-border);
-    background: var(--rd-avatar-ai-bg);
-    color: var(--rd-avatar-ai-fg);
+    border: 0;
+    background: var(--rd-avatar-ai-bg) url("/icons/icon-192.png") center / cover no-repeat;
 }
 html.rd #thinking-bubble .bubble-ai { background: var(--rd-ai-bubble) !important; }
 html.rd .thinking-label { color: var(--rd-text-2) !important; }
 html.rd .thinking-dot { background: var(--rd-accent) !important; }
+
+/* 流式预览行的头像：与消息行同款应用图标、同尺寸、同圆角方块、同取景（全图 cover） */
+html.rd .pixso-chat-avatar {
+    width: 32px !important;
+    height: 32px !important;
+    flex-basis: 32px;
+    border-radius: 10px !important;
+    overflow: hidden;
+}
+html.rd .pixso-chat-avatar img {
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: inherit;
+    object-fit: cover;
+    display: block;
+}
 
 /* ---------- 初始页 ---------- */
 
@@ -905,7 +938,13 @@ html.rd #inputBar {
     background: linear-gradient(180deg, transparent, var(--rd-bg) 38%) !important;
 }
 
-html.rd .conversation-composer { max-width: min(1200px, 100%) !important; margin: 0 auto !important; }
+/* 输入条与消息区同宽贴边：基座层的 width: min(100%, 820px) 挂在 ID 上，
+   这里必须带同一个 ID 才盖得掉 */
+html.rd #inputBar .conversation-composer {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+}
 
 html.rd .composer-more-menu {
     /* 雾蓝/石墨主题的 surface 带透明度，菜单浮在消息上时下面的文字会透出来。
@@ -1193,13 +1232,6 @@ html.rd #diaryEmpty { color: var(--rd-text-3) !important; }
 
 html.rd #achievementsOverlay { z-index: 100001; }
 html.rd #achievementsOverlay .modal-panel { width: min(760px, 100%) !important; max-height: 88dvh !important; }
-html.rd #achievementsOverlay .modal-panel > div:first-child {
-    padding: 16px 20px !important;
-    border-bottom: 1px solid var(--rd-border) !important;
-    background: transparent !important;
-}
-html.rd .ach-title-icon { font-size: 17px; }
-html.rd #achievementsOverlay .text-base.font-bold { color: var(--rd-text) !important; font-family: var(--rd-font-display); font-size: 16px !important; }
 html.rd .ach-count {
     color: var(--rd-accent) !important;
     background: var(--rd-accent-soft) !important;
@@ -1208,9 +1240,6 @@ html.rd .ach-count {
     padding: 2px 8px;
     border-radius: 999px;
 }
-html.rd #achCloseBtn { color: var(--rd-text-3) !important; }
-html.rd #achCloseBtn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
-html.rd #achCategoriesBtn { font-size: 11px !important; }
 
 html.rd #achList {
     padding: 18px 20px 22px !important;
@@ -1779,3 +1808,36 @@ html.rd .mod-card.rd-ripple-static {
     outline: 3px solid rgba(211, 179, 106, .65);
     outline: 3px solid color-mix(in srgb, var(--color-primary) 65%, transparent);
 }
+
+/* ---------- 用户资料面板（data.js 动态建：左下角头像点开） ---------- */
+
+html.rd .profile-avatar-btn {
+    width: 64px;
+    height: 64px;
+    flex: none;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--rd-border);
+    background: var(--rd-surface);
+    color: var(--rd-text-2);
+    font-family: var(--rd-font-display);
+    font-size: 22px;
+    font-weight: 600;
+    cursor: pointer;
+    overflow: hidden;
+    transition: border-color .16s;
+}
+html.rd .profile-avatar-btn:hover { border-color: var(--rd-accent-border); }
+html.rd .profile-avatar-btn img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+html.rd .profile-impression-box {
+    border-color: var(--rd-border) !important;
+    background: var(--rd-surface-2) !important;
+}
+html.rd .profile-impression-text { color: var(--rd-text) !important; }
+html.rd .profile-impression-text.is-empty { color: var(--rd-text-3) !important; }

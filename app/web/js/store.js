@@ -30,6 +30,13 @@
         'elaina_theme_template',         // 主题模板
         'elaina_theme',                  // 明暗模式
         'elaina_theme_custom',           // 自定义主题色
+        // 重构版外观偏好（气泡形状 / 背景纹理，见 redesign-extras.js）。
+        // 必须列在这里：不列的话写入只进内存缓存，刷新即丢。
+        'elaina_rd_bubble',
+        'elaina_rd_texture',
+        // 用户资料（称呼 / 头像 / AI 写下的印象，见 data.js 的用户资料段）。
+        // 同上：不入白名单则刷新即丢。
+        'elaina_user_profile',
         'elaina_plugins_enabled',        // 插件系统总开关
         'live2d.bg',                     // Live2D 背景
         'live2d.mouseFollow',            // 鼠标跟随开关

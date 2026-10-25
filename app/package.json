@@ -5,6 +5,11 @@
   "license": "GPL-3.0-or-later",
   "main": "web/serve.mjs",
   "scripts": {
-    "start": "node start.mjs"
+    "start": "node start.mjs",
+    "check": "node scripts/run-checks.mjs",
+    "check:serial": "node scripts/run-checks.mjs --serial",
+    "check:fast": "node scripts/run-checks.mjs --only mod",
+    "pack:exe": "node dist/Windows/scripts/pack-exe.mjs",
+    "exe:check": "node scripts/check-exe.mjs"
   }
 }

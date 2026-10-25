@@ -90,7 +90,7 @@ function renderNotesPage(searchText = '') {
         card.className = 'group note-card cursor-pointer animate-fade-in-up';
         card.onclick = () => openFavoriteDetail(fav.id);
         const roleClass = fav.role === 'user' ? 'note-role-user' : fav.role === 'ai' ? 'note-role-ai' : 'note-role-quote';
-        const roleLabel = fav.role === 'user' ? '旅人' : fav.role === 'ai' ? '伊蕾娜' : '金句';
+        const roleLabel = fav.role === 'user' ? (getUserProfileName() || '旅人') : fav.role === 'ai' ? '伊蕾娜' : '金句';
         card.innerHTML = `
             <div class="flex items-center gap-2 mb-2">
                 <span class="note-role-badge ${roleClass}">${roleLabel}</span>
@@ -1544,13 +1544,7 @@ function renderThinkingMessage() {
     wrapper.className = 'flex gap-3 mb-4 thinking-bubble animate-fade-in-up';
     wrapper.innerHTML = `
         <div class="pixso-chat-avatar" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="currentColor">
-                <circle cx="12" cy="12" r="2.7"/>
-                <circle cx="5.5" cy="12" r="3.2"/>
-                <circle cx="18.5" cy="12" r="3.2"/>
-                <circle cx="12" cy="5.5" r="3.2"/>
-                <circle cx="12" cy="18.5" r="3.2"/>
-            </svg>
+            <img src="/icons/icon-192.png" alt="" draggable="false">
         </div>
         <div class="flex-1 min-w-0">
             <div class="bubble-ai rounded-2xl px-4 py-3 inline-flex items-center gap-2.5">
@@ -2637,7 +2631,7 @@ function renderMessage(message) {
                 <div class="flex-1">
                     <div class="bubble-user rounded-2xl p-4">
                         <div class="flex items-center gap-2 mb-2">
-                            <span class="text-xs font-medium text-indigo-500">旅人</span>
+                            <span class="text-xs font-medium text-indigo-500">${escapeHtml(getUserProfileName() || '旅人')}</span>
                             <span class="text-xs text-indigo-300">${escapeHtml(message.timestamp)}</span>
                             <button onclick="event.stopPropagation(); handleMessageFavoriteClick('${safeAttrId(message.id)}')"
                                     class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${isMessageFavorited(state.currentConversationId, message.id) ? 'text-amber-500' : 'text-indigo-300 hover:text-amber-500'}">

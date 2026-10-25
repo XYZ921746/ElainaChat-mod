@@ -1504,6 +1504,10 @@ const state = {
     likedQuotes: {},
     memoryCore: null,
     memorySummaryRunning: false,
+    // 用户资料（左下角头像点开的那个面板）：名称 / 头像是用户自己填的，
+    //   impression 是伊蕾娜写的印象 —— 用户不可编辑（见 data.js 用户资料段）。
+    userProfile: { name: '', avatar: '', impression: '' },
+    userImpressionRunning: false,
     announcement: null,
     announcementLoading: false
 };
@@ -1556,6 +1560,7 @@ const elements = {
     railChatBtn: document.getElementById('railChatBtn'),
     railDiaryBtn: document.getElementById('railDiaryBtn'),
     railSettingsBtn: document.getElementById('railSettingsBtn'),
+    railProfileBtn: document.getElementById('railProfileBtn'),
     currentConversationTitle: document.getElementById('currentConversationTitle'),
     floatingMic: document.getElementById('floatingMic'),
     floatingVoiceTitle: document.getElementById('floatingVoiceTitle'),

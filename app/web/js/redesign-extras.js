@@ -81,13 +81,6 @@
         });
     }
 
-    const labBtn = byId('rdLabBtn');
-    if (labBtn) {
-        labBtn.addEventListener('click', function () {
-            openSettingsTab('tab-appearance');
-        });
-    }
-
     function ensureDiaryStats() {
         const page = byId('diaryPage');
         if (!page) return null;
@@ -235,8 +228,8 @@
         let bubble = 'round';
         let texture = 'on';
         try {
-            bubble = localStorage.getItem('elaina_rd_bubble') || 'round';
-            texture = localStorage.getItem('elaina_rd_texture') || 'on';
+            bubble = Store.getItem('elaina_rd_bubble') || 'round';
+            texture = Store.getItem('elaina_rd_texture') || 'on';
         } catch (e) { /* 忽略 */ }
         document.documentElement.dataset.bubble = bubble;
         document.documentElement.dataset.texture = texture;
@@ -249,7 +242,7 @@
 
     document.querySelectorAll('[data-rd-bubble]').forEach(function (button) {
         button.addEventListener('click', function () {
-            try { localStorage.setItem('elaina_rd_bubble', button.dataset.rdBubble); } catch (e) { /* 忽略 */ }
+            try { Store.setItem('elaina_rd_bubble', button.dataset.rdBubble); } catch (e) { /* 忽略 */ }
             applyVisualPrefs();
         });
     });
@@ -258,7 +251,7 @@
     if (textureToggle) {
         textureToggle.addEventListener('click', function () {
             const next = document.documentElement.dataset.texture === 'off' ? 'on' : 'off';
-            try { localStorage.setItem('elaina_rd_texture', next); } catch (e) { /* 忽略 */ }
+            try { Store.setItem('elaina_rd_texture', next); } catch (e) { /* 忽略 */ }
             applyVisualPrefs();
         });
     }

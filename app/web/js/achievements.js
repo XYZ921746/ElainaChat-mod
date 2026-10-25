@@ -1,8 +1,9 @@
 /* ============================================================================
  * 成就系统（生日纪念也收在这里）
  *
- * 分类功能的入口在成就面板顶部（「管理分类」），功能本身保留：
- * 删掉入口用户就没法把对话移进/移出文件夹。
+ * 分类弹窗（ui.js 的 openCategoriesModal）没有常规入口：
+ * 成就面板不放管理按钮；竖栏按钮在成就模块不可用时会回落打开弹窗
+ * （见 init.js 的 manageCategoriesBtn 处理），实现保持可用。
  *
  * 两类成就：
  *   ① 可判定成就（DEFS 里有 check）—— 由当前数据实时算出，达到条件自动解锁；
@@ -99,6 +100,53 @@
             icon: '✨',
             check: (ctx) => ctx.unlockedCount >= 5,
         },
+
+        // ---- 来自设计原型的演示数据（根目录 js/data.js 的 achievements）----
+        // 原型 9 枚里有 3 枚与宿主已有成就重合（初次相遇 / 星屑之日 / 旅途同行同名），
+        // 只搬剩下 6 枚；判定条件按宿主真实数据落地。
+        {
+            id: 'long_journey',
+            title: '漫长的旅途',
+            desc: '交换 1000 条消息',
+            icon: '🗺️',
+            check: (ctx) => ctx.msgCount >= 1000,
+        },
+        {
+            id: 'midnight_talk',
+            title: '深夜谈心室',
+            desc: '在 00:00–03:00 之间聊过天',
+            icon: '🌌',
+            check: (ctx) => ctx.talkedInDeepNight,
+        },
+        {
+            id: 'library_regular',
+            title: '书斋常客',
+            desc: '收藏 20 条语笺',
+            icon: '🔖',
+            check: (ctx) => ctx.keepsakeCount >= 20,
+        },
+        {
+            id: 'worlds_end',
+            title: '世界尽头',
+            desc: '写下 30 篇旅行日记',
+            icon: '📚',
+            check: (ctx) => ctx.diaryCount >= 30,
+        },
+        {
+            id: 'seven_selves',
+            title: '七个自己',
+            desc: '同时启用 7 个插件',
+            icon: '🧩',
+            check: (ctx) => ctx.modCount >= 7,
+        },
+        {
+            id: 'witch_heir',
+            title: '灰之魔女的继承者',
+            desc: '解锁其余全部成就',
+            icon: '👑',
+            // 不把自己数进去：否则"解锁全部"永远差一个（自己）
+            check: (ctx) => ctx.unlockedCount >= DEFS.length - 1,
+        },
     ];
 
     // ========================================================================
@@ -139,17 +187,64 @@
         } catch (e) { /* 忽略：存不下不影响本次会话内的展示 */ }
     }
 
+    /**
+     * 从消息时间戳里取"小时"（本地时区），认不出返回 null。
+     *
+     * 消息的 timestamp 有两种长相：主链路用 `toLocaleTimeString()`
+     *   （"13:23:43" / "下午1:23:43" 这类纯时刻，12 小时制时带 上午/下午/凌晨/晚上
+     *   或 am/pm 前缀），备份导入与部分模块用 ISO 串。两种都要能认出 0～3 点。
+     */
+    function messageHour(ts) {
+        const s = String(ts == null ? '' : ts);
+        if (!s) return null;
+        if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+            const parsed = Date.parse(s);
+            return Number.isFinite(parsed) ? new Date(parsed).getHours() : null;
+        }
+        const m = s.match(/(\d{1,2})\s*[:点]/);
+        if (!m) return null;
+        let h = parseInt(m[1], 10);
+        if (/(下午|晚上|pm)/i.test(s) && h < 12) h += 12;
+        else if (/(凌晨|早上|上午|am)/i.test(s) && h === 12) h = 0;
+        return (h >= 0 && h <= 23) ? h : null;
+    }
+
     /** 当前数据快照 —— 判定类成就的输入 */
     function snapshot() {
         let convCount = 0, diaryCount = 0;
+        let msgCount = 0, keepsakeCount = 0, modCount = 0;
+        let talkedInDeepNight = false;
         try {
-            convCount = Array.isArray(state.conversations) ? state.conversations.length : 0;
+            const convs = Array.isArray(state.conversations) ? state.conversations : [];
+            convCount = convs.length;
+            for (const conv of convs) {
+                const msgs = (conv && Array.isArray(conv.messages)) ? conv.messages : [];
+                msgCount += msgs.length;
+                if (!talkedInDeepNight) {
+                    talkedInDeepNight = msgs.some((m) => {
+                        const h = messageHour(m && m.timestamp);
+                        return h !== null && h < 3;
+                    });
+                }
+            }
         } catch (e) { /* state 未就绪 */ }
+        try {
+            keepsakeCount = Array.isArray(state.favorites) ? state.favorites.length : 0;
+        } catch (e) { /* 忽略 */ }
         try {
             diaryCount = (state.memoryCore && Array.isArray(state.memoryCore.diary))
                 ? state.memoryCore.diary.length : 0;
         } catch (e) { /* 忽略 */ }
-        return { convCount, diaryCount, unlockedCount: Object.keys(unlocked).length };
+        try {
+            if (window.ElainaMods && typeof window.ElainaMods.list === 'function') {
+                modCount = window.ElainaMods.list().filter((m) => m && m.enabled).length;
+            }
+        } catch (e) { /* 忽略 */ }
+        return {
+            convCount, diaryCount,
+            unlockedCount: Object.keys(unlocked).length,
+            msgCount, keepsakeCount, modCount, talkedInDeepNight,
+        };
     }
 
     /**
@@ -238,6 +333,11 @@
      *   用 `el.id = '...'` 赋值而不是只写 innerHTML 字符串 ——
      *     check-dom-refs 靠"`id=` 赋值"识别运行期动态创建的 id，
      *     只写在 innerHTML 里它认不出来，会把 getElementById 误报成悬空引用。
+     *
+     * 为什么页头用 page-secondary-* 结构：语笺/日记的整页样式（页眉竖线、
+     *   英文眉题、副标题、返回胶囊）都钉在 page-secondary-header 这套类名上
+     *   （css/pages-luxe.css），成就页沿用同一套类名才能吃到同一套排版，
+     *   三个次级页面的页头才是一回事。
      */
     function build() {
         if (overlay) return;
@@ -246,14 +346,15 @@
         overlay.className = 'fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay';
         overlay.innerHTML =
             '<div class="modal-panel w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">'
-              + '<div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">'
-                + '<span class="ach-title-icon" aria-hidden="true">🏆</span>'
-                + '<div class="text-base font-bold text-indigo-950">成就</div>'
+              + '<div class="page-secondary-header flex-shrink-0">'
+                + '<div class="page-secondary-copy">'
+                  + '<div class="page-secondary-title">成就</div>'
+                  + '<div class="page-secondary-subtitle">旅途留下的证明，事件成就会停在解锁的那一天</div>'
+                + '</div>'
                 + '<span id="achCount" class="ach-count"></span>'
-                // 分类入口保留在这里 —— 见文件顶部"它取代了什么"的说明
-                + '<button id="achCategoriesBtn" class="btn-secondary text-xs ml-auto" type="button">管理分类</button>'
-                + '<button id="achCloseBtn" class="p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" aria-label="关闭成就">'
-                  + '<svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
+                + '<button id="achCloseBtn" class="page-secondary-back" type="button" aria-label="返回">'
+                  + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>'
+                  + '<span>返回</span>'
                 + '</button>'
               + '</div>'
               + '<div id="achList" class="flex-1 overflow-y-auto scroll-soft px-6 py-4 space-y-3"></div>'
@@ -262,12 +363,6 @@
 
         overlay.querySelector('#achCloseBtn').addEventListener('click', close);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-        // 分类：把用户交回分类弹窗本身（不复制一份实现）
-        overlay.querySelector('#achCategoriesBtn').addEventListener('click', () => {
-            close();
-            try { if (typeof openCategoriesModal === 'function') openCategoriesModal(); }
-            catch (e) { /* 分类弹窗不可用时不影响成就页 */ }
-        });
     }
 
     function render() {
@@ -276,7 +371,9 @@
         const got = items.filter((i) => i.unlocked).length;
         overlay.querySelector('#achCount').textContent = got + ' / ' + items.length;
 
-        box.innerHTML = items.map((it) => {
+        // 已解锁排前面、未解锁排后面；同组内保持定义顺序（sort 稳定）
+        const ordered = items.slice().sort((a, b) => (b.unlocked ? 1 : 0) - (a.unlocked ? 1 : 0));
+        box.innerHTML = ordered.map((it) => {
             const cls = 'ach-card' + (it.unlocked ? ' is-unlocked' : '') + (it.memorial ? ' is-memorial' : '');
             // 纪念正文走 textContent 语义（esc 转义后插入），
             //   它是**模型/用户内容**，不能当 HTML 解析

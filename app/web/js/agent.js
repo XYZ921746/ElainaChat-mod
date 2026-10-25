@@ -277,6 +277,146 @@ ElainaOps.define({
     schema: { type: 'object', properties: {} },
     risk: 'safe', hints: ['记忆', '整理一下', '记下来'],
 });
+ElainaOps.define({
+    name: 'recall_search', tool: 'recall_search', ns: 'app',
+    desc: '回忆检索：按关键词或日期在**过去的对话原话与日记**里找回原文（用户问「我们之前说过什么／原话是什么／那天聊了什么」时用它，不要凭记忆转述当原话）。',
+    schema: {
+        type: 'object',
+        properties: {
+            query: { type: 'string', description: '关键词（原话里出现过的话）；省略则按日期/对话定位' },
+            date: { type: 'string', description: '日期，支持「10月24日」「2026-10-24」「10/24」' },
+            conversation: { type: 'string', description: '对话标题关键词（可选，只在那段对话里找）' },
+        },
+    },
+    // 只走工具调用通道，不接文本标签（用户决定：标签通道容易污染上下文）。
+    //   因此也不配 hints —— 那是给标签降级通道挑说明书用的，教了也是教一个用不了的动作。
+    risk: 'safe',
+});
+
+/**
+ * 回忆检索（recall_search）的执行器：在**磁盘上的完整对话 + 日记**里找原文，
+ * 只读、不产生任何副作用 —— 它是"上下文只带压缩记忆"这层设计的补门：
+ * 平时模型只看得到最近 12 条原文与压缩后的日记，用户问起更早的原话时靠它捞回来。
+ */
+function recallDateHintOf(input) {
+    const t = String(input || '').trim();
+    if (!t) return null;
+    let m = t.match(/(\d{4})\s*[年\-/.]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})/);
+    if (m) return { y: +m[1], m: +m[2], d: +m[3] };
+    m = t.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
+    if (m) return { m: +m[1], d: +m[2] };
+    m = t.match(/^(\d{1,2})[-/.](\d{1,2})$/);
+    if (m) return { m: +m[1], d: +m[2] };
+    return null;
+}
+
+/** 日记日期串（"2026年8月11日" / "2026-08-11"）与用户给的日期提示是否同一天 */
+function recallDiaryDateMatches(hint, dateStr) {
+    if (!hint) return false;
+    const t = String(dateStr || '');
+    if (!t) return false;
+    const pad = (n) => String(n).padStart(2, '0');
+    if (hint.y != null) {
+        return t.includes(`${hint.y}年${hint.m}月${hint.d}日`) || t.includes(`${hint.y}-${pad(hint.m)}-${pad(hint.d)}`);
+    }
+    return new RegExp(`${hint.m}\\s*月\\s*${hint.d}\\s*日?`).test(t)
+        || t.includes(`${pad(hint.m)}-${pad(hint.d)}`);
+}
+
+/** 摘录：围绕关键词取一段，控制长度并压掉换行 */
+function recallExcerpt(text, query, max) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    if (t.length <= max) return t;
+    const i = query ? t.toLowerCase().indexOf(String(query).toLowerCase()) : -1;
+    const start = i > 40 ? Math.max(0, i - 40) : 0;
+    return (start > 0 ? '…' : '') + t.slice(start, start + max) + (start + max < t.length ? '…' : '');
+}
+
+function runRecallSearch(args) {
+    const query = String(args && args.query || '').trim();
+    const queryLower = query.toLowerCase();
+    const convHint = String(args && args.conversation || '').trim().toLowerCase();
+    const dateHint = recallDateHintOf(args && args.date);
+    if (!query && !dateHint && !convHint) {
+        return { ok: false, text: '回忆检索至少要给一个条件：query（关键词）、date（日期）或 conversation（对话标题关键词）。' };
+    }
+
+    const QUOTE_LIMIT = 15;
+    const lines = [];
+
+    // ① 日记命中：日期/对话/关键词任一匹配；关键词没中但日期或对话中了也保留（当定位线索）
+    const diary = (state.memoryCore && Array.isArray(state.memoryCore.diary)) ? state.memoryCore.diary : [];
+    const diaryHits = diary.filter((e) => {
+        if (convHint && !String(e && e.conversationTitle || '').toLowerCase().includes(convHint)) return false;
+        const dateOk = !dateHint || recallDiaryDateMatches(dateHint, e && e.date);
+        const hay = (String(e && e.content || '') + ' ' + ((e && e.essences) || []).join(' ')).toLowerCase();
+        const queryOk = !query || hay.includes(queryLower);
+        return dateOk && (queryOk || Boolean(dateHint || convHint));
+    }).slice(0, 5);
+
+    // ② 原话命中：有关键词就在全部（或指定）对话的消息里找；
+    //    没有关键词（只给了日期/对话）时，按命中日记的要点词在那几段对话里捞
+    const convs = state.conversations.filter((c) => !convHint || String(c.title || '').toLowerCase().includes(convHint));
+    const quotes = [];
+    for (const conv of convs) {
+        const diaryOfConv = diaryHits.filter((e) => e && e.conversationId === conv.id);
+        const essences = diaryOfConv.flatMap((e) => (e.essences || []).map(String));
+        for (const msg of (conv.messages || [])) {
+            if (!msg || msg.hidden === true) continue;
+            const text = String(msg.text || '');
+            if (query) {
+                if (!text.toLowerCase().includes(queryLower)) continue;
+            } else {
+                if (!diaryOfConv.length) continue;
+                if (!essences.some((k) => k && text.toLowerCase().includes(k.toLowerCase()))) continue;
+            }
+            quotes.push({
+                title: conv.title || '未命名对话',
+                role: msg.role === 'user' ? '用户' : ((state.characterCard && state.characterCard.name) || '伊蕾娜'),
+                time: String(msg.timestamp || ''),
+                excerpt: recallExcerpt(text, query, 160),
+            });
+            if (quotes.length >= QUOTE_LIMIT) break;
+        }
+        if (quotes.length >= QUOTE_LIMIT) break;
+    }
+
+    // ②b 只给了对话（无关键词/日期）且日记锚不到：直接给这段对话最近几条原话，
+    //     否则这条合法参数组合永远返回"没检索到"。
+    if (!query && !dateHint && convHint && !quotes.length) {
+        for (const conv of convs) {
+            const recent = (conv.messages || []).filter((m) => m && m.hidden !== true).slice(-6);
+            for (const msg of recent) {
+                quotes.push({
+                    title: conv.title || '未命名对话',
+                    role: msg.role === 'user' ? '用户' : ((state.characterCard && state.characterCard.name) || '伊蕾娜'),
+                    time: String(msg.timestamp || ''),
+                    excerpt: recallExcerpt(msg.text, '', 160),
+                });
+            }
+        }
+        if (quotes.length) quotes.splice(QUOTE_LIMIT);
+    }
+
+    if (diaryHits.length) {
+        lines.push('## 命中的日记');
+        diaryHits.forEach((e) => lines.push(
+            `- ${e.date || '未标注日期'} · ${e.conversationTitle || '未知对话'}：${String(e.content || '').replace(/\s+/g, ' ').slice(0, 120)}`));
+    }
+    if (quotes.length) {
+        lines.push('## 找到的原话');
+        quotes.forEach((q) => lines.push(`- 「${q.title} · ${q.role}${q.time ? ' · ' + q.time : ''}」${q.excerpt}`));
+    }
+    if (!lines.length) {
+        return {
+            ok: true,
+            text: '没有检索到匹配的日记或原话。建议：换一个更独特的关键词（原话里确实出现过的词），或用 date 缩小范围。'
+                + '注意：从未整理过日记的早期对话只能靠关键词命中原话。',
+        };
+    }
+    lines.push('（以上是磁盘记录里的原文片段，回答时可摘录引用；未检索到的部分不要编造。）');
+    return { ok: true, text: lines.join('\n') };
+}
 
 // 执行实现 —— 只有这一处，两条通道共用
 //
@@ -291,6 +431,7 @@ ElainaOps.setExec('file_delete', (args, ctx) => doAgentFile('delete', args, ctx.
 ElainaOps.setExec('pc_command', (args, ctx) => doAgentCommand(args.command, ctx.access, ctx.traceItem));
 ElainaOps.setExec('phone', (args, ctx) => runAgentPhoneOperation(args.raw, ctx.traceItem));
 ElainaOps.setExec('app_memory', () => runManualMemorySummary());
+ElainaOps.setExec('recall_search', (args) => runRecallSearch(args || {}));
 
 const agentRuntime = (function () {
     let running = false;
@@ -2870,6 +3011,17 @@ ElainaOps.setManual('agent_help', () => [
         + '不知道这台电脑上的真实位置、或要用到某个技能里的知识时，先调它。',
     'capability 填工具名（例如 save_file / run_command / phone_action），'
         + '或能力索引里带 `skill:` 前缀的技能名。',
+].join('\n'));
+ElainaOps.setManual('recall_search', () => [
+    '## recall_search 回忆检索',
+    '用途：用户问起过去的事（「我们之前说过什么」「那天的原话」「你还记得吗」）时，'
+        + '检索磁盘上**完整对话与日记里的原文**。你平时只能看到压缩后的记忆和最近 12 条原文，'
+        + '更早的事必须先检索、再回答 —— 不要把日记转述或印象当成原话复述。',
+    '参数（至少给一个）：query=原话里出现过的关键词；date=日期（10月24日 / 2026-10-24 / 10-24）；'
+        + 'conversation=对话标题关键词。',
+    '技巧：关键词选**独特的词**（人名、地名、少见词），太普通的词会命中过多被截断；'
+        + '只给日期时按当天日记定位对话、再用日记要点词捞原话。',
+    '拿到片段后按原话摘录、注明出自哪段对话；没检索到就如实说没有，不要编。',
 ].join('\n'));
 ElainaOps.setExec('agent_help', async (args) => {
     const op = ElainaOps.resolve(args.capability);

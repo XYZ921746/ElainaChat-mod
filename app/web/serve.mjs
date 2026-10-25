@@ -3513,6 +3513,11 @@ if (httpsServer) {
 }
 
 const muxSocket = (socket) => {
+    // 客户端"连上又立刻断开"（浏览器 DevTools 的自动探测就是连上→发半截→RST）会让
+    // 裸 socket 抛 ECONNRESET —— 分路发生在首包之后，分路之前没人接这个错误，
+    // 未捕获的 'error' 事件会带崩整个进程（实测：壳版 WebView2 里整服务退出）。
+    // 兜底只销毁连接：一个探测连接的死活不值得记日志，更不值得陪葬。
+    socket.on('error', () => { try { socket.destroy(); } catch (e) { /* 已关 */ } });
     socket.once('data', (buf) => {
         if (!buf || !buf.length) { socket.destroy(); return; }
         socket.pause();
@@ -3644,6 +3649,8 @@ function openBrowser(url) {
 // 在这个端口上用明文 http 访问时，自动跳到同端口的 https。
 if (httpsServer && HTTPS_PORT !== port) {
     const legacyServer = createNetServer((socket) => {
+        // 与主分路器同款兜底：分路前的裸 socket 错误不能带崩进程（见 muxSocket 处说明）
+        socket.on('error', () => { try { socket.destroy(); } catch (e) { /* 已关 */ } });
         socket.once('data', (buf) => {
             if (!buf || !buf.length) { socket.destroy(); return; }
             socket.pause();

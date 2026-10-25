@@ -1292,13 +1292,7 @@ function renderStreamingReplyPreview() {
         streamingPreviewEl.className = 'flex gap-3 mb-4';
         streamingPreviewEl.innerHTML = `
             <div class="pixso-chat-avatar" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="currentColor">
-                    <circle cx="12" cy="12" r="2.7"/>
-                    <circle cx="5.5" cy="12" r="3.2"/>
-                    <circle cx="18.5" cy="12" r="3.2"/>
-                    <circle cx="12" cy="5.5" r="3.2"/>
-                    <circle cx="12" cy="18.5" r="3.2"/>
-                </svg>
+                <img src="/icons/icon-192.png" alt="" draggable="false">
             </div>
             <div class="flex-1 min-w-0">
                 <div class="bubble-ai rounded-2xl p-4">

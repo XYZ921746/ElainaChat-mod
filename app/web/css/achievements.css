@@ -12,7 +12,6 @@
  *   深色下浅色底会变成"一块块白"，下面单列了几条覆盖。
  * ========================================================================== */
 
-.ach-title-icon { font-size: 20px; line-height: 1; }
 .ach-count {
     font-size: 11px;
     color: var(--pixso-brown-soft);

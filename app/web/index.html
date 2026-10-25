@@ -4995,7 +4995,9 @@
         <aside id="sidebar" class="glass-panel fixed left-4 top-4 bottom-4 w-[280px] rounded-2xl z-40 flex flex-col overflow-hidden animate-slide-in-left" style="isolation:isolate">
             <div class="sidebar-rail" aria-label="主导航">
                 <div class="sidebar-rail-logo" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><circle cx="5.5" cy="12" r="2.2"/><circle cx="18.5" cy="12" r="2.2"/><circle cx="12" cy="5.5" r="2.2"/><circle cx="12" cy="18.5" r="2.2"/></svg>
+                    <!-- 应用图标（与 manifest.webmanifest / PWA 安装同一份素材）：
+                         图片整体盖住底色，底色只在图片加载间隙可见 -->
+                    <img src="/icons/icon-192.png" alt="" draggable="false">
                 </div>
                 <button id="railChatBtn" class="sidebar-rail-btn active" type="button" title="对话" aria-label="对话" data-rail-action="chat">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M5 6.5h14v9H9l-4 3v-12z"/><path stroke-linecap="round" d="M8 10h8M8 13h5"/></svg>
@@ -5006,10 +5008,9 @@
                 </button>
                 <!-- ★ 2026-10：这个位置原来是「管理分类」（点开分类弹窗）。
                      用户要求改成**成就系统**，生日纪念记录也收进成就里。
-                     ★ 分类功能**没有被删掉**，只是换了入口 ——
-                       成就面板顶部有一行「管理分类」按钮，点了打开原来那个弹窗
-                       （直接删掉的话用户就没法把对话移进/移出文件夹了，
-                        那是个真功能，不是装饰）。见 web/js/achievements.js。 -->
+                     ★ 分类弹窗的常规入口随「管理分类」按钮一并撤掉；
+                       openCategoriesModal 实现保留，只在成就模块不可用时的
+                       兜底路径里打开（manageCategoriesBtn 的绑定处见 init.js）。 -->
                 <button id="railCategoriesBtn" class="sidebar-rail-btn" type="button" title="成就" aria-label="成就" data-rail-action="achievements">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 4h8v4.5a4 4 0 11-8 0V4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 5.5H5.5v1.2A3.3 3.3 0 008.8 10M16 5.5h2.5v1.2A3.3 3.3 0 0115.2 10M12 12.5V16M8.5 19.5h7"/></svg>
                 </button>
@@ -5020,7 +5021,8 @@
                 <button id="railSettingsBtn" class="sidebar-rail-btn" type="button" title="设置" aria-label="设置" data-rail-action="settings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
-                <div class="rd-rail-avatar" title="本地账户">旅</div>
+                <!-- 左下角头像 = 用户资料入口（名称 / 头像用户自填；AI 印象由 AI 写，见 data.js 用户资料段） -->
+                <button id="railProfileBtn" class="rd-rail-avatar" type="button" title="我的资料" aria-label="我的资料">旅</button>
             </div>
             <div id="sidebarBrand" class="flex items-center gap-3 px-5 h-16 flex-shrink-0 border-b border-white/50">
                 <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-300 to-pink-200 flex items-center justify-center text-white shadow-lg shadow-pink-200">
@@ -6767,9 +6769,6 @@
             且后面的模块会引用前面的定义）。加新模块时插在合适位置，别直接追加到末尾。
          ⚠️ 不要在本注释里书写脚本标签字面量 —— HTML 注释中出现脚本开标签会让
             「内联脚本语法检查」把注释内容当成代码解析，报出假的 SyntaxError。 -->
-    <button id="rdLabBtn" class="rd-lab-btn" type="button" title="设计实验室" aria-label="设计实验室">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5a8.5 8.5 0 100 17c1.4 0 2-.9 2-1.8 0-1.5-1.4-1.7-1.4-3 0-1 .8-1.7 1.9-1.7h1.8a4 4 0 004-4c0-3.6-3.7-6.5-8.3-6.5z"/><circle cx="8" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="10" r="1" fill="currentColor" stroke="none"/></svg>
-    </button>
 
     <!-- 移动端底部导航：对齐根目录原型的手机外壳（对话 / 语笺 / 日记 / 成就 / 设置）。
          点击复用左侧竖栏按钮的逻辑，避免两套页面切换代码。 -->

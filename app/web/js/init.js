@@ -49,6 +49,8 @@ function startMultiDeviceSync() {
                 }
                 if (has('elaina_open_memory_core') && typeof loadMemoryCore === 'function') loadMemoryCore();
                 if (has('elaina_open_favorites') && typeof loadFavorites === 'function') loadFavorites();
+                // 用户资料（称呼/头像/AI 印象）：别改的设备也要跟着变；名称变了消息行的称呼才对
+                if (has('elaina_user_profile') && typeof loadUserProfile === 'function') loadUserProfile();
                 if (has('elaina_open_liked_quotes') && typeof loadLikedQuotes === 'function') loadLikedQuotes();
                 if (has('elaina_open_tasks') && typeof renderScheduledTaskList === 'function') renderScheduledTaskList();
                 if (has('elaina_open_settings')) loadSettings();
@@ -100,6 +102,7 @@ async function init() {
     loadFavorites();
     loadLikedQuotes();
     loadMemoryCore();
+    loadUserProfile();
     // 成就系统与「星屑之日」生日模式：必须排在 `Store.bootstrap()` **之后**
     //   才 refresh（见它们各自的 ready 闸门说明）。
     //
@@ -1094,8 +1097,9 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         if (fav) jumpToOriginal(fav);
     });
 
-    // 竖栏这个按钮是「成就」入口：点它打开成就面板，
-    //   分类弹窗由面板内部的「管理分类」按钮打开（见 achievements.js 与 index.html）。
+    // 竖栏这个按钮是「成就」入口：点它打开成就面板。
+    //   分类弹窗没有常规入口；成就模块不可用时在这里直接回落打开弹窗，
+    //   避免成就系统坏了之后"点了没反应"。
     elements.manageCategoriesBtn.addEventListener('click', () => {
         try {
             if (window.ElainaAchievements) { window.ElainaAchievements.open(); return; }
@@ -1103,6 +1107,8 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         openCategoriesModal();
     });
     elements.memoryBtn.addEventListener('click', runManualMemorySummary);
+    // 左下角头像 = 用户资料入口（名称/头像自填，AI 印象由 AI 写）
+    elements.railProfileBtn?.addEventListener('click', () => { openProfilePanel(); });
     // 设置 → 记忆：「立即整理记忆」按钮（与顶栏同一个动作）+ 轮数步进器
     elements.memoryNowBtn?.addEventListener('click', runManualMemorySummary);
     const stepMemoryEvery = (delta) => {
