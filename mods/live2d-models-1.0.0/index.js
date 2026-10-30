@@ -33,6 +33,11 @@
      * 平台差异只体现在「宿主有没有注入 __nativeModelBase」：有就是 APK 的数据目录，
      * 没有就是 Web 的静态映射 —— 不在插件里判断 Capacitor / 平台（D5）。
      */
+    function isNative() {
+        // 只反映“宿主有没有注入 APK 数据目录”，不再是 Capacitor 平台判断。
+        return !!window.__nativeModelBase;
+    }
+
     function baseUrl(name, bundled) {
         const n = encodeURIComponent(String(name || ''));
         // 打包进 APK 的内置模型走 WebView 静态资源（不依赖原生文件系统）

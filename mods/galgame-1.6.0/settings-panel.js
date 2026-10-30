@@ -11,7 +11,7 @@
  * 为什么包成 init(host)：面板 HTML 由插槽在**被点开时**才插入 DOM，
  *   顶层执行会全部拿到 null。
  *
- * 改一处立刻生效：直接调 window.Live2DCall 暴露的接口并回写 localStorage，
+ * 改一处立刻生效：直接调 window.Live2DCall 暴露的接口并回写 host.storage，
  *   不走宿主的"保存设置"流程 —— 舞台是插件自己的界面，它知道自己该怎么重绘。
  *   存储键统一在 galgame.live2d.* 下。
  * ========================================================================== */
@@ -19,11 +19,18 @@ function initLive2DSettingsPanel(host) {
     'use strict';
 
     const P = 'galgame.live2d.';
+    // 面板自己的键统一走 host.storage（落 data/、跨设备同步、停用可清理）。
+    const LS = {
+        getItem(k) { try { return host.storage.get(k, null); } catch (e) { return null; } },
+        setItem(k, v) { try { host.storage.set(k, String(v)); } catch (e) { /* 配额满就别存了，界面照样生效 */ } },
+        removeItem(k) { try { host.storage.remove(k); } catch (e) { /* 忽略 */ } },
+    };
     const get = (k, d) => {
-        try { const v = localStorage.getItem(P + k); return v === null ? d : v; } catch (e) { return d; }
+        const v = LS.getItem(P + k);
+        return v === null ? d : v;
     };
     const set = (k, v) => {
-        try { localStorage.setItem(P + k, String(v)); } catch (e) { /* 配额满就别存了，界面照样生效 */ }
+        LS.setItem(P + k, String(v));
     };
     const call = () => window.Live2DCall || null;
     const $ = (id) => document.getElementById(id);
@@ -133,7 +140,7 @@ function initLive2DSettingsPanel(host) {
     if (reset) reset.addEventListener('click', () => {
         const a = call();
         if (a && typeof a.resetModelView === 'function') { a.resetModelView(); return; }
-        try { localStorage.removeItem(P + 'resize'); } catch (e) { /* 忽略 */ }
+        try { LS.removeItem(P + 'resize'); } catch (e) { /* 忽略 */ }
         host.alert('模型的大小与位置会在下次打开情景演绎时重新自适应。', '已重置');
     });
 
@@ -149,7 +156,7 @@ function initLive2DSettingsPanel(host) {
             reader.onload = () => {
                 const value = 'url("' + String(reader.result || '') + '")';
                 // 与舞台的 sanitizeBackground 同一白名单：data: 图片是允许的
-                try { localStorage.setItem(P + 'bg', value); } catch (e) { /* 太大存不下 */ }
+                try { LS.setItem(P + 'bg', value); } catch (e) { /* 太大存不下 */ }
                 const a = call();
                 if (a && typeof a.setBackground === 'function') a.setBackground(value);
             };
@@ -159,7 +166,7 @@ function initLive2DSettingsPanel(host) {
     }
     if (bgClear) {
         bgClear.addEventListener('click', () => {
-            try { localStorage.removeItem(P + 'bg'); } catch (e) { /* 忽略 */ }
+            try { LS.removeItem(P + 'bg'); } catch (e) { /* 忽略 */ }
             const a = call();
             if (a && typeof a.setBackground === 'function') a.setBackground('');
         });
@@ -190,7 +197,7 @@ function initLive2DSettingsPanel(host) {
                 const url = (sb && typeof sb.api?.url === 'function') ? sb.api.url(file) : '';
                 if (!url) return;
                 const value = 'url("' + url + '")';
-                try { localStorage.setItem(P + 'bg', value); } catch (e) { /* 忽略 */ }
+                try { LS.setItem(P + 'bg', value); } catch (e) { /* 忽略 */ }
                 const a = call();
                 if (a && typeof a.setBackground === 'function') a.setBackground(value);
             });

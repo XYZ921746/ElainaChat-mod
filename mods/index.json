@@ -1,6 +1,6 @@
 {
   "comment": "本文件由服务端扫描 mods/ 自动生成（见 server/mods.mjs）。手工改动会在下次扫描时被覆盖。",
-  "generatedAt": "2026-10-30T00:51:53.327Z",
+  "generatedAt": "2026-10-30T01:09:43.777Z",
   "plugins": [
     {
       "id": "birthday",

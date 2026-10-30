@@ -43,7 +43,7 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 - **范围**：`mods/`
 - **为什么**：B2 —— host 已提供 `host.storage`；直用 `localStorage` 会使数据不进同步、停用不清理。
 - **判定**：`mods/**/*.js` 出现 `localStorage` 即违反。
-- **当前违反点**：`mods/galgame-1.6.0/index-live2d.js`、`mods/galgame-1.6.0/index.js`、`mods/galgame-1.6.0/settings-panel.js` 中 `localStorage` 使用处。
+- **当前违反点**：无（2026-10-30 已全部改走 `host.storage`，并补了旧 localStorage 一次性迁移）。
 
 ### D3 宿主不得点名插件专有全局名
 - **范围**：`web/js/`
@@ -61,7 +61,7 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 - **范围**：`web/js/`、`mods/`
 - **为什么**：B6 —— 平台分支外溢会使 Web 与 APK 分裂成两套代码；现有检查只覆盖宿主。
 - **判定**：检索 `isNativePlatform` / `Capacitor.isNative`；仅允许出现在 `web/js/store.js`、`server/store.mjs`、`web/js/core.js` 原生适配段，其它文件出现即违反。
-- **当前违反点**：`web/js/data.js`、`mods/galgame-1.6.0/index-live2d.js` 中 `isNativePlatform` / `Capacitor.isNative` 出现处。
+- **当前违反点**：无（2026-10-30 已清理 `web/js/data.js` 与 `mods/galgame-1.6.0/index-live2d.js`）。
 
 ### D6 工厂只做注册
 - **范围**：`mods/`
@@ -189,9 +189,6 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 
 | 规则 | 违反点（文件 + 可检索符号/片段） | 数量 | 清理优先级 |
 | --- | --- | --- | --- |
-| D2 | `mods/galgame-1.6.0/index-live2d.js` 中 `localStorage` 使用处 | 26 | 高 |
-| D2 | `mods/galgame-1.6.0/index.js` 中 `localStorage` 使用处 | 5 | 高 |
-| D2 | `mods/galgame-1.6.0/settings-panel.js` 中 `localStorage` 使用处 | 7 | 中 |
 | D3 | `web/js/voice.js` 中 `Live2DCall` / `__live2d` / `__l2dm` / `ElainaAvatar` | 9 | 高 |
 | D3 | `web/js/agent.js` 中同上符号 | 9 | 高 |
 | D3 | `web/js/agent-tags.js` 中同上符号 | 2 | 中 |
@@ -202,9 +199,7 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 | D4 | `mods/galgame-1.6.0/register.js` 中 `window.__` 赋值 | 1 | 中 |
 | D4 | `mods/galgame-1.6.0/settings-panel.js` 中 `window.__` 赋值 | 1 | 中 |
 | D4 | `mods/live2d-models-1.0.0/panel.js` 中 `window.__` 赋值（`window.__l2dmRenderPanel =`、`window.__l2dmRefresh =`） | 2 | 中 |
-| D5 | `web/js/data.js` 中 `isNativePlatform` / `Capacitor.isNative` | 1 | 中 |
-| D5 | `mods/galgame-1.6.0/index-live2d.js` 中 `isNativePlatform` / `Capacitor.isNative` | 1 | 中 |
 
-注：本表数量为 **2026-10-17 专项检索**输出，与 `开发文档.md` 的「规范存量违规」小节同源。
+注：本表数量为 **2026-10-30 专项检索**输出，与 `开发文档.md` 的「规范存量违规」小节同源。D1 / D2 / D5 已清零；D3 / D4 为剩余基线。
 D3 上一轮记录为 29 处 / 6 文件（含 `web/js/store.js` 一行）；本轮复核结果：`web/js/store.js` 为 0 处（该行已删），
 `voice.js` 3 处与 `data.js` 1 处随注释重写**顺带清理**，现为 23 处 / 5 文件。

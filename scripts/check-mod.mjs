@@ -1526,6 +1526,8 @@ async function loadModsInSandbox(store, opts = {}) {
         getItem: (k) => (m.has(k) ? m.get(k) : null),
         setItem: (k, v) => m.set(k, String(v)),
         removeItem: (k) => m.delete(k),
+        get length() { return m.size; },
+        key: (i) => Array.from(m.keys())[i] ?? null,
     };
     const mkEl = (tag = 'div') => ({
         tag, id: '', className: '', style: {}, dataset: {}, children: [],
@@ -3630,6 +3632,32 @@ async function caseSharedClosure(c) {
     }
 }
 
+/**
+ * 旧插件 localStorage → host.storage 的一次性迁移。
+ * 只搬已知插件前缀；宿主设置/密钥键绝不能跟着进插件存储。
+ */
+async function caseLegacyStorageMigration(c) {
+    const r = await loadModsInSandbox({
+        'elaina_pet_pos': '12px,34px',
+        'elaina_pet_proactive': '1',
+        'elaina_galgame_bg': 'snow',
+        'galgame.live2d.resize': '{"w":1}',
+        'live2d.scale': '1.2',
+        'elainachat_open_api_secrets': '{"k":"v"}',
+    }, { indexPlugins: [] });
+    r.Mods.migrateLegacyStorage();
+    const raw = r.storeGet('elaina_mod_storage');
+    const all = raw ? JSON.parse(raw) : {};
+    c.ok(all.pet && all.pet.pos === '12px,34px', '★ pet 的旧 localStorage 键迁进 host.storage（短键）');
+    c.ok(all.pet && all.pet.proactive === '1', 'pet 的开关值原样保留');
+    c.ok(all.galgame && all.galgame.bg === 'snow', 'galgame 的旧前缀键迁进 host.storage（短键）');
+    c.ok(all.galgame && all.galgame['galgame.live2d.resize'] === '{"w":1}',
+        'galgame.live2d.* 全键迁移（舞台读的是全键）');
+    c.ok(all.galgame && all.galgame['live2d.scale'] === '1.2', '更早的 live2d.* 键也迁（交给插件自身再迁移）');
+    c.ok(!JSON.stringify(all).includes('open_api_secrets'),
+        '★ 宿主设置/密钥键不会被误搬进插件存储');
+}
+
 const only = process.argv[2];
 const allCases = [
     { name: '插件系统核心（扫描 / 解压 / 清单 / 安全）', fn: caseModsCore },
@@ -3640,6 +3668,7 @@ const allCases = [
     { name: '前置插件生命周期', fn: caseModPrereqLifecycle },
     { name: '脚本加载重试', fn: caseModScriptRetry },
     { name: '插件宿主能力（插槽 / 回收 / 服务端半边）', fn: caseModHostApi },
+    { name: '旧 localStorage 迁移到 host.storage', fn: caseLegacyStorageMigration },
     { name: '服务端半边启用门禁（停用 / 总开关 / 需重启）', fn: caseModServerGate },
     { name: '技能扫描与清单（kind 永远是 knowledge）', fn: caseSkills },
     { name: '制作插件技能（入口短、细则按需加载）', fn: caseModAuthoringSkill },

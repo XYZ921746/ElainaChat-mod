@@ -196,7 +196,7 @@ log-viewer 分支行行对应、settings 40→40、data 11→11。所有 APK 分
 - 剩余 3 处：`check-ui` 的插件 IIFE 用例（本地未安装 live2d / live2d-models 时跳过）。
 - 另修：`check-ui` 的 `live2d-models` 用例按 `manifest.id` 解析目录（不写死无版本号目录名），插件没有 `models/` 时按缺夹具跳过。
 - 顺带修：模板串里的嵌套模板 / `${}` 会让旧抽取提前截断（`ui.js` 的 `renderFolderList` 抽不出来），已支持并加自测。
-- 验证：全量 **PASS 2896 / FAIL 0**（check-frontend 40、check-stream 222、check-chat 280、check-browser 238、check-agent 408）。
+- 验证：全量 **PASS 2902 / FAIL 0**（check-frontend 40、check-stream 222、check-chat 280、check-browser 238、check-agent 408、check-mod 385）。
 
 
 

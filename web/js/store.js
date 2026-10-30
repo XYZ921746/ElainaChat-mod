@@ -87,7 +87,7 @@
     var flushTimer = null;
     var backend = null;
     var backendKind = '';   // 'web' | 'native'；bootstrap 时确定，供平台判断用（不能比较对象身份）
-    var bootstrapped = false;
+    var bootPromise = null;   // 并发调用共享同一个启动 Promise（见 bootstrap）
 
     // 本客户端的随机标识：用于让服务端在广播时**跳过发起方自己**。
     // 每个标签页一份（模块级变量），关掉标签页就没了，不需要持久化。
@@ -347,8 +347,9 @@
      *   这个代价换来的是"删了就是删了"这个不需要任何心智模型的保证。
      */
     function bootstrap() {
-        if (bootstrapped) return Promise.resolve();
-        bootstrapped = true;
+        // 并发调用（init.js 与插件加载器都会调）必须等**同一个**启动 Promise。
+        // 只置一个布尔值会让第二个调用立刻 resolve，插件在数据还没读回来时就启动。
+        if (bootPromise) return bootPromise;
 
         var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
         backendKind = isNative ? 'native' : 'web';
@@ -357,11 +358,12 @@
         // Web：同步填缓存（零闪烁）
         if (backend.loadAllSync) {
             mergeLoadedData(backend.loadAllSync());
-            return Promise.resolve();
+            bootPromise = Promise.resolve();
+        } else {
+            // APK：异步读文件
+            bootPromise = backend.loadAll().then(mergeLoadedData).catch(function () { /* 读不到就按空数据启动 */ });
         }
-
-        // APK：异步读文件
-        return backend.loadAll().then(mergeLoadedData).catch(function () { /* 读不到就按空数据启动 */ });
+        return bootPromise;
     }
 
     /** 当前缓存快照（调试 / 迁移用） */

@@ -949,7 +949,8 @@ function persistSettings() {
     Store.setItem('elaina_open_settings', JSON.stringify(safeSettings));
 }
 function getNativeSecretsPlugin() {
-    if (!window.Capacitor?.isNativePlatform?.()) return null;
+    // 原生密钥插件只在 APK 的 Capacitor 里注册；Web 上自然为 undefined，
+    // 不需要再判断平台（D5：平台分支只留在存储层）。
     return window.Capacitor?.Plugins?.ByokSecrets || null;
 }
 async function loadApiSecrets() {

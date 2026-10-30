@@ -464,6 +464,40 @@
         };
     }
 
+    /**
+     * 旧插件把偏好存在浏览器 localStorage；迁到 host.storage 时一次性搬过来。
+     * 只认已知的插件前缀，绝不碰宿主的设置/密钥键。目标键已存在时保留新值，
+     * 这样重复启动不会把用户后来改过的设置覆盖回旧值。
+     */
+    const LEGACY_MOD_STORAGE = [
+        { prefix: 'elaina_pet_', modId: 'pet', stripPrefix: true },
+        { prefix: 'elaina_galgame_', modId: 'galgame', stripPrefix: true },
+        { prefix: 'galgame.live2d.', modId: 'galgame', stripPrefix: false },
+        { prefix: 'live2d.', modId: 'galgame', stripPrefix: false },
+    ];
+    function migrateLegacyModStorage() {
+        let ls = null;
+        try { ls = window.localStorage; } catch (e) { return; }
+        if (!ls) return;
+        const all = readModStorage();
+        let changed = false;
+        for (const rule of LEGACY_MOD_STORAGE) {
+            let bucket = all[rule.modId];
+            if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) bucket = all[rule.modId] = {};
+            for (let i = 0; i < ls.length; i++) {
+                const key = ls.key(i);
+                if (!key || key.indexOf(rule.prefix) !== 0) continue;
+                const target = rule.stripPrefix ? key.slice(rule.prefix.length) : key;
+                if (!target || Object.prototype.hasOwnProperty.call(bucket, target)) continue;
+                const value = ls.getItem(key);
+                if (value === null) continue;
+                bucket[target] = value;
+                changed = true;
+            }
+        }
+        if (changed) writeModStorage(all);
+    }
+
     function createHostApi(manifest, regName, lifecycle) {
         // 日志前缀用**注册名**（插件自己认得的名字），便于对上它的源码
         const name = regName || manifest.id;
@@ -3025,6 +3059,8 @@ function restoreDraggedCard(card, ph, parent, draggingClass, panel, panelTransfo
     // ========================================================================
 
     window.ElainaMods = {
+        /** 把旧插件 localStorage 偏好搬进 host.storage（启动时自动调用；测试/诊断可手动调） */
+        migrateLegacyStorage: migrateLegacyModStorage,
         /**
          * 插件脚本用它注册初始化函数：ElainaMods.register('galgame', (host) => ({...}))
          *
@@ -3252,9 +3288,23 @@ function restoreDraggedCard(card, ph, parent, draggingClass, panel, panelTransfo
         faultLimit: MOD_FAULT_LIMIT,
     };
 
-    // 页面就绪后自动加载（宿主也可以显式调 loadAll）
+    // 页面就绪后自动加载（宿主也可以显式调 loadAll）。
+    // 必须等 Store 启动完成：host.storage 读的是 Store 缓存，抢在 bootstrap 前面
+    // 会让插件读到空数据、把默认值写回去。
     function boot() {
-        loadAll().catch((e) => console.error('[Plugin] 加载流程异常', e));
+        const start = () => {
+            migrateLegacyModStorage();
+            loadAll().catch((e) => console.error('[Plugin] 加载流程异常', e));
+        };
+        let ready;
+        try {
+            ready = (window.Store && typeof Store.bootstrap === 'function')
+                ? Store.bootstrap()
+                : Promise.resolve();
+        } catch (e) {
+            ready = Promise.resolve();
+        }
+        Promise.resolve(ready).then(start, start);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     else boot();

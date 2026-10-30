@@ -17,8 +17,8 @@
  *    宿主不需要知道"有个叫 galgame 的东西"，只要读注册表即可。
  *    mod 与宿主之间只剩注册表这一个耦合点。
  *
- * ③ **开关交给 mod 系统**：上游自己管 localStorage 的 elaina_galgame_enabled，
- *    并靠 800ms 轮询去感知"设置里改了没有"（同页 localStorage 变化不触发 storage 事件）。
+ * ③ **开关交给 mod 系统**：上游自己管浏览器本地存储里的 elaina_galgame_enabled，
+ *    并靠 800ms 轮询去感知"设置里改了没有"（同页本地存储变化不触发 storage 事件）。
  *    现在由 mod 系统的 setEnabled 直接调用，不需要轮询。
  *
  * ④ 所有宿主调用都通过 host API，不再直接摸 state / handleTextSubmit 等全局。
@@ -74,13 +74,12 @@
             return BASE + 'img/bg/' + name + '.jpg';
         };
 
-        /* 偏好存储：统一前缀，避免与宿主/其他 mod 的键撞车 */
-        const PREFIX = 'elaina_galgame_';
+        /* 偏好存储走宿主：命名空间由 host.storage 负责，键不会与别的插件撞车。 */
         function get(k, d) {
-            try { const v = localStorage.getItem(PREFIX + k); return v === null ? d : v; } catch (e) { return d; }
+            try { return host.storage.get(k, d); } catch (e) { return d; }
         }
         function set(k, v) {
-            try { localStorage.setItem(PREFIX + k, v); } catch (e) { /* 忽略 */ }
+            try { host.storage.set(k, v); } catch (e) { /* 忽略 */ }
         }
 
         let layer = null, sceneEl = null, fxCanvas = null, avatar = null;
@@ -603,7 +602,7 @@
         // 最容易被当成"点了设置就跳页"的那种意外。入口有两个：
         //    · 主页顶栏按钮（register.js 注册的 header.actions，id=story）
         //    · 插件自己的 API：ElainaMods.find('galgame').api.open()
-        // 这里仍然**不读** localStorage 里自己那份 enabled 开关（双重开关问题：
+        // 这里仍然**不读**浏览器本地存储里自己那份 enabled 开关（双重开关问题：
         // mod 系统与界面各记一份，会导致"开关开了但界面没出现"）。
         enabled = false;
         build();

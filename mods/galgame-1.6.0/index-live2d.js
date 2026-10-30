@@ -30,6 +30,16 @@ function initLive2DCore(host) {
   // 资源插件：引擎与模型都从它取（缺它本插件根本不会加载，见 manifest.after）
   const models = host.require('live2d-models');
 
+  // 舞台自己的偏好走 host.storage（落 data/、跨设备同步、停用可清理）。
+  // 保留 getItem/setItem/removeItem/length/key 的旧调用形状，只换底层。
+  const LS = {
+    getItem(k) { try { return host.storage.get(k, null); } catch (e) { return null; } },
+    setItem(k, v) { try { host.storage.set(k, String(v)); } catch (e) { /* 忽略 */ } },
+    removeItem(k) { try { host.storage.remove(k); } catch (e) { /* 忽略 */ } },
+    get length() { try { return host.storage.keys().length; } catch (e) { return 0; } },
+    key(i) { try { return host.storage.keys()[i] ?? null; } catch (e) { return null; } },
+  };
+
 
   let app = null;
   let model = null;
@@ -84,13 +94,13 @@ function initLive2DCore(host) {
   function migrateL2dStorage() {
     try {
       const legacy = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
+      for (let i = 0; i < LS.length; i++) {
+        const k = LS.key(i);
         if (k && k.indexOf('live2d.') === 0) legacy.push(k);
       }
       for (const k of legacy) {
         const next = L2D_PREFIX + k.slice('live2d.'.length);
-        if (localStorage.getItem(next) === null) localStorage.setItem(next, localStorage.getItem(k) || '');
+        if (LS.getItem(next) === null) LS.setItem(next, LS.getItem(k) || '');
       }
     } catch (e) { /* 配额满/隐私模式：读不到旧值就从默认开始，不影响使用 */ }
   }
@@ -112,7 +122,7 @@ function initLive2DCore(host) {
     // 1) 当前模型专属
     if (selectedModel) {
       try {
-        const raw = localStorage.getItem(L2D_PREFIX + 'resize.' + selectedModel);
+        const raw = LS.getItem(L2D_PREFIX + 'resize.' + selectedModel);
         if (raw) {
           const o = JSON.parse(raw);
           if (o && isFinite(o.sx) && o.sx > 0) return sanitizeResize(o);
@@ -121,7 +131,7 @@ function initLive2DCore(host) {
     }
     // 2) 旧版全局（本次改造前的 live2d.resize）
     try {
-      const raw = localStorage.getItem(L2D_PREFIX + 'resize');
+      const raw = LS.getItem(L2D_PREFIX + 'resize');
       if (raw) {
         const o = JSON.parse(raw);
         if (o && isFinite(o.sx) && o.sx > 0) return sanitizeResize(o);
@@ -129,7 +139,7 @@ function initLive2DCore(host) {
     } catch { /* ignore */ }
     // 3) 旧版 live2d.scale = 高度占屏幕比例（0.2~1.2），迁移到新格式
     try {
-      const old = parseFloat(localStorage.getItem(L2D_PREFIX + 'scale'));
+      const old = parseFloat(LS.getItem(L2D_PREFIX + 'scale'));
       if (isFinite(old) && old > 0) {
         legacyScaleHint = Math.min(1.2, Math.max(0.2, old));
         return { sx: 1, sy: 1, cx: 0.5, cy: 0.5 };
@@ -140,7 +150,7 @@ function initLive2DCore(host) {
   }
 
   function saveResizeState() {
-    try { localStorage.setItem(resizeStorageKey(), JSON.stringify(resizeState)); } catch { /* ignore */ }
+    try { LS.setItem(resizeStorageKey(), JSON.stringify(resizeState)); } catch { /* ignore */ }
   }
 
   // 模型在 scale=1 时的自然包围盒（模型单位，高度约 1~2）
@@ -473,10 +483,10 @@ function initLive2DCore(host) {
     try {
       for (const suffix of ['resize.', 'wm.']) {
         const prefix = L2D_PREFIX + suffix;
-        const v = localStorage.getItem(prefix + oldName);
+        const v = LS.getItem(prefix + oldName);
         if (v !== null) {
-          localStorage.setItem(prefix + newName, v);
-          localStorage.removeItem(prefix + oldName);
+          LS.setItem(prefix + newName, v);
+          LS.removeItem(prefix + oldName);
         }
       }
     } catch { /* ignore */ }
@@ -490,8 +500,7 @@ function initLive2DCore(host) {
   function modelBaseUrl(name) {
     const entry = modelsList.find(m => m.name === name);
     if (entry && entry.bundled) return '/live2d/models/' + encodeURIComponent(name) + '/';
-    const isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-    const base = (isNative && window.__nativeModelBase) ? window.__nativeModelBase : '/live2d/models/';
+    const base = window.__nativeModelBase ? window.__nativeModelBase : '/live2d/models/';
     return base + encodeURIComponent(name) + '/';
   }
 
@@ -523,8 +532,8 @@ function initLive2DCore(host) {
       if (json.ok) {
         // 清理该模型保存的尺寸/位置与水印记忆
         try {
-          localStorage.removeItem(L2D_PREFIX + 'resize.' + name);
-          localStorage.removeItem(L2D_PREFIX + 'wm.' + name);
+          LS.removeItem(L2D_PREFIX + 'resize.' + name);
+          LS.removeItem(L2D_PREFIX + 'wm.' + name);
         } catch { /* ignore */ }
         if (selectedModel === name) selectedModel = '';
         await refreshModelList();
@@ -571,7 +580,7 @@ function initLive2DCore(host) {
     } catch { /* ignore */ }
     // 恢复上次记忆：该模型之前隐藏过水印（AI 触发后记忆，下次打开自动恢复隐藏）
     try {
-      if (localStorage.getItem(L2D_PREFIX + 'wm.' + selectedModel) === '1') {
+      if (LS.getItem(L2D_PREFIX + 'wm.' + selectedModel) === '1') {
         watermarkOn = true;
         if (model) applyWatermark();
       }
@@ -602,7 +611,7 @@ function initLive2DCore(host) {
     if (!model || !watermarkExp) return;
     watermarkOn = !watermarkOn;
     applyWatermark();
-    try { localStorage.setItem(L2D_PREFIX + 'wm.' + selectedModel, watermarkOn ? '1' : '0'); } catch { /* ignore */ }
+    try { LS.setItem(L2D_PREFIX + 'wm.' + selectedModel, watermarkOn ? '1' : '0'); } catch { /* ignore */ }
   }
 
   function onWatermarkKeyDown(e) {
@@ -769,7 +778,7 @@ function initLive2DCore(host) {
         console.error('[Live2D] PIXI.live2d 不可用:', window.PIXI ? Object.keys(window.PIXI) : 'PIXI 未加载');
         host.warn('Live2D 引擎未能加载，本次改用图片立绘：' + (err && err.message ? err.message : err));
         sceneMode = 'portrait';
-        try { localStorage.setItem(SCENE_MODE_KEY, 'portrait'); } catch { /* ignore */ }
+        try { LS.setItem(SCENE_MODE_KEY, 'portrait'); } catch { /* ignore */ }
       }
     }
     isOpen = true;
@@ -824,7 +833,7 @@ function initLive2DCore(host) {
 
   // 鼠标跟随开关（默认开启）
   let mouseFollowEnabled = (function () {
-    try { return localStorage.getItem(L2D_PREFIX + 'mouseFollow') !== '0'; } catch { return true; }
+    try { return LS.getItem(L2D_PREFIX + 'mouseFollow') !== '0'; } catch { return true; }
   })();
 
   // 鼠标跟随幅度（设置 → Live2D）。
@@ -841,7 +850,7 @@ function initLive2DCore(host) {
   const BODY_GAIN_SPAN = 2;      // 倍率从 ×1.0 到 ×3.0 期间，身体跟随从 0 加到满量程
   let mouseFollowScale = (function () {
     try {
-      const raw = localStorage.getItem(L2D_PREFIX + 'mouseFollowScale');
+      const raw = LS.getItem(L2D_PREFIX + 'mouseFollowScale');
       if (raw === null) return MOUSE_SCALE_BASE; // 老用户没有这项配置，保持原来的幅度
       const v = Number(raw);
       return Number.isFinite(v) ? Math.max(0, Math.min(MOUSE_SCALE_MAX, Math.round(v))) : MOUSE_SCALE_BASE;
@@ -887,7 +896,7 @@ function initLive2DCore(host) {
     mouseFollowScale = Number.isFinite(n)
       ? Math.max(0, Math.min(MOUSE_SCALE_MAX, Math.round(n)))
       : MOUSE_SCALE_BASE;
-    try { localStorage.setItem(L2D_PREFIX + 'mouseFollowScale', String(mouseFollowScale)); } catch { /* ignore */ }
+    try { LS.setItem(L2D_PREFIX + 'mouseFollowScale', String(mouseFollowScale)); } catch { /* ignore */ }
     // 幅度调到 0 等于"不跟随"，模型应立即回正，而不是停在上一帧歪着的角度
     if (mouseFollowScale === 0) {
       mouseTarget = { x: 0, y: 0 };
@@ -903,7 +912,7 @@ function initLive2DCore(host) {
 
   function setMouseFollow(on) {
     mouseFollowEnabled = Boolean(on);
-    try { localStorage.setItem(L2D_PREFIX + 'mouseFollow', mouseFollowEnabled ? '1' : '0'); } catch { /* ignore */ }
+    try { LS.setItem(L2D_PREFIX + 'mouseFollow', mouseFollowEnabled ? '1' : '0'); } catch { /* ignore */ }
     if (!mouseFollowEnabled) {
       // 关闭时把目标与当前值都归零，并把模型的角度参数复位，避免停在歪着的位置
       mouseTarget = { x: 0, y: 0 };
@@ -1140,7 +1149,7 @@ function initLive2DCore(host) {
   }
 
   let bgStyle = (function () {
-    try { return sanitizeBackground(localStorage.getItem(L2D_PREFIX + 'bg') || ''); } catch { return ''; }
+    try { return sanitizeBackground(LS.getItem(L2D_PREFIX + 'bg') || ''); } catch { return ''; }
   })();
 
   function applyBackground() {
@@ -1913,7 +1922,7 @@ ${lines.join('\n')}
   let speakStartedAt = 0;
   /** 打字机开关（设置页可关；关掉就是整段直接出现） */
   let typewriterOn = (function () {
-    try { return localStorage.getItem(L2D_PREFIX + 'typewriter') !== '0'; } catch { return true; }
+    try { return LS.getItem(L2D_PREFIX + 'typewriter') !== '0'; } catch { return true; }
   })();
 
   function bubbleEls() {
@@ -2020,7 +2029,7 @@ ${lines.join('\n')}
   const SCENE_MODE_KEY = L2D_PREFIX + 'sceneMode';
   let sceneMode = 'live2d';
   try {
-    const m = localStorage.getItem(SCENE_MODE_KEY);
+    const m = LS.getItem(SCENE_MODE_KEY);
     if (m === 'portrait' || m === 'live2d') sceneMode = m;
   } catch { /* ignore */ }
 
@@ -2091,7 +2100,7 @@ ${lines.join('\n')}
   function setSceneMode(mode) {
     const next = mode === 'portrait' ? 'portrait' : 'live2d';
     sceneMode = next;
-    try { localStorage.setItem(SCENE_MODE_KEY, next); } catch { /* ignore */ }
+    try { LS.setItem(SCENE_MODE_KEY, next); } catch { /* ignore */ }
     applySceneMode();
     // 提示词里写了"当前呈现：立绘/模型"，切换后要立刻重算，
     //   否则 AI 会按旧模式给动作/位置标签（立绘模式下那些不生效）。
@@ -2110,7 +2119,7 @@ ${lines.join('\n')}
     setBackground: function (v) {
       const safe = sanitizeBackground(v);
       bgStyle = safe;
-      try { localStorage.setItem(L2D_PREFIX + "bg", safe); } catch { /* ignore */ }
+      try { LS.setItem(L2D_PREFIX + "bg", safe); } catch { /* ignore */ }
       applyBackground();
     },
     getBackground: function () { return bgStyle; },
@@ -2279,7 +2288,7 @@ ${lines.join('\n')}
     setMouseFollowScale(level) { setMouseFollowScale(level); },
     /** 把当前模型的大小与位置恢复成"按屏幕高度自适应"的初始值 */
     resetModelView() {
-      try { localStorage.removeItem(resizeStorageKey()); } catch { /* ignore */ }
+      try { LS.removeItem(resizeStorageKey()); } catch { /* ignore */ }
       needsInitScale = true;
       if (isOpen && model) void loadModel();
       return true;
@@ -2287,7 +2296,7 @@ ${lines.join('\n')}
     /** 对话框打字机开关（关闭则整段直接出现） */
     setTypewriter(on) {
       typewriterOn = !!on;
-      try { localStorage.setItem(L2D_PREFIX + 'typewriter', typewriterOn ? '1' : '0'); } catch { /* ignore */ }
+      try { LS.setItem(L2D_PREFIX + 'typewriter', typewriterOn ? '1' : '0'); } catch { /* ignore */ }
     },
     // 真实语音音量 → 嘴型（VAD 简化）：0~1 音量；传 null/0 恢复正弦波并停嘴
     setVoiceEnergy(level) {
