@@ -705,6 +705,7 @@ async function caseMcpClient(c) {
     //   判据只能是 payload.needLogin —— 用 status===401 会把服务商的 Key 错
     //   误报成"本机服务需要重新登录"，用户去重启服务/刷新/改密码全都无效。
     const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-relay.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const bad401 = coreSrc.match(/response\.status === 401 \|\| payload\?\.needLogin/g) || [];
     c.ok(bad401.length === 0, '★ 不再用 status===401 判定本机登录失效', 'found ' + bad401.length);
