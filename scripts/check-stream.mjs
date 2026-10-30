@@ -48,7 +48,8 @@ async function caseStreamAndCot(c) {
     const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
     const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     // 6h 用例要看 doAgentCommand / doAgentFile 的确认分支（等待提示与计时重置）
-    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
+    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-files.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
     // ★★ 2026-10：本地中继（含它那套流式超时/透传行为）搬进了 server/relay.mjs，
     //   成为电脑端与手机端**共用**的一份实现。所以下面第 6c 节要在新文件里找，
     //   而不是在 serve.mjs 里 —— 搬走之后留了一份转发壳，细节全在那边。
