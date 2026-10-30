@@ -628,7 +628,7 @@ async function caseMcpClient(c) {
     //   而放开它们的 overflow 会让滚动失效 —— 用户报过"展开后别的地方拖不动"。
     c.ok(/ext-menu-floating \{[\s\S]{0,200}position: absolute !important/.test(luxe),
         '★ 子项用 absolute（挂在弹窗下，不在滚动容器里）');
-    const initJs = readFileSync(path.join(ROOT, 'web', 'js', 'bind-events.js'), 'utf8')
+    const initJs = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     // ★ 只在**窄屏**把子项挪到 #settingsPanel：宽屏导航是左侧竖排一列，
     //   子项本来就缩进在「扩展」下面、不受 overflow 影响；一并挪走会让桌面版直接消失。
@@ -778,7 +778,7 @@ async function caseMcpClient(c) {
         '★ 收起期间保持可见（否则动画看不到）');
     c.ok(/is-closing::before \{[\s\S]{0,200}ext-spine-shrink \.18s ease-in \.2s/.test(luxe),
         '★ 竖线最后缩回（收起是展开的逆序）');
-    const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'bind-events.js'), 'utf8')
+    const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     c.ok(/forceClose: true/.test(initSrc) && /forceOpen: true/.test(initSrc),
         '★ 点「扩展」是 toggle（再次点击收起）');

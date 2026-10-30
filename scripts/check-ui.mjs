@@ -1728,7 +1728,7 @@ async function caseBirthday(c) {
         + read(path.join(WEB, 'js', 'roleplay.js')) + '\n'
         + read(path.join(WEB, 'js', 'chat.js')) + '\n'
         + read(path.join(WEB, 'js', 'data.js'));
-    const initJs = read(path.join(WEB, 'js', 'bind-events.js')) + '\n'
+    const initJs = read(path.join(WEB, 'js', 'bindings.js')) + '\n'
         + read(path.join(WEB, 'js', 'init.js'));
     const achJs = read(path.join(WEB, 'js', 'achievements.js'));
 
