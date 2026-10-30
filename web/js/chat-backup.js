@@ -1,0 +1,449 @@
+//  数据备份：导出 / 导入（APK 侧）
+//  APK 没有 Node 后端，/api/data/* 不存在，但用户数据存在应用私有目录，
+//  卸载即丢失、手动也拷不出来，所以 APK 侧比 Web 侧更需要备份。
+//  备份格式与 Web 版完全一致（同一套 zip 结构），两端可互相导入。
+//  清单直接复用 Store.DATA_KEYS，不再抄第二份：加键只需改 store.js 一处。
+//  zip 用零依赖的最小实现（store 模式，不压缩）：浏览器里没有 node:zlib，
+//  引第三方库会破坏零依赖；对话记录体积不大，不值得为此加依赖。
+
+(function () {
+    'use strict';
+
+    // 备份哪些键：直接取 Store 的权威清单（含动态的插件开关键）。
+    // 排除 UI 临时状态由 store.js 的 DATA_KEYS 决定，这里不再重复判断。
+    function backupKeys() {
+        const keys = (window.Store && window.Store.DATA_KEYS) ? window.Store.DATA_KEYS.slice() : [];
+        // 插件开关是动态键（elaina_plugin_<id>）：枚举出来一起备份，
+        // 否则换机后插件的启停状态全丢。Store 不提供枚举，这里从缓存快照取。
+        try {
+            const snap = window.Store ? window.Store.snapshot() : {};
+            for (const k of Object.keys(snap)) {
+                if (/^elaina_plugin_\S+$/.test(k) && !keys.includes(k)) keys.push(k);
+            }
+        } catch (e) { /* 拿不到就只备份固定键 */ }
+        return keys;
+    }
+
+    const FORMAT = 'elainachat-backup';
+    const VERSION = 3;   // 与后端一致：v3 = zip + data/ 目录（v2 仍可导入）
+    // 聊天数据的顶层目录：与电脑版一致，解压后 data/ 与（电脑版的）mods/、skills/ 平级。
+    // 手机端没有 skills/，插件也不进本机备份（只能从市场重装），所以 APK 包里只有 data/。
+    const DATA_PREFIX = 'data/';
+
+    // ------------------------------------------------------------------ CRC32
+    // zip 要求每个条目带 CRC32。浏览器没有内置实现，这里用标准查表法（约 15 行）。
+    let crcTable = null;
+    function makeCrcTable() {
+        const t = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) {
+            let c = n;
+            for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            t[n] = c >>> 0;
+        }
+        return t;
+    }
+    function crc32(bytes) {
+        if (!crcTable) crcTable = makeCrcTable();
+        let c = 0xFFFFFFFF;
+        for (let i = 0; i < bytes.length; i++) c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    // ------------------------------------------------------------------ 写 zip
+    /**
+     * 打包成 zip（只用 store 模式，不压缩）。
+     * @param entries [{ name: string, text: string }]
+     * @returns Blob
+     */
+    function buildZip(entries) {
+        const enc = new TextEncoder();
+        const parts = [];
+        const central = [];
+        let offset = 0;
+
+        for (const e of entries) {
+            const nameBytes = enc.encode(e.name);
+            const dataBytes = enc.encode(e.text);
+            const crc = crc32(dataBytes);
+            const size = dataBytes.length;
+
+            const local = new Uint8Array(30 + nameBytes.length);
+            const lv = new DataView(local.buffer);
+            lv.setUint32(0, 0x04034b50, true);
+            lv.setUint16(4, 20, true);
+            lv.setUint16(6, 0x0800, true);       // UTF-8 文件名
+            lv.setUint16(8, 0, true);            // store（不压缩）
+            lv.setUint16(10, 0, true);
+            lv.setUint16(12, 0x21, true);
+            lv.setUint32(14, crc, true);
+            lv.setUint32(18, size, true);
+            lv.setUint32(22, size, true);
+            lv.setUint16(26, nameBytes.length, true);
+            lv.setUint16(28, 0, true);
+            local.set(nameBytes, 30);
+
+            const cen = new Uint8Array(46 + nameBytes.length);
+            const cv = new DataView(cen.buffer);
+            cv.setUint32(0, 0x02014b50, true);
+            cv.setUint16(4, 20, true);
+            cv.setUint16(6, 20, true);
+            cv.setUint16(8, 0x0800, true);
+            cv.setUint16(10, 0, true);
+            cv.setUint16(12, 0, true);
+            cv.setUint16(14, 0x21, true);
+            cv.setUint32(16, crc, true);
+            cv.setUint32(20, size, true);
+            cv.setUint32(24, size, true);
+            cv.setUint16(28, nameBytes.length, true);
+            cv.setUint16(30, 0, true);
+            cv.setUint16(32, 0, true);
+            cv.setUint16(34, 0, true);
+            cv.setUint16(36, 0, true);
+            cv.setUint32(38, 0, true);
+            cv.setUint32(42, offset, true);
+            cen.set(nameBytes, 46);
+
+            parts.push(local, dataBytes);
+            central.push(cen);
+            offset += local.length + dataBytes.length;
+        }
+
+        const centralBytes = concat(central);
+        const localBytes = concat(parts);
+        const eocd = new Uint8Array(22);
+        const ev = new DataView(eocd.buffer);
+        ev.setUint32(0, 0x06054b50, true);
+        ev.setUint16(8, central.length, true);
+        ev.setUint16(10, central.length, true);
+        ev.setUint32(12, centralBytes.length, true);
+        ev.setUint32(16, localBytes.length, true);
+
+        return new Blob([localBytes, centralBytes, eocd], { type: 'application/zip' });
+    }
+
+    function concat(arrays) {
+        let total = 0;
+        for (const a of arrays) total += a.length;
+        const out = new Uint8Array(total);
+        let at = 0;
+        for (const a of arrays) { out.set(a, at); at += a.length; }
+        return out;
+    }
+
+    // ------------------------------------------------------------------ 读 zip
+    /**
+     * 解出 zip 里的所有条目。
+     * @param bytes Uint8Array
+     * @returns [{ name, text }]
+     */
+    function readZip(bytes) {
+        const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+        if (bytes.length < 22 || dv.getUint32(0, true) !== 0x04034b50) {
+            throw new Error('不是有效的 zip 文件');
+        }
+        // 从尾部找 EOCD
+        let eocd = -1;
+        const min = Math.max(0, bytes.length - 22 - 0xFFFF);
+        for (let i = bytes.length - 22; i >= min; i--) {
+            if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+        }
+        if (eocd < 0) throw new Error('zip 缺少中央目录');
+
+        const total = dv.getUint16(eocd + 10, true);
+        const cdOff = dv.getUint32(eocd + 16, true);
+        const dec = new TextDecoder('utf-8');
+        const out = [];
+
+        let off = cdOff;
+        for (let i = 0; i < total; i++) {
+            if (dv.getUint32(off, true) !== 0x02014b50) break;
+            const method = dv.getUint16(off + 10, true);
+            const compSize = dv.getUint32(off + 20, true);
+            const nameLen = dv.getUint16(off + 28, true);
+            const extraLen = dv.getUint16(off + 30, true);
+            const commentLen = dv.getUint16(off + 32, true);
+            const localOff = dv.getUint32(off + 42, true);
+            const name = dec.decode(bytes.subarray(off + 46, off + 46 + nameLen));
+
+            // local header 里的名字/extra 长度可能与中央目录不同，必须按 local 的算
+            const lNameLen = dv.getUint16(localOff + 26, true);
+            const lExtraLen = dv.getUint16(localOff + 28, true);
+            const dataStart = localOff + 30 + lNameLen + lExtraLen;
+            const payload = bytes.subarray(dataStart, dataStart + compSize);
+
+            if (method === 0) {
+                out.push({ name, text: dec.decode(payload) });
+            } else if (method === 8) {
+                // deflate：交给 DecompressionStream（浏览器/现代 WebView 内置）
+                out.push({ name, deflated: payload });
+            } else {
+                throw new Error(`备份里有不支持的压缩方式 ${method}（${name}）`);
+            }
+            off += 46 + nameLen + extraLen + commentLen;
+        }
+        return out;
+    }
+
+    /** 把 deflate 条目解出来（异步，因为要用 DecompressionStream） */
+    async function inflateEntry(bytes) {
+        if (typeof DecompressionStream === 'undefined') {
+            throw new Error('这个备份用了压缩，当前环境不支持解压（请用 Web 版导入）');
+        }
+        const ds = new DecompressionStream('deflate-raw');
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        return await new Response(stream).text();
+    }
+
+    // ------------------------------------------------------------------ 导出
+    /** 收集当前属于备份范围的键 */
+    function collectLocalData() {
+        const data = {};
+        for (const k of backupKeys()) {
+            try {
+                const v = Store.getItem(k);
+                if (typeof v === 'string') data[k] = v;
+            } catch { /* 读不到：跳过 */ }
+        }
+        return data;
+    }
+
+    /**
+     * 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
+     * 好处：用户能解压开直接看，也能拿去 Web 版导入。
+     */
+    /** manifest.json：格式号、导出时间、来源与条数。 */
+    function buildManifestEntry(cards, convs) {
+        return {
+            name: 'manifest.json',
+            text: JSON.stringify({
+                format: FORMAT,
+                version: VERSION,
+                exportedAt: new Date().toISOString(),
+                source: 'apk',
+                note: '这是 ElainaChat（安卓版）的数据备份，可在 Web 版导入。',
+                counts: { characters: cards.length, conversations: convs.length },
+            }, null, 2),
+        };
+    }
+
+    /** settings.json：除人设卡 / 对话 / 记忆之外的键。 */
+    function buildSettingsEntry(data) {
+        const settings = {};
+        for (const [k, v] of Object.entries(data)) {
+            if (k === 'elaina_open_character_cards' || k === 'elaina_open_conversations' || k === 'elaina_open_memory_core') continue;
+            settings[k] = v;
+        }
+        return { name: DATA_PREFIX + 'settings.json', text: JSON.stringify(settings, null, 2) };
+    }
+
+    /** characters/：一卡一文件 + index.json。 */
+    function buildCharacterEntries(data, cards) {
+        if (!Array.isArray(cards) || !cards.length) return [];
+        const out = [];
+        const order = [];
+        for (const card of cards) {
+            if (!card || typeof card !== 'object') continue;
+            const id = (typeof card.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(card.id)) ? card.id : ('card_' + order.length);
+            order.push(id);
+            out.push({ name: `${DATA_PREFIX}characters/${id}.json`, text: JSON.stringify(card, null, 2) });
+        }
+        out.push({
+            name: DATA_PREFIX + 'characters/index.json',
+            text: JSON.stringify({ version: 1, currentCardId: data['elaina_open_current_card'] || '', order }, null, 2),
+        });
+        return out;
+    }
+
+    /** conversations/：一对话一文件 + index.json。 */
+    function buildConversationEntries(convs) {
+        if (!Array.isArray(convs) || !convs.length) return [];
+        const out = [];
+        const order = [];
+        for (const conv of convs) {
+            if (!conv || typeof conv !== 'object') continue;
+            const id = (typeof conv.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(conv.id)) ? conv.id : ('conv_' + order.length);
+            order.push(id);
+            out.push({ name: `${DATA_PREFIX}conversations/${id}.json`, text: JSON.stringify(conv, null, 2) });
+        }
+        out.push({ name: DATA_PREFIX + 'conversations/index.json', text: JSON.stringify({ version: 1, order }, null, 2) });
+        return out;
+    }
+
+    /**
+     * memory/：与后端同构 —— 按类目拆成一类一文件。
+     * 记忆在前端是一个对象 { diary, promise, preference, plan, motivation, pivotal_memory }，
+     * 这里逐类目写出去（未知类目也写，不丢数据）。
+     */
+    function buildMemoryEntries(data) {
+        if (typeof data['elaina_open_memory_core'] !== 'string') return [];
+        const out = [];
+        try {
+            const memObj = JSON.parse(data['elaina_open_memory_core']);
+            if (memObj && typeof memObj === 'object' && !Array.isArray(memObj)) {
+                for (const [category, value] of Object.entries(memObj)) {
+                    if (!/^[A-Za-z0-9_-]{1,80}$/.test(category)) continue;   // 类目名当文件名，必须过白名单
+                    out.push({
+                        name: `${DATA_PREFIX}memory/${category}.json`,
+                        text: JSON.stringify({ version: 1, value }, null, 2),
+                    });
+                }
+            }
+        } catch { /* 记忆不是合法 JSON 就跳过，不阻塞其它数据 */ }
+        return out;
+    }
+
+    /**
+     * 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
+     * 好处：用户能解压开直接看，也能拿去 Web 版导入。
+     */
+    async function buildBackupBlob() {
+        const data = collectLocalData();
+        // 人设卡 / 对话 / 记忆拆出来（与后端 store.mjs 的目录结构对齐）
+        let cards = [];
+        let convs = [];
+        try { cards = JSON.parse(data['elaina_open_character_cards'] || '[]'); } catch { /* 忽略 */ }
+        try { convs = JSON.parse(data['elaina_open_conversations'] || '[]'); } catch { /* 忽略 */ }
+
+        const entries = [
+            buildManifestEntry(cards, convs),
+            buildSettingsEntry(data),
+            ...buildCharacterEntries(data, cards),
+            ...buildConversationEntries(convs),
+            ...buildMemoryEntries(data),
+        ];
+        return buildZip(entries);
+    }
+
+    // ------------------------------------------------------------------ 导入
+    /**
+     * 解析备份（zip 或 v1 单 JSON），返回 { source, data }。
+     */
+    async function parseBackup(file) {
+        const buf = new Uint8Array(await file.arrayBuffer());
+        const isZip = buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04;
+
+        if (!isZip) {
+            // v1：单个 JSON
+            let parsed;
+            try {
+                parsed = JSON.parse(new TextDecoder('utf-8').decode(buf));
+            } catch {
+                throw new Error('这个文件既不是 zip 也不是有效的 JSON 备份');
+            }
+            const raw = parsed && typeof parsed === 'object' && parsed.data ? parsed.data : parsed;
+            const data = {};
+            for (const [k, v] of Object.entries(raw || {})) if (typeof v === 'string') data[k] = v;
+            return { source: 'json', data };
+        }
+
+        const raw = readZip(buf);
+        const byName = new Map();
+        for (const e of raw) {
+            byName.set(e.name, e.deflated ? await inflateEntry(e.deflated) : e.text);
+        }
+        // 两种写法都认：v3 在 data/ 下，v2 直接摊在 zip 根上（老备份照常能导）。
+        const get = (n) => (byName.has(n) ? byName.get(n) : (byName.has(DATA_PREFIX + n) ? byName.get(DATA_PREFIX + n) : null));
+        const data = {};
+
+        const settingsText = get('settings.json');
+        if (settingsText) {
+            try {
+                const obj = JSON.parse(settingsText);
+                for (const [k, v] of Object.entries(obj || {})) if (typeof v === 'string') data[k] = v;
+            } catch { /* 单个文件坏了不该让整包失败 */ }
+        }
+
+        const charsIdx = get('characters/index.json');
+        if (charsIdx) {
+            try {
+                const idx = JSON.parse(charsIdx);
+                const cards = [];
+                for (const id of (idx && idx.order) || []) {
+                    const t = get(`characters/${id}.json`);
+                    if (!t) continue;
+                    try { cards.push(JSON.parse(t)); } catch { /* 跳过坏卡 */ }
+                }
+                if (cards.length) {
+                    data['elaina_open_character_cards'] = JSON.stringify(cards);
+                    if (typeof idx.currentCardId === 'string') data['elaina_open_current_card'] = idx.currentCardId;
+                    // 当前生效的那套 = 当前选中的卡（Web 版也是这么维护的）
+                    const cur = cards.find((c) => c && c.id === idx.currentCardId) || cards[0];
+                    if (cur) data['elaina_open_character_card'] = JSON.stringify(cur);
+                }
+            } catch { /* 忽略 */ }
+        }
+
+        const convIdx = get('conversations/index.json');
+        if (convIdx) {
+            try {
+                const idx = JSON.parse(convIdx);
+                const convs = [];
+                for (const id of (idx && idx.order) || []) {
+                    const t = get(`conversations/${id}.json`);
+                    if (!t) continue;
+                    try { convs.push(JSON.parse(t)); } catch { /* 跳过坏项 */ }
+                }
+                if (convs.length) data['elaina_open_conversations'] = JSON.stringify(convs);
+            } catch { /* 忽略 */ }
+        }
+
+        // memory/：一类目一文件 → 拼回一个对象。
+        // 同时兼容 v3 的 data/memory/、v2 的根 memory/，以及 v2 中期的单文件
+        // memory.json（{value:…}），老备份照样能导。
+        const memObj = {};
+        for (const e of raw) {
+            const m = /^(?:data\/)?memory\/([A-Za-z0-9_-]+)\.json$/.exec(e.name);
+            if (!m) continue;
+            const category = m[1];
+            try {
+                const text = e.deflated ? await inflateEntry(e.deflated) : e.text;
+                const rec = JSON.parse(text);
+                if (rec && rec.value !== undefined) memObj[category] = rec.value;
+            } catch { /* 跳过坏文件 */ }
+        }
+        if (Object.keys(memObj).length) {
+            data['elaina_open_memory_core'] = JSON.stringify(memObj);
+        } else {
+            const legacyMem = get('memory.json');
+            if (legacyMem) {
+                try {
+                    const rec = JSON.parse(legacyMem);
+                    if (rec && typeof rec.value === 'string') data['elaina_open_memory_core'] = rec.value;
+                } catch { /* 忽略 */ }
+            }
+        }
+
+        return { source: 'zip', data };
+    }
+
+    /**
+     * 导入：把备份写回 Store（合并模式）→ 落进 data/（Web 落 data/store.json，APK 落应用私有目录）
+     * @returns { keys, source }
+     */
+    async function applyBackup(file) {
+        const { source, data } = await parseBackup(file);
+        const keys = Object.keys(data);
+        if (!keys.length) throw new Error('备份里没有可导入的数据');
+        // 只认备份范围内的键，避免把奇怪的键写进去
+        const allowed = new Set(backupKeys());
+        let written = 0;
+        for (const [k, v] of Object.entries(data)) {
+            if (!allowed.has(k)) continue;
+            try { Store.setItem(k, v); written++; } catch { /* 写入失败：跳过 */ }
+        }
+        if (!written) throw new Error('备份里的数据都不在可导入范围内');
+        return { keys: written, source };
+    }
+
+    window.ChatBackup = {
+        // 清单是**动态**的（含插件开关），用函数而不是数组属性，
+        // 避免调用方在启动早期把清单快照下来后永远看不到新增的键。
+        keys: backupKeys,
+        buildBackupBlob,
+        parseBackup,
+        applyBackup,
+        /** 供测试：取当前备份范围的键 */
+        _keys: backupKeys,
+    };
+})();
+

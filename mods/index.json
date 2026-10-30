@@ -1,0 +1,138 @@
+{
+  "comment": "本文件由服务端扫描 mods/ 自动生成（见 server/mods.mjs）。手工改动会在下次扫描时被覆盖。",
+  "generatedAt": "2026-10-30T00:22:27.989Z",
+  "plugins": [
+    {
+      "id": "birthday",
+      "dir": "birthday-1.1.0",
+      "name": "星屑之日（10.17 生日）",
+      "version": "1.1.0",
+      "description": "10 月 17 日伊蕾娜生日隐藏模式：开场彩蛋、生日主题（星屑之日）、生日面板与 23:59 告别彩蛋，并往 system 提示词追加生日补充；生日面板可「与伊蕾娜一起过生日」——故事引导 + 情景演绎（一起买材料做蛋糕）、好感度与成就「今天的特别之处」。",
+      "entry": "index.js",
+      "scripts": [],
+      "styles": [
+        "style.css"
+      ],
+      "defaultEnabled": false,
+      "after": [],
+      "hidden": false,
+      "capabilities": [
+        "theme",
+        "achievements"
+      ],
+      "hasManifest": true
+    },
+    {
+      "id": "elaina-avatar",
+      "dir": "elaina-avatar-1.0.0",
+      "name": "伊蕾娜立绘与情绪",
+      "version": "1.0.0",
+      "description": "Galgame 与桌宠共用的立绘资源与情绪识别。不单独提供界面，被其他 mod 依赖。",
+      "entry": "index.js",
+      "scripts": [],
+      "styles": [],
+      "defaultEnabled": true,
+      "after": [],
+      "hidden": true,
+      "hasManifest": true
+    },
+    {
+      "id": "galgame",
+      "dir": "galgame-1.6.0",
+      "name": "Galgame 界面",
+      "version": "1.6.0",
+      "description": "全屏沉浸式剧情舞台：对话框 + 角色呈现（图片立绘 / Live2D 模型可切换），场景背景、打字机、AI 表情驱动；随附 AI 技能，可自由调节背景与表情；与主界面共用同一份对话数据。",
+      "entry": "index.js",
+      "scripts": [
+        "register.js",
+        "index-live2d.js",
+        "settings-panel.js"
+      ],
+      "styles": [
+        "style.css"
+      ],
+      "defaultEnabled": true,
+      "after": [
+        "elaina-avatar",
+        "scene-backgrounds",
+        "live2d-models"
+      ],
+      "hidden": false,
+      "hasManifest": true
+    },
+    {
+      "id": "live2d-models",
+      "dir": "live2d-models-1.0.0",
+      "name": "Live2D 引擎与模型",
+      "version": "1.0.0",
+      "description": "Live2D 运行引擎（Cubism Core / PIXI / pixi-live2d-display）与模型资源。含模型管理界面（上传/重命名/删除）。",
+      "entry": "index.js",
+      "scripts": [
+        "panel.js"
+      ],
+      "styles": [],
+      "defaultEnabled": true,
+      "after": [],
+      "hidden": false,
+      "capabilities": [
+        "dragSort",
+        "openFolder"
+      ],
+      "server": {
+        "entry": "server.mjs",
+        "capabilities": [
+          "route-register",
+          "static-read",
+          "host-utils"
+        ],
+        "routes": [
+          "/api/live2d"
+        ],
+        "static": [
+          {
+            "url": "/live2d/models",
+            "dir": "models"
+          },
+          {
+            "url": "/live2d/vendor",
+            "dir": "vendor",
+            "mime": "auto"
+          }
+        ]
+      },
+      "hasManifest": true
+    },
+    {
+      "id": "pet",
+      "dir": "pet-1.0.0",
+      "name": "桌宠",
+      "version": "1.0.0",
+      "description": "悬浮桌宠：立绘 + 聊天气泡，回复情绪自动切换表情。与 Galgame 共用立绘与情绪识别。",
+      "entry": "index.js",
+      "scripts": [],
+      "styles": [
+        "style.css"
+      ],
+      "defaultEnabled": false,
+      "after": [
+        "elaina-avatar"
+      ],
+      "hidden": false,
+      "hasManifest": true
+    },
+    {
+      "id": "scene-backgrounds",
+      "dir": "scene-backgrounds-1.0.0",
+      "name": "场景背景图",
+      "version": "1.0.0",
+      "description": "31 张场景背景图（城市/室内/雪景等），供 Galgame 界面与 Live2D 视频通话共用。不提供界面，被依赖。",
+      "entry": "index.js",
+      "scripts": [],
+      "styles": [],
+      "defaultEnabled": true,
+      "after": [],
+      "hidden": true,
+      "hasManifest": true
+    }
+  ]
+}

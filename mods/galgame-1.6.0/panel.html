@@ -1,0 +1,100 @@
+<div class="gs-page">
+    <p class="gs-intro">
+        「情景演绎」= 全屏舞台 + 对话框：角色由<strong>图片立绘</strong>或 <strong>Live2D 模型</strong>呈现，
+        背景由剧情场景或自定义背景决定。这里的改动<strong>保存即生效</strong>，不用刷新页面。
+    </p>
+
+    <!-- ① 角色呈现 -->
+    <section class="gs-sec">
+        <div class="gs-sec-head">
+            <span class="gs-sec-title">① 角色呈现</span>
+            <span class="gs-sec-note">决定舞台上站着的是立绘还是 Live2D 模型</span>
+        </div>
+        <div class="gs-modes" role="radiogroup" aria-label="角色呈现方式">
+            <button type="button" class="gs-mode" data-scene-mode="live2d" role="radio" aria-checked="false">
+                <span class="gs-mode-ico">🎭</span>
+                <span class="gs-mode-body">
+                    <span class="gs-mode-name">Live2D 模型</span>
+                    <span class="gs-mode-desc">会动、有口型与鼠标跟随；需要「Live2D 引擎与模型」与至少一个模型</span>
+                </span>
+                <span class="gs-mode-tick" aria-hidden="true">✓</span>
+            </button>
+            <button type="button" class="gs-mode" data-scene-mode="portrait" role="radio" aria-checked="false">
+                <span class="gs-mode-ico">🖼</span>
+                <span class="gs-mode-body">
+                    <span class="gs-mode-name">图片立绘</span>
+                    <span class="gs-mode-desc">按情绪切换立绘，轻量、不加载引擎；需要「伊蕾娜立绘与情绪」</span>
+                </span>
+                <span class="gs-mode-tick" aria-hidden="true">✓</span>
+            </button>
+        </div>
+        <p id="gsModeHint" class="gs-hint"></p>
+    </section>
+
+    <!-- ② Live2D 模型 -->
+    <section class="gs-sec" id="gsSecLive2D">
+        <div class="gs-sec-head">
+            <span class="gs-sec-title">② Live2D 模型</span>
+            <button type="button" id="gsManageModels" class="gs-link" title="打开「Live2D 引擎与模型」的设置（上传 / 重命名 / 删除）">📦 管理模型</button>
+        </div>
+        <div id="gsModelList" class="gs-models"></div>
+        <div id="gsModelEmpty" class="gs-empty hidden">还没有模型。先在「Live2D 引擎与模型」里上传一个（.zip，Cubism 3/4）。</div>
+        <label class="gs-row">
+            <span class="gs-row-label">鼠标跟随</span>
+            <input type="checkbox" id="gsMouseFollow" class="gs-switch">
+            <span class="gs-row-note">头部与视线跟随鼠标</span>
+        </label>
+        <label class="gs-row">
+            <span class="gs-row-label">跟随幅度</span>
+            <input type="range" id="gsMouseScale" min="0" max="10" step="1" class="custom-slider gs-slider">
+            <span class="gs-row-note" id="gsMouseScaleVal">×1.0</span>
+        </label>
+        <div class="gs-row">
+            <span class="gs-row-label">模型位置</span>
+            <button type="button" id="gsResetModel" class="btn-secondary gs-mini">重置大小与位置</button>
+            <span class="gs-row-note">舞台里也可以点 📐 手动拖动调整</span>
+        </div>
+    </section>
+
+    <!-- ③ 背景 -->
+    <section class="gs-sec">
+        <div class="gs-sec-head">
+            <span class="gs-sec-title">③ 舞台背景</span>
+            <span class="gs-sec-note">立绘与 Live2D 共用同一个背景</span>
+        </div>
+        <div class="gs-row">
+            <span class="gs-row-label">图片</span>
+            <input type="file" id="gsBgImage" accept="image/*" class="modal-input text-xs min-w-0">
+            <button type="button" id="gsBgClear" class="btn-secondary gs-mini">清除</button>
+        </div>
+        <div id="gsBgScenesWrap" class="gs-scenes hidden">
+            <div class="gs-sub">或从「场景背景图」里挑一张</div>
+            <div id="gsBgScenes" class="gs-scene-grid"></div>
+        </div>
+        <p class="gs-hint">不设置时，用剧情界面当前的场景背景；剧情界面没开就用纯色。</p>
+    </section>
+
+    <!-- ④ 对话框 -->
+    <section class="gs-sec">
+        <div class="gs-sec-head">
+            <span class="gs-sec-title">④ 对话框</span>
+            <span class="gs-sec-note">气泡里的字怎么出现</span>
+        </div>
+        <label class="gs-row">
+            <span class="gs-row-label">打字机</span>
+            <input type="checkbox" id="gsTypewriter" class="gs-switch">
+            <span class="gs-row-note">关闭则整段直接出现</span>
+        </label>
+    </section>
+
+    <!-- ⑤ 测试 -->
+    <section class="gs-sec">
+        <div class="gs-sec-head">
+            <span class="gs-sec-title">⑤ 试一下</span>
+        </div>
+        <div class="gs-row">
+            <button type="button" id="gsTest" class="btn-secondary gs-mini">打开情景演绎</button>
+            <span class="gs-row-note">试出来的效果就是对话里会看到的样子</span>
+        </div>
+    </section>
+</div>

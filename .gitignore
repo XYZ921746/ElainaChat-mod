@@ -1,0 +1,13 @@
+# 运行期数据与密钥（data/ 下有 auth.json / cert.pem / key.pem / 聊天记录）
+/data/
+
+# 日志
+*.log
+
+# 临时目录
+.tmp-*/
+node_modules/
+
+# 打包产物（dist/Android/scripts/sync-web.mjs 是检查夹具，必须保留）
+dist/*.exe
+dist/Windows/

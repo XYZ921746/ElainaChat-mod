@@ -1,0 +1,240 @@
+/* ============================================================
+   ElainaChat · Galgame 界面（参考 LingChat：背景 + 立绘舞台 + 底部对话框 + 角落菜单）
+   默认关闭；由设置「Galgame」段或界面内退出按钮控制
+   ============================================================ */
+#galgameLayer { display: none; position: fixed; inset: 0; z-index: 45;   /* 高于 sidebar/floatingMic(40)，低于一切弹窗(50+) —— OCR 二轮 S6 实测 */
+}
+#galgameLayer.on { display: block; }
+
+/* 场景背景由真实图片承担（#ggScene > .bgA/.bgB），旧 CSS 分层场景段已删除（OCR M5）。
+   ★ 2026-10：图片已搬到公共资源包「场景背景图」（scene-backgrounds），
+     不再在 galgame/img/bg/ 下 —— 因为视频通话也要用同一批图。
+     这里只是背景层样式，不含路径。 */
+
+/* 粒子层（星空/雨/樱） */
+#ggFx { position: absolute; inset: 0; pointer-events: none; }
+
+/* 立绘在场景之上 */
+#ggStage { z-index: 6; }
+#ggDialogWrap, #ggMenu, #ggInfo { z-index: 8; }
+
+/* 立绘舞台 */
+#ggStage { position: absolute; left: 0; right: 0; bottom: 0; top: 0; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; }
+#ggAvatar { max-height: 100%; max-width: 68%; object-fit: contain; object-position: bottom center; transform: translateY(7%); transform-origin: bottom center;
+  filter: drop-shadow(0 18px 40px rgba(0,0,0,.45)); animation: gg-in .5s cubic-bezier(.3,1.3,.5,1) both, pet-breathe 6.5s ease-in-out infinite; }
+@keyframes gg-in { from { opacity: 0; transform: translateY(26px) scale(.97); } to { opacity: 1; transform: none; } }
+#ggAvatar.emo-swap { animation: gg-in .32s cubic-bezier(.3,1.4,.5,1) both, pet-breathe 6.5s ease-in-out infinite; }
+
+/* 底部对话框 */
+#ggDialogWrap { position: absolute; left: 0; right: 0; bottom: 0; padding: 0 4vw 18px; display: flex; justify-content: center; }
+#ggDialog { position: relative; width: min(1080px, 94vw); min-height: 150px; padding: 18px 26px 20px; border-radius: 22px;
+  background: rgba(8, 11, 18, var(--gg-alpha, 0.62)); border: 1px solid rgba(255,255,255,.12);
+  backdrop-filter: blur(22px) saturate(1.4); -webkit-backdrop-filter: blur(22px) saturate(1.4);
+  box-shadow: 0 24px 70px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.10);
+  color: #fff; cursor: pointer; }
+#ggDialog::after { content: ""; position: absolute; left: 50%; bottom: 8px; width: 8px; height: 8px; margin-left: -4px;
+  border-right: 2px solid rgba(255,255,255,.65); border-bottom: 2px solid rgba(255,255,255,.65);
+  transform: rotate(45deg); animation: gg-hint 1.2s ease-in-out infinite; opacity: 0; }
+#ggDialog.ready::after { opacity: 1; }
+@keyframes gg-hint { 0%,100% { transform: rotate(45deg) translate(0,0); opacity:.35; } 50% { transform: rotate(45deg) translate(3px,3px); opacity:1; } }
+#ggName { display: inline-block; margin-bottom: 6px; font-size: 15px; font-weight: 800; font-style: italic; letter-spacing: .05em;
+  color: #ffd166; text-shadow: 0 2px 10px rgba(255,180,60,.45); }
+#ggName.me { color: #6fc3ff; text-shadow: 0 2px 10px rgba(60,160,255,.45); }
+#ggText { font-size: 17px; line-height: 1.85; letter-spacing: .01em; text-shadow: 0 2px 6px rgba(0,0,0,.55); min-height: 3.4em;
+  max-height: 34vh; overflow-y: auto; scrollbar-width: none; }
+#ggText::-webkit-scrollbar { display: none; }
+#ggText .markdown-body { font-size: 17px; line-height: 1.85; color: #fff; }
+#ggText .markdown-body code { background: rgba(255,255,255,.16); color: #fff; }
+#ggText .markdown-body pre { background: rgba(0,0,0,.45); }
+#ggText .katex { font-size: 1.05em; }
+
+/* 右上角菜单 */
+#ggMenu { position: absolute; top: 16px; right: 18px; display: flex; gap: 8px; z-index: 5; }
+.gg-btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 12px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: #eaf1fb; background: rgba(10,14,22,.55); border: 1px solid rgba(255,255,255,.14);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: transform .16s cubic-bezier(.3,1.35,.5,1), background .16s ease;
+  -webkit-tap-highlight-color: transparent; }
+.gg-btn:hover { background: rgba(0,122,255,.55); transform: translateY(-1px); }
+.gg-btn:active { transform: scale(.94); }
+
+/* 左上角会话信息 */
+#ggInfo { position: absolute; top: 16px; left: 18px; padding: 8px 14px; border-radius: 12px; font-size: 13px; color: #dbe6f5;
+  background: rgba(10,14,22,.5); border: 1px solid rgba(255,255,255,.12); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+
+/* 输入行（点击对话框展开/常驻显示） */
+#ggInputRow { position: absolute; left: 0; right: 0; bottom: -64px; display: flex; gap: 10px; padding: 0 4vw; justify-content: center;
+  transition: bottom .24s cubic-bezier(.3,1.3,.5,1); }
+#ggDialogWrap:hover #ggInputRow, #ggInputRow.show { bottom: 0; }
+#ggInput { flex: 1 1 auto; max-width: min(880px, 80vw); height: 44px; border-radius: 14px; padding: 0 16px; font-size: 15px;
+  color: #fff; background: rgba(8,11,18,.6); border: 1px solid rgba(255,255,255,.14); outline: 0;
+  backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+#ggInput::placeholder { color: rgba(255,255,255,.4); }
+#ggSend { flex: 0 0 auto; width: 44px; height: 44px; border: 0; border-radius: 50%; cursor: pointer; color: #fff; font-size: 15px;
+  background: linear-gradient(180deg, #1a8cff, #006ee6); box-shadow: 0 8px 22px rgba(0,100,220,.45), inset 0 1px 0 rgba(255,255,255,.4); }
+#ggSend:active { transform: scale(.92); }
+
+/* 手机适配 */
+@media (max-width: 560px) {
+  #ggMenu { flex-wrap: wrap; justify-content: flex-end; max-width: 62vw; }
+  .gg-btn { height: 30px; padding: 0 8px; font-size: 11px; border-radius: 10px; }
+  #ggStage { bottom: 216px; }   /* 手机上让立绘停在对话框上方，避免只露头（OCR 视觉） */
+  #ggAvatar { max-width: 104%; max-height: 118%; transform: translateY(9%); }
+  #ggDialog { min-height: 132px; padding: 14px 16px 16px; border-radius: 18px; }
+  #ggText { font-size: 15.5px; line-height: 1.75; max-height: 30vh; }
+  #ggName { font-size: 13.5px; }
+  #ggMenu { top: 12px; right: 12px; gap: 6px; }
+  .gg-btn { height: 32px; padding: 0 10px; font-size: 12px; }
+  #ggInfo { top: 12px; left: 12px; font-size: 12px; padding: 6px 10px; }
+  #ggInputRow { bottom: -58px; }
+  #ggInput { height: 40px; font-size: 14px; }
+  #ggSend { width: 40px; height: 40px; }
+}
+
+/* 背景场景选择器：固定在设置行内（横向滚动，不溢出面板） */
+.sw-setting-theme-row.gg-row { flex-direction: column !important; align-items: stretch !important; }
+#swGgSceneList { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; max-width: 100%; box-sizing: border-box; padding-bottom: 4px; scrollbar-width: thin; }
+#swGgSceneList .sw-gg-thumb { flex: 0 0 auto; }
+
+/* ============ 手机端构图强制生效（末尾高特异性，避免被其他规则覆盖） ============ */
+@media (max-width: 560px) {
+  #galgameLayer #ggStage { bottom: 216px !important; }
+  #galgameLayer #ggAvatar {
+    max-width: calc(104% * var(--gg-scale, 1)) !important;
+    max-height: 118% !important;
+    transform: translateY(9%) !important;
+    object-position: bottom center !important;
+  }
+}
+/* 桌面端构图（同样强制一次，保证头脚都在画面内且脚贴对话框） */
+@media (min-width: 561px) {
+  #galgameLayer #ggStage { bottom: 0 !important; }
+  #galgameLayer #ggAvatar { max-height: calc(100% * var(--gg-scale, 1)) !important; max-width: calc(68% * var(--gg-scale, 1)) !important; transform: translateY(7%) !important; object-position: bottom center !important; }
+}
+
+/* OCR 二轮 N5：呼吸动画的 keyframes 原本只在 pet.css（主界面不加载该文件），这里补一份 */
+@keyframes pet-breathe { 0%, 100% { transform: translateY(7%) scale(1); } 50% { transform: translateY(6%) scale(1.006); } }
+@keyframes pet-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+/* OCR 二轮 N4：旧场景段删除后 vignette 变成无样式，补回四周压暗 */
+#ggScene .vignette { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 38%, transparent 42%, rgba(4,6,12,.62) 100%); pointer-events: none; }
+
+/* ============ 立绘缩放（置于文件最末，确保不被任何更早规则覆盖） ============ */
+@media (min-width: 561px) {
+  #galgameLayer #ggAvatar {
+    max-height: calc(100% * var(--gg-scale, 1)) !important;
+    max-width: calc(68% * var(--gg-scale, 1)) !important;
+  }
+}
+@media (max-width: 560px) {
+  #galgameLayer #ggAvatar {
+    max-height: calc(118% * var(--gg-scale, 1)) !important;
+    max-width: calc(104% * var(--gg-scale, 1)) !important;
+  }
+}
+
+/* ===== 情景演绎（Live2D）设置面板用到的样式 =====
+   随主包一起启用/停用。 */
+.custom-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 9999px;
+            --slider-progress: 50%;
+            background: linear-gradient(to right, rgba(168, 139, 184, 0.82) 0%, rgba(168, 139, 184, 0.82) var(--slider-progress), rgba(255, 255, 255, 0.35) var(--slider-progress), rgba(255, 255, 255, 0.35) 100%);
+            outline: none;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .custom-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 22px; height: 14px;
+            border-radius: 9999px;
+            background: linear-gradient(135deg, rgba(255, 211, 219, 0.98), rgba(255, 180, 200, 0.98));
+            border: 2px solid rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 6px rgba(244, 114, 182, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+        }
+        .custom-slider::-webkit-slider-thumb:hover { transform: scale(1.1); box-shadow: 0 3px 10px rgba(255, 182, 193, 0.7); }
+        .custom-slider::-moz-range-thumb {
+            width: 22px; height: 14px;
+            border-radius: 9999px;
+            background: linear-gradient(135deg, rgba(255, 211, 219, 0.98), rgba(255, 180, 200, 0.98));
+            border: 2px solid rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 6px rgba(244, 114, 182, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+        }
+    .l2d-bg-opt.selected { outline: 2px solid #6366f1; outline-offset: 2px; box-shadow: 0 0 0 3px rgba(99,102,241,.35); }
+
+/* ===== 情景演绎设置页（合并后的统一入口）=====
+   全部用主题变量：浅色/深色跟着设置面板一起变。 */
+.gs-page { display: flex; flex-direction: column; gap: 14px; }
+.gs-intro { font-size: 12px; line-height: 1.8; color: var(--pixso-brown-soft); margin: 0 0 2px; }
+.gs-sec {
+    border: 1px solid var(--pixso-line); border-radius: 16px;
+    background: var(--pixso-panel-soft); padding: 14px 16px;
+    transition: opacity .18s ease;
+}
+.gs-sec.is-dim { opacity: .55; }
+.gs-sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.gs-sec-title { font-size: 12.5px; font-weight: 750; color: var(--pixso-brown); }
+.gs-sec-note { font-size: 10.5px; color: var(--pixso-brown-soft); }
+.gs-link { margin-left: auto; font-size: 11px; color: var(--pixso-green-dark); text-decoration: underline; text-underline-offset: 2px; }
+.gs-hint { margin: 8px 0 0; font-size: 10.5px; line-height: 1.7; color: var(--pixso-brown-soft); }
+.gs-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 12px; color: var(--pixso-brown); }
+.gs-row + .gs-row { border-top: 1px dashed color-mix(in srgb, var(--pixso-line) 70%, transparent); }
+.gs-row-label { flex: 0 0 72px; font-weight: 600; }
+.gs-row-note { font-size: 10.5px; color: var(--pixso-brown-soft); }
+.gs-slider { flex: 1 1 auto; min-width: 120px; }
+.gs-mini { padding: 4px 10px; font-size: 11px; }
+.gs-switch { width: 16px; height: 16px; accent-color: var(--pixso-green-dark); }
+.gs-sub { font-size: 10.5px; color: var(--pixso-brown-soft); margin: 4px 0 8px; }
+.gs-empty {
+    padding: 14px; border-radius: 12px; text-align: center; font-size: 11px; line-height: 1.7;
+    color: var(--pixso-brown-soft); border: 1px dashed var(--pixso-line);
+}
+/* 角色呈现：两张卡片式单选 */
+.gs-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 560px) { .gs-modes { grid-template-columns: 1fr; } }
+.gs-mode {
+    position: relative; display: flex; align-items: flex-start; gap: 10px; text-align: left;
+    padding: 12px 14px; border-radius: 14px; cursor: pointer;
+    border: 1.5px solid var(--pixso-line); background: var(--pixso-surface);
+    transition: border-color .15s, box-shadow .15s, transform .15s;
+}
+.gs-mode:hover { border-color: var(--pixso-green); transform: translateY(-1px); }
+.gs-mode.is-on {
+    border-color: var(--pixso-green-dark);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--pixso-green) 24%, transparent);
+}
+.gs-mode-ico { font-size: 18px; line-height: 1.2; }
+.gs-mode-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gs-mode-name { font-size: 12.5px; font-weight: 750; color: var(--pixso-brown); }
+.gs-mode-desc { font-size: 10.5px; line-height: 1.65; color: var(--pixso-brown-soft); }
+.gs-mode-tick {
+    position: absolute; top: 10px; right: 10px; width: 16px; height: 16px; border-radius: 50%;
+    display: none; align-items: center; justify-content: center;
+    font-size: 10px; color: #fff; background: var(--pixso-green-dark);
+}
+.gs-mode.is-on .gs-mode-tick { display: flex; }
+/* 模型选择 */
+.gs-models { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.gs-model {
+    display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+    padding: 6px 10px; border-radius: 10px; font-size: 11.5px; cursor: pointer;
+    border: 1px solid var(--pixso-line); background: var(--pixso-surface); color: var(--pixso-brown);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.gs-model:hover { border-color: var(--pixso-green); }
+.gs-model.is-on { border-color: var(--pixso-green-dark); background: color-mix(in srgb, var(--pixso-green) 14%, var(--pixso-surface)); }
+.gs-model-badge { font-size: 9.5px; padding: 1px 6px; border-radius: 999px; color: #fff; background: var(--pixso-green-dark); }
+/* 场景背景缩略图 */
+.gs-scene-grid { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: thin; }
+.gs-scene {
+    flex: 0 0 auto; width: 92px; border: 1px solid var(--pixso-line); border-radius: 10px;
+    overflow: hidden; background: var(--pixso-surface); cursor: pointer; padding: 0;
+}
+.gs-scene:hover { border-color: var(--pixso-green); }
+.gs-scene img { display: block; width: 100%; height: 52px; object-fit: cover; }
+.gs-scene span { display: block; padding: 4px 6px; font-size: 9.5px; color: var(--pixso-brown-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+

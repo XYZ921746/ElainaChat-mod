@@ -1,0 +1,11 @@
+{
+  "id": "scene-backgrounds",
+  "name": "场景背景图",
+  "version": "1.0.0",
+  "description": "31 张场景背景图（城市/室内/雪景等），供 Galgame 界面与 Live2D 视频通话共用。不提供界面，被依赖。",
+  "entry": "index.js",
+  "styles": [],
+  "defaultEnabled": true,
+  "after": [],
+  "hidden": true
+}
