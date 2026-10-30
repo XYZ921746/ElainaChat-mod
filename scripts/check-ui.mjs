@@ -1703,6 +1703,7 @@ async function caseBirthday(c) {
     const themesCss = read(path.join(WEB, 'css', 'themes.css'));
     const storeJs = read(path.join(WEB, 'js', 'store.js'));
     const modsJs = read(path.join(WEB, 'js', 'mods-storage.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-host-core.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods-host-extras.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods.js'));
     const dataJs = read(path.join(WEB, 'js', 'data.js'));
@@ -1780,7 +1781,7 @@ async function caseBirthday(c) {
             '★★ host.theme 的句柄带 use()/restore()（临时切主题再还原）');
         c.ok(/unlock\(id,\s*detail\)\s*\{/.test(modsJs), '★★ host.unlock(id, detail) 已提供（触发宿主成就）');
         c.ok(/markAppReady\(/.test(modsJs), '★★ markAppReady()（init 末尾广播 app-ready）');
-        c.ok(/appReadyFired/.test(modsJs) && /event === 'app-ready' && appReadyFired/.test(modsJs),
+        c.ok(/appReadyFired/.test(modsJs) && /event === 'app-ready' && (appReadyFired|isAppReady\(\))/.test(modsJs),
             '★★ app-ready 对晚注册的插件会补调（否则慢加载的插件永远等不到启动信号）');
 
         c.ok(/function registerTemplate/.test(themeJs), '★ theme.js 有 registerTemplate()');

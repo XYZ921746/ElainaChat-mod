@@ -405,7 +405,8 @@ async function caseModsCore(c) {
         // 服务端早有 DELETE /api/plugins/:id，但界面一直没暴露 —— 用户装了插件
         // 就没法在应用里卸掉（只能去删目录，而删目录又会被 zip 装回来）。
         const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-        const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
+        const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-host-core.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
         c.ok(/mod-del-btn/.test(settingsSrc), '★ 设置里渲染「删除」按钮');
         c.ok(/method: 'DELETE'/.test(settingsSrc), '★ 删除走 DELETE /api/plugins/:id');
         c.ok(/showCustomConfirm[\s\S]{0,400}删除插件/.test(settingsSrc), '★ 删除前二次确认（防误删）');
@@ -1146,6 +1147,7 @@ function makeModsSandbox(modsJs) {
     sandbox.globalThis = sandbox;
     const ctx = vm.createContext(sandbox);
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8'), ctx, { filename: 'mods-storage.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8'), ctx, { filename: 'mods-host-core.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
 }
@@ -1277,7 +1279,9 @@ function writeIsolationMod(root, id, indexJs, extra = {}) {
 }
 
 async function caseModIsolation(c) {
-    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
 
     // ---- i0. 源码约定：路径校验 / 超时 / 生命周期 / 统一错误出口 ----
     {
@@ -1480,6 +1484,7 @@ async function loadModsInSandbox(store, opts = {}) {
     const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
+    const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
     // 诊断格式模块：真实页面里 diagnostics.js 排在 mods.js 之前加载
     // （见 index.html），mods.js 的输出格式依赖它。这里照实模拟，
     // 否则测的是"没有诊断模块时的回落路径"，与线上不一致。
@@ -1613,6 +1618,7 @@ async function loadModsInSandbox(store, opts = {}) {
     // 把测试给定的初值灌进 Store（模拟 data/ 里已有的键）
     for (const [k, v] of m) sandbox.window.Store.setItem(k, v);
     vm.runInContext(MODS_STORAGE_JS, ctx, { filename: 'mods-storage.js' });
+    vm.runInContext(MODS_HOST_CORE_JS, ctx, { filename: 'mods-host-core.js' });
     vm.runInContext(MODS_EXTRAS_JS, ctx, { filename: 'mods-host-extras.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
