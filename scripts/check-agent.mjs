@@ -1750,7 +1750,7 @@ async function caseOps(c) {
         // 备份/导入是"整份对话对象"落盘与读回：hidden 必须原样保留，否则导入一份
         // 做到一半的对话时，工具消息会因为没有这个标记而**冒到聊天记录里**。
         // （导出侧不需要过滤：备份就是数据本身，可见与否由渲染侧决定。）
-        [coreSrc, 'hidden: m ? m.hidden === true : false', '★ 对话读回时保留 hidden 标记（否则导入后工具消息会冒出来）'],
+        [dataSrc, 'state.conversations = JSON.parse(convs)', '★ 对话读回时原样保留 hidden 标记（不重建消息对象）'],
     ].filter(([src, needle]) => !src.includes(needle)).map(([, , label]) => label);
     c.ok(unwired.length === 0, '★ 工具通道接线完整（请求侧 / 分流 / 各处隐藏过滤）', unwired.join(' / '));
 

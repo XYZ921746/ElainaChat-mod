@@ -1091,7 +1091,8 @@ async function caseModId(c) {
 
             // 三处实现同语义：任何一处回到 `!== false` 都会让两端口径分叉
             const modsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-            const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+            const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
             const serverSrc = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
             for (const [name, src] of [['web/js/mods.js', modsSrc], ['web/js/core.js', coreSrc], ['server/mods.mjs', serverSrc]]) {
                 c.ok(!/defaultEnabled\s*!==\s*false/.test(src),
@@ -3004,6 +3005,7 @@ async function caseModE2E(c) {
         // 只表现为"点了上传安装没反应"或"删了还在"。
         {
             const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-native.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
                 + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
 
             const memFs = makeMemFs();
