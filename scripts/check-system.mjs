@@ -533,7 +533,8 @@ async function casePcCommand(c) {
         const live2d = (await import('node:fs')).existsSync(path.join(ROOT, 'mods', 'live2d', 'index.js'))
             ? (await import('node:fs')).readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8')
             : '';
-        const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
+        const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
 
         c.ok(/agentCommandOperation\(raw\)/.test(agent), 'agentActions 有电脑命令入口');
         c.ok(/doAgentCommand\(/.test(agent), '有 doAgentCommand 执行层');
@@ -580,7 +581,8 @@ async function casePcCommand(c) {
         // 提示词侧（data.js）必须：off 档不注入能力清单、改注入"已关闭"说明；
         // 且迁移白名单要包含 'off'，否则老用户存下的 off 会被重置成 strict。
         {
-            const dataJs = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
+            const dataJs = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
             c.ok(/agentDisabledSkillText\(\)/.test(dataJs) && /agentAccessDisabled\(\)/.test(dataJs),
                 '★ 提示词侧在 off 档下不注入能力清单，改注入"已关闭"说明');
             c.ok(/\['off', 'strict', 'auto', 'full'\]/.test(dataJs),
