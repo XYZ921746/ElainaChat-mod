@@ -1740,7 +1740,8 @@ async function caseOps(c) {
     //   都是要跑一整轮对话才看得见的故障。
     const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
-    const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
+    const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data-memory.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const unwired = [
         [agentSrc, 'insertToolResult(', 'agent.js 有 insertToolResult（结果以 role:tool 回灌）'],
