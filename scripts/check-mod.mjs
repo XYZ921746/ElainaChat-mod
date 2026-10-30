@@ -292,6 +292,7 @@ async function caseModsCore(c) {
         //   结果是主体插件装完直接拒绝加载（"前置插件不可用"），
         //   看起来像插件坏了 —— 而这一步本可以自动完成。
         const market = readFileSync(path.join(WEB, 'js', 'market-utils.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'market-download.js'), 'utf8')
             + '\n' + readFileSync(path.join(WEB, 'js', 'mod-market.js'), 'utf8');
         c.ok(/function resolveInstallOrder/.test(market),
             '★ 有 resolveInstallOrder（把依赖摊平成安装顺序）');
