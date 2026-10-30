@@ -55,7 +55,7 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 - **范围**：`mods/`
 - **为什么**：B4 —— 私有全局名使加载顺序与依赖关系不可见，且无法被检查覆盖。
 - **判定**：`mods/**/*.js` 出现 `window.__` 开头的自建全局名赋值即违反。
-- **当前违反点**：`mods/galgame-1.6.0/index-live2d.js`、`mods/galgame-1.6.0/index.js`、`mods/galgame-1.6.0/register.js`、`mods/galgame-1.6.0/settings-panel.js`、`mods/live2d-models-1.0.0/panel.js` 中 `window.__` 赋值处（按符号检索）。
+- **当前违反点**：无（2026-10-30 已改为插件内 `GalgameBridge` / `Live2dModelsBridge`，不再挂 `window.__`）。
 
 ### D5 平台分支只允许出现在存储层（含插件）
 - **范围**：`web/js/`、`mods/`
@@ -194,12 +194,7 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 | D3 | `web/js/agent-tags.js` 中同上符号 | 2 | 中 |
 | D3 | `web/js/mods.js` 中同上符号 | 2 | 中 |
 | D3 | `web/js/data.js` 中同上符号 | 1 | 中 |
-| D4 | `mods/galgame-1.6.0/index-live2d.js` 中 `window.__` 赋值 | 2 | 中 |
-| D4 | `mods/galgame-1.6.0/index.js` 中 `window.__` 赋值 | 1 | 中 |
-| D4 | `mods/galgame-1.6.0/register.js` 中 `window.__` 赋值 | 1 | 中 |
-| D4 | `mods/galgame-1.6.0/settings-panel.js` 中 `window.__` 赋值 | 1 | 中 |
-| D4 | `mods/live2d-models-1.0.0/panel.js` 中 `window.__` 赋值（`window.__l2dmRenderPanel =`、`window.__l2dmRefresh =`） | 2 | 中 |
 
-注：本表数量为 **2026-10-30 专项检索**输出，与 `开发文档.md` 的「规范存量违规」小节同源。D1 / D2 / D5 已清零；D3 / D4 为剩余基线。
+注：本表数量为 **2026-10-30 专项检索**输出，与 `开发文档.md` 的「规范存量违规」小节同源。D1 / D2 / D4 / D5 已清零；D3 为剩余基线。
 D3 上一轮记录为 29 处 / 6 文件（含 `web/js/store.js` 一行）；本轮复核结果：`web/js/store.js` 为 0 处（该行已删），
 `voice.js` 3 处与 `data.js` 1 处随注释重写**顺带清理**，现为 23 处 / 5 文件。

@@ -618,8 +618,8 @@
         // 再同步一次提示词 —— 否则第一次注入时还没有表现指南。
         let scenario = null;
         try {
-            if (typeof window.__galgameMountScenarioStage === 'function') {
-                scenario = window.__galgameMountScenarioStage(host);
+            if (typeof GalgameBridge.mountScenarioStage === 'function') {
+                scenario = GalgameBridge.mountScenarioStage(host);
             } else {
                 host.error('情景演绎装配脚本未就绪（register.js 没加载成功），剧情界面不受影响');
             }
@@ -631,7 +631,7 @@
         // 情景演绎切换"立绘 / 模型"时要立刻重算提示词（那段里写了当前呈现方式）。
         //   暴露一个只做这件事的钩子，而不是让 stage 直接改 host 提示词 ——
         //   提示词只能由插件这一处合成（两段分开 setPromptHint 会互相覆盖）。
-        window.__galgameRefreshPromptHint = syncSceneHint;
+        GalgameBridge.refreshPromptHint = syncSceneHint;
         host.log('已就绪（场景 ' + BGS.length + ' 个，立绘走 elaina-avatar，情景演绎=' + (scenario ? '可用' : '不可用') + '）');
 
         return {

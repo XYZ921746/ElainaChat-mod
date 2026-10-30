@@ -7,6 +7,10 @@
  *   · 视频通话（live2d）：只选「用哪个」，以及通话时的表现
  * 好处：卸载视频通话不会把模型一起带走；想换模型不必进视频通话。
  * ========================================================================== */
+/** 本插件跨脚本的私有桥；不挂 window.__，避免 D4 私有全局名。
+ *  用 var 允许脚本失败重试时重复注入而不触发 const 重复声明。 */
+var Live2dModelsBridge = Live2dModelsBridge || {};
+
 (function () {
     'use strict';
 
@@ -336,6 +340,6 @@
 
 
     /** 暴露给 register：由它挂到 settings.modal 插槽 */
-    window.__l2dmRenderPanel = renderPanel;
-    window.__l2dmRefresh = refreshList;
+    Live2dModelsBridge.renderPanel = renderPanel;
+    Live2dModelsBridge.refresh = refreshList;
 })();

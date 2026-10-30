@@ -184,13 +184,13 @@
                 label: 'Live2D 引擎与模型',
                 title: 'Live2D 引擎与模型',
                 render(container) {
-                    if (typeof window.__l2dmRenderPanel === 'function') {
-                        window.__l2dmRenderPanel(container, host);
+                    if (typeof Live2dModelsBridge.renderPanel === 'function') {
+                        Live2dModelsBridge.renderPanel(container, host);
                     } else {
                         // panel.js 没注入成功时说清楚，别留空白
                         container.innerHTML = '<div class="text-[11px] text-red-500 py-4">'
                             + '模型管理界面加载失败（panel.js 未就绪）。请确认插件目录里有它，然后刷新页面。</div>';
-                        host.error('panel.js 未就绪（__l2dmRenderPanel 不存在）');
+                        host.error('panel.js 未就绪（renderPanel 不存在）');
                     }
                 },
             });

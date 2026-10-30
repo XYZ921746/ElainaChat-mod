@@ -376,7 +376,6 @@ function initLive2DCore(host) {
       //   跟着它刷新按钮，比轮询便宜也更即时。
       window.addEventListener('voice-state', syncMicBtn);
       syncMicBtn();
-      window.__galgameSyncMicBtn = syncMicBtn;
     }
     layer.querySelector('#live2d-adjust-toggle').addEventListener('click', toggleAdjustBox);
     // 气泡输入行：和剧情界面一样"回车发送"。发送走 host.sendUserMessage，
@@ -2105,8 +2104,8 @@ ${lines.join('\n')}
     // 提示词里写了"当前呈现：立绘/模型"，切换后要立刻重算，
     //   否则 AI 会按旧模式给动作/位置标签（立绘模式下那些不生效）。
     syncLive2DPromptHint();
-    if (typeof window.__galgameRefreshPromptHint === 'function') {
-      try { window.__galgameRefreshPromptHint(); } catch (e) { /* 宿主提示词刷新失败不影响界面 */ }
+    if (typeof GalgameBridge.refreshPromptHint === 'function') {
+      try { GalgameBridge.refreshPromptHint(); } catch (e) { /* 宿主提示词刷新失败不影响界面 */ }
     }
     return next;
   }
@@ -2335,4 +2334,4 @@ ${lines.join('\n')}
 }
 
 // 暴露给 register.js（经典脚本共享全局作用域，不 export）
-window.__live2dInitCore = initLive2DCore;
+GalgameBridge.initLive2DCore = initLive2DCore;

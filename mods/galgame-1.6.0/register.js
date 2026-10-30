@@ -15,6 +15,10 @@
  * 注意：本文件不是注册点。index-live2d.js / settings-panel.js 都**不**自己调
  *   ElainaMods.register —— 注册表是 Map，多注册一次会覆盖掉 galgame 主界面。
  * ========================================================================== */
+/** 本插件跨脚本的私有桥；不挂 window.__，避免 D4 私有全局名。
+ *  用 var 允许脚本失败重试时重复注入而不触发 const 重复声明。 */
+var GalgameBridge = GalgameBridge || {};
+
 (function () {
     'use strict';
     // 合并包的标记：测试与排障靠它确认"这份代码是主包带进来的"，
@@ -55,11 +59,11 @@
         }
 
         // ---- 实现主体：全屏通话界面 ----
-        if (typeof window.__live2dInitCore === 'function') {
-            window.__live2dInitCore(host);
+        if (typeof GalgameBridge.initLive2DCore === 'function') {
+            GalgameBridge.initLive2DCore(host);
         } else {
             // 脚本没注入成功时要说清楚 —— 否则表现为"插件是 ready、但点了没反应"
-            host.error('index-live2d.js 未就绪（__live2dInitCore 不存在），情景演绎不可用');
+            host.error('index-live2d.js 未就绪（initLive2DCore 不存在），情景演绎不可用');
         }
 
         // ---- 顶部按钮：情景演绎 ----
@@ -104,8 +108,8 @@
                 }
                 container.innerHTML = html;
                 try {
-                    if (typeof window.__live2dInitSettingsPanel === 'function') {
-                        window.__live2dInitSettingsPanel(host);
+                    if (typeof GalgameBridge.initSettingsPanel === 'function') {
+                        GalgameBridge.initSettingsPanel(host);
                     } else {
                         host.warn('settings-panel.js 未就绪，面板只有外观没有行为');
                     }
@@ -126,5 +130,5 @@
         };
     }
 
-    window.__galgameMountScenarioStage = mountScenarioStage;
+    GalgameBridge.mountScenarioStage = mountScenarioStage;
 })();

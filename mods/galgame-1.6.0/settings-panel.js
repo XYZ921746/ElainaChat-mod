@@ -229,4 +229,4 @@ function initLive2DSettingsPanel(host) {
     });
 }
 
-window.__live2dInitSettingsPanel = initLive2DSettingsPanel;
+GalgameBridge.initSettingsPanel = initLive2DSettingsPanel;
