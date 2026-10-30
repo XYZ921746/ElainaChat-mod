@@ -1099,7 +1099,8 @@ async function caseDiagnostics(c) {
     // 6. 状态文案与前端一致
     console.log('\n=== 诊断 6. 状态文案与前端保持一致 ===');
     {
-        const modsJs = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
+        const modsJs = readFileSync(path.join(ROOT, 'web', 'js', 'mods-summary.js'), 'utf8')
+            + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
         c.ok(/STATE_LABEL/.test(modsJs), '前端也有 STATE_LABEL（同一套状态名）');
         // 两边对同一状态的说法必须是同一句，否则对照着看会以为不是一回事
         c.ok(MOD_STATE_LABEL.ready.includes('已加载'), 'ready 说法一致');
