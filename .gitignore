@@ -8,6 +8,9 @@
 .tmp-*/
 node_modules/
 
+# 服务端扫描自动生成的插件索引（每次扫描只改 generatedAt）
+mods/index.json
+
 # 打包产物（dist/Android/scripts/sync-web.mjs 是检查夹具，必须保留）
 dist/*.exe
 dist/Windows/
