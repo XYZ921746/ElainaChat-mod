@@ -389,6 +389,7 @@ async function caseModsCore(c) {
 
         // ---- 宿主消费 mod 提示词（Galgame 场景指令送达模型的必经路径）----
         const data = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
         c.ok(/ElainaMods/.test(data) && /collectPromptHints/.test(data),
             '★ 宿主在构造提示词时消费 mod 注入的 system 片段');

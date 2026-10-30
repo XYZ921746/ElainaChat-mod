@@ -799,6 +799,7 @@ async function caseMcpClient(c) {
 // 7e. 第三人称下的标签回填（白名单，不能把 markdown 链接吃进去）
 async function caseThirdPersonTags(c) {
     const data = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     const tags = readFileSync(path.join(ROOT, 'web', 'js', 'agent-tags.js'), 'utf8');
 
@@ -914,6 +915,7 @@ async function caseConversationNaming(c) {
 // 8. 图片转述的开关（生效判据必须看开关，不能只看"填没填"）
 async function caseVisionToggle(c) {
     const data = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');

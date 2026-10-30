@@ -534,6 +534,7 @@ async function casePcCommand(c) {
             ? (await import('node:fs')).readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8')
             : '';
         const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
 
         c.ok(/agentCommandOperation\(raw\)/.test(agent), 'agentActions 有电脑命令入口');
@@ -582,6 +583,7 @@ async function casePcCommand(c) {
         // 且迁移白名单要包含 'off'，否则老用户存下的 off 会被重置成 strict。
         {
             const dataJs = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
             c.ok(/agentDisabledSkillText\(\)/.test(dataJs) && /agentAccessDisabled\(\)/.test(dataJs),
                 '★ 提示词侧在 off 档下不注入能力清单，改注入"已关闭"说明');

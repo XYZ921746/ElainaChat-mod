@@ -51,6 +51,7 @@ async function caseStreamAndCot(c) {
     const providers = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js'), 'utf8');
     const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
     const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     // 6h 用例要看 doAgentCommand / doAgentFile 的确认分支（等待提示与计时重置）
     const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-files.js'), 'utf8')
@@ -950,6 +951,7 @@ async function caseStreamAndCot(c) {
         '有动态说明（告诉用户当前档位对当前服务商意味着什么）');
     // 请求侧接线
     c.ok(/thinkingEffort: state\.settings\.thinkingEffort/.test(readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8')),
         'callAI 把思考强度带进请求');
 
