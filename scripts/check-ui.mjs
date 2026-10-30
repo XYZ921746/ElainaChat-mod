@@ -1178,6 +1178,8 @@ async function caseDiary(c) {
     console.log('=== 1. 源码约定 ===');
     {
         const ui = readFileSync(path.join(WEB, 'js', 'conversations.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'favorites.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'diary.js'), 'utf8')
             + '\n' + readFileSync(path.join(WEB, 'js', 'ui.js'), 'utf8');
         const core = readFileSync(path.join(WEB, 'js', 'core-state.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'core.js'), 'utf8');
