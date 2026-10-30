@@ -524,6 +524,7 @@ async function casePcCommand(c) {
         const html = readFrontend();
         const agent = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-backend.js'), 'utf8')
             + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-continue.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-access.js'), 'utf8')
             + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-result.js'), 'utf8')
             + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-files.js'), 'utf8')
             + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8'));

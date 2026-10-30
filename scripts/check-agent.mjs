@@ -933,7 +933,7 @@ async function casePaths(c) {
         //   agentRootsText 依赖 agentAccessDisabled → currentAgentAccess → 常量；
         //   只装目标函数时这些 helper 不在场，会静默走 typeof 兜底，测的就不是真实逻辑。
         const coreSrc = readWebFile('js/core.js');
-        const agentSrc3 = readWebFile('js/agent.js');
+        const agentSrc3 = readWebFile('js/agent-access.js') + '\n' + readWebFile('js/agent.js');
         const rootsSandbox = makeVmSandbox({});
         vm.runInContext(
             [extractVariable(agentSrc3, 'AGENT_ACCESS_LEVELS'), extractVariable(agentSrc3, 'AGENT_ACCESS_DEFAULT')].join('\n')
@@ -1708,7 +1708,8 @@ async function caseOps(c) {
     }
 
     // 7. 接线：标签通道改走注册表，且两条通道共用同一批执行实现
-    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-result.js'), 'utf8')
+    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-access.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-result.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-manuals.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-tools.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-continue.js'), 'utf8')
