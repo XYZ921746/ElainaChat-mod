@@ -449,12 +449,14 @@ async function caseModsCore(c) {
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         c.ok(/async function refreshModsList/.test(settings), '有 refreshModsList');
         // 绑定必须只在 init.js 一处，且不在 refreshModsList（会被重建冲掉 / 重复绑定）
-        c.ok(/getElementById\('modsBrowseBtn'\)\?\.addEventListener/.test(readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8')),
+        c.ok(/getElementById\('modsBrowseBtn'\)\?\.addEventListener/.test(readFileSync(path.join(ROOT, 'web', 'js', 'bind-events.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8')),
             '★ 「浏览目录」在 init.js 绑一次（不随列表重建丢失）');
         c.ok(!/modsBrowseBtn[\s\S]{0,400}addEventListener/.test(settings),
             '★ settings.js 里不再重复绑定「浏览目录」');
         // 「浏览目录」要**真的去打开**文件夹（不只是列名字），失败才用列表兜底
-        const initSrc2 = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+        const initSrc2 = readFileSync(path.join(ROOT, 'web', 'js', 'bind-events.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
         c.ok(/modsBrowseBtn[\s\S]{0,2000}fetch\('\/api\/plugins\/open-folder'/.test(initSrc2),
             '★ 「浏览目录」先真去打开 mods/，再列内容兜底');
         c.ok(/\/api\/plugins/.test(settings), '列表数据来自服务端 /api/plugins');
@@ -2273,7 +2275,8 @@ async function caseModHostApi(c) {
     // ---- 5.1 插槽与"注册即副作用"：源码约定 ----
     {
         const modsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-        const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+        const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'bind-events.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
         const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
         const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')

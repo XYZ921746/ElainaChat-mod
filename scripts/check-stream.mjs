@@ -48,7 +48,8 @@ async function caseStreamAndCot(c) {
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
     const settings = readFileSync(path.join(ROOT, 'web', 'js', 'save.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-    const init = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+    const init = readFileSync(path.join(ROOT, 'web', 'js', 'bind-events.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     const streamSrc = readFileSync(path.join(ROOT, 'web', 'js', 'chat-stream.js'), 'utf8');
     const providers = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js'), 'utf8');
     const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');

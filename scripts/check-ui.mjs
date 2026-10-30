@@ -1728,7 +1728,8 @@ async function caseBirthday(c) {
         + read(path.join(WEB, 'js', 'roleplay.js')) + '\n'
         + read(path.join(WEB, 'js', 'chat.js')) + '\n'
         + read(path.join(WEB, 'js', 'data.js'));
-    const initJs = read(path.join(WEB, 'js', 'init.js'));
+    const initJs = read(path.join(WEB, 'js', 'bind-events.js')) + '\n'
+        + read(path.join(WEB, 'js', 'init.js'));
     const achJs = read(path.join(WEB, 'js', 'achievements.js'));
 
     // 所有宿主前端脚本（用来断言"没有任何一处还在引用旧的 ElainaBirthday"）
