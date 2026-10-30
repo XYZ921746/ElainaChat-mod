@@ -29,19 +29,15 @@
      * Web：服务端把 `/live2d/models/` 映射到本插件目录下的 models/（见 manifest.server.static）
      * APK：`window.__nativeModelBase` 指向应用数据目录（内置模型会被播种到那里）
      *
-     * 两条路的**对外 URL 都是 /live2d/models/**，所以调用方不需要区分平台 ——
-     *   这也是拆分前 live2d-video.js 里那段 `isNative ? __nativeModelBase : '/live2d/models/'`
-     *   能原样保留的原因。
+     * 两条路的**对外 URL 都是 /live2d/models/**，所以调用方不需要区分平台。
+     * 平台差异只体现在「宿主有没有注入 __nativeModelBase」：有就是 APK 的数据目录，
+     * 没有就是 Web 的静态映射 —— 不在插件里判断 Capacitor / 平台（D5）。
      */
-    function isNative() {
-        return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
-    }
-
     function baseUrl(name, bundled) {
         const n = encodeURIComponent(String(name || ''));
         // 打包进 APK 的内置模型走 WebView 静态资源（不依赖原生文件系统）
         if (bundled) return '/live2d/models/' + n + '/';
-        const base = (isNative() && window.__nativeModelBase) ? window.__nativeModelBase : '/live2d/models/';
+        const base = window.__nativeModelBase ? window.__nativeModelBase : '/live2d/models/';
         return base + n + '/';
     }
 
@@ -141,7 +137,7 @@
                     const probe = await fetch(primary, { method: 'HEAD' });
                     if (probe.ok) { await injectScript(primary); continue; }
                 } catch (e) { /* 探测失败就走回落 */ }
-                const fallback = (isNative() && hostRef && typeof hostRef.assetUrl === 'function')
+                const fallback = (window.__nativeModelBase && hostRef && typeof hostRef.assetUrl === 'function')
                     ? hostRef.assetUrl('vendor/' + f)
                     : vendorFallbackBase() + f;
                 await injectScript(fallback);

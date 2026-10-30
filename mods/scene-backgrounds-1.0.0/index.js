@@ -31,7 +31,8 @@
        声明的 id 与实际安装目录可能不一致（历史版本装出过带版本号的目录），
        写死 '/mods/scene-backgrounds/img/bg/' 会在那时全部 404。
        优先用宿主注入的 assetBase（来自清单归一化后的真实目录）。 */
-    let BASE = '/mods/' + MOD_ID + '/img/bg/';
+    // 空串表示“等宿主注入真实目录”；不再写死 '/mods/<id>/'（目录名可能带版本号，D1）。
+    let BASE = '';
 
     /**
      * 场景库：文件名 → 中文标签。**与 img/bg/ 下的实际文件一一对应**。
@@ -98,6 +99,9 @@
             // 用宿主给的真实安装位置覆盖约定路径（见上面 BASE 的说明）
             if (host && typeof host.assetBase === 'function') {
                 BASE = host.assetBase() + 'img/bg/';
+                window.ElainaSceneBackgrounds.base = BASE;
+            } else if (host && typeof host.assetUrl === 'function') {
+                BASE = host.assetUrl('img/bg/');
                 window.ElainaSceneBackgrounds.base = BASE;
             }
             host.log('背景资源就绪（' + BGS.length + ' 张，基址 ' + BASE + '）');

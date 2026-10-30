@@ -60,9 +60,9 @@
         const BG_FILES = BGS.map((b) => b[0]);
         const FX_MODES = ['auto', 'none', 'star', 'snow', 'rain', 'petal'];
 
-        /* 资源基址：mod 自己的目录。用绝对路径 —— 相对路径会相对于页面 URL 解析，
-           而 mod 资源在 /mods/galgame/ 下，相对路径必然 404。 */
-        const BASE = '/mods/' + MOD_ID + '/';
+        /* 资源基址：mod 自己的目录。用宿主给的真实安装位置（目录名可能带版本号）；
+           不写死 '/mods/<id>/'（D1）。 */
+        const BASE = (host && typeof host.assetBase === 'function') ? host.assetBase() : '';
         /* 背景图 URL：★ 走公共资源插件（它知道自己的真实安装目录）。
            拿不到就回落到 galgame 自己的旧路径 —— 兼容"资源还没搬"的场景。 */
         const bgUrl = (name) => {

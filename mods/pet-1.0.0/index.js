@@ -17,7 +17,7 @@
  *
  * ② **立绘与情绪走公共依赖**：与 Galgame 同源，词表只有一份。
  *
- * ③ **开关交给 mod 系统**：不再自己轮询 localStorage。
+ * ③ **开关交给 mod 系统**：不再自己轮询浏览器本地存储。
  *
  * ④ 发送走 host.sendUserMessage，与主界面完全同一条链路。
  *
@@ -31,13 +31,13 @@
     const MOD_ID = 'pet';
 
     window.ElainaMods.register(MOD_ID, function (host) {
-        const BASE = '/mods/' + MOD_ID + '/';
-        const PREFIX = 'elaina_pet_';
+        // 资源路径走宿主（目录名可能带版本号），持久化走 host.storage（落 data/、跨设备同步、
+        // 停用/卸载时可清理）—— 不自己拼插件资源路径，也不直接读写浏览器本地存储（D1 / D2）。
         function get(k, d) {
-            try { const v = localStorage.getItem(PREFIX + k); return v === null ? d : v; } catch (e) { return d; }
+            try { return host.storage.get(k, d); } catch (e) { return d; }
         }
         function set(k, v) {
-            try { localStorage.setItem(PREFIX + k, v); } catch (e) { /* 忽略 */ }
+            try { host.storage.set(k, v); } catch (e) { /* 忽略 */ }
         }
 
         let root = null, avatarEl = null, bubbleEl = null, inputEl = null;
@@ -202,7 +202,7 @@
                     return;
                 }
                 paintProactive();
-                // ⚠️ 顺序很重要：先 setProactive（它写 localStorage），再 paint。
+                // ⚠️ 顺序很重要：先 setProactive（它写 host.storage），再 paint。
                 //   反过来画的是**旧状态** —— 按钮显示"关"、存储却是"1"，
                 //   状态不一致。
                 // setProactive 开启时会**立即执行一次**并把 Promise 返回回来，

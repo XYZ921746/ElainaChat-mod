@@ -35,7 +35,8 @@
        的 URL 全部 404，表现为"桌宠/Galgame 显示不出人物"）。
        优先用宿主注入的 assetBase（清单归一化后的真实位置）；
        宿主太老没有该 API 时回落到约定路径（正常安装下二者一致）。 */
-    let BASE = '/mods/' + MOD_ID + '/img/';
+    // 空串表示“等宿主注入真实目录”；不再写死 '/mods/<id>/'（目录名可能带版本号，D1）。
+    let BASE = '';
 
     /* 情绪键固定为 9 个 —— 与立绘文件名一一对应。
        顺序无关紧要，但**键名不能随意改**：它就是图片文件名。 */
@@ -114,6 +115,9 @@
             //   而 host.assetBase() 来自清单归一化后的 id，永远指向真实位置。
             if (host && typeof host.assetBase === 'function') {
                 BASE = host.assetBase() + 'img/';
+                window.ElainaAvatar.base = BASE;
+            } else if (host && typeof host.assetUrl === 'function') {
+                BASE = host.assetUrl('img/');
                 window.ElainaAvatar.base = BASE;
             }
             host.log('立绘与情绪接口就绪（' + EMOTIONS.length + ' 种表情，资源基址 ' + BASE + '）');
