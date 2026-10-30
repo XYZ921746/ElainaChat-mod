@@ -53,6 +53,7 @@
 
     /** 已注入的 <script>，避免重复注入 */
     const loadedScripts = new Set();
+    const { injectScript, SCRIPT_LOAD_TIMEOUT_MS } = window.ElainaModsLoader({ loadedScripts });
 
     /**
      * 插件服务表：name -> Map(modId -> api)。
@@ -94,7 +95,6 @@
      * 脚本请求可能被服务端/系统占用拖住，初始化函数也可能返回永不 resolve 的 Promise。
      * 没有上限时前者会让整轮 loadAll 卡在一个 URL 上，后者会让「设置 → 插件」永远停在"加载中"。
      */
-    const SCRIPT_LOAD_TIMEOUT_MS = 15000;
     const MOD_INIT_TIMEOUT_MS = 20000;
     /** 同一个插件运行期连续出错多少次后自动停用（偶发一次不处罚） */
     const MOD_FAULT_LIMIT = 5;
@@ -1008,56 +1008,6 @@
      *   为什么是**有限次**：重试只该吸收抖动。脚本真的缺失 / 语法错误时，
      *   每次都会失败，有限次后照旧停用并给出原因 —— 不能变成"每次点都再试很久"。
      */
-    const SCRIPT_LOAD_ATTEMPTS = 3;
-    /** 每次重试前的等待（毫秒），逐次加长：给占用文件的进程一点时间松手 */
-    const SCRIPT_RETRY_DELAYS = [400, 1200];
-
-    /** 注入一个 <script>，resolve 于 load / reject 于 error（瞬时失败会重试） */
-    function injectScript(src, attempt = 1) {
-        if (loadedScripts.has(src)) return Promise.resolve();
-        return new Promise((resolve, reject) => {
-            const el = document.createElement('script');
-            // 重试时必须换一个 URL：同一地址的失败结果可能已被浏览器缓存，
-            // 不带新参数的话"重试"只是从缓存里再拿一次同样的失败。
-            el.src = attempt > 1
-                ? src + (src.includes('?') ? '&' : '?') + 'retry=' + attempt
-                : src;
-            el.setAttribute('data-mod-script', '1');
-            // 超时即失败：服务端/系统把文件占住时，onload/onerror 可能**都不触发**。
-            //   没有这道闸，整轮 loadAll 会永远停在这个 URL 上，后面的插件
-            //   一个都不会加载（表现为"插件系统只加载了一半"）。
-            let settled = false;
-            const timer = setTimeout(() => {
-                if (settled) return;
-                settled = true;
-                try { el.remove(); } catch (e) { /* 忽略 */ }
-                reject(new Error('脚本加载超时（' + Math.round(SCRIPT_LOAD_TIMEOUT_MS / 1000)
-                    + ' 秒）：' + src));
-            }, SCRIPT_LOAD_TIMEOUT_MS);
-            const done = (fn) => (arg) => {
-                if (settled) return;
-                settled = true;
-                clearTimeout(timer);
-                fn(arg);
-            };
-            el.onload = done(() => { loadedScripts.add(src); resolve(); });
-            el.onerror = done(() => {
-                try { el.remove(); } catch (e) { /* 老浏览器没有 remove，忽略 */ }
-                if (attempt >= SCRIPT_LOAD_ATTEMPTS) {
-                    reject(new Error('脚本加载失败：' + src));
-                    return;
-                }
-                const wait = SCRIPT_RETRY_DELAYS[attempt - 1] || 1200;
-                console.warn('[Mod] 脚本加载失败，' + wait + 'ms 后重试（第 '
-                    + (attempt + 1) + '/' + SCRIPT_LOAD_ATTEMPTS + ' 次）：' + src);
-                setTimeout(() => {
-                    injectScript(src, attempt + 1).then(resolve, reject);
-                }, wait);
-            });
-            document.head.appendChild(el);
-        });
-    }
-
     /**
      * 加载并初始化单个插件。
      *

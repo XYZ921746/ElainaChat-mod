@@ -1152,6 +1152,7 @@ function makeModsSandbox(modsJs) {
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-drag-sort.js'), 'utf8'), ctx, { filename: 'mods-drag-sort.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8'), ctx, { filename: 'mods-storage.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8'), ctx, { filename: 'mods-host-core.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8'), ctx, { filename: 'mods-loader.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
 }
@@ -1283,7 +1284,8 @@ function writeIsolationMod(root, id, indexJs, extra = {}) {
 }
 
 async function caseModIsolation(c) {
-    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8')
+    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
@@ -1487,6 +1489,7 @@ const resolveUrlToDisk = (url) => {
  */
 async function loadModsInSandbox(store, opts = {}) {
     const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+    const MODS_LOADER_JS = readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8');
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
     const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
@@ -1631,6 +1634,7 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(MODS_STORAGE_JS, ctx, { filename: 'mods-storage.js' });
     vm.runInContext(MODS_HOST_CORE_JS, ctx, { filename: 'mods-host-core.js' });
     vm.runInContext(MODS_EXTRAS_JS, ctx, { filename: 'mods-host-extras.js' });
+    vm.runInContext(MODS_LOADER_JS, ctx, { filename: 'mods-loader.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
     const results = await Mods.loadAll();
