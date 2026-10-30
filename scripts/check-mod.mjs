@@ -223,7 +223,8 @@ async function caseModsCore(c) {
             'register(ctx) 经 withTimeout 包裹');
 
         // 前端 host API 能力组（AGENTS.md D18 / 表 A22）
-        const modsJs = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+        const modsJs = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
         c.ok(/HOST_API_GROUPS\s*=\s*\{/.test(modsJs), 'mods.js 有 HOST_API_GROUPS 能力组表');
         for (const g of ['core', 'theme', 'achievements', 'dragSort', 'openFolder']) {
             c.ok(new RegExp('HOST_API_GROUPS|' + g + ':').test(modsJs), '能力组表含 ' + g);
@@ -1158,6 +1159,7 @@ function makeModsSandbox(modsJs) {
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8'), ctx, { filename: 'mods-slots.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8'), ctx, { filename: 'mods-summary.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8'), ctx, { filename: 'mods-deps.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8'), ctx, { filename: 'mods-capabilities.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
 }
@@ -1289,7 +1291,8 @@ function writeIsolationMod(root, id, indexJs, extra = {}) {
 }
 
 async function caseModIsolation(c) {
-    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8')
+    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-contributions.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-services.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8')
@@ -1503,6 +1506,7 @@ async function loadModsInSandbox(store, opts = {}) {
     const MODS_SLOTS_JS = readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8');
     const MODS_SUMMARY_JS = readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8');
     const MODS_DEPS_JS = readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8');
+    const MODS_CAPABILITIES_JS = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8');
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
     const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
@@ -1653,6 +1657,7 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(MODS_SLOTS_JS, ctx, { filename: 'mods-slots.js' });
     vm.runInContext(MODS_SUMMARY_JS, ctx, { filename: 'mods-summary.js' });
     vm.runInContext(MODS_DEPS_JS, ctx, { filename: 'mods-deps.js' });
+    vm.runInContext(MODS_CAPABILITIES_JS, ctx, { filename: 'mods-capabilities.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
     const results = await Mods.loadAll();
