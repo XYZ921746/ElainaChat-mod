@@ -372,7 +372,7 @@ async function caseWebSearch(c) {
     c.ok(/tavilySearchEnabled !== true\) return false/.test(src), '★ 开关关着时不可用（注册表 available 判据）');
     c.ok(/searchApiKey_' \+ id/.test(src), '★ 没填 Key 时不可用（按当前服务商那一格判）');
     c.ok(/id === 'custom'/.test(src), '★ 自定义源还必须填了 https 端点才算可用');
-    c.ok(/SEARCH_PROVIDERS/.test(readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8')),
+    c.ok(/SEARCH_PROVIDERS/.test(readFileSync(path.join(ROOT, 'web', 'js', 'core-search.js'), 'utf8')),
         '★ 服务商清单在 core.js（执行器与设置页共用同一份）');
     const tags = readFileSync(path.join(ROOT, 'web', 'js', 'agent-tags.js'), 'utf8');
     c.ok(/web_search: '搜索'/.test(tags), '工具名 → 中文标签名有映射');
@@ -382,7 +382,7 @@ async function caseWebSearch(c) {
 
 // 6. 四家搜索服务商的请求体与响应解析（形状来自各家真实响应）
 async function caseSearchProviders(c) {
-    const src = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const src = readFileSync(path.join(ROOT, 'web', 'js', 'core-search.js'), 'utf8');
     const table = vm.runInContext(extractVariable(src, 'SEARCH_PROVIDERS') + '\n;SEARCH_PROVIDERS', makeVmSandbox({}));
     c.ok(table && Object.keys(table).length > 0, 'core.js 里有 SEARCH_PROVIDERS');
     const ids = Object.keys(table);
@@ -465,7 +465,7 @@ async function caseSearchFailure(c) {
 
 // 7a. 自定义搜索源：宽松解析（不要求手写 JSONPath）
 async function caseCustomSource(c) {
-    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-search.js'), 'utf8');
     // 装 core.js 的**整个顶层函数环境** + SEARCH_PROVIDERS 常量：
     //   parseLooseSearchPayload 以后若拆出 helper，这里也不用改。
     const searchSandbox = makeVmSandbox({});
@@ -506,7 +506,7 @@ async function caseCustomSource(c) {
 
 // 7b. 402 的排查方向必须按服务商给（新账号 ≠ 余额不足）
 async function caseQuotaHint(c) {
-    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-search.js'), 'utf8');
     const agent = readAgentSources();
     const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
 
