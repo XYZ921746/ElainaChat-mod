@@ -428,7 +428,7 @@ async function caseContinue(c) {
     //   现场：用户点「允许新建」之外的路径（拒绝 / 平台不支持）时，
     //   界面上写着"完成"，模型却读到"失败"，下一句就向用户道歉说文件没建成。
     //   文件其实好好地在桌面上。
-    const agentSrc2 = readWebFile('js/agent.js');
+    const agentSrc2 = readWebFile('js/agent-phone.js') + '\n' + readWebFile('js/agent.js');
     const voiceSrc2 = readWebFile('js/voice.js');
     const uiSrc2 = readWebFile('js/ui.js');
     // extractFnFrom 按大括号配平取值，遇到注释/字符串里的大括号会跑偏
