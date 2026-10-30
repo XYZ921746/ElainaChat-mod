@@ -1167,6 +1167,7 @@ function makeModsSandbox(modsJs) {
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8'), ctx, { filename: 'mods-load-one.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8'), ctx, { filename: 'mods-faults.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8'), ctx, { filename: 'mods-host.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8'), ctx, { filename: 'mods-forget.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8'), ctx, { filename: 'mods-api.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
@@ -1307,6 +1308,7 @@ async function caseModIsolation(c) {
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8')
@@ -1524,6 +1526,7 @@ async function loadModsInSandbox(store, opts = {}) {
     const MODS_LOAD_ONE_JS = readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8');
     const MODS_FAULTS_JS = readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8');
     const MODS_HOST_JS = readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8');
+    const MODS_FORGET_JS = readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8');
     const MODS_API_JS = readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8');
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
@@ -1681,6 +1684,7 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(MODS_LOAD_ONE_JS, ctx, { filename: 'mods-load-one.js' });
     vm.runInContext(MODS_FAULTS_JS, ctx, { filename: 'mods-faults.js' });
     vm.runInContext(MODS_HOST_JS, ctx, { filename: 'mods-host.js' });
+    vm.runInContext(MODS_FORGET_JS, ctx, { filename: 'mods-forget.js' });
     vm.runInContext(MODS_API_JS, ctx, { filename: 'mods-api.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
