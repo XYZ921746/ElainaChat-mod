@@ -36,7 +36,8 @@ import { extractFunction, extractTopLevelFunctions, extractVariable, makeVmSandb
 
 async function caseStreamAndCot(c) {
     const html = readFrontend();
-    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const ui = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     const voice = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
     const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
