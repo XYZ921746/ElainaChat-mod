@@ -434,7 +434,7 @@ async function caseContinue(c) {
         + readWebFile('js/agent-tools.js') + '\n' + readWebFile('js/agent-continue.js')
         + '\n' + readWebFile('js/agent.js');
     const voiceSrc2 = readWebFile('js/voice.js');
-    const uiSrc2 = readWebFile('js/ui.js');
+    const uiSrc2 = readWebFile('js/ui-process.js') + '\n' + readWebFile('js/ui.js');
     // extractFnFrom 按大括号配平取值，遇到注释/字符串里的大括号会跑偏
     // （实测一度算出"82 处裸 return"这种明显不可能的计数）。
     // 这两个函数的范围改用**下一个顶层 async function** 作边界，判据稳定。
