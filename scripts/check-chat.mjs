@@ -124,7 +124,8 @@ async function caseProviders(c) {
 
     // 真实的「思考参数构造器」：装 core.js 的**整个顶层函数环境** + THINKING_EFFORTS，
     //   不再只抠三个函数。以后 buildThinkingParams 拆 helper，这里也不用改。
-    const coreThinkSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    const coreThinkSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const thinkSandbox = makeVmSandbox({ URL });
     vm.runInContext(
@@ -387,7 +388,8 @@ async function caseAnthropicRequest(c) {
 
     // 整脚本装载 core.js 的函数环境 + 需要的常量，再把“只有网络出口是假的”桩装进同一个 VM。
     // 不再用 new Function('window', ...) 拼几十行函数体 —— 这样 core.js 再拆 helper 也不用改检查。
-    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const fakeWindow = {};
     const chatSandbox = makeVmSandbox({ window: fakeWindow, URL, TextEncoder, TextDecoder });
@@ -844,7 +846,8 @@ async function caseModelList(c) {
 
     // 整脚本装载 core.js 的函数环境 + 需要的常量，再把“假网络出口 / 假 DOM”桩装进同一个 VM。
     // 不再用 new Function('window', ...) 拼几十行函数体。
-    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     const fakeWindow = {};
@@ -1380,7 +1383,8 @@ async function caseThinkingCompat(c) {
     }
 
     // 从 core.js 装整个顶层函数环境（别在测试里重写一遍逻辑 —— 测的不是真代码就没意义）
-    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const coreThinkSandbox = makeVmSandbox({ URL });
     vm.runInContext(

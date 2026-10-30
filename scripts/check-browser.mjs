@@ -704,7 +704,8 @@ async function caseMcpClient(c) {
     // ★ 401 必须区分"本机登录失效"与"服务商 Key 无效"：
     //   判据只能是 payload.needLogin —— 用 status===401 会把服务商的 Key 错
     //   误报成"本机服务需要重新登录"，用户去重启服务/刷新/改密码全都无效。
-    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-relay.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const bad401 = coreSrc.match(/response\.status === 401 \|\| payload\?\.needLogin/g) || [];
@@ -904,7 +905,8 @@ async function caseConversationNaming(c) {
 // 8. 图片转述的开关（生效判据必须看开关，不能只看"填没填"）
 async function caseVisionToggle(c) {
     const data = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
-    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
     const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
 
