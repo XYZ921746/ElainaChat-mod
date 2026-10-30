@@ -3003,7 +3003,8 @@ async function caseModE2E(c) {
         // 而 APK 上没有服务端可对照 —— 原生这条链断了**不会有任何报错**，
         // 只表现为"点了上传安装没反应"或"删了还在"。
         {
-            const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+            const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-native.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
 
             const memFs = makeMemFs();
             const sandbox = {

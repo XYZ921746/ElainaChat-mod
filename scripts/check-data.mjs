@@ -784,6 +784,7 @@ async function caseSingleSource(c) {
         //   判断标准：**丢了会不会心疼**。会心疼的（聊天/设置/记忆）必须只有 data/ 一处。
         const NON_DATA_WRITERS = {
             'core.js': 'Live2D 模型文件（可重新获取的资源，不是用户数据）',
+            'core-native.js': '原生 Live2D 模型文件（从 core.js 拆出的同一类资源）',
             // Directory.Documents：读写**用户自己选的备份文件**（导出/导入）。
             // 那是"跟用户交换文件"，不是"应用自己的存储"，且只在用户主动操作时发生。
             'settings.js': '备份文件的导入导出（读写用户在文档目录里选的文件）',
