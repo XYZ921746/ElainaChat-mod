@@ -429,6 +429,7 @@ async function caseContinue(c) {
     //   界面上写着"完成"，模型却读到"失败"，下一句就向用户道歉说文件没建成。
     //   文件其实好好地在桌面上。
     const agentSrc2 = readWebFile('js/agent-phone.js') + '\n'
+        + readWebFile('js/agent-nl.js') + '\n'
         + readWebFile('js/agent-files.js') + '\n'
         + readWebFile('js/agent-tools.js') + '\n' + readWebFile('js/agent-continue.js')
         + '\n' + readWebFile('js/agent.js');
