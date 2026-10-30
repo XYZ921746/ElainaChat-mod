@@ -275,6 +275,7 @@ async function handleUserInput(message, conversation) {
 
         const handleVoiceStart = () => {
             voiceStarted = true;
+            clearMessageVoiceError(aiMessage.id);
             if (presentationMode === 'simultaneous') commitAiMessageOnce();
             markVoicePlaybackStarted(aiMessage.id, estimateVoiceDurationSeconds(textToSpeak));
             // Live2D：AI 开始说话 → 嘴动（经宿主服务，不直接点插件全局名）
@@ -301,12 +302,10 @@ async function handleUserInput(message, conversation) {
             pendingAutomaticVoiceMessageIds.delete(automaticVoiceMessageKey);
             // 语音不可用：仍提交并保存文字回复，避免"语音通话模式丢聊天记录"
             commitAiMessageOnce();
-            if (presentationMode === 'simultaneous') {
-                removeThinkingMessage();
-                state.voiceState = 'idle';
-                updateUI();
-                showCustomAlert('本次回复没有可播放的语音，已保留文字回复。', '语音生成失败');
-            }
+            removeThinkingMessage();
+            state.voiceState = 'idle';
+            updateUI();
+            setMessageVoiceError(aiMessage.id, '本次回复没有可播放的语音，已保留文字回复。');
             return;
         }
         // AI 声音已静音（[操作:静音]）：跳过语音播放，但文字回复照常保留
@@ -352,7 +351,7 @@ async function handleUserInput(message, conversation) {
                 setVoicePlaybackState(aiMessage.id, false);
                 state.voiceState = 'idle';
                 updateUI();
-                showCustomAlert('本次语音未能生成，已保留文字回复。', '语音生成失败');
+                setMessageVoiceError(aiMessage.id, '本次语音未能生成，已保留文字回复。');
             }
         }).catch(error => {
             if (isVoiceCancellation(error)) return;
@@ -364,7 +363,7 @@ async function handleUserInput(message, conversation) {
             setVoicePlaybackState(aiMessage.id, false);
             state.voiceState = 'idle';
             updateUI();
-            showClientApiError(error);
+            setMessageVoiceError(aiMessage.id, '语音生成失败：' + voiceErrorSummary(error));
         }).finally(() => pendingAutomaticVoiceMessageIds.delete(automaticVoiceMessageKey));
     } catch (error) {
         if (automaticVoiceMessageKey) pendingAutomaticVoiceMessageIds.delete(automaticVoiceMessageKey);

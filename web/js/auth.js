@@ -1,12 +1,12 @@
 /* ============================================================================
  * 访问密码 / 浏览器状态（从 settings.js 拆出）
  *
- * 局域网鉴权状态、修改密码、退出登录、浏览器连接状态与手机分区显隐。
+ * 局域网鉴权状态、修改密码、浏览器连接状态与手机分区显隐。
  * ========================================================================== */
 "use strict";
 
 // ==================== 访问密码（局域网鉴权） ====================
-// 本机（127.0.0.1）自动是管理员：免密、且可修改访问密码（也是忘记密码的找回入口）。
+// 本机（127.0.0.1）是管理员：未设置密码时免密；设置后本机也要先登录才能修改密码。
 async function refreshAuthStatus() {
     const box = document.getElementById('authStatusBox');
     if (!box) return;
@@ -17,8 +17,8 @@ async function refreshAuthStatus() {
         if (!json.ok) { box.textContent = '无法获取鉴权状态'; return; }
         if (json.isAdmin) {
             box.innerHTML = json.isDefaultPassword
-                ? '当前是本机管理员（免密）。访问密码仍是初始随机密码：<code class="text-indigo-500">' + escapeHtml(json.passwordHint || '') + '</code>，建议改成自己的。'
-                : '当前是本机管理员（免密）。访问密码已由你自行设置，控制台不再显示。';
+                ? '当前是本机。<b>尚未设置访问密码</b>：此时只有本机能用，局域网接口是关闭的；请在下方设置一个密码。'
+                : '当前是本机管理员（已登录）。访问密码已设置：本机与局域网设备打开应用都需要输入这个密码。';
         } else {
             box.textContent = '当前设备已登录（非本机）。如需修改访问密码，请在这台电脑上打开本应用操作。';
         }
@@ -29,11 +29,17 @@ async function refreshAuthStatus() {
 }
 
 async function changeAccessPassword() {
+    // 重置密码要删的文件路径从服务端取（DATA_DIR 可能被覆盖，不能写死 data/auth.json）。
+    let authFile = '';
+    try {
+        const st = await fetch('/api/auth/status').then((r) => r.json());
+        authFile = st && st.authFile ? String(st.authFile) : '';
+    } catch (e) { /* 拿不到就用通用说法 */ }
     const a = document.getElementById('authNewPwd');
     const b = document.getElementById('authNewPwd2');
     const next = (a && a.value ? a.value : '').trim();
     const again = (b && b.value ? b.value : '').trim();
-    if (next.length < 6) { showCustomAlert('新密码至少 6 位。', '访问密码'); return; }
+    if (next.length < 8) { showCustomAlert('新密码至少 8 位，且要同时含数字、小写字母、大写字母。', '访问密码'); return; }
     if (next !== again) { showCustomAlert('两次输入的密码不一致，请重新输入。', '访问密码'); return; }
     try {
         const res = await fetch('/api/auth/change-password', {
@@ -45,18 +51,11 @@ async function changeAccessPassword() {
         if (!json.ok) { showCustomAlert(json.message || '修改失败', '访问密码'); return; }
         if (a) a.value = '';
         if (b) b.value = '';
-        await refreshAuthStatus();
-        showCustomAlert('访问密码已更新。\n\n· 手机/平板等局域网设备需要重新输入新密码\n· 本机仍然免密\n· 服务端控制台不再显示密码，请记牢', '访问密码');
+        await showCustomAlert('访问密码已设置。\n\n从现在起，本机与局域网设备打开应用都需要输入这个密码。\n请记牢；忘记时删除 ' + (authFile || '数据目录下的 auth.json') + ' 并重启应用即可重置。', '访问密码');
+        location.href = '/login';
     } catch (e) {
         showCustomAlert('修改失败：' + (e.message || e), '访问密码');
     }
-}
-
-async function logoutAccess() {
-    try {
-        await fetch('/api/auth/logout', { method: 'POST' });
-    } catch (e) { /* 忽略：无论成功与否都跳登录页 */ }
-    location.href = '/login';
 }
 
 // 「电脑操作权限」与「手机操作」两组设置按设备形态只显示一组：

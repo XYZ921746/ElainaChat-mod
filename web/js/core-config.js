@@ -407,6 +407,10 @@ const DEFAULT_SETTINGS = {
     visionBaseUrl: '',
     visionApiKey: '',
     visionModel: '',
+    // 对话模型「能不能收图片」的探测结论（见 models.js 的 probeModelImageSupport）。
+    //   null = 没测过/结论已过期；true/false = 实测过。chip 一起存，模型名或地址一变就作废。
+    chatModelVision: null,
+    chatModelVisionKey: '',
     // 首次运行的「欢迎使用独立开源版」公告**是否已同意过**。
     //   语义是"同意一次，之后不再出现"（生日版与普通版一致）。
     //   为什么存进 settings 而不是单开一个 Store 键：

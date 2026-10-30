@@ -243,31 +243,273 @@ function phoneArgsForNative(parsed) {
 /** 文件类操作（路径需要按授权状态加前缀的那几个） */
 const PHONE_FILE_OPS = ['手机列出文件', '手机读文件', '手机写文件', '手机删除文件'];
 
-/** 把手机截图交给视觉模型转述。没配视觉模型时如实说明，不静默吞掉。 */async function describePhoneScreenshot(res, fallbackText) {
+// 上一次截图带回来的屏幕尺寸（物理像素）。用来给点击/滑动坐标做越界校验，
+// 因为越界坐标派发出去只会失败或点空，模型却会当成"完成"。
+let lastScreenSize = null;
+
+// 待交给主模型的截图（一次性）：没有配置视觉模型时，手机截图直接附给主模型看，
+//   而不是先转成文字。下一次请求用掉后清空；超过 60 秒没用掉就作废，免得串到别的对话里。
+let pendingAgentImageDataUrl = '';
+let pendingAgentImageAt = 0;
+function setPendingAgentImage(dataUrl) {
+    pendingAgentImageDataUrl = String(dataUrl || '');
+    pendingAgentImageAt = Date.now();
+}
+function takePendingAgentImage() {
+    if (!pendingAgentImageDataUrl) return '';
+    if (Date.now() - pendingAgentImageAt > 60000) { pendingAgentImageDataUrl = ''; return ''; }
+    const out = pendingAgentImageDataUrl;
+    pendingAgentImageDataUrl = '';
+    return out;
+}
+
+/** 是否配置了独立的视觉模型（与 callAI 的判据一致） */
+function phoneVisionModelConfigured() {
+    return state.settings.visionEnabled === true
+        && Boolean(String(state.settings.visionBaseUrl || '').trim() && String(state.settings.visionModel || '').trim());
+}
+
+/** 没配视觉模型时，顺手截一张图交给主模型看（失败不影响读界面这种主流程）。 */
+async function maybeStashScreenImage() {
+    try {
+        const res = await callDeviceQuietly('手机截图', '');
+        if (!res || !res.imageBase64) return;
+        if (res.screenWidth && res.screenHeight) {
+            lastScreenSize = { width: Number(res.screenWidth), height: Number(res.screenHeight) };
+        }
+        setPendingAgentImage('data:' + (res.imageMime || 'image/jpeg') + ';base64,' + res.imageBase64);
+    } catch (err) {
+        console.warn('[Agent] 读界面时附带截图失败:', err);
+    }
+}
+
+/** 直接调原生设备层执行一个动作，不经过权限/运行方式/过程记录 —— 只给"读界面"这类内部辅助用。 */
+async function callDeviceQuietly(action, args) {
+    const dev = deviceBridge();
+    if (!dev || typeof dev.exec !== 'function') return null;
+    try {
+        return await dev.exec({
+            action,
+            args: args == null ? '' : String(args),
+            backend: runModeDecision === 'module' || runModeDecision === 'accessibility'
+                ? runModeDecision
+                : currentBackendId(),
+            strictBackend: false
+        });
+    } catch (err) {
+        console.warn('[Agent] 辅助设备调用失败:', action, err);
+        return null;
+    }
+}
+
+// 控件树里一行形如：#3 “发送” id=btn_send 可点 [540,1200]。
+// 只取可点 / 可输入的行 —— 不可点的容器节点给模型只会增加噪音，还可能被误点。
+const UI_NODE_LINE = /^#(\d+)\s+(.*?)\s*\[(-?\d+),(-?\d+)\]\s*$/;
+function parseUiNodes(dumpText) {
+    const out = [];
+    for (const line of String(dumpText || '').split('\n')) {
+        const m = UI_NODE_LINE.exec(line.trim());
+        if (!m) continue;
+        const body = m[2];
+        if (!body.includes('可点') && !body.includes('可输入')) continue;
+        let label = '';
+        const q = body.match(/“([^”]*)”/);
+        if (q) label = q[1];
+        else {
+            const d = body.match(/\[描述\]“([^”]*)”/);
+            if (d) label = d[1];
+        }
+        const idm = body.match(/id=([^\s]+)/);
+        out.push({
+            index: Number(m[1]),
+            label: label || (idm ? idm[1] : ''),
+            id: idm ? idm[1] : '',
+            x: Number(m[3]),
+            y: Number(m[4]),
+        });
+    }
+    return out;
+}
+
+/** 把「编号 → 控件 / 坐标」清单排成一行行给模型看（截断到 60 条，免得又把上下文灌满）。 */
+function formatNodeListForModel(nodes) {
+    const limit = Math.min(nodes.length, 60);
+    const lines = [];
+    for (let i = 0; i < limit; i++) {
+        const n = nodes[i];
+        const name = n.label || n.id || '控件';
+        lines.push('#' + (i + 1) + ' ' + name + ' (' + n.x + ',' + n.y + ')' + (n.id ? ' id=' + n.id : ''));
+    }
+    return lines.join('\n');
+}
+
+/**
+ * 把控件树 dump 压成给模型看的**精简元素清单**。
+ *
+ * 为什么不直接把 dump 丢给模型：原始控件树每行都带 id / 各类标记 / [x,y]，
+ *   又长又像代码，模型很容易把它当成"要输出的内容"照抄进回复。只留
+ *   「文字 + 坐标」的人话清单，既够它决定点哪儿，又不会被当成代码复述。
+ * 解析不到可点元素时原样返回（宁可难看，也不要让模型完全看不到界面）。
+ */
+function summarizeUiDumpForModel(dumpText) {
+    const text = String(dumpText || '');
+    const nodes = parseUiNodes(text);
+    if (!nodes.length) return text;
+    const out = ['当前界面可操作元素（括号里是可直接点击的屏幕坐标）：'];
+    const limit = Math.min(nodes.length, 40);
+    for (let i = 0; i < limit; i++) {
+        const n = nodes[i];
+        out.push('- ' + (n.label || n.id || '控件') + ' (' + n.x + ',' + n.y + ')' + (n.id ? ' id=' + n.id : ''));
+    }
+    if (nodes.length > limit) {
+        out.push('…还有 ' + (nodes.length - limit) + ' 个没列出（需要时再读一次界面，或用截图看画面）。');
+    }
+    return out.join('\n');
+}
+
+/**
+ * 把编号圆点画到截图上，好让视觉模型"看到编号"再回答。
+ *
+ * 为什么要画：视觉模型不擅长估计像素坐标，但很擅长"第 3 个红点是什么"。
+ *   编号到坐标的映射由控件树给出（精确），于是「看图指认」和「按坐标点击」各司其职。
+ * 返回新的 dataURL；任何一步失败返回 null，调用方退化成纯文字描述。
+ */
+function annotateScreenshot(dataUrl, nodes) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth || img.width;
+                canvas.height = img.naturalHeight || img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                // 控件树坐标是屏幕像素，图片可能是 1:1 也可能缩放过 —— 按两者比例换算。
+                const sw = (lastScreenSize && lastScreenSize.width) || canvas.width;
+                const sh = (lastScreenSize && lastScreenSize.height) || canvas.height;
+                const sx = canvas.width / Math.max(1, sw);
+                const sy = canvas.height / Math.max(1, sh);
+                const r = Math.max(10, Math.round(Math.min(canvas.width, canvas.height) * 0.018));
+                ctx.font = 'bold ' + Math.round(r * 1.25) + 'px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                const limit = Math.min(nodes.length, 60);
+                for (let i = 0; i < limit; i++) {
+                    const n = nodes[i];
+                    const px = n.x * sx;
+                    const py = n.y * sy;
+                    if (!isFinite(px) || !isFinite(py)) continue;
+                    ctx.beginPath();
+                    ctx.arc(px, py, r, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(220,38,38,0.85)';
+                    ctx.fill();
+                    ctx.lineWidth = Math.max(1, Math.round(r * 0.12));
+                    ctx.strokeStyle = '#ffffff';
+                    ctx.stroke();
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillText(String(i + 1), px, py + 1);
+                }
+                resolve(canvas.toDataURL('image/jpeg', 0.8));
+            } catch (err) {
+                console.warn('[Agent] 截图标注失败:', err);
+                resolve(null);
+            }
+        };
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+    });
+}
+
+/**
+ * 手机截图：把「画面」交给视觉模型看，同时给一份「可点元素（编号 → 坐标）」清单。
+ *
+ * 为什么不是只回一句画面描述：主模型是文本模型，光看转述无法确定点哪儿；
+ *   控件树又常被截断、含不可见节点。把"看到什么"与"能点什么（精确坐标）"一起回灌，
+ *   既看得懂画面、又点得准 —— 坐标永远来自控件树，不从图片上估像素。
+ */
+async function describePhoneScreenshot(res, fallbackText) {
     const dataUrl = 'data:' + (res.imageMime || 'image/jpeg') + ';base64,' + res.imageBase64;
+    if (res.screenWidth && res.screenHeight) {
+        lastScreenSize = { width: Number(res.screenWidth), height: Number(res.screenHeight) };
+    }
+
+    // 先摸一次控件树，拿到可点/可输入控件的精确坐标。
+    let nodes = [];
+    try {
+        const dump = await callDeviceQuietly('手机查看界面', '');
+        const dumpText = (dump && (dump.text || dump.message)) || '';
+        nodes = parseUiNodes(dumpText);
+    } catch (err) {
+        console.warn('[Agent] 截图前读取控件树失败:', err);
+    }
+    const nodeList = formatNodeListForModel(nodes);
+    const listBlock = nodeList
+        ? '\n\n【可点元素（编号 → 控件 / 坐标）】\n' + nodeList
+            + '\n（要操作某个控件就用它后面的坐标写 [操作:手机点击 x y]；'
+            + '或按 id 用 [操作:手机按键 id:<id>] 直接点。不要把图片上的位置换算成像素。）'
+        : '';
+
     const hasVision = Boolean(
         state.settings.visionEnabled === true
         && String(state.settings.visionBaseUrl || '').trim() && String(state.settings.visionModel || '').trim()
     );
     if (!hasVision) {
-        return fallbackText + '\n（没有配置视觉模型，所以我拿不到画面内容。'
-            + '在「设置 → 模型 → 视觉模型」填一个多模态模型后我就能看见屏幕了；或者改用「手机查看界面」直接读控件树。）';
+        // 没有独立视觉模型：把截图**原样直接交给主模型**看（主模型是多模态时就能真正"看到画面"，
+        //   不再是"转成文字"）。若主模型不支持图片，callAI 会自动去掉图片重试并记下这个事实，
+        //   之后就不再反复附图片了。
+        const modelVerdict = (typeof cachedModelImageVerdict === 'function') ? cachedModelImageVerdict() : null;
+        if (state._agentImageUnsupported || modelVerdict === false) {
+            return fallbackText + '\n（已实测当前主模型不支持图片，看不到画面；先用下面的可点元素清单操作。）' + listBlock;
+        }
+        setPendingAgentImage(dataUrl);
+        return fallbackText + '\n（已把这张截图直接附给你，请直接看图判断；'
+            + '如果收不到图片，说明当前主模型不支持图片，可改用界面清单或配置视觉模型。）' + listBlock;
     }
+
     try {
-        const described = await describeImageWithVision(
-            '这是我手机当前的屏幕截图。请简短回答三点：'
-            + '1) 这是什么界面（哪个应用、什么页面）；'
-            + '2) 界面上有哪些可点的按钮和输入框，各自大致在什么位置（用「上方/中间/下方 + 左/中/右」描述）；'
-            + '3) 屏幕上有没有明显的文字提示或弹窗。只描述你确实看到的，不要猜。',
-            dataUrl
-        );
-        if (!described || !described.trim()) return fallbackText;
-        return fallbackText + '\n\n【画面内容】\n' + described.trim();
+        const picture = nodes.length ? ((await annotateScreenshot(dataUrl, nodes)) || dataUrl) : dataUrl;
+        const prompt = '这是手机当前屏幕的截图。'
+            + (nodes.length ? '图上用红色圆点标了可交互元素的编号（1、2、3…）。' : '')
+            + '请简短回答：1) 这是什么应用、什么页面；'
+            + '2) 屏幕上主要有哪些文字和按钮；'
+            + '3) 有没有明显的输入框或弹窗。'
+            + (nodes.length ? '不要逐个复述编号，只说你确实看到的。' : '')
+            + '只描述你真实看到的，不要编造。';
+        const described = await describeImageWithVision(prompt, picture);
+        const visual = described && described.trim() ? described.trim() : '';
+        if (!visual) return fallbackText + listBlock;
+        return fallbackText + '\n\n【画面内容】\n' + visual + listBlock;
     } catch (err) {
         const reason = String(err?.message || err || '');
         console.error('[Agent] 手机截图转述失败:', err);
-        return fallbackText + '\n（截图拿到了，但视觉模型没能看：' + reason.slice(0, 200) + '）';
+        return fallbackText + '\n（截图拿到了，但视觉模型没能看：' + reason.slice(0, 200) + '）' + listBlock;
     }
+}
+
+/**
+ * 坐标是否明显超出屏幕（只在"已经截过图、知道屏幕尺寸"时才判断）。
+ * 越界坐标派发出去只会失败或点空，模型还会当成"完成" —— 提前拦下并让它重读界面更省事。
+ * 返回空串表示没问题。
+ */
+function phoneCoordsOutOfScreen(parsed) {
+    if (!lastScreenSize) return '';
+    const nums = String(parsed.args == null ? '' : parsed.args).trim().split(/\s+/).map((v) => Number(v));
+    const w = lastScreenSize.width;
+    const h = lastScreenSize.height;
+    const bad = (x, y) => !isFinite(x) || !isFinite(y) || x < 0 || y < 0 || x > w || y > h;
+    if (parsed.action === '手机点击') {
+        if (nums.length < 2 || !isFinite(nums[0]) || !isFinite(nums[1])) return '';
+        if (bad(nums[0], nums[1])) {
+            return '坐标 (' + nums[0] + ',' + nums[1] + ') 超出屏幕（' + w + '×' + h + '）。'
+                + '请先 [操作:手机查看界面] 重读一次界面，再按最新坐标点击。';
+        }
+    } else if (parsed.action === '手机滑动') {
+        if (nums.length < 4) return '';
+        if (bad(nums[0], nums[1]) || bad(nums[2], nums[3])) {
+            return '滑动坐标超出屏幕（' + w + '×' + h + '）。请先 [操作:手机查看界面] 重读一次界面，再按最新坐标滑动。';
+        }
+    }
+    return '';
 }
 
 async function runAgentPhoneOperation(raw, traceItem) {
@@ -366,6 +608,12 @@ async function runAgentPhoneOperation(raw, traceItem) {
             return { ok: false, text: m };
         }
     }
+    // 坐标越界就提前拦下：派发出去只会失败或点空，模型还会当成"完成"。
+    const coordProblem = phoneCoordsOutOfScreen(parsed);
+    if (coordProblem) {
+        insertAgentResult(coordProblem);
+        return { ok: false, text: coordProblem };
+    }
     phoneOpsInFlight += 1;
     clearTimeout(phoneRunEndTimer);
     if (!rt.isRunning()) {
@@ -447,11 +695,19 @@ async function runAgentPhoneOperation(raw, traceItem) {
         }
         rt.assertNotStopped();
         // 这一步真的执行了 → 让 AI 接着决定下一步（见 insertAgentResult 的说明）
-        const opResult = await execPhoneOperation(parsed);
-        updateTurnTool(traceItem, { state: 'ok', result: opResult });
+        const fullResult = await execPhoneOperation(parsed);
+        // 没配视觉模型时，读界面也顺手把当前画面截给主模型看（主模型多模态就能直接看图）。
+        if (parsed.action === '手机查看界面' && !phoneVisionModelConfigured() && !state._agentImageUnsupported
+            && (typeof cachedModelImageVerdict !== 'function' || cachedModelImageVerdict() !== false)) {
+            await maybeStashScreenImage();
+        }
+        updateTurnTool(traceItem, { state: 'ok', result: fullResult });
+        // 读界面给模型 / 上下文的是**精简元素清单**，不是原始控件树 —— 原始控件树又长又像代码，
+        //   模型会照抄进回复。过程区仍保留完整原文，需要时用户自己展开看。
+        const opResult = parsed.action === '手机查看界面' ? summarizeUiDumpForModel(fullResult) : fullResult;
         // 工具通道的结果由 runToolCalls 以 role:'tool' 回灌，这里再插一条就是重复
         if (ownTrace) insertAgentResult(opResult, { continueLoop: true, asContext: true });
-        // 必须返回结果对象：过去成功路径没有返回值，工具通道会读成
+        // 必须返回结果对象：成功路径没有返回值的话，工具通道会读成
         //   「没有返回结果」，把**执行成功**的手机操作报成失败。
         return { ok: true, text: String(opResult || '') };
     } catch (err) {

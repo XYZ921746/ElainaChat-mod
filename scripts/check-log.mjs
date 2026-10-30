@@ -53,7 +53,9 @@ function dropDir(dir) {
 function startServe({ port, logDir, env: extraEnv = {} }) {
     const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', LOG_DIR: logDir, ...extraEnv },
+        // 数据目录必须跟着日志目录一起隔离：默认落到项目 data/ 会读写用户真实的
+        // 访问密码与 store，既污染数据，也让“默认密码 / 已设置密码”这类断言随本机状态漂移。
+        env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', LOG_DIR: logDir, DATA_DIR: path.join(logDir, 'data'), ...extraEnv },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -312,14 +314,12 @@ async function caseLogFormat(c) {
             //    stderr 出来的。密码那一行恰好是带前缀的记录行，因此必须两路合起来找，
             //    只翻 stdout 会得到 null（控制台明明打了密码，断言却报"没打印"）。
             const consoleOut = getOut();
-            const pw = consoleOut.match(/access password[^:\n]*:\s*(\S+)/i)
-                || consoleOut.match(/访问密码[^：:\n]{0,20}[:：]\s*(\S+)/)
-                || consoleOut.match(/要输这个密码\s*\n\s*(\S+)/);
-            c.ok(!!pw, '控制台打印了访问密码（用户要靠它登录）');
-            c.ok(pw && !main.includes(pw[1]), '★ 日志文件里没有明文访问密码（脱敏对文案变化仍有效）');
-            // 反向断言：日志里必须能看到"已脱敏"的痕迹，否则可能是整条都没记
-            c.ok(main.includes('******') || main.includes('user-configured'),
-                '日志里能看到脱敏后的占位符（或"已由用户设置"的事实行）');
+            // 默认状态不再生成随机密码：启动日志应明确说"尚未设置"，局域网设备在此之前不可用。
+            c.ok(/LAN access password:\s*not set/i.test(consoleOut),
+                '启动日志说明访问密码尚未设置（局域网设备不可用）');
+            // 日志里必须有这条事实行（脱敏后仍是事实行），不能整条都没记。
+            c.ok(/LAN access password/.test(main) || main.includes('******') || main.includes('user-configured'),
+                '日志里能看到访问密码事实行（或脱敏占位符 / 已设置）');
         }
 
         // ---- 控制台不重复输出 ----

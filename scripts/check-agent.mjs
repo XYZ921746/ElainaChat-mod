@@ -8,7 +8,7 @@
 // 用法：node scripts/check-agent.mjs          跑全部
 //       node scripts/check-agent.mjs 续跑     只跑名字含该子串的用例
 
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
 import os from 'node:os';
@@ -210,7 +210,7 @@ async function caseContinue(c) {
         `实际 ${continueLines.length} 处`);
     c.ok(/insertAgentResult\(resultText, \{ continueLoop: true, asContext: true \}\)/.test(html),
         '文件操作成功处开启续跑');
-    c.ok(/const opResult = await execPhoneOperation\(parsed\);/.test(html)
+    c.ok(/const \w+ = await execPhoneOperation\(parsed\);/.test(html)
         && /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true \}\)/.test(html),
         '手机操作成功处开启续跑');
     // 成功结果必须是"上下文"而不是一个新的聊天气泡：
@@ -833,9 +833,12 @@ async function casePaths(c) {
 
     const projectRoot = ROOT;
     const port = await freePort();
+    // 数据目录必须隔离：否则一旦本机设置过访问密码，本机请求也会被要求登录，
+    // 这个用例就全变成 401（与本用例要测的路径解析无关）。
+    const dataTmp = mkdtempSync(path.join(os.tmpdir(), 'elaina-agent-paths-'));
     const child = spawn(process.execPath, ['web/serve.mjs'], {
         cwd: projectRoot,
-        env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', LOG_TO_FILE: '0' },
+        env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', LOG_TO_FILE: '0', DATA_DIR: dataTmp, LOG_DIR: path.join(dataTmp, 'logs') },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let bootLog = '';
@@ -959,6 +962,7 @@ async function casePaths(c) {
             rootsText('full', roots.map((r) => ({ ...r, path: undefined }))), '');
     } finally {
         child.kill();
+        try { rmSync(dataTmp, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 }
 

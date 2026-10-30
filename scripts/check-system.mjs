@@ -165,9 +165,12 @@ async function casePcCommand(c) {
     // 端口向内核要（不复用固定端口），每个用例各自拿一个新的
     const PORT = await c.freePort();
     const BASE = `http://127.0.0.1:${PORT}`;
+    // 数据目录必须隔离：否则本机一旦设置过访问密码，本机请求会被要求登录，
+    // 这组 agent 链路断言就全变成 401。
+    const DATA_TMP = await mkdtemp(path.join(os.tmpdir(), 'elaina-system-pc-'));
     const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(PORT), LOG_TO_FILE: '0', LOG_CHAT: '0' },
+        env: { ...process.env, PORT: String(PORT), LOG_TO_FILE: '0', LOG_CHAT: '0', DATA_DIR: DATA_TMP, LOG_DIR: path.join(DATA_TMP, 'logs') },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let serverOut = '';
@@ -516,6 +519,7 @@ async function casePcCommand(c) {
     } finally {
         // 自己起的进程自己收 —— 漏掉它会留下一个占着端口的孤儿 node
         try { child.kill(); } catch { /* ignore */ }
+        try { await rm(DATA_TMP, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 
     // ============================================================ 4. 前端接线

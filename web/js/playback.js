@@ -103,7 +103,66 @@ function updateVoicePlayerButton(messageId, status) {
     button.setAttribute('aria-label', isLoading ? '伊蕾娜的语音生成中' : isPlaying ? '暂停伊蕾娜的语音' : isPaused ? '继续伊蕾娜的语音' : '播放伊蕾娜的语音');
 }
 
+// 语音生成 / 播放失败时把原因留在该条消息的语音条上，而不是弹窗打断对话。
+// 原因按消息 id 记住：消息可能还没渲染（工具回合 / 用户已切走的会话），
+// 等它真正渲染时再补到语音条上。
+const messageVoiceErrors = new Map();
+
+function voiceErrorSummary(error) {
+    const apiError = typeof toClientApiError === 'function' ? toClientApiError(error) : error;
+    const code = String(apiError?.code || '');
+    const raw = String(apiError?.message || apiError || '').replace(/\s+/g, ' ').trim();
+    const detail = raw.length > 80 ? raw.slice(0, 80) + '…' : raw;
+    switch (code) {
+        case 'APP_KEY_INVALID': return 'Key 无效或已失效，请在设置中更换';
+        case 'MINIMAX_QUOTA_EXHAUSTED': return '服务额度或余额不足，请检查服务商账号';
+        case 'RATE_LIMITED':
+        case 'UPSTREAM_RATE_LIMITED': return '请求过于频繁，请稍后再试';
+        case 'REQUEST_TIMEOUT': return '请求超时，请稍后重试';
+        case 'NETWORK_ERROR': return '请求没能发出去（网络或跨域问题）';
+        default: return detail || '请稍后重试';
+    }
+}
+
+function applyMessageVoiceError(messageId, root) {
+    const scope = root || document;
+    let button;
+    try {
+        button = scope.querySelector('#voice-player-' + safeAttrId(messageId));
+    } catch (e) { return; }
+    if (!button) return;
+    const card = button.closest ? button.closest('.ai-voice-card') : null;
+    const text = messageVoiceErrors.get(String(messageId)) || '';
+    button.classList.toggle('is-error', Boolean(text));
+    if (text) {
+        button.setAttribute('aria-busy', 'false');
+        button.setAttribute('aria-label', '语音生成失败，点击重试');
+    } else {
+        button.setAttribute('aria-busy', 'false');
+        button.setAttribute('aria-label', '播放伊蕾娜的语音');
+    }
+    const label = card ? card.querySelector('.ai-voice-error') : null;
+    if (label) {
+        label.textContent = text;
+        label.hidden = !text;
+    }
+}
+
+function setMessageVoiceError(messageId, text) {
+    const key = String(messageId);
+    const value = String(text || '').trim();
+    if (value) messageVoiceErrors.set(key, value);
+    else messageVoiceErrors.delete(key);
+    applyMessageVoiceError(key);
+}
+
+function clearMessageVoiceError(messageId) {
+    messageVoiceErrors.delete(String(messageId));
+    applyMessageVoiceError(messageId);
+}
+
 function setVoicePlaybackLoading(messageId) {
+    clearMessageVoiceError(messageId);
     if (activeVoicePlayerId && String(activeVoicePlayerId) !== String(messageId)) {
         updateVoicePlayerButton(activeVoicePlayerId, 'idle');
     }

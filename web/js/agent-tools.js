@@ -187,7 +187,15 @@ function summarizeToolArgs(args) {
 function agentToolOptions() {
     if (typeof ElainaOps === 'undefined' || typeof ElainaOps.toolsForAccess !== 'function') return null;
     const tools = ElainaOps.toolsForAccess();
-    return tools.length ? { tools, replyInfo: {} } : null;
+    const opt = tools.length ? { tools, replyInfo: {} } : {};
+    // 手机截图待交给主模型时：把图片挂到这次请求上，让主模型直接看（directImage 见 callAI）。
+    //   用一次性取出，避免同一张截图被重复发到后续无关请求里。
+    const pendingImage = (typeof takePendingAgentImage === 'function') ? takePendingAgentImage() : '';
+    if (pendingImage) {
+        opt.imageDataUrl = pendingImage;
+        opt.directImage = true;
+    }
+    return Object.keys(opt).length ? opt : null;
 }
 
 /**

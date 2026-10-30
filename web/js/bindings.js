@@ -338,7 +338,6 @@ function bindAppEvents() {
             .observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     }
     document.getElementById('authChangeBtn')?.addEventListener('click', changeAccessPassword);
-    document.getElementById('authLogoutBtn')?.addEventListener('click', logoutAccess);
     // 日志级别 / 追踪开关的界面已移除（见 index.html 里的说明）：级别回默认、追踪固定开，
     // 所以这里不再有"改完立即生效"的监听。运行期仍可用 /api/logs/settings 调。
     // 我的数据：导出直接下载备份，导入选文件后合并进 data/
@@ -404,6 +403,9 @@ function bindAppEvents() {
         input.value = '';
         void importDataBackup(file);
     });
+    // 局域网共享：开启（显示 IP / 端口）/ 接收（填对方地址与密码）
+    document.getElementById('lanShareOpenBtn')?.addEventListener('click', openLanShare);
+    document.getElementById('lanShareReceiveBtn')?.addEventListener('click', receiveLanShare);
     // 获取模型列表。**三种格式都支持** —— Anthropic 也有 Models API（`GET /v1/models`），
     // 返回 `{ data: [{ id, display_name, … }] }`，和 OpenAI 的 `{ data: [{ id }] }` 同构，
     // 所以解析逻辑可以共用，差别只在**地址**和**认证头**。
@@ -480,6 +482,11 @@ function bindAppEvents() {
         void loadBuiltinMimoCloneSample();
     });
     elements.testChatConnectionBtn.addEventListener('click', testChatConnection);
+    // 对话模型「能不能收图片」：手动探测按钮 + 模型名/地址变化时刷新提示。
+    document.getElementById('probeChatModelVisionBtn')?.addEventListener('click', () => { void detectChatModelVision(); });
+    ['settingChatModel', 'settingBaseUrl'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', updateChatModelVisionHint);
+    });
     elements.testTtsConnectionBtn.addEventListener('click', testTtsConnection);
     elements.clearApiKeysBtn.addEventListener('click', clearApiKeys);
     elements.announcementConfirmBtn.addEventListener('click', closeAnnouncement);

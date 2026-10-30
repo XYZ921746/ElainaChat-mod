@@ -31,6 +31,8 @@ async function refreshDataSettings() {
         } catch (e) {
             box.textContent = '无法读取本地数据统计';
         }
+        // 手机版没有本机服务端，局域网共享接口不存在；直接隐藏，避免点了必然失败。
+        ['lanShareOpenBtn', 'lanShareReceiveBtn', 'lanShareHintLine'].forEach((id) => document.getElementById(id)?.classList.add('hidden'));
         return;
     }
 
@@ -48,6 +50,7 @@ async function refreshDataSettings() {
             + ' · 记忆 <b>' + escapeHtml(String(c.memoryEntries || 0)) + '</b> 条'
             + ' · 插件 <b>' + escapeHtml(String(c.mods || 0)) + '</b> 个'
             + ' · 技能 <b>' + escapeHtml(String(c.skills || 0)) + '</b> 个';
+        ['lanShareOpenBtn', 'lanShareReceiveBtn', 'lanShareHintLine'].forEach((id) => document.getElementById(id)?.classList.remove('hidden'));
     } catch (e) {
         if (section) section.classList.add('hidden');
     }
@@ -253,5 +256,164 @@ async function importDataBackup(file) {
     }
 }
 
+// ==================== 局域网共享（我的数据旁的两个按钮） ====================
+// 与导出 / 导入共用同一份备份：共享开关与拉取都由本机服务端完成。
+function lanShareFmtSize(bytes) {
+    const n = Number(bytes) || 0;
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    if (n >= 1024) return Math.round(n / 1024) + ' KB';
+    return n + ' B';
+}
 
+function lanShareAddressText(share) {
+    const list = (share && Array.isArray(share.addresses)) ? share.addresses : [];
+    const port = share && share.port ? String(share.port) : '';
+    let text = '局域网共享已开启（' + Math.round(((share && share.expiresAt) ? (share.expiresAt - Date.now()) : 0) / 60000)
+        + ' 分钟后自动关闭）。\n\n';
+    if (!list.length) {
+        text += '未检测到局域网 IPv4 地址，请确认本机已连上 Wi-Fi / 网线。';
+        return text;
+    }
+    text += '把这台设备的 IP、端口和访问密码告诉对方：\n\n';
+    text += list.map((a) => '• ' + (a.label ? a.label + '：' : '') + 'IP ' + a.ip + '　端口 ' + (a.port || port)).join('\n');
+    text += '\n\n对方点「局域网接收共享」，填上面的 IP 和端口，再填访问密码即可。';
+    return text;
+}
 
+async function openLanShare() {
+    const btn = document.getElementById('lanShareOpenBtn');
+    if (btn) btn.disabled = true;
+    try {
+        const status = await fetch('/api/auth/status').then((r) => r.json()).catch(() => null);
+        if (status && status.ok && status.isDefaultPassword) {
+            showCustomAlert('还没有设置访问密码，局域网设备不能连接。\n\n请先在下方「访问密码（局域网）」里设置一个密码，再来开启局域网共享。', '无法开启局域网共享');
+            return;
+        }
+        const res = await fetch('/api/data/lan/enable', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+        });
+        const json = await res.json().catch(() => ({ ok: false, message: 'HTTP ' + res.status }));
+        if (!json.ok) throw new Error(json.message || '开启失败');
+        showCustomAlert(lanShareAddressText(json.share), '局域网共享已开启');
+    } catch (e) {
+        showCustomAlert('开启失败：' + (e.message || e), '局域网共享');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+// 局域网接收共享的输入弹窗：IP 与端口一行两个，密码单独一行。
+// 密码就是对方登录用的访问密码 —— 局域网能连上就一定有密码，不再提示"没有就留空"。
+function openLanReceiveDialog() {
+    return new Promise((resolve) => {
+        const old = document.getElementById('lanReceiveOverlay');
+        if (old) old.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'lanReceiveOverlay';
+        overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay';
+        overlay.innerHTML = [
+            '<div class="modal-panel w-full max-w-md">',
+            '<div class="p-5">',
+            '<div class="flex items-center justify-between mb-1">',
+            '<h3 class="text-base font-bold text-indigo-900">局域网接收共享</h3>',
+            '<button type="button" id="lanReceiveClose" class="text-indigo-400 hover:text-indigo-600" aria-label="关闭">✕</button>',
+            '</div>',
+            '<p class="text-[12px] text-indigo-400 leading-relaxed mb-4">填对方「开启局域网共享」时给出的地址，以及对方登录用的访问密码。</p>',
+            '<div class="flex items-start gap-2 mb-3">',
+            '<div class="flex-1">',
+            '<label class="text-[11px] text-indigo-400">对方 IP</label>',
+            '<input id="lanReceiveIp" class="modal-input w-full text-sm py-1.5" placeholder="如 192.168.1.5" autocomplete="off">',
+            '</div>',
+            '<div class="w-24">',
+            '<label class="text-[11px] text-indigo-400">端口</label>',
+            '<input id="lanReceivePort" class="modal-input w-full text-sm py-1.5" placeholder="如 3999" autocomplete="off" inputmode="numeric">',
+            '</div>',
+            '</div>',
+            '<div class="mb-4">',
+            '<label class="text-[11px] text-indigo-400">对方访问密码（对方登录用的密码）</label>',
+            '<input id="lanReceivePwd" class="modal-input w-full text-sm py-1.5" type="password" autocomplete="off">',
+            '</div>',
+            '<div class="flex items-center justify-end gap-2">',
+            '<button type="button" id="lanReceiveCancel" class="btn-secondary text-xs">取消</button>',
+            '<button type="button" id="lanReceiveOk" class="btn-secondary text-xs">开始导入</button>',
+            '</div>',
+            '<p id="lanReceiveErr" class="text-[11px] text-red-500 mt-2"></p>',
+            '</div>',
+            '</div>',
+        ].join('\n');
+        document.body.appendChild(overlay);
+        const ipEl = overlay.querySelector('#lanReceiveIp');
+        const portEl = overlay.querySelector('#lanReceivePort');
+        const pwdEl = overlay.querySelector('#lanReceivePwd');
+        const errEl = overlay.querySelector('#lanReceiveErr');
+        const finish = (value) => {
+            overlay.remove();
+            document.removeEventListener('keydown', onKey);
+            resolve(value);
+        };
+        const submit = () => {
+            const ip = String(ipEl.value || '').trim();
+            const port = String(portEl.value || '').trim();
+            const pwd = String(pwdEl.value || '');
+            if (!ip) { errEl.textContent = '请填对方 IP。'; ipEl.focus(); return; }
+            if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
+                errEl.textContent = '请填合法端口（1–65535）。'; portEl.focus(); return;
+            }
+            if (!pwd) { errEl.textContent = '请填对方登录用的访问密码。'; pwdEl.focus(); return; }
+            finish({ ip, port, password: pwd });
+        };
+        const onKey = (e) => {
+            if (e.key === 'Escape') finish(null);
+            else if (e.key === 'Enter') submit();
+        };
+        overlay.querySelector('#lanReceiveClose').addEventListener('click', () => finish(null));
+        overlay.querySelector('#lanReceiveCancel').addEventListener('click', () => finish(null));
+        overlay.querySelector('#lanReceiveOk').addEventListener('click', submit);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(null); });
+        document.addEventListener('keydown', onKey);
+        setTimeout(() => ipEl.focus(), 0);
+    });
+}
+
+async function receiveLanShare() {
+    const picked = await openLanReceiveDialog();
+    if (!picked) return;
+    const sourceUrl = picked.ip + ':' + picked.port;
+    const pwd = picked.password;
+
+    const btn = document.getElementById('lanShareReceiveBtn');
+    if (btn) btn.disabled = true;
+    try {
+        const res = await fetch('/api/data/lan/pull', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sourceUrl, password: String(pwd) }),
+        });
+        if (!res.ok) {
+            const json = await res.json().catch(() => null);
+            throw new Error((json && json.message) || ('HTTP ' + res.status));
+        }
+        const blob = await res.blob();
+        if (!blob.size) throw new Error('对方返回空内容');
+        const ok = await showCustomConfirm(
+            '已从对方拉取 ' + lanShareFmtSize(blob.size) + ' 的备份。\n\n'
+            + '将按「合并」方式导入本机：同名数据被覆盖，本机其它数据保留。\n\n继续导入吗？',
+            '从局域网导入');
+        if (!ok) return;
+        const up = await fetch('/api/data/import?mode=merge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: blob,
+        });
+        const json = await up.json().catch(() => null);
+        if (!json || !json.ok) throw new Error((json && json.message) || ('HTTP ' + up.status));
+        await refreshDataSettings();
+        showCustomAlert((json.message || '导入完成') + '。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
+    } catch (e) {
+        showCustomAlert('导入失败：' + (e.message || e), '局域网接收共享');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}

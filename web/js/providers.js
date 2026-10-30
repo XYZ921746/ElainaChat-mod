@@ -174,6 +174,8 @@ function fillVisionSettings() {
     if (toggle) toggle.checked = on;
     const fields = document.getElementById('visionFields');
     if (fields) fields.classList.toggle('hidden', !on);
+    // 打开设置时顺手把"当前对话模型能不能收图片"的缓存结论显示出来。
+    try { if (typeof updateChatModelVisionHint === 'function') updateChatModelVisionHint(); } catch (e) { /* 提示刷新失败不该挡住设置 */ }
 }
 
 /**

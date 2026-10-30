@@ -555,6 +555,7 @@ function renderMessage(message) {
                                 <span class="voice-duration">${formatVoiceDuration(voiceDurationSeconds)}</span>
                                 <span class="voice-waveform" aria-hidden="true">${voiceWaveformMarkup()}</span>
                             </button>
+                            <div class="ai-voice-error" role="status" aria-live="polite" hidden></div>
                         </div>`;
         div.innerHTML = `
             <div class="flex gap-3 mb-4 group">
@@ -584,6 +585,7 @@ function renderMessage(message) {
     //   在节点**进入文档之前**画好，否则会先闪一个空位再冒出按钮。
     //   守卫是必要的：消息渲染是核心链路，插槽模块没加载（或插件抛错）都不该影响它 ——
     //   decorateMessageSlots 内部已对每个 mod 做失败隔离。
+    if (typeof applyMessageVoiceError === 'function') applyMessageVoiceError(message.id, div);
     if (typeof window.decorateMessageSlots === 'function') window.decorateMessageSlots(div);
 
     elements.conversationHistory.appendChild(div);
@@ -620,12 +622,12 @@ async function replayAIMessage(messageId) {
         } catch (error) {
             console.error('[TTS] 手动播放的日语朗读稿生成失败:', error);
             setVoicePlaybackState(messageId, false);
-            showClientApiError(error);
+            setMessageVoiceError(messageId, '语音生成失败：' + voiceErrorSummary(error));
             return;
         }
         if (!textToSpeak) {
             setVoicePlaybackState(messageId, false);
-            showCustomAlert('未能生成日语朗读稿，本次不会回退播放中文。请稍后重试。', '日语语音生成失败');
+            setMessageVoiceError(messageId, '未能生成日语朗读稿，本次不会回退播放中文，请稍后重试。');
             return;
         }
     }
@@ -639,7 +641,7 @@ async function replayAIMessage(messageId) {
         if (isVoiceCancellation(error)) return;
         console.error('[TTS] 缓存语音播放失败:', error);
         setVoicePlaybackState(messageId, false);
-        showClientApiError(error);
+        setMessageVoiceError(messageId, '语音生成失败：' + voiceErrorSummary(error));
     });
 }
 

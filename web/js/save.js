@@ -118,7 +118,12 @@ async function saveSettings(opts) {
             : 'off',
         // 对话优化：第三人称两段式开关。与上面一样"改了立刻生效 + 立刻持久化"，
         // 这里再读一次是为了覆盖"改了控件但没点保存、又点了保存"的路径。
-        thirdPerson: elements.settingThirdPerson.checked
+        thirdPerson: elements.settingThirdPerson.checked,
+        // 对话模型能否收图片的探测缓存。这两个键不在表单里，必须从旧设置原样带过来 ——
+        //   saveSettings 是整体替换 state.settings，不显式带上就会在保存时丢掉。
+        chatModelVision: state.settings.chatModelVision === true ? true
+            : (state.settings.chatModelVision === false ? false : null),
+        chatModelVisionKey: String(state.settings.chatModelVisionKey || '')
     };
     try {
         await saveApiSecrets(state.settings);

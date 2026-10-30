@@ -23,6 +23,7 @@ import { createSkillManager } from '../server/skills.mjs';
 // 备份里的插件 / 技能目录：与 data/ 的键值分开收集，但合进同一个 zip ——
 // 用户备份时只该拿一个文件（见 server/backup-packages.mjs）。
 import { createPackageBackup } from '../server/backup-packages.mjs';
+import { createLanShare, LAN_SHARE_PREFIX } from '../server/lan-share.mjs';
 // 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
 // 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
 // 而它放行的是"第三方 JS 在服务端进程里注册接口"，判定错了后面全是空的。
@@ -2072,6 +2073,21 @@ const store = createStore({
 const loadStore = () => store.loadStore();
 const saveStore = () => store.saveStore();
 
+/** 打包一份完整备份（data/ + mods/ + skills/）。导出接口与局域网共享共用这一份实现。 */
+async function buildBackupBuffer() {
+    const packages = await packageBackup.collect();
+    return await store.exportZip(packages.entries, packages.counts);
+}
+
+// 局域网共享数据：与「我的数据」的导出 / 导入共用同一套备份实现。
+const lanShare = createLanShare({
+    collectBackup: buildBackupBuffer,
+    maxUpload: MAX_UPLOAD,
+    // 局域网设备只在本机设置过访问密码后才能用：默认状态（未设置密码）不算。
+    isPasswordSet: hasAccessPassword,
+    log: (msg) => console.log('[LAN共享] ' + msg),
+});
+
 /**
  * 校验并收敛 POST /api/store 提交上来的补丁。
  * 只收字符串值（与 localStorage 语义一致）；限制键长与单键体积，
@@ -2162,7 +2178,7 @@ function handleStoreStream(request, response) {
 // 规则：
 //   · 本机（127.0.0.1）自动视为管理员：免密进入，且可修改访问密码 —— 这也是忘记密码时的找回入口。
 //   · 局域网设备必须登录，登录后种 HttpOnly Cookie 会话（默认 7 天）。
-//   · 首次启动生成随机密码并在控制台打印；用户改过密码后只存加盐哈希，控制台不再打印。
+//   · 默认状态是「尚未设置访问密码」：此时只有本机可用。要允许局域网设备进入，必须在本机主动设置密码。
 // 文件位置：data/auth.json。
 // 不放进 web/ 下的 .local-auth.json —— 那是"运行时私密数据混在源码目录里"，
 // 只能靠 .gitignore 单独排除 + 静态服务的"禁止访问隐藏文件"规则兜住，位置本身就不对。
@@ -2188,16 +2204,6 @@ const pruneTimer = setInterval(() => {
     try { loginGuard.prune(now); } catch { /* 清理失败不影响鉴权 */ }
 }, 10 * 60 * 1000);
 pruneTimer.unref?.();
-
-// 去掉容易看错的字符（0/O、1/l/I），方便手输
-const PWD_CHARS = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
-function randomPassword(len = 12) {
-    const bytes = randomBytes(len);
-    let out = '';
-    for (let i = 0; i < len; i++) out += PWD_CHARS[bytes[i] % PWD_CHARS.length];
-    return out;
-}
 
 function hashPassword(password, salt) {
     return scryptAsync(String(password), String(salt), 64).then(buf => Buffer.from(buf).toString('hex'));
@@ -2249,15 +2255,17 @@ async function saveAuthFile(o) {
     await writeFile(AUTH_FILE, JSON.stringify(o, null, 2), 'utf8');
 }
 
-// 启动时准备密码：没有就生成；仍是初始随机密码就再打印一次（方便重启后查看）
+// 启动时准备密码：默认状态就是「尚未设置」。局域网设备只认用户主动设置的密码，
+// 不生成随机默认密码 —— 一个没人设置过的随机串对局域网没有意义，只会在界面上误导用户。
 async function ensureAuth() {
     auth = await loadAuthFile();
-    if (auth && auth.isDefault === false && auth.salt && auth.hash) return { generated: false, isDefault: false };
-    if (auth && auth.isDefault && auth.password) return { generated: false, isDefault: true, password: auth.password };
-    const password = randomPassword();
-    auth = { isDefault: true, password, createdAt: new Date().toISOString() };
-    await saveAuthFile(auth);
-    return { generated: true, isDefault: true, password };
+    if (auth && (auth.isDefault === false || (auth.salt && auth.hash))) return { generated: false, isDefault: false };
+    const createdAt = (auth && auth.createdAt) || new Date().toISOString();
+    if (!auth || auth.isDefault !== true || auth.password) {
+        auth = { isDefault: true, createdAt };
+        await saveAuthFile(auth);
+    }
+    return { generated: false, isDefault: true, password: '' };
 }
 
 // 校验密码。scrypt 是本服务里最重的计算，必须异步执行，
@@ -2331,9 +2339,23 @@ async function suggestModDir(wantId) {
     return '';
 }
 
-// 本机 = 管理员：免密 + 可改密码
+// 本机 = 管理员（未设置密码时免密；设置后需要先登录）
 function isAdmin(request) { return isLocalRequest(request); }
-function isAuthenticated(request) { return isAdmin(request) || hasValidSession(request); }
+
+/** 本机是否已经主动设置过访问密码（老 auth 文件没有 isDefault 字段时看 salt/hash） */
+function hasAccessPassword() {
+    if (!auth) return false;
+    if (auth.isDefault === false) return true;
+    return Boolean(auth.salt && auth.hash);
+}
+
+function isAuthenticated(request) {
+    // 未设置访问密码：只有本机可用（局域网接口在 muxSocket 处已直接关闭）。
+    if (!hasAccessPassword()) return isAdmin(request);
+    // 设置过密码：本机与局域网一律要登录。本机不再是「永久免密」——
+    //   设置密码后第一次打开同样要输入密码，之后靠会话 Cookie 保持登录。
+    return hasValidSession(request);
+}
 
 // 简单 CSRF 防护：浏览器发起的跨站请求会带 Origin，这里要求它与 Host 同源。
 // 否则任意网页都能在你浏览器里悄悄 POST /api/auth/change-password 改掉本机密码。
@@ -2457,6 +2479,16 @@ const handleRelay = relayHandler.handleRelay;
 
 async function handleLogin(request, response) {
     const ip = ipOf(request);
+    // 未设置访问密码时，局域网设备不能登录。默认状态不是给局域网用的，
+    // 必须在主机上主动设一个密码。
+    if (!isLocalRequest(request) && !hasAccessPassword()) {
+        request.resume();
+        return jsonResponse(response, 403, {
+            ok: false,
+            code: 'PASSWORD_NOT_SET',
+            message: '本机还没有设置访问密码，局域网设备暂时不能使用。请先在本机的「设置 → 高级 → 访问密码」里设置密码。',
+        });
+    }
     // ① 先看是否已被锁（全局冻结优先报出来 —— 它连正常用户一起挡，用户需要知道原因）
     const st = loginGuard.status(ip);
     if (st.blocked) {
@@ -2494,6 +2526,7 @@ async function handleLogin(request, response) {
 }
 
 function loginPageHtml() {
+    const authPathHtml = String(AUTH_FILE).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -2542,6 +2575,10 @@ function loginPageHtml() {
   }
   button:hover { background:#98ad5c; }
   button:active { transform: translateY(1px); }
+  /* 忘记密码：次要按钮，别抢主按钮的位置 */
+  button.forgot { margin-top:10px; padding:9px; background:transparent; color:#738746; border:1px solid #d9c7c0; font-size:13px; font-weight:600; }
+  button.forgot:hover { background:#f8f5f2; }
+  .forgot-hint { margin-top:10px; padding:10px 12px; background:#f8f5f2; border:1px solid #e9ddda; border-radius:10px; text-align:left; }
   .err { min-height:18px; margin:10px 0 0; font-size:12px; color:#d9541f; }
   .divider { height:1px; background:#e9ddda; margin:18px 0 14px; }
   .hint { margin:0; font-size:11.5px; line-height:1.75; color:#765e52; }
@@ -2553,16 +2590,21 @@ function loginPageHtml() {
   <div class="card">
     <div class="eyebrow">ElainaChat Mod · 局域网访问</div>
     <h1>需要访问密码</h1>
-    <p class="sub">这台设备不是本机，请输入访问密码后进入。</p>
+    <p class="sub">这台设备需要访问密码，请输入后进入。</p>
     <form id="loginForm">
       <input id="pwd" type="password" placeholder="访问密码" autocomplete="current-password" autofocus>
       <button type="submit">进入</button>
     </form>
     <p class="err" id="err"></p>
+    <button type="button" class="forgot" id="forgotBtn">忘记密码？</button>
+    <p class="hint forgot-hint" id="forgotHint" style="display:none">
+      忘记密码只能重置：删除这个文件后重启应用 —— <code>${authPathHtml}</code><br>
+      删除后应用会回到「尚未设置密码」状态（局域网接口关闭，只有本机能用），再重新设置即可。
+    </p>
     <div class="divider"></div>
     <p class="hint">
-      密码显示在服务端启动的 cmd 窗口里（形如 <code>访问密码: xxxxxxxx</code>）。<br>
-      如果你已经改过密码，请用改后的那个。
+      还没设置密码时只有本机能用；设置之后，本机与局域网设备打开应用都需要输入这个密码。<br>
+      首次设置请在本机的「设置 → 高级 → 访问密码」里完成。
     </p>
     <div class="divider" id="httpsDivider" style="display:none"></div>
     <p class="hint" id="httpsHint" style="display:none">
@@ -2594,6 +2636,11 @@ function loginPageHtml() {
       })
       .catch(function () { /* 拿不到就不显示，不影响登录 */ });
   })();
+
+  document.getElementById('forgotBtn').addEventListener('click', function () {
+    var h = document.getElementById('forgotHint');
+    if (h) h.style.display = h.style.display === 'none' ? 'block' : 'none';
+  });
 
   document.getElementById('loginForm').addEventListener('submit', async function (e) {
     e.preventDefault();
@@ -2724,15 +2771,6 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/auth/login' && request.method === 'POST') {
             return await handleLogin(request, response);
         }
-        // 退出登录
-        if (pathname === '/api/auth/logout' && request.method === 'POST') {
-            const token = parseCookies(request)[SESSION_COOKIE] || '';
-            if (token) sessions.delete(token);
-            return jsonResponse(response, 200, { ok: true }, {
-                'Set-Cookie': SESSION_COOKIE + '=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
-            });
-        }
-
         // 访问控制：本机（管理员）放行，其余必须已登录
         if (!isAuthenticated(request)) {
             if (pathname.startsWith('/api/')) {
@@ -2909,8 +2947,7 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/data/export' && request.method === 'GET') {
             let body;
             try {
-                const packages = await packageBackup.collect();
-                body = await store.exportZip(packages.entries, packages.counts);
+                body = await buildBackupBuffer();
             } catch (err) {
                 // 插件目录读不到（被占用 / 权限）时不能悄悄退回"只导出 data/"：
                 // 用户会以为备份是全的，换机器时才发现插件全没了。
@@ -2993,7 +3030,13 @@ const requestHandler = async (request, response) => {
             });
         }
 
-        // 鉴权状态（供设置页展示：是否本机管理员、是否仍是初始随机密码）
+        // 局域网共享数据：与「我的数据」的导出 / 导入配套。
+        // 放在这里是因为它同属 /api/data/*；仍走上面的鉴权闸门。
+        if (pathname.startsWith(LAN_SHARE_PREFIX + '/')) {
+            if (await lanShare.handle(request, response, { pathname, url })) return;
+        }
+
+        // 鉴权状态（供设置页展示：是否本机管理员、是否已设置访问密码）
         // 注意：初始明文密码只回给本机管理员，局域网会话拿不到（避免"能登录的人就能拿到明文密码"）
         if (pathname === '/api/auth/status' && request.method === 'GET') {
             const admin = isAdmin(request);
@@ -3002,12 +3045,15 @@ const requestHandler = async (request, response) => {
                 isAdmin: admin,
                 isDefaultPassword: Boolean(auth && auth.isDefault),
                 passwordHint: (admin && auth && auth.isDefault && auth.password) ? auth.password : '',
+                // 本机管理员才拿到真实路径：重置密码要删的就是它（DATA_DIR 可被环境变量覆盖，
+                // 所以这里回实际路径而不是写死 data/auth.json）。
+                authFile: admin ? AUTH_FILE : '',
             });
         }
-        // 修改访问密码（仅本机管理员；这也是忘记密码时的找回入口）
+        // 修改访问密码（仅本机、且已登录；忘记密码只能删 data/auth.json 重置）
         if (pathname === '/api/auth/change-password' && request.method === 'POST') {
-            if (!isAdmin(request)) {
-                return jsonResponse(response, 403, { ok: false, message: '只有本机（管理员）可以修改访问密码' });
+            if (!isAdmin(request) || !isAuthenticated(request)) {
+                return jsonResponse(response, 403, { ok: false, message: '只有本机（已登录的管理员）可以修改访问密码' });
             }
             let body;
             try { body = await readJsonBody(request); } catch { return jsonResponse(response, 400, { ok: false, message: '请求无效' }); }
@@ -3026,7 +3072,7 @@ const requestHandler = async (request, response) => {
             console.log('[鉴权] 访问密码已更新（局域网设备需重新登录）');
             return jsonResponse(response, 200, {
                 ok: true,
-                message: '访问密码已更新，局域网设备需要重新登录',
+                message: '访问密码已更新，本机与局域网设备都需要重新登录',
                 minLength: PWD_MIN_LEN,
             });
         }
@@ -3888,6 +3934,13 @@ if (httpsServer) {
 }
 
 const muxSocket = (socket) => {
+    // 未设置访问密码时，局域网接口**直接关闭**：非回环地址的连接不进 HTTP / TLS，
+    //   也不回任何提示，直接销毁 socket（客户端看到的是连接被重置）。
+    //   本机回环照常可用；设置密码后新连接立即放行，不需要重启。
+    if (!hasAccessPassword() && !isLocalRequest({ socket })) {
+        try { socket.destroy(); } catch (e) { /* 已关 */ }
+        return;
+    }
     // 客户端"连上又立刻断开"（浏览器 DevTools 的自动探测就是连上→发半截→RST）会让
     // 裸 socket 抛 ECONNRESET —— 分路发生在首包之后，分路之前没人接这个错误，
     // 未捕获的 'error' 事件会带崩整个进程（实测：壳版 WebView2 里整服务退出）。
@@ -3936,7 +3989,8 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
     // （设置页 / 登录页），日志里刷一遍只会让机器与人更难提取有用信息。
     // 日志行回答"什么在什么端口、装了什么插件、密码是不是初始的"这些**事实**。
     const urls = ['http://127.0.0.1:' + port];
-    if (host === '0.0.0.0' || host === '::') {
+    // 没设置访问密码时局域网接口是关闭的，不再把局域网地址当成可用入口印出来。
+    if ((host === '0.0.0.0' || host === '::') && hasAccessPassword()) {
         for (const ip of localIPv4List()) urls.push('http://' + ip + ':' + port);
     }
     console.log(`[boot] listening on ${urls.join(', ')} (HTTP+HTTPS on the same port)`);
@@ -3945,10 +3999,9 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
     // 地址用**实际监听到的端口**：端口漂移过之后，写着 3999 的地址是打不开的。
     openBrowser('http://127.0.0.1:' + port);
 
-    // 访问密码：只有仍是初始随机密码时才打明文（用户没别的地方看它）。
-    // 用户自己设置过之后，这里只剩一行事实，不再重复提示。
+    // 访问密码：默认状态是「尚未设置」，局域网设备因此在设置密码前不可用。
     if (authInfo.isDefault) {
-        console.log(`[auth] LAN access password (initial, change it in Settings → Advanced): ${authInfo.password}`);
+        console.log('[auth] LAN access password: not set (set one in Settings → Advanced before LAN devices can connect)');
     } else {
         console.log('[auth] LAN access password: user-configured');
     }

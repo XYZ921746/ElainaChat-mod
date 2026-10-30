@@ -191,6 +191,17 @@ function getRecentHistoryMessages(text) {
             });
             continue;
         }
+        // hidden 的助手消息不是"AI 真说过的话"，而是系统塞进去的操作结果（手机 / 文件等）。
+        //   按 assistant 下发，模型会把那段结果（尤其手机控件树）当成自己的上一句去模仿，
+        //   表现出来的就是"AI 突然输出一堆控件树代码"。所以按 user 下发，并明确标成内部观察。
+        if (m.role !== 'user' && m.hidden === true && !(Array.isArray(m.toolCalls) && m.toolCalls.length)) {
+            history.push({
+                role: 'user',
+                content: '【系统内部观察结果（不是用户发言）；只当判断下一步的依据，绝不要复述或转述给用户】\n'
+                    + String(extractTextContent(m.text) || ''),
+            });
+            continue;
+        }
         const role = m.role === 'user' ? 'user' : 'assistant';
         const content = role === 'assistant'
             ? (stripThinkTags(extractTextContent(m.text)) || ' ')

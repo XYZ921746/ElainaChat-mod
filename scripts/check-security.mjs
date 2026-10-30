@@ -301,27 +301,29 @@ async function caseSecurityHardening(c) {
 
                     let up = false;
                     for (let i = 0; i < 75; i++) {
-                        try { const r = await fetch(`http://${LAN}:${port}/api/server-info`); if (r.status) { up = true; break; } }
+                        try { const r = await fetch(`http://127.0.0.1:${port}/api/server-info`); if (r.status) { up = true; break; } }
                         catch { await c.wait(200); }
                     }
-                    c.ok(up, '服务已就绪（经局域网地址 ' + LAN + ' 访问）', up ? '' : out.slice(-400));
+                    c.ok(up, '服务已就绪（本机回环）', up ? '' : out.slice(-400));
 
                     if (up) {
-                        // 非本机访问必须登录。
-                        // ★ 密码的抓取要**容忍文案改版**（2026-09 两次踩到）：
-                        //   日志格式已改为英文事实行：`[auth] LAN access password (initial, …): xxx`。
-                        //   每次日志改版这里都要跟 —— 抓不到 → pwd 空 → 登录 401
-                        //   → 后面所有 SSRF 断言连锁失败（假故障，不是安全问题）。
-                        //   按历史格式从新到旧依次回落。
-                        const pwd = (out.match(/access password[^:\n]*:\s*(\S+)/i) || [])[1]
-                            || (out.match(/访问密码[^：:\n]{0,20}[:：]\s*(\S+)/) || [])[1]
-                            || (out.match(/要输这个密码\s*\n\s*(\S+)/) || [])[1]
-                            || '';
-                        c.ok(Boolean(pwd), '能从启动日志里抓到访问密码（后续登录要用）',
-                            pwd ? '' : '日志格式可能又变了，检查 check-security.mjs 的抓取正则');
+                        // 规则：没有设置访问密码时，局域网接口直接关闭 —— 非回环连接会被
+                        // 直接销毁（客户端拿不到任何 HTTP 响应），而不是回一句"没有密码"。
+                        let lanClosed = false;
+                        try { await fetch(`http://${LAN}:${port}/api/server-info`); }
+                        catch { lanClosed = true; }
+                        c.ok(lanClosed, '未设置访问密码时局域网接口直接关闭（非回环连接被拒）');
+
+                        const TEST_PWD = 'CheckSec1234';
+                        const setPwd = await fetch(`http://127.0.0.1:${port}/api/auth/change-password`, {
+                            method: 'POST', headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ next: TEST_PWD }),
+                        });
+                        c.ok(setPwd.status === 200, '本机设置访问密码成功（局域网才开始可用）', 'HTTP ' + setPwd.status);
+
                         const login = await fetch(`http://${LAN}:${port}/api/auth/login`, {
                             method: 'POST', headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ password: pwd }),
+                            body: JSON.stringify({ password: TEST_PWD }),
                         });
                         const cookie = (login.headers.getSetCookie?.() || []).map((x) => x.split(';')[0]).join('; ');
                         c.ok(login.status === 200 && Boolean(cookie), '以局域网身份登录成功（后续才能调中转）', 'HTTP ' + login.status);

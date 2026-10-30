@@ -785,6 +785,12 @@ html.rd .ai-voice-player {
 html.rd .ai-voice-player:hover { background: var(--rd-hover) !important; }
 html.rd .voice-duration { color: var(--rd-text-2) !important; }
 html.rd .voice-waveform i { background: var(--rd-accent) !important; }
+html.rd .ai-voice-player.is-error {
+    background: var(--rd-warn-bg) !important;
+    box-shadow: inset 0 0 0 1px var(--rd-warn-border) !important;
+}
+html.rd .ai-voice-player.is-error .voice-wave-bar { background: var(--rd-warn) !important; }
+html.rd .ai-voice-error { color: var(--rd-warn) !important; }
 
 html.rd #thinking-bubble {
     max-width: 100%;

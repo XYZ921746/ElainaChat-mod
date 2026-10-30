@@ -14,7 +14,9 @@ async function callAI(text, options = {}) {
     //   两个同时成立才走转述，否则图片直接交给主模型（多模态时这是更优路径）。
     const hasVision = state.settings.visionEnabled === true
         && Boolean(String(state.settings.visionBaseUrl || '').trim() && String(state.settings.visionModel || '').trim());
-    if (hasImage && hasVision) {
+    // directImage：调用方（手机截图链路）要求把图片**原样**交给主模型，而不是先交给视觉模型转述 ——
+    //   主模型是多模态时它就能真正"看到画面"；不支持图片时由下面的 catch 去掉图片重试。
+    if (hasImage && hasVision && !options.directImage) {
         try {
             // 多模态模型直接处理图片 + 用户消息，返回其回应
             const visionReply = await describeImageWithVision(text, options.imageDataUrl);
@@ -48,7 +50,7 @@ async function callAI(text, options = {}) {
             // 明确失败，不再把图片丢给主模型（避免主模型报 "not multimodal" 之类误导错误）
             throw new ClientApiError('VISION_FAILED', '图片转述失败：' + visionErr);
         }
-    } else if (hasImage && !hasVision) {
+    } else if (hasImage && !hasVision && !options.directImage) {
         // 未配置视觉模型：图片直接给当前模型，会话内提示一次
         if (!state._visionHintShown) {
             state._visionHintShown = true;
@@ -82,8 +84,9 @@ async function callAI(text, options = {}) {
     // 记下"这次到底有没有带图片"，供 400 报错时决定要不要提图片原因。
     // 用合并前的 hasImage：走视觉模型转述成功时 options.imageDataUrl 已被清空，
     // 但那次请求确实处理过图片，报错提示理应还能提到图片。
+    let reply;
     try {
-        return await callChatAPI(messages, {
+        reply = await callChatAPI(messages, {
             thinking: Boolean(state.settings.thinkingMode),
             // 思考强度：只在开思考时有意义（关着的时候 provider 会发 disabled，
             // 带上档位也无害，但不传更干净）。
@@ -108,9 +111,38 @@ async function callAI(text, options = {}) {
             replyInfo: options.replyInfo || null
         });
     } catch (err) {
+        // 主模型不收图片（纯文本模型）：去掉图片重试一次，退回文字
+        //   （手机截图链路里还带着可点元素清单，照样能操作）。
+        const visionUnsupported = /not a multimodal|not multimodal|does not support (image|vision)|vision.*not supported|multimodal model|image.*not supported|不支持.{0,4}图片|无法.{0,4}图片/i
+            .test(String((err && err.message) || err));
+        if (hasImage && options.directImage && !options.imageRetried && visionUnsupported) {
+            console.warn('[Agent] 主模型不支持图片，改用文字继续：', (err && err.message) || err);
+            state._agentImageUnsupported = true;
+            try {
+                if (typeof rememberModelImageVerdict === 'function') {
+                    rememberModelImageVerdict(false, state.settings.baseUrl, state.settings.model);
+                }
+            } catch (e) { /* 缓存失败不该挡住回退 */ }
+            if (!state._agentImageUnsupportedShown) {
+                state._agentImageUnsupportedShown = true;
+                showCustomAlert('当前主模型不支持图片，所以这次"看屏幕"只能读到文字（控件清单）。\n\n'
+                    + '想真正让它看图：把「设置 → 模型」里的对话模型换成多模态模型'
+                    + '（如 Qwen-VL / GLM-4V / GPT-4o），或在「视觉模型」里配一个。', '主模型不支持图片');
+            }
+            return callAI(text, Object.assign({}, options, { imageDataUrl: '', directImage: false, imageRetried: true }));
+        }
         if (hasImage && err instanceof ClientApiError) err.imageHint = true;
         throw err;
     }
+    // 主模型真的收下并处理了图片 → 记下"它能看图"（供设置页提示与手机操作判断）。
+    if (hasImage && options.directImage) {
+        try {
+            if (typeof rememberModelImageVerdict === 'function') {
+                rememberModelImageVerdict(true, state.settings.baseUrl, state.settings.model);
+            }
+        } catch (e) { /* 缓存失败不该影响回复 */ }
+    }
+    return reply;
 }
 
 /**

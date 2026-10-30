@@ -3162,6 +3162,23 @@
             from { transform: scaleY(.45); opacity: .65; }
             to { transform: scaleY(1); opacity: 1; }
         }
+        .ai-voice-player.is-error {
+            background: var(--pixso-warn-bg, rgba(255, 247, 237, .75));
+            box-shadow: inset 0 0 0 1px var(--pixso-warn-line, #e8cf9e);
+        }
+        .ai-voice-player.is-error:hover { background: var(--pixso-warn-bg, rgba(255, 247, 237, .9)); }
+        .ai-voice-player.is-error .voice-wave-bar { background: var(--pixso-warn, #b45309); }
+        .ai-voice-error {
+            display: block;
+            margin-top: 4px;
+            padding: 0 2px;
+            color: var(--pixso-warn, #b45309);
+            font-size: 10.5px;
+            font-weight: 600;
+            line-height: 1.45;
+            white-space: normal;
+        }
+        .ai-voice-error[hidden] { display: none; }
 
         #inputBar {
             padding: 14px 32px 20px;
@@ -6185,6 +6202,7 @@
                                 </div>
                                 <button id="fetchChatModelsBtn" class="btn-secondary text-xs flex-none" type="button" title="从当前 API 地址拉取可用模型列表">获取模型</button>
                             </div>
+                            <p id="chatModelVisionHint" class="text-[11px] text-indigo-300 leading-relaxed mt-1"></p>
                         </div>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">API Key（Ollama 本地可留空）</label>
@@ -6193,6 +6211,7 @@
                     </div>
                     <div class="flex flex-wrap gap-2 mt-3">
                         <button id="testChatConnectionBtn" type="button" class="btn-secondary text-xs">测试对话连接</button>
+                        <button id="probeChatModelVisionBtn" type="button" class="btn-secondary text-xs" title="发一个 1×1 小图探测当前对话模型是否接受图片">检测图片能力</button>
                         <button id="clearApiKeysBtn" type="button" class="btn-secondary text-xs">清除全部 API Key</button>
                     </div>
                     <p id="chatFormatHint" class="text-[11px] text-indigo-300 leading-relaxed mt-2">请求从当前设备直接发给所选服务商，不经过作者服务器。Android Key 使用系统 Keystore 加密；Web Key 仅保存在当前标签页会话。</p>
@@ -7029,8 +7048,13 @@
                         <div class="flex flex-wrap items-center gap-2">
                             <button id="dataExportBtn" class="btn-secondary text-xs" type="button">导出备份</button>
                             <button id="dataImportBtn" class="btn-secondary text-xs" type="button">导入备份</button>
+                            <button id="lanShareOpenBtn" class="btn-secondary text-xs" type="button">开启局域网共享</button>
+                            <button id="lanShareReceiveBtn" class="btn-secondary text-xs" type="button">局域网接收共享</button>
                             <input id="dataImportFile" type="file" accept=".zip,.json,application/zip,application/json" class="hidden">
                             <span id="dataActionHint" class="text-[11px] text-indigo-300"></span>
+                        </div>
+                        <div id="lanShareHintLine" class="text-[11px] text-indigo-300 leading-relaxed mt-1">
+                            局域网共享：「开启」后把弹窗里的 IP、端口和访问密码告诉对方；对方点「局域网接收共享」填进去即可导入。
                         </div>
                     </section>
 
@@ -7041,12 +7065,10 @@
                             <input id="authNewPwd" type="password" class="modal-input text-sm w-40 py-1.5" placeholder="新密码（≥8位，含数字+大小写）" autocomplete="new-password">
                             <input id="authNewPwd2" type="password" class="modal-input text-sm w-40 py-1.5" placeholder="再输一次" autocomplete="new-password">
                             <button id="authChangeBtn" class="btn-secondary text-xs" type="button">修改访问密码</button>
-                            <button id="authLogoutBtn" class="btn-secondary text-xs" type="button">退出登录</button>
                         </div>
                         <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
-                            本机（127.0.0.1）访问自动视为管理员，免密码，也是忘记密码时的重设入口。
-                            手机/平板等局域网设备必须输入访问密码才能进入。密码显示在服务端启动的 cmd 窗口里，
-                            改过之后控制台不再显示明文。
+                            未设置密码时，本机（127.0.0.1）免密可用。设置密码后，<b>本机与局域网设备打开应用都需要输入密码</b>。<br>
+                            忘记密码只能重置：删除数据目录下的 <code>auth.json</code> 后重启应用（登录页的「忘记密码？」会显示实际路径）。
                         </p>
 
                         <!-- 密码强度与防爆破说明。
@@ -7064,8 +7086,7 @@
                                     且失败次数<b>只在登录成功后才清零</b> —— 持续攻击只会越锁越久。</li>
                                 <li>· 另有全局限流：即使攻击者不断更换 IP，失败次数累计到阈值后
                                     <b>全部登录会临时冻结</b>（正常设备也会被挡，这是全局限流固有的代价）。</li>
-                                <li>· 初始随机密码是 12 位（字符集排除了 0/O、1/l/I 这类易混字符），强度足够；
-                                    若要改，请按上面的规则来。</li>
+                                <li>· 必须主动设置密码后本机与局域网设备才能进入；没设置时只有本机可用（局域网接口关闭）。</li>
                             </ul>
                         </div>
                     </section>
