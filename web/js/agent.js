@@ -72,10 +72,10 @@ function phoneTierAllows(action) {
 }
 
 window.agentActions = {
-    openVideoCall() { if (window.Live2DCall) window.Live2DCall.open(); },
-    closeVideoCall() { if (window.Live2DCall) window.Live2DCall.close(); },
+    openVideoCall() { const l2d = live2dService(); if (l2d) l2d.open(); },
+    closeVideoCall() { const l2d = live2dService(); if (l2d) l2d.close(); },
     organizeMemory() { void ElainaOps.invoke('app_memory'); },
-    setLive2dBackground(v) { if (window.Live2DCall) window.Live2DCall.setBackground(v); },
+    setLive2dBackground(v) { const l2d = live2dService(); if (l2d) l2d.setBackground(v); },
     // 文件操作：解析 [操作:列出文件/查看文件/保存文件/删除文件 …] 并执行（权限档位见上）
     agentFileOperation(raw) {
         // `off` 档：电脑操作整体关闭 —— 连服务端都不必问，直接回一句明确说明。
@@ -225,8 +225,8 @@ const AGENT_RISK = {
 
 // Agent 操作定义：两条触发通道（正文标签、原生 function calling）共用这一份 —— 各写一份会让新能力
 //   只在一条通道可用，或者两边的参数规则慢慢走样。「此刻能不能用」写成函数，权限档/开关/平台变了才准。
-//   注意「打开视频通话 / 结束通话」没进注册表：它们走 window.Live2DCall（插件专有全局名，AGENTS.md D3
-//   存量违规），放进新代码等于新增违规；要收进来得先由 Live2D 侧经插槽暴露能力。
+//   注意「打开视频通话 / 结束通话」没进注册表：它们走插件服务（host.service('live2d')），
+//   宿主不直接点插件全局名。
 const pcOpsAvailable = () => !IS_NATIVE_APP && !agentAccessDisabled();
 const phoneOpsAvailable = () => IS_NATIVE_APP && state.settings.agentPhoneEnabled !== false;
 
@@ -3467,9 +3467,10 @@ function maybeAutoExpression(text) {
     // 去掉尾部可能带上的"的"
     name = name.replace(/的$/, '');
     const target = NL_EXPRESSION_MAP[name] || name;
-    if (window.Live2DCall && typeof window.Live2DCall.setExpression === 'function') {
+    const l2d = live2dService();
+    if (l2d && typeof l2d.setExpression === 'function') {
         console.log('[Live2D] 自然语言触发表情:', name, '→', target);
-        void window.Live2DCall.setExpression(target);
+        void l2d.setExpression(target);
         return true;
     }
     return false;

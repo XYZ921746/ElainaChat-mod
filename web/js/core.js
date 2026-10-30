@@ -2890,6 +2890,17 @@ async function callChatAPI(messages, opts = {}, settings = state.settings) {
     return window.ChatProviders.forFormat(format)(normalized, resolvedOpts, settings);
 }
 
+/**
+ * 取 Live2D 插件注册的服务（host.service('live2d')）。
+ * 宿主不直接点名插件的 window 全局名；插件不在/停用时返回 null（D3）。
+ */
+function live2dService() {
+    try {
+        return (window.ElainaMods && typeof window.ElainaMods.service === 'function')
+            ? window.ElainaMods.service('live2d') : null;
+    } catch (e) { return null; }
+}
+
 // ==================== 宿主内部接口（插件系统唯一可依赖的宿主面）====================
 // `mods.js` 的 host API 需要借宿主的内部实现（发消息、渲染 Markdown、弹确认框）。直接 `typeof handleUserInput`
 //   去摸全局名的话，宿主一改名插件就在运行到那一步时炸，而插件作者看不到改名 —— 那正是 host API 该防住的事。

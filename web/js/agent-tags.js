@@ -3,7 +3,7 @@
  *
  * 这套东西不能长在可选的 Live2D mod 里：stripTags / drive / handleAgentOperation 原先都住在
  *   `web/live2d-video.js`，而 handleAgentOperation 是**全部 [操作:…] 标签的唯一分发器**
- *   （文件 / 命令 / 手机 / 记忆）；宿主调用点带着 `if (window.Live2DCall)`。于是 Live2D 一旦不在
+ *   （文件 / 命令 / 手机 / 记忆）；宿主调用点带着 Live2D 全局名判断。于是 Live2D 一旦不在
  *   （被当成可选 mod 卸掉、或那个文件加载失败），后果不是少了视频通话：
  *     ① 整个 Agent 系统失效 —— 文件/命令/手机标签全部不会被执行；
  *     ② 标签漏进可见文本 —— stripTags 也没了，用户直接看到 `[表情:开心]`。
@@ -181,7 +181,7 @@
         if (!t) return;
         dispatchOperations(t);
         try {
-            const presenter = window.Live2DCall;
+            const presenter = live2dService();
             if (presenter && typeof presenter.drivePresentation === 'function') {
                 presenter.drivePresentation(t);
             }

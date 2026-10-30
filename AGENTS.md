@@ -49,7 +49,7 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 - **范围**：`web/js/`
 - **为什么**：B3 —— 宿主引用插件专有全局名后，插件停用/缺失即宿主报错。
 - **判定**：`web/js/**/*.js` 出现 `Live2DCall`、`ElainaLive2DModels`、`window.__live2d`、`window.__l2dm`、`window.ElainaAvatar` 即违反。
-- **当前基线**：见附录；数量以最近一次专项检索输出为准，不以行号为锚点。
+- **当前违反点**：无（2026-10-30 已改走 `host.service('live2d')` / `ElainaMods.service`，宿主不再直接点插件全局名）。
 
 ### D4 插件之间不得用私有全局名通信
 - **范围**：`mods/`
@@ -189,12 +189,6 @@ ElainaChat-mod 是「Mod 优先」的 BYOK AI 角色聊天应用：程序本体�
 
 | 规则 | 违反点（文件 + 可检索符号/片段） | 数量 | 清理优先级 |
 | --- | --- | --- | --- |
-| D3 | `web/js/voice.js` 中 `Live2DCall` / `__live2d` / `__l2dm` / `ElainaAvatar` | 9 | 高 |
-| D3 | `web/js/agent.js` 中同上符号 | 9 | 高 |
-| D3 | `web/js/agent-tags.js` 中同上符号 | 2 | 中 |
-| D3 | `web/js/mods.js` 中同上符号 | 2 | 中 |
-| D3 | `web/js/data.js` 中同上符号 | 1 | 中 |
 
-注：本表数量为 **2026-10-30 专项检索**输出，与 `开发文档.md` 的「规范存量违规」小节同源。D1 / D2 / D4 / D5 已清零；D3 为剩余基线。
-D3 上一轮记录为 29 处 / 6 文件（含 `web/js/store.js` 一行）；本轮复核结果：`web/js/store.js` 为 0 处（该行已删），
-`voice.js` 3 处与 `data.js` 1 处随注释重写**顺带清理**，现为 23 处 / 5 文件。
+注：本表数量为 **2026-10-30 专项检索**输出。**D1–D5 当前均无存量违规**；宿主与插件的通信改走 `host.service` / `ElainaMods.service`。
+D3 的 23 处已随 `host.service` 边界清理归零；宿主不再直接引用插件专有全局名。

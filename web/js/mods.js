@@ -69,6 +69,40 @@
     const loadedScripts = new Set();
 
     /**
+     * 插件服务表：name -> Map(modId -> api)。
+     * 宿主用 ElainaMods.service(name) 找服务，不再写插件专有全局名（D3）。
+     */
+    const services = new Map();
+    function registerService(modId, name, api) {
+        const key = String(name || '').trim();
+        if (!key) return () => {};
+        if (!services.has(key)) services.set(key, new Map());
+        services.get(key).set(modId, api);
+        return () => {
+            const m = services.get(key);
+            if (!m) return;
+            m.delete(modId);
+            if (!m.size) services.delete(key);
+        };
+    }
+    function findService(name) {
+        const key = String(name || '').trim();
+        const m = services.get(key);
+        if (!m) return null;
+        for (const [modId, api] of m) {
+            const entry = registry.get(modId);
+            if (entry && entry.state === 'ready') return api;
+        }
+        return null;
+    }
+    function removeModServices(modId) {
+        for (const [key, m] of services) {
+            m.delete(modId);
+            if (!m.size) services.delete(key);
+        }
+    }
+
+    /**
      * 第三方代码的单次时间上限。
      *
      * 脚本请求可能被服务端/系统占用拖住，初始化函数也可能返回永不 resolve 的 Promise。
@@ -137,6 +171,7 @@
             //   只删目录不释放注册项的话，界面里会留下一个点了没反应的入口
             //   （它指向的插件已经不在了）—— 比"没装过"更难理解。
             disposeContributions(id);
+            removeModServices(id);
             // 工厂也丢掉：重装同一个插件时应当是一次干净的重注册
             pendingRegistrations.delete(id);
             const rn = entry && entry.regName;
@@ -539,6 +574,14 @@
             signal: lifecycle ? lifecycle.signal : undefined,
 
             /**
+             * 注册一个插件服务，供宿主或其它插件按名字取用。
+             * 返回取消函数；停用/卸载时宿主会自动摘掉（不必手动调）。
+             */
+            service(serviceName, api) {
+                return registerService(manifest.id, serviceName, api);
+            },
+
+            /**
              * 取本插件资源的 URL 基址（结尾带 /）。
              *
              * 必须用它而不是自己拼 '/mods/<名字>/…'：插件**声明的 id** 与它**实际被安装成**的目录名
@@ -885,7 +928,7 @@
              *
              * 参数是一份固定清单里的名字（见 HOST_CAPABILITIES），不是任意全局名。
              * 早期版本是 `typeof window[name] !== 'undefined'`，等于把 window 上
-             * 的一切都变成了 API：插件写 `host.has('Live2DCall')` 就能探到另一个
+             * 的一切都变成了 API：插件随便写一个名字就能探到另一个
              * 插件的私有全局名，宿主也没法据这份清单做兼容性判断。名字写错时
              * 现在会明确报出来，而不是安静返回 false。
              */
@@ -2195,7 +2238,7 @@ function restoreDraggedCard(card, ph, parent, draggingClass, panel, panelTransfo
         }
         // 前置插件不可用 → **拒绝加载**，并给出可读原因。
         // 只打一句警告然后照样加载很糟：插件会在"依赖不在"的前提下跑起来 ——
-        // 例如 galgame 拿不到 window.ElainaAvatar，于是自己回落成"没有立绘"，
+        // 例如 galgame 拿不到 elaina-avatar 的接口，于是自己回落成"没有立绘"，
         // 用户看到的是"界面能打开但没有人物"，而设置里那个"缺依赖"角标很容易被忽略。
         // 更麻烦的是**加载顺序失去保证**：依赖可能排在它后面才加载。
         // 所以判定同时看"装没装"与"启用没启用"。"装了但没启用"等于不可用：
@@ -2261,7 +2304,7 @@ function restoreDraggedCard(card, ph, parent, draggingClass, panel, panelTransfo
             //   一个插件拆成"实现主体 / 设置面板 / 注册装配"几个文件时，
             //   装配那个文件（entry）要**调用**其它文件定义的东西 ——
             //   所以它必须在最后执行。反过来（entry 先）会让装配时
-            //   `window.Live2DCall` 还是 undefined，表现为"插件是 ready、
+            //   Live2D 服务还是空，表现为"插件是 ready、
             //   但界面什么都没出现"，而控制台一声不响。
             //   顺序是**声明顺序**，且全部注入完成后才调 factory。
             const entrySrc = manifest.entry || 'index.js';
@@ -3061,6 +3104,8 @@ function restoreDraggedCard(card, ph, parent, draggingClass, panel, panelTransfo
     window.ElainaMods = {
         /** 把旧插件 localStorage 偏好搬进 host.storage（启动时自动调用；测试/诊断可手动调） */
         migrateLegacyStorage: migrateLegacyModStorage,
+        /** 按名字取插件服务（只返回已启用/已就绪的插件注册的服务） */
+        service: findService,
         /**
          * 插件脚本用它注册初始化函数：ElainaMods.register('galgame', (host) => ({...}))
          *

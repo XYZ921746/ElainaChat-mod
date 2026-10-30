@@ -2308,6 +2308,8 @@ ${lines.join('\n')}
       if (!speaking) startMouth();
     },
   };
+  // 宿主按服务名取用，不再直接点 window.Live2DCall（D3）。
+  host.service('live2d', window.Live2DCall);
 
   // 语音音量走宿主事件（见 app-05-voice.js 的说明）。
   // 搬迁后改走 host.on：订阅登记在 mod 系统里，**停用插件时会被自动摘掉**

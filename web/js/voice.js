@@ -1682,8 +1682,8 @@ async function handleUserInput(message, conversation) {
         // （用户的停止只作用于当次操作；AI 下一次回复是新批次，应重新可用）
         if (window.agentRuntime) window.agentRuntime.beginBatch();
         // 标签协议：解析 AI 回复中的 [操作:…] / [表情:…] 等标签。
-        // 走宿主的 ElainaTags，**不再**经过 window.Live2DCall ——
-        //   旧写法是 `if (window.Live2DCall) { drive(); stripTags(); }`，
+        // 走宿主的 ElainaTags，**不再**经过 Live2D 插件全局名 ——
+        //   旧写法是插件在时才 `drive(); stripTags();`，
         //   而 drive() 是全部 [操作:] 标签的唯一分发器（文件/命令/手机/记忆）。
         //   于是"Live2D 不在"就等于"整个 Agent 系统失效 + 标签漏给用户看"。
         //   现在剥离与分发都归宿主，Live2D 只提供表现（表情/动作/口型）。
@@ -1785,9 +1785,10 @@ async function handleUserInput(message, conversation) {
             voiceStarted = true;
             if (presentationMode === 'simultaneous') commitAiMessageOnce();
             markVoicePlaybackStarted(aiMessage.id, estimateVoiceDurationSeconds(textToSpeak));
-            // Live2D：AI 开始说话 → 嘴动
-            if (window.Live2DCall && window.Live2DCall.isOpen()) {
-                window.Live2DCall.speakStart();
+            // Live2D：AI 开始说话 → 嘴动（经宿主服务，不直接点插件全局名）
+            const l2d = live2dService();
+            if (l2d && l2d.isOpen()) {
+                l2d.speakStart();
             }
         };
 
@@ -1818,7 +1819,8 @@ async function handleUserInput(message, conversation) {
         }
         // AI 声音已静音（[操作:静音]）：跳过语音播放，但文字回复照常保留
         // （此前静音只停一下嘴型，TTS 仍会照常播放，等于没静音）
-        if (window.Live2DCall && typeof window.Live2DCall.isVoiceMuted === 'function' && window.Live2DCall.isVoiceMuted()) {
+        const l2dMuted = live2dService();
+        if (l2dMuted && typeof l2dMuted.isVoiceMuted === 'function' && l2dMuted.isVoiceMuted()) {
             pendingAutomaticVoiceMessageIds.delete(automaticVoiceMessageKey);
             console.log('[TTS] AI 声音已静音，跳过语音播放，保留文字回复');
             commitAiMessageOnce();
@@ -1829,8 +1831,9 @@ async function handleUserInput(message, conversation) {
             onEnd: () => {
                 setVoicePlaybackState(aiMessage.id, false);
                 // Live2D：AI 说完 → 闭嘴
-                if (window.Live2DCall && window.Live2DCall.isOpen()) {
-                    window.Live2DCall.speakEnd();
+                const l2dEnd = live2dService();
+                if (l2dEnd && l2dEnd.isOpen()) {
+                    l2dEnd.speakEnd();
                 }
             }
         }).then(result => {
@@ -2048,7 +2051,7 @@ async function saveCachedTtsAudio(key, pcmBuffer, sampleRate, format = 'pcm') {
 
 // 真实语音音量 → Live2D 嘴型（VAD 简化）：播放 TTS 时分析音量驱动模型说话
 // 宿主只负责**报出音量**，谁需要谁订阅（`ElainaMods.on('voice-energy', …)`）。
-//   旧写法是这里直接调 `window.Live2DCall.setVoiceEnergy()` —— 于是"音量"这条
+//   旧写法是这里直接调 Live2D 插件的音量接口 —— 于是"音量"这条
 //   通道把宿主和 Live2D 拴死了：Live2D 一旦变成可装的 mod（默认关闭），
 //   宿主这句调用就会在它没装/没启用时变成空转，而"没装"与"装了但没声音"
 //   从代码上分不出来。

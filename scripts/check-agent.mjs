@@ -1484,6 +1484,7 @@ async function caseTags(c) {
     };
     sandbox.window.window = sandbox.window;
     sandbox.globalThis = sandbox;
+    sandbox.live2dService = () => null;   // 真实页面里由 core.js 提供
     vm.createContext(sandbox);
     vm.runInContext(src, sandbox);
     const T = sandbox.window.ElainaTags;
@@ -1563,11 +1564,16 @@ async function caseTags(c) {
             console,
             window: {
                 agentActions: {},
-                Live2DCall: { drivePresentation: (t) => calls.push('present:' + t.slice(0, 12)) },
+                ElainaMods: {
+                    service: (name) => (name === 'live2d'
+                        ? { drivePresentation: (t) => calls.push('present:' + t.slice(0, 12)) }
+                        : null),
+                },
             },
         };
         sandbox2.window.window = sandbox2.window;
         sandbox2.globalThis = sandbox2;
+        sandbox2.live2dService = () => sandbox2.window.ElainaMods.service('live2d');
         vm.createContext(sandbox2);
         vm.runInContext(src, sandbox2);
         const T2 = sandbox2.window.ElainaTags;
@@ -1581,6 +1587,7 @@ async function caseTags(c) {
         const sandbox3 = { console, window: { agentActions: {} } };
         sandbox3.window.window = sandbox3.window;
         sandbox3.globalThis = sandbox3;
+        sandbox3.live2dService = () => null;
         vm.createContext(sandbox3);
         vm.runInContext(src, sandbox3);
         const T3 = sandbox3.window.ElainaTags;
