@@ -1706,6 +1706,7 @@ async function caseOps(c) {
 
     // 7. 接线：标签通道改走注册表，且两条通道共用同一批执行实现
     const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-result.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-manuals.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-browser.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
     const expectOps = ['file_ls', 'file_read', 'file_write', 'file_delete', 'pc_command', 'phone', 'app_memory', 'recall_search', 'browser', 'web_search', 'agent_help'];
