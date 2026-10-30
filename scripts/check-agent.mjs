@@ -429,7 +429,8 @@ async function caseContinue(c) {
     //   界面上写着"完成"，模型却读到"失败"，下一句就向用户道歉说文件没建成。
     //   文件其实好好地在桌面上。
     const agentSrc2 = readWebFile('js/agent-phone.js') + '\n'
-        + readWebFile('js/agent-tools.js') + '\n' + readWebFile('js/agent.js');
+        + readWebFile('js/agent-tools.js') + '\n' + readWebFile('js/agent-continue.js')
+        + '\n' + readWebFile('js/agent.js');
     const voiceSrc2 = readWebFile('js/voice.js');
     const uiSrc2 = readWebFile('js/ui.js');
     // extractFnFrom 按大括号配平取值，遇到注释/字符串里的大括号会跑偏
@@ -1709,6 +1710,7 @@ async function caseOps(c) {
     const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-result.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-manuals.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-tools.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-continue.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent-browser.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
     const expectOps = ['file_ls', 'file_read', 'file_write', 'file_delete', 'pc_command', 'phone', 'app_memory', 'recall_search', 'browser', 'web_search', 'agent_help'];
