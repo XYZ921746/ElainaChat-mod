@@ -1702,7 +1702,9 @@ async function caseBirthday(c) {
     const themeJs = read(path.join(WEB, 'js', 'theme.js'));
     const themesCss = read(path.join(WEB, 'css', 'themes.css'));
     const storeJs = read(path.join(WEB, 'js', 'store.js'));
-    const modsJs = read(path.join(WEB, 'js', 'mods.js'));
+    const modsJs = read(path.join(WEB, 'js', 'mods-storage.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-host-extras.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods.js'));
     const dataJs = read(path.join(WEB, 'js', 'data.js'));
     const initJs = read(path.join(WEB, 'js', 'init.js'));
     const achJs = read(path.join(WEB, 'js', 'achievements.js'));

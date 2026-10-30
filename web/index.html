@@ -7557,7 +7557,9 @@
          必须排在 init.js **之前**：初始化会读插件清单来渲染
          「设置 → 插件」那一栏，加载器没就位的话那一栏会是空的。
          但它要排在 core～settings 之后 —— 插件拿到的宿主 API 依赖这些模块已定义。 -->
-    <script src="/js/mods.js"></script>
+    <script src="/js/mods-storage.js"></script>
+<script src="/js/mods-host-extras.js"></script>
+<script src="/js/mods.js"></script>
     <!-- 宿主插槽清单（★ 插件作者看这一个文件就知道能挂在哪）。
          必须排在 mods.js **之后**（要用 ElainaMods.defineSlot）、init.js **之前**。
          为什么单独成文件：插槽是 mod 系统与宿主界面之间**唯一的契约面**，

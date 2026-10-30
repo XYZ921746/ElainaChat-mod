@@ -439,98 +439,22 @@
      * @param {object} manifest 清单条目
      * @param {string} [regName] 插件脚本里 register() 用的名字（缺省 = manifest.id）
      */
-    // 存在宿主的一个 Store 键里按插件 id 分区：插件要跨重启记住状态，却拿不到宿主的 Store 内部键；
-    // 自己写 localStorage 又进不了 data/（不跨设备、不进备份）。
-    // 这个键必须列在 store.js 的 DATA_KEYS 白名单里，否则写入只进内存缓存、刷新即丢。
-    const MOD_STORAGE_KEY = 'elaina_mod_storage';
-    /** 单个插件的私有存储上限（按它自己那一片算）：防止一个失控插件撑爆共享键 */
-    const MOD_STORAGE_MAX_BYTES = 1024 * 1024;
+    let _modsStorage = null;
+    function modsStorageApi() {
+        if (!_modsStorage) _modsStorage = window.createModsStorage(typeof Store === 'undefined' ? null : Store);
+        return _modsStorage;
+    }
+    function readModStorage() { return modsStorageApi().readModStorage(); }
+    function writeModStorage(all) { return modsStorageApi().writeModStorage(all); }
+    function createModStorage(modId) { return modsStorageApi().createModStorage(modId); }
+    function migrateLegacyModStorage() { return modsStorageApi().migrateLegacyModStorage(); }
 
-    function readModStorage() {
-        try {
-            const raw = Store.getItem(MOD_STORAGE_KEY);
-            const o = raw ? JSON.parse(raw) : null;
-            return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
-        } catch (e) { return {}; }
-    }
-    function writeModStorage(all) {
-        try { Store.setItem(MOD_STORAGE_KEY, JSON.stringify(all)); } catch (e) { /* 忽略 */ }
-    }
-    /** 造一块"带插件命名空间"的存储（值须 JSON 可序列化；读回来是原值） */
-    function createModStorage(modId) {
-        const mine = () => {
-            const v = readModStorage()[modId];
-            return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
-        };
-        return {
-            get(key, fallback) {
-                const o = mine();
-                return Object.prototype.hasOwnProperty.call(o, String(key))
-                    ? o[String(key)]
-                    : (fallback === undefined ? null : fallback);
-            },
-            set(key, value) {
-                const all = readModStorage();
-                const cur = (all[modId] && typeof all[modId] === 'object' && !Array.isArray(all[modId])) ? all[modId] : {};
-                cur[String(key)] = value;
-                // 上限保护（按**本插件**的那一片算，不牵连别的插件）：
-                //   这块存储整体落在一个 Store 键里、还要跨设备同步，一个失控的
-                //   插件（循环里 append）能把它撑到几十 MB，之后每次保存/同步都
-                //   变慢，而用户看不出是谁干的。超限直接拒绝并说清。
-                let size = 0;
-                try { size = JSON.stringify(cur).length; } catch (e) { size = 0; }
-                if (size > MOD_STORAGE_MAX_BYTES) {
-                    throw new Error('本插件的 host.storage 超过上限（' + Math.round(MOD_STORAGE_MAX_BYTES / 1024)
-                        + ' KB），本次写入被拒绝。请清理不再需要的数据。');
-                }
-                all[modId] = cur;
-                writeModStorage(all);
-                return value;
-            },
-            remove(key) {
-                const all = readModStorage();
-                const cur = (all[modId] && typeof all[modId] === 'object' && !Array.isArray(all[modId])) ? all[modId] : {};
-                delete cur[String(key)];
-                all[modId] = cur;
-                writeModStorage(all);
-            },
-            keys() { return Object.keys(mine()); },
-            all() { return { ...mine() }; },
-        };
-    }
-
-    /**
-     * 旧插件把偏好存在浏览器 localStorage；迁到 host.storage 时一次性搬过来。
-     * 只认已知的插件前缀，绝不碰宿主的设置/密钥键。目标键已存在时保留新值，
-     * 这样重复启动不会把用户后来改过的设置覆盖回旧值。
-     */
-    const LEGACY_MOD_STORAGE = [
-        { prefix: 'elaina_pet_', modId: 'pet', stripPrefix: true },
-        { prefix: 'elaina_galgame_', modId: 'galgame', stripPrefix: true },
-        { prefix: 'galgame.live2d.', modId: 'galgame', stripPrefix: false },
-        { prefix: 'live2d.', modId: 'galgame', stripPrefix: false },
-    ];
-    function migrateLegacyModStorage() {
-        let ls = null;
-        try { ls = window.localStorage; } catch (e) { return; }
-        if (!ls) return;
-        const all = readModStorage();
-        let changed = false;
-        for (const rule of LEGACY_MOD_STORAGE) {
-            let bucket = all[rule.modId];
-            if (!bucket || typeof bucket !== 'object' || Array.isArray(bucket)) bucket = all[rule.modId] = {};
-            for (let i = 0; i < ls.length; i++) {
-                const key = ls.key(i);
-                if (!key || key.indexOf(rule.prefix) !== 0) continue;
-                const target = rule.stripPrefix ? key.slice(rule.prefix.length) : key;
-                if (!target || Object.prototype.hasOwnProperty.call(bucket, target)) continue;
-                const value = ls.getItem(key);
-                if (value === null) continue;
-                bucket[target] = value;
-                changed = true;
-            }
+    let _hostExtras = null;
+    function getHostExtras() {
+        if (!_hostExtras) {
+            _hostExtras = window.ElainaModsHostExtras({ bindFlatDragSort, host, addContribution });
         }
-        if (changed) writeModStorage(all);
+        return _hostExtras;
     }
 
     function createHostApi(manifest, regName, lifecycle) {
@@ -545,12 +469,13 @@
         const groups = declaredApiGroups(manifest, log);
         const hasGroup = (g) => groups.has(g);
         const ctx = { manifest, name, log, groups, lifecycle };
+        const extras = getHostExtras();
         return {
             ...coreHostApi(ctx),
-            ...(hasGroup('openFolder') ? openFolderHostApi(ctx) : {}),
-            ...(hasGroup('dragSort') ? dragSortHostApi(ctx) : {}),
-            ...(hasGroup('theme') ? themeHostApi(ctx) : {}),
-            ...(hasGroup('achievements') ? achievementsHostApi(ctx) : {}),
+            ...(hasGroup('openFolder') ? extras.openFolderHostApi(ctx) : {}),
+            ...(hasGroup('dragSort') ? extras.dragSortHostApi(ctx) : {}),
+            ...(hasGroup('theme') ? extras.themeHostApi(ctx) : {}),
+            ...(hasGroup('achievements') ? extras.achievementsHostApi(ctx) : {}),
         };
     }
 
@@ -961,126 +886,6 @@
      *
      * @returns {Promise<{ok:boolean, path?:string, message?:string}>}
      */
-    function openFolderHostApi({ manifest }) {
-        return {
-            async openFolder(sub) {
-                // 目录名不一定等于 manifest.id（A9）：安装目录被改过名时服务端只认
-                //   目录名，按 id 拼出来的路径不存在 —— 先试目录名，再试身份。
-                //   两个都失败才报错；报错里带上服务端的长文案（含"它的目录叫什么"）。
-                // modDir 会做 URL 编码，而目录要当**查询参数**（服务端再解一次），
-                //   所以这里取未编码的原始目录名。
-                const rawDir = manifest && typeof manifest.dir === 'string' ? manifest.dir.trim() : '';
-                const names = [rawDir, manifest.id]
-                    .filter((v, i, a) => v && a.indexOf(v) === i);
-                const url = (which) => {
-                    const q = new URLSearchParams({ id: which });
-                    if (sub) q.set('sub', String(sub));
-                    return '/api/plugins/open-folder?' + q.toString();
-                };
-                let message = '';
-                for (const which of (names.length ? names : [manifest.id])) {
-                    try {
-                        const res = await fetch(url(which), { method: 'POST' });
-                        const data = await res.json().catch(() => null);
-                        if (res.ok && data && data.ok) return { ok: true, path: data.path };
-                        message = (data && data.message) || ('HTTP ' + res.status);
-                        // 只对"目录不存在"换下一个名字；其它失败（越界 / 非法 / 403 / 500）重试无意义
-                        const retryable = /目录不存在|目录名|Not found|HTTP 404/.test(message) || res.status === 404;
-                        if (!retryable) break;
-                    } catch (e) {
-                        message = String((e && e.message) || e);
-                    }
-                }
-                return { ok: false, message };
-            },
-        };
-    }
-
-    /**
-     * 给一组 `.mod-card` 元素绑定拖拽排序（与插件页同一套手感）。
-     *
-     *   const stop = host.dragSort(container, (ids) => save(ids));
-     *
-     * 由宿主实现：指针捕获、FLIP 动画、占位块、Esc 取消、触屏这些细节各写一份必然分叉，
-     *   而"某个列表拖起来手感不一样"是最难解释的那类不一致。
-     * 只改**显示顺序**：宿主不解释 id 语义、不碰加载顺序；持久化交给调用方在自己的 onDone 里。
-     */
-    function dragSortHostApi() {
-        return {
-            dragSort(container, onDone) {
-                return bindFlatDragSort(container, onDone);
-            },
-        };
-    }
-
-    /**
-     * `host.theme({ id, name, dots, vars })` —— 把一套配色注册进
-     * 「设置 → 外观」的主题选择器，用 vars（CSS 变量表）落成样式。
-     *
-     *   host.theme({
-     *     id: 'stardust', name: '星屑之日',
-     *     dots: ['#ded8e8', '#b8934a', '#fbf7ef'],
-     *     vars: { '--pixso-canvas': '#ded8e8', '--pixso-green': '#6d6aa8', … },
-     *   });
-     *
-     * 启用时注册、停用/卸载时**自动摘除**（走与插槽同一套贡献回收）；用户正停在它上面时回落默认主题。
-     * 只给"浅色"var：深色由宿主的深色块统一覆盖（见 theme.js 的说明）。
-     * @returns {{ok:boolean, id:string}}
-     */
-    function themeHostApi({ manifest, log }) {
-        return {
-            theme(spec) {
-                const t = { ...(spec || {}) };
-                if (!t.id) { log('warn', 'host.theme 需要 id'); return { ok: false, id: '' }; }
-                const apply = () => {
-                    const th = host().theme;
-                    try {
-                        if (th && typeof th.registerTemplate === 'function') return th.registerTemplate(t) !== false;
-                    } catch (e) { /* 忽略 */ }
-                    return false;
-                };
-                const undo = () => {
-                    const th = host().theme;
-                    try {
-                        if (th && typeof th.unregisterTemplate === 'function') th.unregisterTemplate(t.id);
-                    } catch (e) { /* 忽略 */ }
-                };
-                addContribution(manifest.id, { activate: apply, deactivate: undo, dispose: undo });
-                return {
-                    ok: true,
-                    id: String(t.id),
-                    /** 临时切到这套主题（记住切换前的那套，供 restore() 还原） */
-                    use() {
-                        try { return host().theme?.useTemplate?.(t.id) ?? null; } catch (e) { return null; }
-                    },
-                    /** 还原到 use() 之前用户用的那套主题 */
-                    restore() {
-                        try { return host().theme?.restoreTemplate?.() ?? null; } catch (e) { return null; }
-                    },
-                };
-            },
-        };
-    }
-
-    /**
-     * `host.unlock(id, detail)` —— 解锁一条**宿主已定义**的成就。
-     *
-     * 成就是宿主的功能（面板、持久化、判定都在宿主），插件只负责"在合适的时机上报"：
-     *   例如生日插件在用户选完开场分支时上报 `stardust_remembered`。
-     *
-     * @returns {boolean} 是否成功（id 不在宿主清单里返回 false）
-     */
-    function achievementsHostApi() {
-        return {
-            unlock(id, detail) {
-                const ac = host().achievements;
-                try {
-                    return Boolean(ac && typeof ac.unlock === 'function' && ac.unlock(id, detail));
-                } catch (e) { return false; }
-            },
-        };
-    }
-
     /** 插件注册的 system 提示词片段：id -> text（**当前生效**的那些） */
     const promptHints = new Map();
 
