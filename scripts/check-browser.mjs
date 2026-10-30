@@ -659,7 +659,8 @@ async function caseMcpClient(c) {
     // ===== MCP 配置体验（模板 / 代码编辑器 / 测试连接 / 格式兼容） =====
     const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mcp-config.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-    const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
+    const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'modal.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     // ★ 三个模板：选错传输是最常见的"连不上"原因，点一下直接填好
     c.ok(/MCP_PRESETS/.test(settingsSrc) && /label: '远程 HTTP'/.test(settingsSrc) && /label: '本地命令'/.test(settingsSrc),
         '★ 有传输模板按钮（远程 / 本地 / 从教程粘贴）');
