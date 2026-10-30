@@ -789,6 +789,7 @@ async function caseSingleSource(c) {
             // Directory.Documents：读写**用户自己选的备份文件**（导出/导入）。
             // 那是"跟用户交换文件"，不是"应用自己的存储"，且只在用户主动操作时发生。
             'settings.js': '备份文件的导入导出（读写用户在文档目录里选的文件）',
+            'settings-data.js': '备份文件的导入导出（从 settings.js 拆出的同一类文件交换）',
             // CACHE 目录的日志导出文件（log-viewer 的「导出」按钮）：写进缓存后
             //   交由系统分享面板发出。与 settings.js 同一性质 —— 跟用户交换文件，
             //   只在用户主动点导出时发生；缓存目录系统可随时回收，不承载任何应用状态。
