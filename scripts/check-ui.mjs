@@ -1713,6 +1713,7 @@ async function caseBirthday(c) {
         + read(path.join(WEB, 'js', 'mods-load.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods-enable.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods-load-one.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-api.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods-storage.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods-host-core.js')) + '\n'
         + read(path.join(WEB, 'js', 'mods-host-extras.js')) + '\n'

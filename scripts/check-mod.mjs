@@ -408,6 +408,7 @@ async function caseModsCore(c) {
         // 就没法在应用里卸掉（只能去删目录，而删目录又会被 zip 装回来）。
         const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-host-core.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods-api.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
         c.ok(/mod-del-btn/.test(settingsSrc), '★ 设置里渲染「删除」按钮');
         c.ok(/method: 'DELETE'/.test(settingsSrc), '★ 删除走 DELETE /api/plugins/:id');
@@ -1164,6 +1165,7 @@ function makeModsSandbox(modsJs) {
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8'), ctx, { filename: 'mods-load.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-enable.js'), 'utf8'), ctx, { filename: 'mods-enable.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8'), ctx, { filename: 'mods-load-one.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8'), ctx, { filename: 'mods-api.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
 }
@@ -1301,6 +1303,7 @@ async function caseModIsolation(c) {
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-services.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8')
@@ -1515,6 +1518,7 @@ async function loadModsInSandbox(store, opts = {}) {
     const MODS_LOAD_JS = readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8');
     const MODS_ENABLE_JS = readFileSync(path.join(WEB, 'js', 'mods-enable.js'), 'utf8');
     const MODS_LOAD_ONE_JS = readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8');
+    const MODS_API_JS = readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8');
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
     const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
@@ -1669,6 +1673,7 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(MODS_LOAD_JS, ctx, { filename: 'mods-load.js' });
     vm.runInContext(MODS_ENABLE_JS, ctx, { filename: 'mods-enable.js' });
     vm.runInContext(MODS_LOAD_ONE_JS, ctx, { filename: 'mods-load-one.js' });
+    vm.runInContext(MODS_API_JS, ctx, { filename: 'mods-api.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
     const results = await Mods.loadAll();
