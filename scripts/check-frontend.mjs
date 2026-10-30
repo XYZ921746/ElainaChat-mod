@@ -215,7 +215,8 @@ async function caseMessageRender(c) {
     const html = readFrontend();
     const ui = readFileSync(path.join(JS_DIR, 'ui.js'), 'utf8');
     const view = readFileSync(path.join(JS_DIR, 'readme-view.js'), 'utf8');
-    const mods = readFileSync(path.join(JS_DIR, 'mods.js'), 'utf8');
+    const mods = readFileSync(path.join(JS_DIR, 'mods-host-core.js'), 'utf8')
+        + '\n' + readFileSync(path.join(JS_DIR, 'mods.js'), 'utf8');
 
     c.ok(/function renderMessageText/.test(ui), 'ui.js 里有 renderMessageText');
     c.ok(/ElainaReadme/.test(ui) && /renderChat\(/.test(view), '★ 消息与说明共用 readme-view.js 的自写渲染器');
