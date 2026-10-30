@@ -185,7 +185,8 @@ async function caseModsCore(c) {
     {
         const mods = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
         const serve = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-        const loader = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
+        const loader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-load.js'), 'utf8')
+            + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
         // 解压实现已合并到 server/zip.mjs（原先 serve.mjs 里另有一份几乎相同的 unzip）。
         // 所以 BLOCKED_EXT / effectiveExt / allowScripts 这些要看**实现那份**，
         // 不能再断言它们在 serve.mjs 里 —— 那是合并前的布局。
@@ -1160,6 +1161,7 @@ function makeModsSandbox(modsJs) {
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8'), ctx, { filename: 'mods-summary.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8'), ctx, { filename: 'mods-deps.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8'), ctx, { filename: 'mods-capabilities.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8'), ctx, { filename: 'mods-load.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
 }
@@ -1507,6 +1509,7 @@ async function loadModsInSandbox(store, opts = {}) {
     const MODS_SUMMARY_JS = readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8');
     const MODS_DEPS_JS = readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8');
     const MODS_CAPABILITIES_JS = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8');
+    const MODS_LOAD_JS = readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8');
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
     const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
@@ -1658,6 +1661,7 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(MODS_SUMMARY_JS, ctx, { filename: 'mods-summary.js' });
     vm.runInContext(MODS_DEPS_JS, ctx, { filename: 'mods-deps.js' });
     vm.runInContext(MODS_CAPABILITIES_JS, ctx, { filename: 'mods-capabilities.js' });
+    vm.runInContext(MODS_LOAD_JS, ctx, { filename: 'mods-load.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
     const results = await Mods.loadAll();
