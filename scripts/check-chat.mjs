@@ -849,7 +849,8 @@ async function caseModelList(c) {
     const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-    const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+    const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'init-models.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     const fakeWindow = {};
     const modelSandbox = makeVmSandbox({ window: fakeWindow, URL, TextEncoder, TextDecoder });
     vm.runInContext(
