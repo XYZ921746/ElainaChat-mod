@@ -1177,7 +1177,8 @@ async function caseDiary(c) {
     // ============================================================ 1. 源码约定
     console.log('=== 1. 源码约定 ===');
     {
-        const ui = readFileSync(path.join(WEB, 'js', 'ui.js'), 'utf8');
+        const ui = readFileSync(path.join(WEB, 'js', 'conversations.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'ui.js'), 'utf8');
         const core = readFileSync(path.join(WEB, 'js', 'core-state.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'core.js'), 'utf8');
         const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');

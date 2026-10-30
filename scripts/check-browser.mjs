@@ -660,6 +660,7 @@ async function caseMcpClient(c) {
     const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mcp-config.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'modal.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     // ★ 三个模板：选错传输是最常见的"连不上"原因，点一下直接填好
     c.ok(/MCP_PRESETS/.test(settingsSrc) && /label: '远程 HTTP'/.test(settingsSrc) && /label: '本地命令'/.test(settingsSrc),
@@ -858,7 +859,8 @@ async function caseRelayTlsFallback(c) {
 
 // 7c. 会话自动取名（招呼语不该变成标题，手动改名不该被覆盖）
 async function caseConversationNaming(c) {
-    const ui = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
+    const ui = readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     const voice = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
 
     const fnSrc = (name) => {
