@@ -457,7 +457,8 @@ async function caseSearchFailure(c) {
     c.ok(/searchOnProvider/.test(agent), '换家复用同一个执行函数（除 id 外条件不变）');
 
     // 测试按钮不能借用对话模型的错误文案
-    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const testFn = settings.slice(settings.indexOf('async function testTavilyConnection'), settings.indexOf('async function withSettingsTestButton'));
     c.ok(!/ClientApiError/.test(testFn), '★ 测试按钮不借用对话模型的错误文案（那里写的是"检查 Base URL、模型名"）');
     c.ok(/额度/.test(testFn), '测试失败时也解释额度问题');
@@ -508,7 +509,8 @@ async function caseCustomSource(c) {
 async function caseQuotaHint(c) {
     const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-search.js'), 'utf8');
     const agent = readAgentSources();
-    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
 
     const table = vm.runInContext(extractVariable(core, 'SEARCH_PROVIDERS') + '\n;SEARCH_PROVIDERS', makeVmSandbox({}));
     for (const id of Object.keys(table)) {
@@ -658,6 +660,7 @@ async function caseMcpClient(c) {
 
     // ===== MCP 配置体验（模板 / 代码编辑器 / 测试连接 / 格式兼容） =====
     const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mcp-config.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'modal.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
@@ -734,7 +737,8 @@ async function caseMcpClient(c) {
     // ★ 展开判据只看 .is-open：:has() 与事件委托的执行顺序不稳定，会"点两下才开"
     c.ok(/html\.rd #settingsExtNav\.is-open \.ext-nav-children/.test(luxe),
         '★ 展开判据只看 .is-open（避免点两下）');
-    const settingsJs = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+    const settingsJs = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const posStart = settingsJs.indexOf('function positionExtMenu');
     const posEnd = settingsJs.indexOf('function ensureExtTab');
     const posFn = settingsJs.slice(posStart, posEnd > posStart ? posEnd : posStart + 4000);
@@ -912,7 +916,8 @@ async function caseVisionToggle(c) {
     const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
 
     c.ok(/visionEnabled: false/.test(core), '默认关闭（主模型能看图时转述只会丢细节）');
     c.ok(/settingVisionEnabled/.test(html), '设置页有开关');
