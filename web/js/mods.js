@@ -696,8 +696,8 @@
     /** 当前正在注入的插件目录（register() 据此知道自己来自哪个目录） */
     let loadingDir = null;
 
-    const { manifestKeyIndex, findMissingDeps, pullUpPrerequisites } = window.ElainaModsDeps({
-        getRegByDir: () => regByDir,
+    const { manifestKeyIndex, findMissingDeps, pullUpPrerequisites, findByKey, dependentsOf } = window.ElainaModsDeps({
+        getRegByDir: () => regByDir, getRegistry: () => registry, getDirByReg: () => dirByReg,
         modsGloballyEnabled, isModEnabled, setModEnabled,
     });
 
@@ -790,47 +790,6 @@
 
         logLoadSummary(results);
         return results;
-    }
-
-    /** 插件状态的**中文说明** —— 日志与设置界面共用一份，避免两处说法不一致 */
-    function findByKey(key) {
-        const k = String(key || '');
-        if (!k) return null;
-        let entry = registry.get(k);
-        if (!entry) {
-            const dir = dirByReg.get(k);
-            if (dir) entry = [...registry.values()].find((e) => (e.manifest.dir || e.manifest.id) === dir);
-        }
-        if (!entry) entry = [...registry.values()].find((e) => (e.manifest.dir || e.manifest.id) === k);
-        return entry || null;
-    }
-
-    /**
-     * 谁正在用这个插件：`after` 指向它、且已启用并加载成功（ready）的插件。
-     *
-     * 给"停用 / 卸载"做闸门用 —— 前置一旦被关掉/删掉，正在运行的依赖方
-     *   下一轮就会以"前置不可用"被拒（界面从"好好的"变成"半残"）。
-     *   所以要在动手**之前**问这里，把"谁会受影响"说给用户听。
-     *
-     * 只算 ready 的依赖方：停用（disabled）/ 被拒（blocked）/ 坏（error）的
-     *   插件本来就没在用它，拦着不让删只会让人莫名其妙。
-     *
-     * @returns {Array<{id:string, name:string}>} 依赖方列表（空 = 没人在用，随便动）
-     */
-    function dependentsOf(id) {
-        const entry = registry.get(id) || findByKey(id);
-        if (!entry) return [];
-        const out = [];
-        for (const e of registry.values()) {
-            if (e === entry) continue;
-            const after = Array.isArray(e.manifest.after) ? e.manifest.after : [];
-            // 三键匹配（清单 id / 目录名 / 注册名）—— 与 findByKey 同一套判据
-            if (!after.some((d) => findByKey(d) === entry)) continue;
-            if (e.state === 'ready' && isModEnabled(e.manifest.id, e.manifest)) {
-                out.push({ id: e.manifest.id, name: e.manifest.name || e.manifest.id });
-            }
-        }
-        return out;
     }
 
     /**
