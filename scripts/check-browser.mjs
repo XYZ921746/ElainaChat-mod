@@ -738,6 +738,7 @@ async function caseMcpClient(c) {
     c.ok(/html\.rd #settingsExtNav\.is-open \.ext-nav-children/.test(luxe),
         '★ 展开判据只看 .is-open（避免点两下）');
     const settingsJs = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agents.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const posStart = settingsJs.indexOf('function positionExtMenu');
     const posEnd = settingsJs.indexOf('function ensureExtTab');
