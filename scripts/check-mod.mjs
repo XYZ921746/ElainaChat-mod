@@ -406,7 +406,7 @@ async function caseModsCore(c) {
         // ---- 应用内删除按钮 ----
         // 服务端早有 DELETE /api/plugins/:id，但界面一直没暴露 —— 用户装了插件
         // 就没法在应用里卸掉（只能去删目录，而删目录又会被 zip 装回来）。
-        const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'settings-mods.js'), 'utf8')
+        const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-host-core.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods-api.js'), 'utf8')
@@ -429,7 +429,7 @@ async function caseModsCore(c) {
         //   都会重扫（openSettings → refreshModsList），不需要单独的刷新按钮。
         c.ok(!/id="modsRefreshBtn"/.test(html), '★ 没有「⟳ 重新扫描」按钮');
         c.ok(!/modsFab/.test(html), '★ 没有右下角悬浮刷新钮');
-        const settingsForCard = readFileSync(path.join(ROOT, 'web', 'js', 'settings-mods.js'), 'utf8')
+        const settingsForCard = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         c.ok(!/mod-refresh-one/.test(settingsForCard), '★ 卡片上没有单独的 ⟳');
         c.ok(/id="modsAddGroupBtn"/.test(html), '★ 有「添加分栏」按钮（插件分组）');
@@ -441,7 +441,7 @@ async function caseModsCore(c) {
         //   长路径会被挤出可视区，看起来和"点了没反应"一模一样。
         c.ok(/id="modsBrowseResult"/.test(html), '★ 「浏览目录」有独立结果面板（长路径不会被挤没）');
         c.ok(/mod-group-toggle/.test(html), '★ 分栏折叠三角（disclosure triangle）');
-        const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings-mods.js'), 'utf8')
+        const settings = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         c.ok(/async function refreshModsList/.test(settings), '有 refreshModsList');
         // 绑定必须只在 init.js 一处，且不在 refreshModsList（会被重建冲掉 / 重复绑定）
@@ -1349,7 +1349,7 @@ async function caseModIsolation(c) {
     // ---- i1. 统一接口：插件设置入口不再靠 window 私有全局名 ----
     {
         const slotsSrc = readFileSync(path.join(WEB, 'js', 'host-slots.js'), 'utf8');
-        const settingsSrc = readFileSync(path.join(WEB, 'js', 'settings-mods.js'), 'utf8')
+        const settingsSrc = readFileSync(path.join(WEB, 'js', 'plugins.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'settings.js'), 'utf8');
         const slotsCode = stripComments(slotsSrc);
         const settingsCode = stripComments(settingsSrc);
@@ -2044,7 +2044,7 @@ async function caseModPrereqLifecycle(c) {
                 '★ 依赖方已关 → 现在可以关前置了（顺序：先关用它的，再关被用的）');
 
             // 设置页两个入口（停用/卸载）的接线：查到依赖方 → 弹窗指路「先关谁」
-            const setSrc = stripComments(readFileSync(path.join(WEB, 'js', 'settings-mods.js'), 'utf8')
+            const setSrc = stripComments(readFileSync(path.join(WEB, 'js', 'plugins.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'settings.js'), 'utf8'));
             const uses = [...setSrc.matchAll(/dependentsOf\(/g)];
             c.ok(uses.length >= 2, '★ 开关与删除两个入口都接了 dependentsOf', String(uses.length));

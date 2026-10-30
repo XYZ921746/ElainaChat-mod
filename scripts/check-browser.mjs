@@ -657,7 +657,7 @@ async function caseMcpClient(c) {
     c.ok(/s\.id && \(s\.url \|\| s\.command\)/.test(serveSrc2), '★ 有 url 或 command 就放行');
 
     // ===== MCP 配置体验（模板 / 代码编辑器 / 测试连接 / 格式兼容） =====
-    const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'settings-mcp.js'), 'utf8')
+    const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mcp-config.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     // ★ 三个模板：选错传输是最常见的"连不上"原因，点一下直接填好
