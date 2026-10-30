@@ -1146,6 +1146,7 @@ function makeModsSandbox(modsJs) {
     sandbox.window = sandbox;
     sandbox.globalThis = sandbox;
     const ctx = vm.createContext(sandbox);
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-drag-sort.js'), 'utf8'), ctx, { filename: 'mods-drag-sort.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8'), ctx, { filename: 'mods-storage.js' });
     vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8'), ctx, { filename: 'mods-host-core.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
@@ -1485,6 +1486,7 @@ async function loadModsInSandbox(store, opts = {}) {
     const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
     const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
     const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
+    const MODS_DRAG_SORT_JS = readFileSync(path.join(WEB, 'js', 'mods-drag-sort.js'), 'utf8');
     // 诊断格式模块：真实页面里 diagnostics.js 排在 mods.js 之前加载
     // （见 index.html），mods.js 的输出格式依赖它。这里照实模拟，
     // 否则测的是"没有诊断模块时的回落路径"，与线上不一致。
@@ -1617,6 +1619,7 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(DIAG_JS, ctx, { filename: 'diagnostics.js' });
     // 把测试给定的初值灌进 Store（模拟 data/ 里已有的键）
     for (const [k, v] of m) sandbox.window.Store.setItem(k, v);
+    vm.runInContext(MODS_DRAG_SORT_JS, ctx, { filename: 'mods-drag-sort.js' });
     vm.runInContext(MODS_STORAGE_JS, ctx, { filename: 'mods-storage.js' });
     vm.runInContext(MODS_HOST_CORE_JS, ctx, { filename: 'mods-host-core.js' });
     vm.runInContext(MODS_EXTRAS_JS, ctx, { filename: 'mods-host-extras.js' });
