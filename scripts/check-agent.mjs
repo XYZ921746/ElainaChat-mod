@@ -1742,6 +1742,7 @@ async function caseOps(c) {
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'memory.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'persistence.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const unwired = [
