@@ -2274,7 +2274,8 @@ async function caseModHostApi(c) {
         const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
         const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
+        const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
         const l2dSrc = readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8');
         const fsSrc = readFileSync(path.join(ROOT, 'scripts', 'frontend-sources.mjs'), 'utf8');
         const slotsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'host-slots.js'), 'utf8');

@@ -867,7 +867,8 @@ async function caseRelayTlsFallback(c) {
 async function caseConversationNaming(c) {
     const ui = readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
-    const voice = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
+    const voice = readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
 
     const fnSrc = (name) => {
         const s = ui.indexOf('function ' + name + '(');

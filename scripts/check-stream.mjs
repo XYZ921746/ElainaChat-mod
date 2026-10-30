@@ -44,6 +44,7 @@ async function caseStreamAndCot(c) {
     const ui = readFileSync(path.join(ROOT, 'web', 'js', 'turn-process.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     const voice = readFileSync(path.join(ROOT, 'web', 'js', 'voice-asr.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
     const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
     const init = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');

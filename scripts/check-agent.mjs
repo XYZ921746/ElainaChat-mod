@@ -433,7 +433,7 @@ async function caseContinue(c) {
         + readWebFile('js/agent-files.js') + '\n'
         + readWebFile('js/agent-tools.js') + '\n' + readWebFile('js/agent-continue.js')
         + '\n' + readWebFile('js/agent.js');
-    const voiceSrc2 = readWebFile('js/voice.js');
+    const voiceSrc2 = readWebFile('js/composer.js') + '\n' + readWebFile('js/voice.js');
     const uiSrc2 = readWebFile('js/turn-process.js') + '\n' + readWebFile('js/conversations.js') + '\n' + readWebFile('js/ui.js');
     // extractFnFrom 按大括号配平取值，遇到注释/字符串里的大括号会跑偏
     // （实测一度算出"82 处裸 return"这种明显不可能的计数）。
@@ -1738,7 +1738,8 @@ async function caseOps(c) {
     // 这几条只能靠"源码里有没有那句话"来钉：它们跨 4 个文件，而且任一条漏掉都不会
     //   当场报错 —— 表现是"模型调了工具却没人执行"或"聊天记录里多出一段没人说过的文本"，
     //   都是要跑一整轮对话才看得见的故障。
-    const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
+    const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
     const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
     const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'memory.js'), 'utf8')
