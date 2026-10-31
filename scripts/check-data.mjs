@@ -882,7 +882,7 @@ async function caseSingleSource(c) {
     console.log('\n=== 6. index.html 引入顺序 ===');
     {
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        ok(/<script src="\/js\/store\.js"><\/script>/.test(html), 'index.html 引入了 store.js');
+        ok(/<script[^>]*src="\/js\/store\.js"[^>]*><\/script>/.test(html), 'index.html 引入了 store.js');
         const storeAt = html.indexOf('/js/store.js');
         // store.js 必须在所有业务脚本之前
         for (const f of ['/js/core.js', '/js/data.js', '/js/theme.js', '/js/mods.js']) {
@@ -890,7 +890,7 @@ async function caseSingleSource(c) {
             ok(at < 0 || at > storeAt, `store.js 排在 ${f} 之前`);
         }
         // data-sync.js 仍被引用（空壳也要在，否则老 APK 的旧文件不会被覆盖）
-        ok(/<script src="\/js\/data-sync\.js"><\/script>/.test(html),
+        ok(/<script[^>]*src="\/js\/data-sync\.js"[^>]*><\/script>/.test(html),
             'data-sync.js 仍被引入（空壳覆盖老 APK 的旧实现）');
     }
 

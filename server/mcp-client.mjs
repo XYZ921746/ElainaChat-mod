@@ -17,6 +17,7 @@
 //   这条流（那是它的 bug，不是我们的），所以解析失败的行要**跳过**而不是让整个连接崩掉
 //   —— 否则一个 print 语句就能让整个 MCP 服务器不可用。
 import { spawn } from 'node:child_process';
+import { buildInitializeParams, flattenToolResult } from './mcp-shared.mjs';
 
 /** 握手超时：MCP 服务器首次启动可能要去装包 / 加载模型，给得比普通请求宽。 */
 const INIT_TIMEOUT_MS = 30000;
@@ -140,15 +141,6 @@ export function createMcpClient(def, opts = {}) {
         }
     }
 
-    /** 握手参数：协议版本与客户端身份，抽出来让 start() 只关心"什么时候发"。 */
-    function buildInitializeParams() {
-        return {
-            protocolVersion: PROTOCOL_VERSION,
-            capabilities: { roots: { listChanged: false } },
-            clientInfo: { name: 'ElainaChat', version: String(opts.version || '2.0.0') },
-        };
-    }
-
     /**
      * 把子进程的三条流接到协议层：stdout 走行切分器，stderr 只当日志。
      * exit / error 都要把待决请求一次性 reject —— 否则每个调用方要各自等到超时。
@@ -214,7 +206,7 @@ export function createMcpClient(def, opts = {}) {
         );
         wireChildProcess();
 
-        const result = await request('initialize', buildInitializeParams(), INIT_TIMEOUT_MS);
+        const result = await request('initialize', buildInitializeParams({ protocolVersion: PROTOCOL_VERSION, version: opts.version }), INIT_TIMEOUT_MS);
         // 版本不匹配时**不拒绝**：MCP 1.x 的工具语义在 2024-11 / 2025-06 之间没有
         //   破坏性变化，硬拒等于"能用却不让用"。只记一条日志。
         const negotiated = String(result?.protocolVersion || '');
@@ -245,22 +237,6 @@ export function createMcpClient(def, opts = {}) {
         await start();
         const result = await request('tools/list', {}, LIST_TIMEOUT_MS);
         return normalizeToolList(result);
-    }
-
-    /** 把 content 数组拍平成一段文本；非文本内容降级成一句说明，不会丢成空白。 */
-    function flattenToolResult(result) {
-        const parts = [];
-        for (const item of (Array.isArray(result?.content) ? result.content : [])) {
-            if (item?.type === 'text') parts.push(String(item.text || ''));
-            else if (item?.type === 'image') parts.push('（该工具返回了一张图片，这里只能显示文字）');
-            else if (item?.type === 'resource') parts.push('（该工具返回了一个资源引用：' + String(item.resource?.uri || '无地址') + '）');
-            else parts.push('（该工具返回了 ' + String(item?.type || '未知') + ' 类型的内容）');
-        }
-        const text = parts.join('\n').trim();
-        return {
-            ok: result?.isError !== true,
-            text: text || '（工具没有返回内容）',
-        };
     }
 
     /**

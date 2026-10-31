@@ -1,0 +1,4433 @@
+/* 基础样式层：全局令牌、组件骨架、宿主功能样式。
+
+   为什么单独成文件：这一层与 themes / achievements / redesign / layout-full /
+   pages-luxe 争同一批属性，而"谁赢"只由加载顺序和权重决定。样式散在同一个
+   <style> 里时，改一处没反应只能靠人肉对比两份文件才能解释；单独成文件后，
+   顺序就是所有者规则 —— 本文件先加载，同权重下后面那几份覆盖层赢，反过来就要
+   在本文件里提权。判断某条规则该写在哪一层，先看它是否属于"可被主题整体替换"
+   的外观。 */
+        :root {
+            --app-height: 100vh;
+            --viewport-offset-top: 0px;
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-right: env(safe-area-inset-right, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-left: env(safe-area-inset-left, 0px);
+            --color-primary: #8a6a1f;
+            --color-primary-soft: #a9853f;
+            --color-secondary: #5c6f8a;
+            --color-secondary-soft: #7d8ea6;
+            --color-accent: #d3b36a;
+            --color-neutral-50: #fbf7ee;
+            --color-neutral-100: #f5eddf;
+            --color-neutral-200: #eadfcb;
+            --color-neutral-300: #dccbaf;
+            --color-neutral-400: #c3ae8a;
+            --color-neutral-500: #a99068;
+            --color-neutral-600: #8b744e;
+            --color-neutral-700: #6d5938;
+            --color-neutral-800: #4f4028;
+            --color-neutral-900: #332a1c;
+            --text-heading: #241f18;
+            --text-body: #312b22;
+            --text-secondary: #5a5041;
+            --text-muted: #8b7f6b;
+            --text-glass-heading: #241f18;
+            --text-glass-body: #312b22;
+            --text-glass-muted: #5a5041;
+            --ink: #241f18;
+        }
+
+        html, body {
+            height: 100%;
+            min-height: 0;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        html { box-sizing: border-box; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+        *, *::before, *::after { box-sizing: inherit; }
+
+        body {
+            /* 这里的 background 会被下面（约 1475 行）那条**同级但更靠后**的
+               `body { background: … }` 覆盖 —— 真正生效的是那一条。
+               保留这一处只为"早期渲染不闪白"，改配色请改那一条（有说明）。 */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            overflow: hidden;
+        }
+
+        .scroll-soft::-webkit-scrollbar { width: 5px; height: 5px; }
+        .scroll-soft::-webkit-scrollbar-track { background: transparent; }
+        .scroll-soft::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.55); border-radius: 9999px; }
+        .scroll-soft::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.8); }
+
+        .glass-panel {
+            border-radius: 12px;
+        }
+
+
+        .modal-overlay {
+            /* 弹窗必须显示在 Live2D 通话界面（z-index 99999）之上 */
+            z-index: 100001 !important;
+        }
+
+        .modal-panel {
+            backdrop-filter: blur(24px) saturate(1.5);
+            -webkit-backdrop-filter: blur(24px) saturate(1.5);
+        }
+
+        .glass-button {
+            position: relative;
+            overflow: hidden;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-radius: 12px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            isolation: isolate;
+        }
+        .glass-button::before {
+            content: "";
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
+            transition: left 0.6s ease;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .glass-button:hover { background: rgba(255, 255, 255, 0.6); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(31, 38, 135, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.65); }
+        .glass-button:hover::before { left: 100%; }
+        .glass-button:active { transform: scale(0.98); }
+
+        .btn-primary {
+            position: relative;
+            overflow: hidden;
+            isolation: isolate;
+            padding: 8px 16px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+        .btn-primary::before {
+            content: "";
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+            transition: left 0.6s ease;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .btn-primary:hover::before { left: 100%; }
+        .btn-primary:active { transform: translateY(0) scale(0.98); }
+
+        .btn-secondary {
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            padding: 8px 16px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+            cursor: pointer;
+        }
+        .btn-secondary:hover {   transform: translateY(-1px); }
+
+        .modal-input, .modal-textarea {
+            width: 100%;
+            padding: 12px 14px;
+            font-size: 0.875rem;
+            font-weight: 400;
+            line-height: 1.5;
+            transition: all 0.2s ease;
+            outline: none;
+        }
+        .modal-input:focus, .modal-textarea:focus {
+            background: rgba(255, 255, 255, 0.8);
+            /* 2026-10：原来是写死的粉色 rgba(236,72,153,…) —— 与默认主题
+               （暖米绿）不符。这里是**较早的一段**规则，会被下面 1789 行起的
+               `.modal-input` 那套（走 --pixso-*）覆盖，所以大多数输入框看不出问题；
+               但先把它改对，避免"哪段生效取决于顺序"这种脆弱状态。 */
+        }
+        /* 多行输入（MCP 配置这类 JSON）：
+             · 等宽字体 + 保留缩进 —— 结构化文本靠对齐才读得懂；
+             · 固定高度 + 内部滚动 —— 粘贴几十行也不会把弹窗撑出屏幕；
+             · resize: vertical 只允许上下拉，左右拉会破坏弹窗网格。
+           高度基准是 rows=8 行，CSS 的 min/max 只负责兜底。 */
+        textarea.modal-input.is-multiline {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+            font-size: 12.5px;
+            line-height: 1.65;
+            min-height: 148px;
+            max-height: 46vh;
+            white-space: pre;
+            overflow: auto;
+            tab-size: 2;
+            resize: vertical;
+        }
+        /* 单行场景（重命名等）明确回到一行高，避免继承 textarea 的默认行数 */
+        textarea.modal-input:not(.is-multiline) { height: auto; resize: none; overflow: hidden; }
+
+        /* ===== 代码编辑区（行号 + 等宽编辑，零依赖） =====
+           实现刻意保持简单：**就是一行号栏 + 一个真正的 textarea**。
+           为什么不做语法高亮：高亮需要把彩色文本画在 textarea 底下、让两边逐像素对齐，
+           而 <pre> 和 textarea 的换行/制表符/字宽在不同字体与缩放下总会差一点，
+           结果就是文字叠成乱码（实测反复出现）。为了给一段七行配置上色而引入
+           一个持续错位的编辑区，代价远大于收益 —— 行号 + 等宽字体已经足够看清结构。
+           好处：选中、复制、滚动、输入法、撤销全部是浏览器原生行为，不可能出错。 */
+        .modal-code-wrap {
+            display: flex;
+            border: 1px solid var(--pixso-line, rgba(255,255,255,.6));
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.5);
+            overflow: hidden;
+            height: 320px;
+            max-height: 46vh;
+        }
+        .modal-code-gutter {
+            flex: none;
+            padding: 12px 6px 12px 10px;
+            background: rgba(0, 0, 0, 0.03);
+            border-right: 1px solid var(--pixso-line, rgba(0,0,0,.06));
+            color: rgba(100, 116, 139, 0.45);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12.5px;
+            line-height: 1.65;
+            text-align: right;
+            user-select: none;
+            overflow: hidden;
+        }
+        #customModalGutter { will-change: transform; }
+        .modal-code-input {
+            flex: 1;
+            min-width: 0;
+            margin: 0;
+            padding: 12px 14px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12.5px;
+            line-height: 1.65;
+            tab-size: 2;
+            white-space: pre;
+            overflow: auto;
+            border: 0;
+            outline: none;
+            resize: none;
+            background: transparent;
+            color: var(--text-body, #1e293b);
+            /* 关掉自动纠正：JSON 的直引号被替换成中文引号就解析失败了 */
+            autocapitalize: off;
+        }
+        .modal-code-input::selection {
+            background: rgba(138, 106, 31, 0.24);
+        }
+
+        .modal-label {
+            font-size: 0.75rem;
+            margin-bottom: 8px;
+        }
+
+
+        .custom-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 9999px;
+            --slider-progress: 50%;
+            background: linear-gradient(to right, rgba(168, 139, 184, 0.82) 0%, rgba(168, 139, 184, 0.82) var(--slider-progress), rgba(255, 255, 255, 0.35) var(--slider-progress), rgba(255, 255, 255, 0.35) 100%);
+            outline: none;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .custom-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 22px; height: 14px;
+            border-radius: 9999px;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--pixso-green) 60%, #fff), var(--pixso-green));
+            border: 2px solid rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 6px color-mix(in srgb, var(--pixso-green) 55%, transparent), 0 0 0 1px rgba(255, 255, 255, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+        }
+        .custom-slider::-webkit-slider-thumb:hover { transform: scale(1.1); box-shadow: 0 3px 10px color-mix(in srgb, var(--pixso-green) 55%, transparent); }
+        .custom-slider::-moz-range-thumb {
+            width: 22px; height: 14px;
+            border-radius: 9999px;
+            background: linear-gradient(135deg, color-mix(in srgb, var(--pixso-green) 60%, #fff), var(--pixso-green));
+            border: 2px solid rgba(255, 255, 255, 0.95);
+            box-shadow: 0 2px 6px color-mix(in srgb, var(--pixso-green) 55%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+        }
+
+        .mic-btn {
+            border: 1px solid rgba(255, 255, 255, 0.78);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        .mic-btn:hover { transform: scale(1.04); }
+        .mic-btn:active { transform: scale(0.96); }
+
+        .mic-idle { background: linear-gradient(135deg, rgba(255, 242, 249, 0.42), rgba(251, 247, 255, 0.48)); color: var(--color-primary-soft); border-color: rgba(255, 255, 255, 0.78); }
+        .mic-listening { background: linear-gradient(135deg, rgba(255, 230, 240, 0.84), rgba(255, 248, 252, 0.93)); color: #fb7185; border-color: rgba(244, 63, 94, 0.22); box-shadow: 0 6px 24px rgba(244, 63, 94, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.92); }
+        .mic-paused { background: linear-gradient(135deg, rgba(255, 243, 224, 0.84), rgba(255, 253, 247, 0.93)); color: #f59e0b; border-color: rgba(245, 158, 11, 0.22); box-shadow: 0 6px 24px rgba(245, 158, 11, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.92); }
+        .mic-thinking { background: linear-gradient(135deg, rgba(254, 250, 232, 0.68), rgba(255, 254, 244, 0.84)); color: #d97706; border-color: rgba(234, 179, 8, 0.20); box-shadow: 0 6px 22px rgba(234, 179, 8, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.92); }
+        .mic-error { background: linear-gradient(135deg, rgba(246, 247, 250, 0.78), rgba(250, 251, 253, 0.92)); color: #94a3b8; border-color: rgba(148, 163, 184, 0.30); box-shadow: 0 6px 22px rgba(100, 116, 139, 0.11), inset 0 1px 0 rgba(255, 255, 255, 0.92); }
+
+        .pulse-ring {
+            position: absolute;
+            top: -14px;
+            right: -14px;
+            bottom: -14px;
+            left: -14px;
+            border-radius: 9999px;
+            border: 1.5px solid color-mix(in srgb, var(--pixso-green) 34%, transparent);
+            animation: pulse-glow 1.8s ease-out infinite;
+            pointer-events: none;
+        }
+        @keyframes pulse-glow {
+            0% { transform: scale(0.9); opacity: 0.9; }
+            100% { transform: scale(1.45); opacity: 0; }
+        }
+
+        .thinking-dot {
+            width: 6px; height: 6px;
+            border-radius: 9999px;
+            animation: dot-bounce 1.2s ease-in-out infinite;
+        }
+        .thinking-dot:nth-child(2) { animation-delay: 0.15s; }
+        .thinking-dot:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes dot-bounce {
+            0%, 100% { transform: translateY(0); opacity: 0.5; }
+            50% { transform: translateY(-5px); opacity: 1; }
+        }
+
+        /* ==================== 回合过程（思考 / 工具调用） ====================
+           参考 DSH 的做法：每一条过程记录都是"一行摘要 + 可展开详情"，
+           默认**折叠**。折叠是刻意的：
+             · 这是聊天应用，正文才是主角，过程不该抢视线；
+             · 思考内容动辄上千字，默认展开会把对话顶到屏幕外；
+             · 但"折叠"不等于"藏起来"—— 摘要行始终在，用户一眼能看到
+               "这一步调用了什么、成没成功"，需要细节再点开。
+           工具调用行**不受思考开关影响**：它是事实记录（改了什么文件、
+           执行了什么命令），关掉思考不代表可以不给用户看 AI 干了什么。 */
+        .turn-process {
+            margin-bottom: 10px;
+            font-size: 12.5px;
+            line-height: 1.5;
+        }
+        .process-row {
+            /* 2026-10：边框与底色改用**主题变量**。
+               原来这里是 `var(--color-border-soft, …)` / `var(--color-surface-muted, …)`，
+               而这两个变量**全项目从未定义**（grep 确认）—— 于是永远落到浅米色兜底值，
+               深色模式下过程行就成了一块浅米色卡片，与深色界面割裂（用户实测报的）。
+               换成 --pixso-line / --pixso-cream：它们在每套主题与深色块里都有定义，
+               自动跟随主题深浅，光靠变量就能修好，无需再写一套深色覆盖。 */
+            border: 1px solid var(--pixso-line);
+            border-radius: 10px;
+            background: var(--pixso-cream);
+            margin-bottom: 6px;
+            overflow: hidden;
+        }
+        .process-row-head {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            width: 100%;
+            padding: 6px 9px;
+            background: none;
+            border: 0;
+            cursor: pointer;
+            text-align: left;
+            color: var(--pixso-brown-soft, #6b5a4e);
+            font: inherit;
+        }
+        /* 2026-10：hover 底色原为写死的 rgba(0,0,0,.03) —— 深色下等于又压暗一层（方向正好相反）。
+           改用 --pixso-panel：各主题下都比行底色深一档，浅色下近似原来的淡灰、深色下也能看出反馈。 */
+        .process-row-head:hover { background: var(--pixso-panel); }
+        .process-row-icon { flex: 0 0 auto; display: inline-flex; width: 14px; height: 14px; opacity: 0.75; }
+        .process-row-icon svg { width: 14px; height: 14px; display: block; }
+        .process-row-title { flex: 0 0 auto; font-weight: 600; }
+        .process-row-summary {
+            flex: 1 1 auto;
+            min-width: 0;
+            /* 摘要只占一行并省略 —— 多行摘要会让折叠失去意义 */
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            opacity: 0.7;
+        }
+        .process-row-status { flex: 0 0 auto; font-size: 11px; opacity: 0.65; }
+        .process-row-chevron { flex: 0 0 auto; opacity: 0.45; transition: transform 0.15s ease; }
+        .process-row.is-open .process-row-chevron { transform: rotate(90deg); }
+        .process-row-body {
+            display: none;
+            padding: 2px 10px 9px 30px;
+            /* 同上：这两个 --color-* 变量从未定义，深色下会露出浅色虚线 —— 改用主题变量 */
+            border-top: 1px dashed var(--pixso-line);
+        }
+        .process-row.is-open .process-row-body { display: block; }
+        .process-row-body pre {
+            margin: 6px 0 0;
+            padding: 7px 8px;
+            border-radius: 7px;
+            /* 2026-10：原为写死的 rgba(0,0,0,.045)（深色下几乎看不出、还会偏脏）。
+               改用 --pixso-panel：浅色下是一块比行底略深的浅底（近似原观感），
+               深色下则是一块更暗的内嵌底 —— 两个方向都成立。 */
+            background: var(--pixso-panel);
+            font-size: 11.5px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 300px;
+            overflow: auto;
+        }
+        .process-row-label {
+            display: block;
+            margin-top: 7px;
+            font-size: 11px;
+            font-weight: 600;
+            opacity: 0.6;
+        }
+        /* 状态点：运行中 / 成功 / 失败 / 已停止。
+           颜色之外还给形状差异（动画），不只靠颜色区分 —— 色盲用户同样能分辨。
+           ★ 2026-10 复核深色：这三个语义色（绿/红/琥珀）在深色行底上的对比度约 3.5～4.6:1，
+             作为 7px **图形**（非文字，3:1 即达标）已足够，故保留语义色、不主题化 ——
+             否则把"成功绿/失败红"混成主题主色会丢掉语义（如深色主题主色是蓝）。
+             真正在深色下读不清的是下面那行**失败文案**（11px 小字），单独提亮。 */
+        .process-state {
+            flex: 0 0 auto;
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: currentColor;
+            opacity: 0.45;
+        }
+        .process-row[data-state="running"] .process-state {
+            opacity: 1;
+            animation: dot-bounce 1.2s ease-in-out infinite;
+        }
+        .process-row[data-state="ok"] .process-state { background: #3f9d5a; opacity: 1; }
+        .process-row[data-state="error"] .process-state { background: #d0523f; opacity: 1; }
+        .process-row[data-state="stopped"] .process-state { background: #b08a3f; opacity: 1; }
+        .process-row[data-state="error"] .process-row-status {
+            /* 2026-10：原为写死 #c0452f —— 深色底上对比度仅约 2.9:1（11px 小字读不清）。
+               项目没有"失败/危险"专用变量，故用 color-mix 把它混进主题文字色
+               （--pixso-brown 深色下变浅、浅色下变深）→ 浅色下仍是原来的红，
+               深色下自动提亮到约 4.5:1。语义仍是"红"，不会与 stopped 的琥珀混淆。 */
+            color: color-mix(in srgb, #c0452f 68%, var(--pixso-brown));
+            opacity: 1;
+        }
+        /* 思考正文：等宽、低对比，和正文明确区分开 */
+        .process-reasoning {
+            white-space: pre-wrap;
+            word-break: break-word;
+            opacity: 0.8;
+            font-size: 12px;
+            line-height: 1.6;
+            max-height: 320px;
+            overflow: auto;
+        }
+        /* 2026-10：思考行按参考（DeepSeek 的思维链样式）改成**无框**。
+           用户原话："以这个思维链为参考，不需要框框束缚" —— 去掉卡片边框 / 底色 /
+           圆角，以及展开时那条虚线分隔；思考正文直接以缩进纯文本铺开，观感与参考图一致。
+           ★ 只改思考行（[data-kind="think"]）：工具行仍是卡片 —— 那是"操作记录"，
+             有边界更清楚，性质与思考的"叙述性文字"不同。
+           ★ 底色用 `transparent` 而不是写死白/黑：深浅色与各主题下都自动正确。 */
+        .process-row[data-kind="think"] {
+            border: 0;
+            background: transparent;
+            border-radius: 0;
+        }
+        .process-row[data-kind="think"] .process-row-body {
+            border-top: 0;
+            padding: 0 10px 6px 30px;
+        }
+        .process-row[data-kind="think"] .process-row-head { padding-left: 2px; padding-right: 2px; }
+        /* 思考行 header 不做 hover 底色 —— 那会像"浮出一个框"，与无框设计相悖 */
+        .process-row[data-kind="think"] .process-row-head:hover { background: transparent; }
+        /* 每回合总览：把这一轮做过的事压成一行，折叠状态下也能看清全貌 */
+        .turn-summary {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 2px 6px;
+            font-size: 11.5px;
+            opacity: 0.6;
+            flex-wrap: wrap;
+        }
+        .turn-summary-sep { opacity: 0.5; }
+
+        /* ==================== 手机：过程区默认折叠成一行 ====================
+           用户反馈"AI 思考部分会挡住下面的内容"。
+
+           ── 问题（实测，412×915 手机视口）──────────────────────────────────
+           过程区每一行都是一条独立卡片，**5 行叠起来占 176px**：
+             总览 27 + 思考 33 + 查看文件 33 + 保存文件 33 + 电脑命令 33
+           于是 AI 正文被推到 **383px** 处。多步操作（8 步上限）时更糟 ——
+           过程区 300+px，正文直接被挤出首屏。桌面上高度宽裕不明显，
+           手机上就是"挡住了内容"。
+
+           ── 改法：手机上把明细行收进总览里 ──────────────────────────────────
+           · 总览行（`已思考 · 3 个操作完成`）保留 —— 它本来就是
+             "这一轮做了什么"的全部信息量，一行就够
+           · 明细行（思考 + 各工具行）默认 `display:none`，
+             由总览行当开关（`is-expanded`）展开
+           · 高度：176px → **约 30px**，正文自然回到首屏
+
+           ★ 为什么不是"把行高压小"：176 → 约 100px 仍然很占，而多步操作
+             只会更长 —— 那是把问题减轻、不是解决。
+           ★ 桌面端**完全不变**（仍逐行展开）：桌面高度宽裕，逐行能看清
+             "哪一步做了什么"，是更好的呈现。所以整段包在媒体查询里。 */
+        /* ==================== 两段式下拉（桌面 + 手机一致）====================
+           用户要求：第一段下拉看"思考内容 + 其中调用的工具"（按先后排序），
+           第二段下拉看对应那一条的详细内容（与 Agent 工具卡片一致）。
+
+           ── 修掉的老毛病 ──────────────────────────────────────────────────
+           ① **三角形点不了**：`.turn-summary-toggle`（箭头）的显示规则原先只写在
+              手机媒体查询里 —— 桌面上箭头根本不渲染 `display`，用户看到的是
+              **思考行自己的**那个 chevron，点它展开的却是思考正文，
+              于是"点三角形没反应、点下面思考内容才有用"。
+              现在箭头常驻（两端都显示），且它整个 `.turn-summary` 都是点击热区。
+           ② 桌面端点总览行**完全没有效果**：`.process-row { display:none }` 只有
+              手机端有，桌面端本来就把所有 .process-row 摊开显示，
+              所以 is-expanded 切换在桌面无任何视觉变化。
+              现在两段式在两端统一：明细默认收起，点总览行 → 展开时间线，
+              点时间线里的一条 → 展开它的详细内容。
+
+           ★ 为什么桌面也默认收起：这是聊天应用，正文才是主角。
+             一轮 agent 任务可能有十几条思考/工具记录，全摊开会把正文顶出屏幕
+             —— 这个理由在桌面同样成立（原来只是"桌面高度宽裕"就摊开了）。 */
+        .turn-summary { cursor: pointer; }
+        .turn-summary-toggle {
+            display: inline-flex;
+            align-items: center;
+            flex: 0 0 auto;
+            opacity: .7;
+            transition: transform .15s ease;
+        }
+        .turn-process.is-expanded .turn-summary-toggle { transform: rotate(90deg); }
+        /* 第一段：明细（时间线）默认收起，展开后才显示 */
+        .turn-process .process-row { display: none; }
+        .turn-process.is-expanded .process-row { display: block; }
+        /* 阶段输出的完整原文：等宽、可滚动，方便与正文对照 */
+        .process-phase-text {
+            max-height: 340px;
+            overflow: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        /* 两个下拉箭头都随展开态旋转，用户一眼能看出"哪一层开着" */
+        .process-row.is-open .process-row-chevron { transform: rotate(90deg); }
+
+        /* ==================== 时间线外观（参考 DSH 的步骤流）====================
+           目标：让"想 → 做 → 想"看起来是一条**有先后的流**，而不是一堆并列卡片。
+
+           ── 做法 ──────────────────────────────────────────────────────────
+           ① 左侧一条竖线贯穿整块过程区（画在 .turn-process 上），
+              每个 .process-row 的图标位置再压一个圆点 —— 于是竖线像串珠子一样
+              把各步连起来，先后顺序一眼可见。
+           ② 工具行保留卡片（它是一次"操作"，有边界更清楚），思考行仍然无框
+              （它是叙述性文字，加框会像"又调了一次工具"）。
+           ③ 连线用 currentColor + 低透明度：深浅主题、各主题色下都自动正确，
+              不需要为每套主题单独写一条线色。
+
+           ★ 为什么不用"给每行编号"来表达先后：一轮任务可能有十几步，
+             编号会让人下意识去数"到第几步了"，而这条流想表达的是"它在推进"。
+             竖线是**连续**的，不暗示总量。 */
+        .turn-process {
+            position: relative;
+            /* 给左侧留出竖线与圆点的位置 */
+            padding-left: 18px;
+        }
+        .turn-process::before {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 22px;
+            bottom: 8px;
+            width: 1.5px;
+            border-radius: 1px;
+            background: currentColor;
+            opacity: 0.16;
+        }
+        .process-row {
+            position: relative;
+        }
+        /* 每一行图标左侧的节点圆点：把"这一步"钉在那条竖线上 */
+        .process-row::before {
+            content: '';
+            position: absolute;
+            left: -16.5px;
+            top: 12px;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--pixso-cream);
+            border: 1.5px solid currentColor;
+            opacity: 0.5;
+        }
+        /* 圆点与文字里那个状态圆重复表达同一件事时，以**这一颗**为主：
+           它是时间线上的一步，状态色直接画在它上面更自然。
+           所以状态圆（.process-state）在这种情况下淡出，只留节点色。 */
+        .process-row[data-state="ok"]::before { border-color: #3f9d5a; opacity: 0.9; }
+        .process-row[data-state="error"]::before { border-color: #d0523f; opacity: 1; }
+        .process-row[data-state="stopped"]::before { border-color: #b08a3f; opacity: 1; }
+        .process-row[data-state="running"]::before {
+            border-color: currentColor;
+            opacity: 1;
+            animation: dot-bounce 1.2s ease-in-out infinite;
+        }
+        /* 思考行的节点用空心，和工具行的实心区分开：
+           "想"是内在的、没有动作发生。 */
+        .process-row[data-kind="think"]::before {
+            background: transparent;
+            border-style: dashed;
+        }
+        /* 耗时：贴在状态文字左边，比状态更弱（它是补充信息，不是结论） */
+        .process-row-duration {
+            flex: 0 0 auto;
+            font-size: 10.5px;
+            opacity: 0.5;
+            font-variant-numeric: tabular-nums;
+        }
+        /* 参数键值表：让 path / command 这类值从 JSON 里浮出来 */
+        .process-args {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 6px;
+        }
+        .process-arg {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            min-width: 0;
+            font-size: 11.5px;
+            line-height: 1.5;
+        }
+        .process-arg-block {
+            flex-direction: column;
+            align-items: stretch;
+            gap: 3px;
+        }
+        .process-arg-key {
+            flex: 0 0 auto;
+            font-size: 10.5px;
+            font-weight: 600;
+            opacity: 0.55;
+            /* 键名统一宽度，值才能对齐成一列 —— 扫读时靠这一列定位 */
+            min-width: 62px;
+        }
+        .process-arg-value {
+            flex: 1 1 auto;
+            min-width: 0;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11.5px;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        code.process-arg-value {
+            background: var(--pixso-panel);
+            border-radius: 5px;
+            padding: 1px 5px;
+        }
+        .process-arg-block pre.process-arg-value {
+            margin: 0;
+            padding: 6px 8px;
+            border-radius: 6px;
+            background: var(--pixso-panel);
+            max-height: 220px;
+            overflow: auto;
+        }
+
+        @media (max-width: 980px) {
+            /* 手机上总览行的箭头推到最右（桌面跟在一行摘要后面更自然） */
+            .turn-summary-toggle { margin-left: auto; }
+        }
+
+        .typing-cursor::after {
+            content: "|";
+            color: var(--pixso-green-dark);   /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
+            animation: cursor-blink 1s step-end infinite;
+            margin-left: 1px;
+        }
+        @keyframes cursor-blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        .animate-fade-in-up { animation: fade-in-up 0.35s ease-out both; }
+        @keyframes fade-in-up {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-modal-pop { animation: modal-pop 0.25s cubic-bezier(0.16, 1, 0.3, 1) both; }
+        @keyframes modal-pop {
+            from { opacity: 0; transform: scale(0.94) translateY(8px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        @keyframes overlay-fade { from { opacity: 0; } to { opacity: 1; } }
+
+        .animate-slide-in-left { animation: slide-in-left 0.3s ease-out both; }
+        @keyframes slide-in-left { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: translateX(0); } }
+
+        .highlight-pulse { animation: highlight 2.2s ease-in-out; }
+        @keyframes highlight {
+            0%, 100% { box-shadow: none; }
+            20%, 60% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--pixso-green) 40%, transparent), 0 8px 32px color-mix(in srgb, var(--pixso-green) 20%, transparent); }
+        }
+
+        .bubble-user {
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .bubble-ai {
+            /* 2026-10：原来是写死的粉紫渐变（rgba(244,114,182)/rgba(139,92,246)）
+               + 写死的粉色描边 —— 与默认主题（暖米绿）不符。
+               改用主题变量的淡色混合，跟随主题切换。 */
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        .sidebar-item-active {
+            background: rgba(255, 255, 255, 0.75);
+            border: 1px solid color-mix(in srgb, var(--pixso-green) 40%, transparent);
+            box-shadow: 0 2px 12px color-mix(in srgb, var(--pixso-green) 20%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+        }
+        #folderList .conversation-inline-actions button,
+        #conversationMoveClose {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 0 !important;
+            outline: 0 !important;
+            box-shadow: none !important;
+            color: var(--pixso-brown-soft, #92796e);
+            background: var(--pixso-cream, #fffaf2);
+            -webkit-tap-highlight-color: transparent;
+        }
+        #folderList .conversation-inline-actions button {
+            width: 30px;
+            height: 30px;
+            padding: 0 !important;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px !important;
+        }
+        #folderList .conversation-inline-actions button:hover,
+        #conversationMoveClose:hover { color: var(--pixso-orange, #ff7d4d); background: var(--pixso-panel-soft, #f1e5d5); }
+        #folderList .conversation-inline-actions button svg { color: var(--pixso-brown-soft, #92796e) !important; }
+        #folderList .conversation-inline-actions button svg.text-pink-500,
+        #folderList .conversation-inline-actions button svg.text-amber-500 { color: var(--pixso-orange, #ff7d4d) !important; }
+        #folderList .folder-header-icon { color: var(--pixso-green-dark) !important; }
+        #folderList .folder-header-unfiled { color: var(--pixso-green-dark) !important; }
+        #folderList .conversation-pin-icon,
+        #folderList .conversation-pinned-label { color: var(--pixso-orange) !important; }
+        #conversationMoveClose { width: 34px; height: 34px; padding: 0 !important; display: inline-flex; align-items: center; justify-content: center; border-radius: 50% !important; }
+        #conversationMoveClose:focus-visible { outline: 2px solid rgba(167,187,108,.7) !important; outline-offset: 2px; }
+        #sidebarOverlay {
+            background: rgba(76, 49, 35, .08) !important;
+            backdrop-filter: blur(12px) saturate(1.05);
+            -webkit-backdrop-filter: blur(12px) saturate(1.05);
+        }
+
+        .conversation-context-menu {
+            position: fixed;
+            z-index: 900;
+            width: 176px;
+            padding: 6px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            color: var(--pixso-brown, #4c3123);
+            background: rgba(255, 252, 246, 0.96);
+            border: 1px solid rgba(217, 199, 192, 0.9);
+            border-radius: 15px;
+            box-shadow: 0 16px 36px rgba(76, 49, 35, 0.2), inset 0 1px 0 rgba(255,255,255,.92);
+            backdrop-filter: blur(18px) saturate(1.08);
+            -webkit-backdrop-filter: blur(18px) saturate(1.08);
+            opacity: 0;
+            transform: translateY(-4px) scale(.97);
+            transform-origin: top right;
+            pointer-events: none;
+            transition: opacity .16s ease, transform .16s cubic-bezier(.16, 1, .3, 1);
+        }
+        .conversation-context-menu.is-open {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+            pointer-events: auto;
+        }
+        .conversation-context-menu button {
+            appearance: none;
+            -webkit-appearance: none;
+            min-height: 38px;
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            color: inherit;
+            background: transparent;
+            border: 0;
+            border-radius: 10px;
+            font-size: 13px;
+            font-weight: 650;
+            text-align: left;
+        }
+        .conversation-context-menu button:active { background: rgba(226, 214, 190, .58); }
+        .conversation-context-menu button.danger { color: #a65347; }
+        .conversation-context-menu svg { width: 16px; height: 16px; flex: 0 0 16px; }
+
+        /* 兼容旧 WebView（Chromium < 87 不支持 inset 简写，会导致浮层定位失效）：
+           用长属性兜底所有 fixed inset-0 浮层，新 WebView 上效果与 inset: 0 相同。 */
+        .fixed.inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+
+        /* #customModal 的层级不在这里 —— 见下方「弹窗之间的层叠顺序必须写死」那段。
+           同一个属性上留两条互相打架的 !important 规则，靠源码顺序决定谁赢，
+           下次有人挪动其中一条就会静默改变层级，所以只保留一处。 */
+        #customModal:not(.hidden),
+        #conversationMoveOverlay:not(.hidden) { display: flex !important; }
+        #conversationMoveOverlay {
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            z-index: 1000;
+            padding: 16px;
+            align-items: center;
+            justify-content: center;
+        }
+        #conversationMoveOverlay.hidden { display: none !important; }
+        .conversation-move-panel { width: min(100%, 390px); max-height: min(72vh, 560px); }
+        .conversation-move-list { display: flex; flex-direction: column; gap: 7px; }
+        .conversation-move-option {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 100%;
+            min-height: 48px;
+            padding: 0 14px;
+            display: flex;
+            align-items: center;
+            gap: 11px;
+            color: var(--pixso-brown, #4c3123);
+            background: var(--pixso-cream, #fffaf2);
+            border: 1px solid var(--pixso-line, #d9c7c0);
+            border-radius: 14px;
+            font: inherit;
+            font-size: 13px;
+            font-weight: 650;
+            text-align: left;
+        }
+        .conversation-move-option.is-current { color: #fff; background: var(--pixso-green-dark, #68763e); border-color: transparent; }
+        .conversation-move-option svg { width: 18px; height: 18px; flex: 0 0 18px; }
+        .conversation-move-option span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+        .quote-chip {
+            background: rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.55);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+        }
+
+        /* ── 顶栏「公告」按钮 + 公告面板─────────────────────────
+           按钮本身沿用 .header-memory-btn（桌面图标+文字、手机收成圆图标），
+           这里只加"未读红点"与面板的样式。面板配色一律走主题变量。 */
+        .announce-dot { background: #ef5b73; }
+        #announcePanel {
+            display: flex;
+            flex-direction: column;
+            /* 头部是静态布局、z-10 其实不生效，这里显式给个层级，
+               否则面板会被后面渲染的聊天区盖住 */
+            z-index: 30;
+        }
+        /* 必须写这一条：上面的 #announcePanel 是 id 选择器（优先级高于 Tailwind
+           的 .hidden），不显式覆盖的话 hidden 根本藏不住面板。 */
+        #announcePanel.hidden { display: none; }
+        .announce-panel-head {
+            flex: none;
+        }
+        .announce-panel-close {
+            appearance: none;   cursor: pointer;
+             font-size: 12px; line-height: 1;
+             
+        }
+        .announce-item-dot {   border-radius: 999px;  flex: none; }
+        .announce-item-meta {    flex: none; }
+        .announce-item-body {
+               white-space: pre-wrap;
+        }
+        .announce-item-act {
+            appearance: none;  cursor: pointer; 
+              
+              
+        }
+
+        /* ── 设置 → 记忆：轮数步进器 + 手动整理按钮──────────
+           开关本身复用全站统一的 .mod-switch；这里只加步进器与手动按钮的样式，
+           配色一律走主题变量（写死颜色会在换主题/深色下显得割裂）。 */
+        .memory-every-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+        .memory-every-text { font-size: 12px; color: var(--pixso-brown-soft, #5d5878); flex: none; }
+        .memory-stepper {
+            display: inline-flex;
+            align-items: center;
+            flex: none;
+            border: 1px solid var(--pixso-line, #d3cadd);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .memory-step-btn {
+            appearance: none; -webkit-appearance: none;
+            border: 0; background: transparent; cursor: pointer;
+            width: 28px; height: 30px;
+            font-size: 14px; line-height: 1;
+            color: var(--pixso-brown-soft, #5d5878);
+        }
+        .memory-step-input {
+            appearance: none; -moz-appearance: textfield;
+            width: 46px; height: 30px;
+            border: 0;
+            border-left: 1px solid var(--pixso-line, #d3cadd);
+            border-right: 1px solid var(--pixso-line, #d3cadd);
+            background: transparent;
+            text-align: center;
+            font-size: 12px; font-weight: 650;
+            color: var(--pixso-brown-dark, #2c2a45);
+        }
+        /* 数字输入框在 Chrome/Safari 下自带上下小箭头，会和步进器按钮重复：去掉 */
+        .memory-step-input::-webkit-outer-spin-button,
+        .memory-step-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+        .memory-step-input:focus { outline: none; background: var(--pixso-panel-soft, #f5f0f6); }
+        .memory-now-btn {
+            appearance: none; -webkit-appearance: none; cursor: pointer;
+            display: inline-flex; align-items: center; gap: 7px;
+            margin-top: 12px; min-height: 34px; padding: 0 14px;
+            border: 1px solid var(--pixso-line, #d3cadd);
+            border-radius: 999px;
+            font-size: 12px; font-weight: 650;
+        }
+        .memory-now-btn svg { width: 15px; height: 15px; flex: none; }
+        .memory-now-btn.is-running { color: var(--pixso-orange, #b8934a); opacity: .8; }
+
+        /* ── MiMo TTS 参考音频样本────────────────────────
+           原生 file 控件的“未选择任何文件”改不了文案、也带不进主题，
+           所以换成：视觉隐藏的原生 input + 主题化按钮 + 状态文案 + 清除按钮。
+           配色全走主题变量 —— 之前那个 `bg-rose-500/20 text-rose-300`
+           是写死的 Tailwind 色，换主题/深色下都和周围格格不入。 */
+        .tts-sample-input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; overflow: hidden; }
+        .tts-sample-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .tts-sample-pick {
+            appearance: none; -webkit-appearance: none; cursor: pointer; flex: none;
+            display: inline-flex; align-items: center; gap: 6px;
+            min-height: 32px; padding: 0 12px;
+            border: 1px solid var(--pixso-line, #d3cadd);
+            border-radius: 999px;
+            font-size: 12px; font-weight: 650;
+            color: var(--pixso-brown, #5d5878);
+            background: var(--pixso-cream, #fbf7ef);
+        }
+        .tts-sample-pick:hover { background: var(--pixso-panel-soft, #f5f0f6); color: var(--pixso-brown-dark, #2c2a45); }
+        .tts-sample-pick svg { width: 15px; height: 15px; flex: none; }
+        .tts-sample-status {
+            display: block;
+            margin-top: 6px;
+            font-size: 11px; line-height: 1.55;
+            color: var(--pixso-brown-soft, #5d5878);
+            overflow-wrap: anywhere;
+        }
+        .tts-sample-status.is-ok { color: var(--pixso-green, #6d6aa8); }
+        .tts-sample-status.is-error { color: var(--pixso-warn, #b45309); }
+        .tts-sample-clear {
+            appearance: none; -webkit-appearance: none; cursor: pointer; flex: none;
+            min-height: 28px; padding: 0 10px;
+            border: 1px solid var(--pixso-warn-line, #fed7aa);
+            border-radius: 999px;
+            font-size: 11px; font-weight: 650;
+            color: var(--pixso-warn, #b45309);
+            background: var(--pixso-warn-bg, rgba(255, 247, 237, .75));
+        }
+        .tts-sample-clear:hover { background: var(--pixso-panel-soft, #f5f0f6); }
+
+        /* Core layout primitives stay stable even if the utility stylesheet is delayed. */
+        #appShell {
+            display: flex;
+        }
+        #sidebar {
+            position: fixed;
+            left: 16px;
+            top: 16px;
+            bottom: 16px;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            z-index: 40;
+        }
+        #mainContent {
+            display: flex;
+            flex: 1 1 0%;
+            flex-direction: column;
+            min-width: 0;
+        }
+        #mainContent > header {
+            display: flex;
+            align-items: center;
+            flex: 0 0 64px;
+            min-height: 64px;
+            margin: 16px 16px 0;
+            padding: 0 16px;
+            gap: 12px;
+            position: relative;
+            z-index: 10;
+        }
+        #initialState {
+            display: flex;
+            flex: 1 1 0%;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 0;
+        }
+        /* ID-based layout rules must still yield to the runtime's .hidden state. */
+        #initialState.hidden,
+        #conversationHistory.hidden,
+        #inputBar.hidden,
+        #chatHeader.hidden,
+        #notesPage.hidden,
+        #diaryPage.hidden {
+            display: none !important;
+        }
+        #conversationHistory,
+        #notesPage,
+        #diaryPage {
+            flex: 1 1 0%;
+            min-height: 0;
+        }
+        #conversationHistory { overflow-y: auto; }
+
+        /* Icon-only controls should never inherit a platform black button frame. */
+        #showSidebar,
+        #quoteLikeBtn,
+        #quoteFavBtn,
+        #sidebarSearchClear {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 0;
+            outline: none;
+            background: transparent;
+            font: inherit;
+        }
+        #showSidebar:focus-visible,
+        #quoteLikeBtn:focus-visible,
+        #quoteFavBtn:focus-visible,
+        #sidebarSearchClear:focus-visible {
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
+            outline-offset: 2px;
+        }
+        .initial-composer {
+            width: min(100%, 560px);
+        }
+        .initial-composer-shell {
+            display: flex;
+            align-items: center;
+        }
+        #initialTextInput {
+            flex: 1 1 0%;
+            min-width: 0;
+            outline: none;
+        }
+        .initial-composer-shell .btn-primary {
+            min-height: 40px;
+            padding: 0 18px;
+            white-space: nowrap;
+        }
+        #inputBar {
+            width: 100%;
+        }
+        #inputBar .conversation-composer {
+            display: flex;
+            align-items: center;
+            width: min(100%, 820px);
+        }
+        #textInput {
+            flex: 1 1 0%;
+            min-width: 0;
+            outline: none;
+        }
+        #inputBar .conversation-mic-btn {
+            flex: 0 0 40px;
+        }
+        #inputBar .conversation-send-btn {
+            min-height: 40px;
+            padding: 0 16px;
+            border-radius: 13px;
+            white-space: nowrap;
+        }
+        .composer-send-transition {
+            overflow: hidden;
+            opacity: 1;
+            transform: translateX(0) scale(1);
+            max-width: 112px;
+            transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), width 0.22s ease, min-width 0.22s ease, max-width 0.22s ease, padding 0.22s ease, border-width 0.16s ease;
+            will-change: opacity, transform, width, max-width;
+        }
+        #inputBar .conversation-send-btn.is-hidden,
+        #initialSendBtn.is-hidden {
+            width: 0;
+            min-width: 0;
+            max-width: 0;
+            padding-left: 0 !important;
+            padding-right: 0 !important;
+            border-width: 0;
+            opacity: 0;
+            transform: translateX(8px) scale(0.88);
+            pointer-events: none;
+        }
+        /* AI 回复中：同一按钮位置整键变「停止」（DSH 式二态）。
+           颜色保持主色调不变 —— 只换图标（箭头→暂停），不做红/蓝突跳。 */
+        #initialSendBtn.is-stopping,
+        #inputBar .conversation-send-btn.is-stopping {
+            opacity: 0.85;
+        }
+        .composer-tools {
+            position: relative;
+            flex: 0 0 40px;
+        }
+        .composer-more-btn {
+            appearance: none;
+            -webkit-appearance: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.78);
+            transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
+            cursor: pointer;
+        }
+        .composer-more-btn[aria-expanded="true"] {
+            color: var(--pixso-green-dark);   /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
+            transform: rotate(45deg);
+            background: rgba(255, 255, 255, 0.82);
+        }
+        .composer-more-btn:focus-visible {
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
+            outline-offset: 2px;
+        }
+        .composer-more-menu {
+            position: absolute;
+            left: 0;
+            bottom: calc(100% + 12px);
+            z-index: 50;
+            width: 276px;
+            transform-origin: left bottom;
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0) scale(1);
+            transition: opacity 0.18s ease, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s linear 0s;
+        }
+        .composer-more-menu.hidden {
+            display: block !important;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translateY(8px) scale(0.96);
+            transition: opacity 0.15s ease, transform 0.17s ease, visibility 0s linear 0.17s;
+        }
+        .composer-menu-label {
+            padding: 2px 9px 7px;
+            font-weight: 600;
+        }
+        .composer-menu-row {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 100%;
+            min-height: 54px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 9px;
+            text-align: left;
+            background: transparent;
+            border: 0;
+            outline: none;
+            cursor: pointer;
+            transition: background 0.16s ease;
+        }
+        .composer-menu-row:focus-within,
+        .composer-menu-row:focus-visible { background: rgba(255, 255, 255, 0.78); }
+        .composer-menu-row:disabled { opacity: 0.62; cursor: wait; }
+        .composer-menu-icon {
+            width: 32px;
+            height: 32px;
+            flex: 0 0 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255, 255, 255, 0.8);
+        }
+        .composer-menu-copy {
+            display: flex;
+            flex: 1 1 auto;
+            min-width: 0;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .composer-menu-title {  font-weight: 600;  }
+        .composer-menu-hint {  line-height: 1.35;  }
+        .composer-memory-status {
+            flex: 0 0 auto;
+               /* ★ 2026-10：原为 --color-primary（粉），改主题色 */
+            font-size: 10px;
+        }
+        .composer-image-preview {
+            position: relative;
+            width: 42px;
+            height: 42px;
+            flex: 0 0 42px;
+            margin-left: 5px;
+            border: 1px solid rgba(255, 255, 255, 0.82);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.62);
+            box-shadow: 0 4px 12px rgba(71, 52, 108, 0.12);
+        }
+        .composer-image-preview.hidden { display: none; }
+        .composer-image-preview img {
+            width: 100%;
+            height: 100%;
+            display: block;
+            object-fit: cover;
+            border-radius: 11px;
+        }
+        .composer-image-remove {
+            position: absolute;
+            top: -6px;
+            right: -6px;
+            width: 19px;
+            height: 19px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            color: #fff;
+            background: rgba(71, 52, 108, 0.86);
+            border: 2px solid rgba(255, 255, 255, 0.92);
+            border-radius: 50%;
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .message-image {
+            display: block;
+            width: min(320px, 100%);
+            max-height: 360px;
+            object-fit: contain;
+            margin-bottom: 10px;
+            background: rgba(255, 255, 255, 0.42);
+        }
+        .message-action-btn {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 0;
+            outline: none;
+            box-shadow: none;
+            font: inherit;
+        }
+        .message-action-btn:focus-visible {
+            outline: 2px solid color-mix(in srgb, var(--pixso-green) 52%, transparent);
+            outline-offset: 2px;
+        }
+
+        .tab-active {
+            background: rgba(255, 255, 255, 0.75);
+            /* 2026-10：原来是写死的粉描边 + 粉阴影，改成主题色 */
+            color: var(--pixso-green-dark);
+            border: 1px solid color-mix(in srgb, var(--pixso-green) 34%, transparent);
+            box-shadow: 0 2px 10px color-mix(in srgb, var(--pixso-green) 16%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+        }
+
+        .floating-dock-btn {
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.65);
+            box-shadow: 0 8px 24px rgba(31, 38, 135, 0.18), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+            transition: all 0.2s ease;
+        }
+        .floating-dock-btn:hover { transform: scale(1.08); }
+        .floating-dock-btn:active { transform: scale(0.95); }
+
+        @media (max-width: 980px) {
+            #sidebar {
+                width: min(280px, calc(100vw - 24px));
+                left: 12px;
+                top: 12px;
+                bottom: 12px;
+                animation: none;
+                transform: translateX(-115%);
+                opacity: 0;
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+                background: rgba(255, 247, 252, 0.96);
+                -webkit-backdrop-filter: blur(24px) saturate(1.35);
+                backdrop-filter: blur(24px) saturate(1.35);
+            }
+            body.sidebar-open #sidebar {
+                animation: none;
+                transform: translateX(0);
+                opacity: 1;
+            }
+            #showSidebar {
+                display: flex !important;
+            }
+            body.sidebar-open #mainContent {
+                visibility: hidden;
+                pointer-events: none;
+            }
+            #mainContent,
+            .ml-\[320px\] {
+                margin-left: 0 !important;
+            }
+            #mainContent > header {
+                flex-basis: 56px;
+                min-height: 56px;
+                margin: 12px 12px 0;
+                padding: 0 12px;
+                gap: 8px;
+            }
+            .quote-chip {
+                padding-left: 10px;
+                padding-right: 10px;
+            }
+            #initialState { padding: 20px 16px 24px; }
+            .initial-composer { margin-top: 24px; }
+            #inputBar { padding: 8px 12px 14px; }
+            #inputBar .conversation-composer {
+                min-height: 56px;
+                padding: 7px 8px 7px 12px;
+                gap: 8px;
+                border-radius: 16px;
+            }
+            .composer-more-menu { width: min(276px, calc(100vw - 32px)); }
+            #inputBar .conversation-send-btn {
+                width: 40px;
+                padding: 0;
+                justify-content: center;
+                font-size: 0;
+            }
+            #inputBar .conversation-send-btn svg { width: 16px; height: 16px; }
+        }
+
+        .fallback-ready .flex { display: flex; }
+        .fallback-ready .flex-col { flex-direction: column; }
+        .fallback-ready .flex-1 { flex: 1 1 0%; min-height: 0; }
+        .fallback-ready .flex-shrink-0 { flex-shrink: 0; }
+        .fallback-ready .flex-wrap { flex-wrap: wrap; }
+        .fallback-ready .items-center { align-items: center; }
+        .fallback-ready .items-end { align-items: flex-end; }
+        .fallback-ready .justify-center { justify-content: center; }
+        .fallback-ready .justify-end { justify-content: flex-end; }
+        .fallback-ready .justify-between { justify-content: space-between; }
+        .fallback-ready .justify-start { justify-content: flex-start; }
+        .fallback-ready .gap-0\.5 { gap: 2px; }
+        .fallback-ready .gap-1 { gap: 4px; }
+        .fallback-ready .gap-1\.5 { gap: 6px; }
+        .fallback-ready .gap-2 { gap: 8px; }
+        .fallback-ready .gap-2\.5 { gap: 10px; }
+        .fallback-ready .gap-3 { gap: 12px; }
+        .fallback-ready .gap-4 { gap: 16px; }
+        .fallback-ready .hidden { display: none; }
+        .fallback-ready .block { display: block; }
+        .fallback-ready .inline-flex { display: inline-flex; }
+        .fallback-ready .grid { display: grid; }
+        .fallback-ready .grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .fallback-ready .relative { position: relative; }
+        .fallback-ready .absolute { position: absolute; }
+        .fallback-ready .fixed { position: fixed; }
+        .fallback-ready .inset-0 { top: 0; right: 0; bottom: 0; left: 0; }
+        .fallback-ready .min-w-0 { min-width: 0; }
+        .fallback-ready .min-h-0 { min-height: 0; }
+        .fallback-ready .overflow-hidden { overflow: hidden; }
+        .fallback-ready .overflow-y-auto { overflow-y: auto; }
+        .fallback-ready .overflow-x-hidden { overflow-x: hidden; }
+        .fallback-ready .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fallback-ready .whitespace-nowrap { white-space: nowrap; }
+        .fallback-ready .whitespace-pre-wrap { white-space: pre-wrap; }
+        .fallback-ready .text-ellipsis { text-overflow: ellipsis; }
+        .fallback-ready .cursor-pointer { cursor: pointer; }
+        .fallback-ready .select-none { user-select: none; }
+        .fallback-ready .resize-none { resize: none; }
+        .fallback-ready .outline-none { outline: none; }
+        .fallback-ready .w-full { width: 100%; }
+        .fallback-ready .h-full { height: 100%; }
+        .fallback-ready .opacity-0 { opacity: 0; }
+        .fallback-ready .opacity-50 { opacity: 0.5; }
+        .fallback-ready .transition-all { transition: all 0.2s ease; }
+        .fallback-ready .transition-colors { transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease; }
+        .fallback-ready .transition-opacity { transition: opacity 0.2s ease; }
+        .fallback-ready .text-left { text-align: left; }
+        .fallback-ready .text-center { text-align: center; }
+        .fallback-ready .font-medium { font-weight: 500; }
+        .fallback-ready .font-semibold { font-weight: 600; }
+        .fallback-ready .font-bold { font-weight: 700; }
+        .fallback-ready .text-xs { font-size: 12px; line-height: 16px; }
+        .fallback-ready .text-sm { font-size: 14px; line-height: 20px; }
+        .fallback-ready .text-base { font-size: 16px; line-height: 24px; }
+        .fallback-ready .text-lg { font-size: 18px; line-height: 28px; }
+        .fallback-ready .text-2xl { font-size: 24px; line-height: 32px; }
+        .fallback-ready .text-3xl { font-size: 30px; line-height: 36px; }
+        .fallback-ready .text-4xl { font-size: 36px; line-height: 40px; }
+        .fallback-ready .text-5xl { font-size: 48px; line-height: 1; }
+        .fallback-ready .text-\[10px\] { font-size: 10px; }
+        .fallback-ready .text-\[11px\] { font-size: 11px; }
+        .fallback-ready .text-\[13px\] { font-size: 13px; }
+        .fallback-ready .leading-relaxed { line-height: 1.625; }
+        .fallback-ready .leading-tight { line-height: 1.25; }
+        .fallback-ready .line-clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+        .fallback-ready .space-y-1 > * + * { margin-top: 4px; }
+        .fallback-ready .space-y-7 > * + * { margin-top: 28px; }
+        .fallback-ready .space-y-3 > * + * { margin-top: 12px; }
+        .fallback-ready .space-y-1 { display: block; }
+        .fallback-ready .p-2 { padding: 8px; }
+        .fallback-ready .p-2\.5 { padding: 10px; }
+        .fallback-ready .p-3 { padding: 12px; }
+        .fallback-ready .p-4 { padding: 16px; }
+        .fallback-ready .p-5 { padding: 20px; }
+        .fallback-ready .p-6 { padding: 24px; }
+        .fallback-ready .px-2 { padding-left: 8px; padding-right: 8px; }
+        .fallback-ready .px-2\.5 { padding-left: 10px; padding-right: 10px; }
+        .fallback-ready .px-3 { padding-left: 12px; padding-right: 12px; }
+        .fallback-ready .px-4 { padding-left: 16px; padding-right: 16px; }
+        .fallback-ready .px-5 { padding-left: 20px; padding-right: 20px; }
+        .fallback-ready .px-6 { padding-left: 24px; padding-right: 24px; }
+        .fallback-ready .py-0\.5 { padding-top: 2px; padding-bottom: 2px; }
+        .fallback-ready .py-1 { padding-top: 4px; padding-bottom: 4px; }
+        .fallback-ready .py-1\.5 { padding-top: 6px; padding-bottom: 6px; }
+        .fallback-ready .py-2 { padding-top: 8px; padding-bottom: 8px; }
+        .fallback-ready .py-2\.5 { padding-top: 10px; padding-bottom: 10px; }
+        .fallback-ready .py-3 { padding-top: 12px; padding-bottom: 12px; }
+        .fallback-ready .py-4 { padding-top: 16px; padding-bottom: 16px; }
+        .fallback-ready .py-5 { padding-top: 20px; padding-bottom: 20px; }
+        .fallback-ready .py-24 { padding-top: 96px; padding-bottom: 96px; }
+        .fallback-ready .pt-1 { padding-top: 4px; }
+        .fallback-ready .pt-2 { padding-top: 8px; }
+        .fallback-ready .pt-3 { padding-top: 12px; }
+        .fallback-ready .pt-4 { padding-top: 16px; }
+        .fallback-ready .pb-2 { padding-bottom: 8px; }
+        .fallback-ready .pb-3 { padding-bottom: 12px; }
+        .fallback-ready .pb-5 { padding-bottom: 20px; }
+        .fallback-ready .pl-9 { padding-left: 36px; }
+        .fallback-ready .ml-2 { margin-left: 8px; }
+        .fallback-ready .ml-auto { margin-left: auto; }
+        .fallback-ready .mr-2 { margin-right: 8px; }
+        .fallback-ready .mt-1 { margin-top: 4px; }
+        .fallback-ready .mt-3 { margin-top: 12px; }
+        .fallback-ready .mt-4 { margin-top: 16px; }
+        .fallback-ready .mt-6 { margin-top: 24px; }
+        .fallback-ready .mt-8 { margin-top: 32px; }
+        .fallback-ready .mb-1 { margin-bottom: 4px; }
+        .fallback-ready .mb-2 { margin-bottom: 8px; }
+        .fallback-ready .mb-3 { margin-bottom: 12px; }
+        .fallback-ready .mb-4 { margin-bottom: 16px; }
+        .fallback-ready .mb-10 { margin-bottom: 40px; }
+        .fallback-ready .mx-auto { margin-left: auto; margin-right: auto; }
+        .fallback-ready .rounded-md { border-radius: 6px; }
+        .fallback-ready .rounded-lg { border-radius: 8px; }
+        .fallback-ready .rounded-xl { border-radius: 12px; }
+        .fallback-ready .rounded-2xl { border-radius: 16px; }
+        .fallback-ready .rounded-full { border-radius: 9999px; }
+        .fallback-ready .shadow-lg { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
+        .fallback-ready .shadow-2xl { box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25); }
+        .fallback-ready .shadow-sm { box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+        .fallback-ready .w-3\.5 { width: 14px; }
+        .fallback-ready .h-3\.5 { height: 14px; }
+        .fallback-ready .w-3 { width: 12px; }
+        .fallback-ready .h-3 { height: 12px; }
+        .fallback-ready .w-4 { width: 16px; }
+        .fallback-ready .h-4 { height: 16px; }
+        .fallback-ready .w-5 { width: 20px; }
+        .fallback-ready .h-5 { height: 20px; }
+        .fallback-ready .w-6 { width: 24px; }
+        .fallback-ready .h-6 { height: 24px; }
+        .fallback-ready .w-9 { width: 36px; }
+        .fallback-ready .h-9 { height: 36px; }
+        .fallback-ready .w-10 { width: 40px; }
+        .fallback-ready .h-10 { height: 40px; }
+        .fallback-ready .w-12 { width: 48px; }
+        .fallback-ready .h-12 { height: 48px; }
+        .fallback-ready .w-14 { width: 56px; }
+        .fallback-ready .h-14 { height: 56px; }
+        .fallback-ready .w-32 { width: 128px; }
+        .fallback-ready .h-32 { height: 128px; }
+        .fallback-ready .max-w-md { max-width: 28rem; }
+        .fallback-ready .max-w-lg { max-width: 32rem; }
+        .fallback-ready .max-w-sm { max-width: 24rem; }
+        .fallback-ready .max-w-2xl { max-width: 42rem; }
+        .fallback-ready .max-w-3xl { max-width: 48rem; }
+        .fallback-ready .max-w-full { max-width: 100%; }
+        .fallback-ready .max-w-\[220px\] { max-width: 220px; }
+        .fallback-ready .max-w-\[180px\] { max-width: 180px; }
+        .fallback-ready .max-h-\[80vh\] { max-height: 80vh; }
+        .fallback-ready .max-h-\[88vh\] { max-height: 88vh; }
+        .fallback-ready .max-h-\[50vh\] { max-height: 50vh; }
+        .fallback-ready .max-h-56 { max-height: 14rem; }
+        .fallback-ready .max-w-\[280px\] { max-width: 280px; }
+        .fallback-ready .w-\[280px\] { width: 280px; }
+        .fallback-ready .w-56 { width: 14rem; }
+        .fallback-ready .w-\[220px\] { width: 220px; }
+        .fallback-ready .text-indigo-950 { color: #1e1b4b; }
+        .fallback-ready .text-indigo-900 { color: #312e81; }
+        .fallback-ready .text-indigo-800 { color: #3730a3; }
+        .fallback-ready .text-indigo-700 { color: #4338ca; }
+        .fallback-ready .text-indigo-600 { color: #4f46e5; }
+        .fallback-ready .text-indigo-500 { color: #6366f1; }
+        .fallback-ready .text-indigo-400 { color: #818cf8; }
+        .fallback-ready .text-indigo-300 { color: #a5b4fc; }
+        .fallback-ready .text-indigo-200 { color: #c7d2fe; }
+        .fallback-ready .text-pink-600 { color: #db2777; }
+        .fallback-ready .text-pink-500 { color: #ec4899; }
+        .fallback-ready .text-pink-400 { color: #f472b6; }
+        .fallback-ready .text-violet-500 { color: #8b5cf6; }
+        .fallback-ready .text-violet-400 { color: #a78bfa; }
+        .fallback-ready .text-amber-500 { color: #f59e0b; }
+        .fallback-ready .text-amber-600 { color: #d97706; }
+        .fallback-ready .text-red-500 { color: #ef4444; }
+        .fallback-ready .text-red-400 { color: #f87171; }
+        .fallback-ready .text-red-300 { color: #fca5a5; }
+        .fallback-ready .text-indigo-800 { color: #1f2937; }
+        .fallback-ready .text-indigo-700 { color: #374151; }
+        .fallback-ready .text-indigo-400 { color: #9ca3af; }
+        .fallback-ready .text-indigo-600 { color: #4b5563; }
+        .fallback-ready .text-white { color: #ffffff; }
+        .fallback-ready .text-emerald-400 { color: #34d399; }
+        .fallback-ready .text-teal-500 { color: #14b8a6; }
+        .fallback-ready .fill-current { fill: currentColor; }
+        .fallback-ready .bg-white\/40 { background-color: rgba(255, 255, 255, 0.4); }
+        .fallback-ready .bg-white\/50 { background-color: rgba(255, 255, 255, 0.5); }
+        .fallback-ready .bg-white\/60 { background-color: rgba(255, 255, 255, 0.6); }
+        .fallback-ready .bg-white\/70 { background-color: rgba(255, 255, 255, 0.7); }
+        .fallback-ready .bg-white\/85 { background-color: rgba(255, 255, 255, 0.85); }
+        .fallback-ready .bg-black\/20 { background-color: rgba(0, 0, 0, 0.2); }
+        .fallback-ready .bg-pink-50 { background-color: #fdf2f8; }
+        .fallback-ready .bg-red-50 { background-color: #fef2f2; }
+        .fallback-ready .border { border-width: 1px; border-style: solid; }
+        .fallback-ready .border-t { border-top-width: 1px; border-top-style: solid; }
+        .fallback-ready .border-b { border-bottom-width: 1px; border-bottom-style: solid; }
+        .fallback-ready .border-white\/50 { border-color: rgba(255, 255, 255, 0.5); }
+        .fallback-ready .border-white\/55 { border-color: rgba(255, 255, 255, 0.55); }
+        .fallback-ready .border-white\/60 { border-color: rgba(255, 255, 255, 0.6); }
+        .fallback-ready .group:hover .group-hover\:opacity-100 { opacity: 1; }
+        .fallback-ready .group:hover .group-hover\:opacity-100 { transition: opacity 0.2s ease; }
+        .fallback-ready .rotate-90 { transform: rotate(90deg); }
+        .fallback-ready .-translate-x-1\/2 { transform: translateX(-50%); }
+        .fallback-ready .-translate-y-1\/2 { transform: translateY(-50%); }
+        .fallback-ready .translate-y-0 { transform: translateY(0); }
+        .fallback-ready .-translate-x-full { transform: translateX(-100%); }
+        .fallback-ready .hover\:text-indigo-500:hover { color: #6366f1; }
+        .fallback-ready .hover\:text-pink-800:hover { color: #9d174d; }
+        .fallback-ready .hover\:text-red-500:hover { color: #ef4444; }
+        .fallback-ready .hover\:scale-105:hover { transform: scale(1.05); }
+        .fallback-ready .duration-300 { transition-duration: 300ms; }
+        .fallback-ready .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .fallback-ready .xl\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        .fallback-ready .md\:block { display: block; }
+        .fallback-ready .md\:text-3xl { font-size: 30px; line-height: 36px; }
+        .fallback-ready .accent-pink-500 { accent-color: #ec4899; }
+        .fallback-ready .bg-gradient-to-br { background-image: linear-gradient(to bottom right, var(--tw-gradient-from, #8b5cf6), var(--tw-gradient-to, #ec4899)); }
+        .fallback-ready .from-pink-300.to-violet-300 { background-image: linear-gradient(135deg, #f9a8d4, #a5b4fc); }
+        .fallback-ready .from-emerald-300.to-teal-400 { background-image: linear-gradient(135deg, #6ee7b7, #2dd4bf); }
+        .fallback-ready .shadow-pink-200 { box-shadow: 0 10px 15px -3px rgba(251, 207, 232, 0.5), 0 4px 6px -2px rgba(251, 207, 232, 0.3); }
+        /* 默认主题（暗夜魔女书房 · 浅色）的基准色。
+           themes.css 在运行时按 data-theme-template / data-theme 覆盖；
+           这里保证首屏在主题脚本执行前也不会闪回旧配色。 */
+        :root {
+            --pixso-canvas: #f4eee1;
+            --pixso-cream: #fbf7ee;
+            --pixso-surface: #fbf7ee;
+            --pixso-panel: #efe7d7;
+            --pixso-panel-soft: #f1e8d7;
+            --pixso-brown: #241f18;
+            --pixso-brown-soft: #5a5041;
+            --pixso-green: #8a6a1f;
+            --pixso-green-dark: #6f5315;
+            --pixso-orange: #5c6f8a;
+            --pixso-line: #ddcfb8;
+            --pixso-warn: #a6761f;
+            --pixso-warn-soft: #8a5f12;
+            --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+            --pixso-warn-line: #e8cf9e;
+            --pixso-shadow: 0 24px 70px rgba(60, 45, 20, 0.18);
+            --chat-liquid-background:
+                radial-gradient(ellipse at 12% 18%, rgba(255, 255, 255, .92) 0%, rgba(255, 255, 255, 0) 42%),
+                radial-gradient(ellipse at 88% 24%, rgba(211, 179, 106, .18) 0%, rgba(211, 179, 106, 0) 44%),
+                radial-gradient(ellipse at 24% 88%, rgba(120, 150, 190, .12) 0%, rgba(120, 150, 190, 0) 46%),
+                linear-gradient(135deg, #fbf7ee 0%, #f4eee1 48%, #efe4d2 100%);
+            --text-heading: var(--pixso-brown);
+            --text-body: var(--pixso-brown-soft);
+            --text-secondary: var(--pixso-green-dark);
+            --text-muted: #8b7f6b;
+            --ink: var(--pixso-brown);
+        }
+
+        html, body { background: var(--pixso-canvas); }
+        body {
+            /* 2026-10：这里才是**真正生效**的 body 背景（上面的规则与它同级，
+               它在文件更后面，所以由它胜出 —— 我第一次只在前面那份上改渐变，
+               被这一条 `background` 简写整个盖掉了，实测 bgImage=none）。
+
+               原来这里是 `var(--pixso-canvas)` 纯色铺底，而**更前面**还有一条
+               写死的粉紫渐变 `#FFF0F5→#FFE4E1→#E6E6FA`（见上面 body 规则）。
+               两条叠加的结果：纯色压在渐变上，渐变看不见 ——
+               但设置页遮罩只有 82% 不透明，透出来的仍是**画布色**
+               （#a8b974 橄榄绿）与那层粉紫的混合，用户看到偏粉。
+
+               现在统一到主题变量：画布色 + 一层极轻的暖色渐变，
+               既保留层次，又跟随主题切换；不再有任何写死的粉紫。 */
+            background-image: linear-gradient(135deg,
+                color-mix(in srgb, var(--pixso-cream) 90%, transparent) 0%,
+                color-mix(in srgb, var(--pixso-cream) 72%, transparent) 42%,
+                color-mix(in srgb, var(--pixso-panel) 50%, transparent) 100%);
+            background-attachment: fixed;
+            overflow: hidden;
+        }
+        #sidebar {
+            position: relative;
+            inset: auto;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+            isolation: isolate;
+        }
+        #sidebar::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 0;
+            width: 108px;
+            background: var(--pixso-brown);
+            z-index: 0;
+        }
+        #sidebar,
+        #sidebar *,
+        #sidebar *::before,
+        #sidebar *::after {
+            box-sizing: border-box;
+        }
+        #sidebar > div:not(.sidebar-rail) {
+            position: relative;
+            z-index: 1;
+            width: calc(100% - 108px);
+            margin-left: 108px;
+            min-width: 0;
+        }
+        .sidebar-rail {
+            top: 0;
+            bottom: 0;
+            left: 0;
+            box-sizing: border-box;
+        }
+        .sidebar-rail-logo {
+            box-sizing: border-box;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 22px;
+        }
+        .sidebar-rail-logo svg {
+            position: static;
+            width: 32px;
+            height: 32px;
+            margin: 0;
+            display: block;
+            flex: 0 0 auto;
+            transform: none;
+        }
+        .sidebar-rail-btn {
+            appearance: none;
+            -webkit-appearance: none;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            line-height: 0;
+            border: 0;
+            cursor: pointer;
+        }
+        .rail-badge {
+            position: absolute;
+            top: 3px;
+            right: 2px;
+            min-width: 17px;
+            height: 17px;
+            padding: 0 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 2px solid var(--pixso-brown);
+            border-radius: 999px;
+            font-size: 9px;
+            line-height: 1;
+            font-weight: 800;
+        }
+        .rail-badge.hidden { display: none !important; }
+        .sidebar-rail-btn:hover {   transform: none; }
+        .sidebar-rail-btn svg {
+            position: static;
+            width: 27px;
+            height: 27px;
+            margin: 0;
+            display: block;
+            flex: 0 0 auto;
+            transform: none;
+            pointer-events: none;
+        }
+        #sidebarBrand {
+            border: 0;
+        }
+        #sidebarBrand > div:first-child {
+            width: 46px;
+            height: 46px;
+            border-radius: 50%;
+            color: var(--pixso-brown) !important;
+            background: var(--pixso-cream) !important;
+            box-shadow: none !important;
+        }
+        #sidebarBrand > div:first-child svg { width: 24px; height: 24px; }
+        #sidebarBrand .text-indigo-950,
+        #sidebarBrand .text-indigo-400 { color: var(--pixso-brown) !important; }
+        #sidebarBrand .text-indigo-400 { color: var(--pixso-brown-soft) !important; }
+        #sidebarBrand .text-sm { font-size: 18px !important; font-weight: 700; letter-spacing: -0.02em; }
+        #sidebarBrand .text-\[11px\] { font-size: 11px !important; font-weight: 500; }
+        #sidebar .text-indigo-950,
+        #sidebar .text-indigo-900,
+        #sidebar .text-indigo-800,
+        #sidebar .text-indigo-700,
+        #sidebar .text-indigo-600 { color: var(--pixso-brown) !important; }
+        #sidebar .text-indigo-500,
+        #sidebar .text-indigo-400,
+        #sidebar .text-indigo-300,
+        #sidebar .text-indigo-200 { color: var(--pixso-brown-soft) !important; }
+        #sidebar .p-3.grid { padding: 8px 18px 14px; gap: 8px; }
+        #sidebar .btn-primary,
+        #sidebar .glass-button {
+            min-height: 42px;
+            padding: 0 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        #sidebar .glass-button:hover { background: #fff; }
+        #sidebar .modal-input {
+            min-height: 42px;
+            padding: 10px 14px 10px 38px;
+        }
+        #sidebar .modal-input:focus { background: #fff; border: 0;  }
+        .sidebar-search-field {  width: 100%; min-width: 0; }
+        .sidebar-search-icon {
+            position: absolute;
+            top: 50%;
+            z-index: 2;
+            display: block;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+        .sidebar-search-clear {
+            appearance: none;
+            -webkit-appearance: none;
+            position: absolute;
+            right: 9px;
+            top: 50%;
+            z-index: 3;
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--pixso-brown-soft);
+            background: transparent;
+            border: 0;
+            border-radius: 50%;
+            transform: translateY(-50%);
+        }
+        .sidebar-search-clear.hidden { display: none !important; }
+        .sidebar-search-clear svg { width: 14px; height: 14px; display: block; }
+        #folderListWrapper { overflow: hidden; }
+        #folderList .text-sm { font-size: 14px !important; font-weight: 600; }
+        #folderList .text-\[11px\] { font-size: 11px !important; font-weight: 500; }
+        #sidebar .sidebar-item-active {
+            color: var(--pixso-brown);
+            background: rgba(255,255,255,0.68);
+            border: 0;
+            box-shadow: inset 4px 0 0 var(--pixso-orange);
+            border-radius: 12px;
+        }
+        #sidebar .sidebar-item-active .text-pink-600,
+        #sidebar .sidebar-item-active .text-indigo-900,
+        #sidebar .sidebar-item-active .text-indigo-300 {
+            color: var(--pixso-brown) !important;
+        }
+        #sidebar .sidebar-item-active .text-indigo-300 { color: var(--pixso-brown-soft) !important; }
+        #sidebar > div:last-child {
+            padding: 16px 18px 18px;
+            border-top: 1px solid rgba(76,49,35,0.12);
+            background: transparent;
+        }
+        #sidebar > div:last-child > div:last-child { color: var(--pixso-brown-soft) !important; }
+
+        /* Pixso dialog system: opaque, warm and typography-led instead of grey glass. */
+        /* 弹窗之间的层叠顺序必须写死。
+           .modal-overlay 上是 z-index: 100001 !important，会把所有弹窗压成同一层，
+           于是"谁在上面"变成由 DOM 顺序决定 —— 改一下 HTML 里元素的位置就可能把对话框
+           埋到别的弹窗后面。这里用 ID 选择器（优先级高于类选择器）+ !important 显式分层：
+             100001 普通弹窗（设置、分类管理、移动会话…）
+             100002 实现方式面板 / 副屏监视窗 / 下载悬浮窗（都从设置或全局语境打开，
+                    要盖住设置页；与确认框不冲突 —— 确认框更高）
+             100003 提示 / 确认对话框（要用户立刻做决定，永远在最上面 ——
+                    包括盖住副屏监视窗，否则 AI 的授权确认会被画面挡住） */
+        #backendPanel { z-index: 100002 !important; }
+        #customModal { z-index: 100003 !important; }
+        #screenWatchPanel { z-index: 100002 !important; }
+        /* 下载悬浮窗是**全局常驻件**：设置页开着也要看得见下载进度（所以必须高于
+           100001）；但卸载确认（#customModal）要压得住它，否则"确认卸载"会被
+           角落的进度条挡住。z-50 这类 utility 类压不过 .modal-overlay 的
+           !important，必须进这个阶梯。 */
+        #marketDlPanel { z-index: 100002 !important; }
+        /* 插件弹窗：必须**高于主设置**（主设置本身也是 .modal-overlay，同层 100001）。
+           ★ 为什么需要显式抬一档：打开插件设置时，主设置应当**留在后面当背景**，
+             而不是被盖住或消失。同层时谁在上由 DOM 顺序决定 —— 显式抬一档最稳，
+             不受以后插入顺序影响。
+           ★ 为什么不能用内联 style="z-index:…"：.modal-overlay 上是
+             `z-index: 100001 !important`，!important 会压过内联样式
+             （实测踩到：写了内联值，computed 仍是 100001）。必须同样用 !important 的规则。
+           ★ 也必须在 DOM 上放在 #settingsOverlay **外面**：主面板有
+             animation（含 transform），会成为 position:fixed 后代的包含块 ——
+             嵌在里面时弹窗会被"关进"主面板里。 */
+        #modSettingsOverlay { z-index: 100010 !important; }
+        #modReadmeOverlay { z-index: 100010 !important; }
+        .modal-overlay {
+            /* 弹窗必须显示在 Live2D 通话界面（z-index 99999）之上 */
+            z-index: 100001 !important;
+        }
+        .modal-panel {
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        .modal-panel,
+        .modal-panel button,
+        .modal-panel input,
+        .modal-panel textarea,
+        .modal-panel select { font-family: inherit; letter-spacing: 0; }
+        .modal-panel > div:first-child,
+        .modal-panel > div:last-child { border-color: var(--pixso-line) !important; }
+        .modal-panel .text-indigo-950,
+        .modal-panel .text-indigo-900,
+        .modal-panel .text-indigo-800,
+        .modal-panel .text-indigo-700,
+        .modal-panel .text-indigo-600 { color: var(--pixso-brown) !important; }
+        .modal-panel .text-indigo-500,
+        .modal-panel .text-indigo-400,
+        .modal-panel .text-indigo-300,
+        .modal-panel .text-indigo-200 { color: var(--pixso-brown-soft) !important; }
+        .modal-panel .text-pink-500,
+        .modal-panel .text-pink-600,
+        .modal-panel .text-fuchsia-500,
+        .modal-panel .text-rose-500,
+        .modal-panel .text-violet-500 { color: var(--pixso-orange) !important; }
+
+        /* 2026-10：`.text-pink-500` 等 Tailwind 类在**弹窗之外**的地方
+           （如顶栏金句的 ✨）没有被上面那条覆盖，仍是原生的 `#ec4899` 粉 ——
+           默认主题（暖米绿）下这些粉点是"漏网"的。
+
+           ★ 为什么必须带 `body` 前缀、而不能用 `:where()` 压低特异性：
+             themes.css 里已有的同类规则写的是
+             `html[data-theme-template] body .text-pink-500`（特异性 0,1,3）——
+             那套**只对显式选过模板的主题生效**，默认主题（不设 data-theme-template）
+             一条都不匹配。所以我这里要补的是"默认主题那一档"，
+             选择器得能压过 Tailwind 的单类选择器（0,1,0）：
+             用 `body .text-pink-500`（0,1,1）刚好够，且不与主题模板那套冲突
+             （那套特异性更高，选过模板时由它说了算）。
+
+           ★ 实测教训：第一版我用了 `:where(...)`（特异性 0）——
+             结果被 Tailwind 的 `.text-pink-500` 直接盖掉，**一点没生效**
+             （探针仍报 rgb(236,72,153)）。低特异性在"兜底"场景是反效果。 */
+        body .text-pink-500, body .text-pink-600, body .text-pink-400,
+        body .text-fuchsia-500, body .text-rose-500, body .text-violet-500,
+        body .text-purple-500 {
+            color: var(--pixso-orange);
+        }
+        .modal-label {
+            margin-bottom: 12px;
+            font-size: 13px;
+        }
+        .modal-label > span { color: var(--pixso-orange) !important; }
+        .modal-input,
+        .modal-textarea {
+            font-weight: 500;
+        }
+
+        /* ==================== 模型名组合框====================
+           用户要求（原话）："下拉框能不能和输入的地方直接二合一，右边的三角形区域
+           大一些，点右边三角形区域展开更改设置。就比如获取模型那里，点开直接在
+           输入那里显示模型列表；点左边区域可更改模型名称，点右边三角显示模型列表，
+           点击对应的模型直接替换模型上去。如果获取到的模型里有与填写的一样的，
+           列表里就不显示名称，避免显示两个一模一样的。"
+
+           ── 结构 ────────────────────────────────────────────────────────────
+             .model-combo
+               ├ input.model-combo-input      ← 点左边：正常编辑（手填模型名）
+               └ button.model-combo-toggle    ← 点右边三角：展开/收起列表
+               └ div.model-combo-list         ← 候选列表（绝对定位浮层）
+
+           ── 为什么不用 <datalist> ───────────────────────────────────────────
+           `<datalist>` 看起来正好是这个需求，但两个硬伤：
+             ① 各浏览器 UI 完全不受控（Chromium 只在输入时过滤、不显示右三角），
+                与用户要的"右边一块专门点开列表"不是一回事；
+             ② 不能用 JS 精确控制"列表里排除与输入框相同的项"。
+           所以自己拼：一个 input + 一个按钮 + 一个浮层列表，行为完全可控。
+
+           ── 与既有 DOM 的关系 ───────────────────────────────────────────────
+           ★ 保留原来的 <input> 与 <select> 元素**不动**：
+             · input 仍是 `#settingChatModel` / `#settingVisionModel`（真正取值的地方）
+             · select 仍是 `#chatModelsSelect` / `#visionModelsSelect`（承载候选）
+             组合框只是给它们加了一层视觉外壳 + 一个显式的展开按钮，
+             把 select 藏起来当作数据源。这样所有既有代码与检查脚本
+             （check-model-list 的 8 组断言都盯着 input.value 与 select）继续有效。 */
+        .model-combo { position: relative; }
+        /* 组合框做成**一个整体外框**。
+           ── 第一版错在哪 ─────────────────────────────────────────────────
+           我给 input 和三角按钮**各画了边框**（按钮只去掉左边那条），
+           想靠"边框重叠 1px"骗过眼睛。结果用户一眼看出是**两个部分**：
+             · input 46px 高、普通 select 48px —— 高度都对不上（少 2px）；
+             · 两条边框即使重合，颜色/抗锯齿的接缝仍在，"框里套了个按钮"。
+           ── 正确做法 ────────────────────────────────────────────────────
+           **外框画在容器上**（.model-combo-row），里面两个子元素都**不带边框**：
+             .model-combo-row   ← border + radius + background（唯一的框）
+               ├ input          ← 透明底、无边框、无圆角
+               └ button(toggle) ← 透明底、无边框，只提供"按钮"的语义与 hover
+           这样无论内部怎么分块，外框永远是**一个**圆角矩形 —— 与普通
+           `<select>` 的观感完全一致（select 也是"一个框 + 右侧原生三角"）。
+           ★ 高度必须与普通 select **实测一致**（都是 46px）。
+             第一版我按"modal-input 是 48px"设了 48 —— 实测普通 select 是 **46px**
+             （select 的行高算法与 input 不同）。差 2px 就能看出"两块不一样高"，
+             用户报的"分成两个部分"与此有关。 */
+        .model-combo-row {
+            display: flex;
+            align-items: stretch;
+            height: 46px;                      /* = 实测的普通 select 高度 */
+            border: 1px solid var(--pixso-line);
+            border-radius: 13px;
+            background: var(--pixso-cream);
+            box-sizing: border-box;
+            transition: border-color .15s ease, background .15s ease;
+        }
+        /* 聚焦：外框轻微高亮 —— ★ 但**不再换边框色**。
+           原来这里把边框改成 `--pixso-green`，聚焦/展开时外框会出现一圈彩色描边；
+           现在只保留背景的轻微变化作为聚焦提示，边框始终保持普通线色 ——
+           输入框与展开的列表也就天然同色，不会有任何色差。 */
+        .model-combo-row:focus-within {
+            background: var(--pixso-panel-soft);
+        }
+        /* 输入区：透明、无边框、无圆角 —— 它只是外框里的一段 */
+        .model-combo-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            background: transparent !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            height: 100%;
+            padding: 0 14px;
+        }
+        .model-combo-input:focus { background: transparent !important; box-shadow: none !important; }
+        /* 右侧三角：同样是外框里的一段（无边框、无底），
+           只保留 hover 的轻微提示 + "可点"的语义。
+           ★ 用户要求"三角形区域大一些" —— 给足宽度（46px）而不是挤成小箭头。 */
+        .model-combo-toggle {
+            flex: 0 0 auto;
+            width: 46px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border: 0;
+            background: transparent;
+            color: var(--pixso-brown-soft);
+            cursor: pointer;
+            border-radius: 0 12px 12px 0;   /* 与外框右下同弧度，hover 底色不会溢出圆角 */
+            transition: background .15s ease, color .15s ease;
+        }
+        .model-combo-toggle:hover,
+        .model-combo.is-open .model-combo-toggle { background: rgba(0, 0, 0, .05); color: var(--pixso-brown); }
+        /* 键盘聚焦（Tab 到三角）时的描边 —— ★ 用中性色，不用绿色（"我不需要绿边"） */
+        .model-combo-toggle:focus-visible { outline: 2px solid var(--pixso-brown-soft); outline-offset: -2px; }
+        /* 三角在展开时翻转（朝上），给一个明确的状态提示 */
+        .model-combo-toggle svg { transition: transform .15s ease; }
+        .model-combo.is-open .model-combo-toggle svg { transform: rotate(180deg); }
+        /* 浮层候选列表。
+           ★★ 注意 `right: 0` 而不是 `left: 0; right: 0` 拉满 ——
+             这里右端要**让开「获取模型」按钮**，否则浮层会盖住它。
+             做法：`right` 由 JS 无关的固定值给出（按钮宽度 + gap ≈ 100px 太多，
+             因为浮层宽度只需要覆盖输入框那一段即可）。
+             实测截图：拉满时会压住右侧的「获取模型」按钮，且下方内容被遮挡。
+           ★ `z-index` 要高于卡片内其它元素，但不能盖过设置面板顶栏（z-index: 2 在
+             顶栏那条规则里，那是面板内的层叠上下文，这里 5 足够盖住同层内容）。 */
+        .model-combo-list {
+            position: absolute;
+            left: 0;
+            /* 宽度对齐"输入框 + 三角"那一段（与 .model-combo 同宽，
+               而 .model-combo 本身就是 flex-1，不含右侧的获取按钮） */
+            right: 0;
+            /* 与输入框**无缝衔接**（原来是 calc(100% + 4px) 留了 4px 间隙，
+               使列表看起来是"另一个浮层"而不是输入框的一部分） */
+            top: 100%;
+            z-index: 5;
+            max-height: 232px;
+            overflow-y: auto;
+            padding: 4px;
+            border: 1px solid var(--pixso-line);
+            border-radius: 13px;
+            background: var(--pixso-cream);
+            box-shadow: 0 10px 30px rgba(30, 27, 75, .16);
+        }
+        .model-combo-list.hidden { display: none; }
+        /* 展开时把「输入框」与「下拉列表」合成**一块**：
+           "把模型名称和下拉栏合并成一个整体，而不是两个分开的地方"。
+           ── 原来为什么是两块 ──────────────────────────────────────────────
+           输入框是一个圆角框（.model-combo-row），候选列表是浮在它下方 4px 处的
+           **另一个**圆角框（各自带边框 + 圆角 + 阴影），中间有空隙 —— 一眼就是两截。
+           ── 现在怎么做 ────────────────────────────────────────────────────
+           展开时（.model-combo.is-open，init.js 展开加、收起移除）：
+             · 输入框的**下角压平**（两个下圆角设 0）；
+             · 列表的**上角压平**并**去掉上边框** —— 那条分隔线由输入框自身的
+               下边框充当，于是不会出现"两条边框叠在一起"的重边；
+             · 列表顶部紧贴输入框底部（上面的 `top: 100%`）。
+           结果：输入框 + 列表拼成一个连续的圆角矩形，只有**一个**外框。
+           ★ 两个组合框（对话模型 settingChatModel / 视觉模型 settingVisionModel）
+             共用这段规则。 */
+        .model-combo.is-open .model-combo-row {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+        }
+        .model-combo.is-open .model-combo-toggle { border-bottom-right-radius: 0; }
+        /* 展开时输入框与列表的边框**同色**（都保持普通线色 var(--pixso-line)）——
+           接缝两角干净、无缺口。这里**不再单独指定颜色**：因为聚焦态已不再换成
+           `--pixso-green`，输入框与列表天然同色（用户要求"我不需要绿边"）。 */
+        .model-combo.is-open .model-combo-list {
+            border-top: 0;
+            border-radius: 0 0 13px 13px;
+            box-shadow: 0 16px 30px rgba(30, 27, 75, .14);
+        }
+        .model-combo-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            padding: 8px 10px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: var(--pixso-brown);
+            font-size: 0.8125rem;
+            font-family: inherit;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .model-combo-item:hover,
+        .model-combo-item:focus-visible {
+            background: var(--pixso-panel-soft);
+            outline: none;
+        }
+        .model-combo-item.is-current { color: var(--pixso-green-dark); font-weight: 600; }
+        .model-combo-empty {
+            padding: 8px 10px;
+            font-size: 0.75rem;
+            color: var(--pixso-brown-soft);
+        }
+        .modal-input:focus,
+        .modal-textarea:focus {
+            color: var(--pixso-brown);
+            /* 不能写死 #fff：深色模式下聚焦会突然变白（用户反馈插件页没适配
+               深色时的一部分）。用 panel-soft，深色下是 #222833、浅色下 #f1e8e5。 */
+            background: var(--pixso-panel-soft);
+        }
+
+        /* ==================== 所有下拉统一外观====================
+           用户反馈："还有其他比如语言主题那里的下拉还是老下拉"。
+
+           ── 问题 ────────────────────────────────────────────────────────────
+           `<select>` 默认由**浏览器/系统原生绘制**：Windows 上是一个方角小箭头，
+           在 macOS 上是另一套，与我们的圆角输入框/组合框都不一致 ——
+           而且**深色模式下那个原生箭头不会跟着变**（8.62 记过同类坑）。
+           组合框（模型名）已经是自绘三角，两者并排就更明显。
+
+           ── 做法 ────────────────────────────────────────────────────────────
+           `appearance: none` 去掉原生箭头，再用一条内联 SVG 当背景图自绘三角
+           （与 `.model-combo-toggle` 里那个三角**同一个形状**，视觉一致）。
+           padding-right 留出 34px 给它，避免长选项文字压到箭头上。
+
+           ★ 为什么用 SVG 背景图而不是 `::after` 伪元素：
+             `<select>` 是替换元素，`::after` 在多数浏览器上不渲染 ——
+             这是唯一可靠的自绘方式。
+           ★ 深色模式不用单独写：三角用 `currentColor` 不行（背景图里取不到），
+             所以用 `stroke='%23566070'`（= 浅色的 brown-soft）。
+             深色下会偏暗，但 select 本身有 --pixso-cream 底，
+             对比度仍然够（实测深色下清晰可读）。 */
+        #settingsPanel select.modal-input:not(.hidden),
+        #settingsPanel select.log-select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23566070' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            background-size: 13px 13px;
+            padding-right: 34px;
+            cursor: pointer;
+        }
+        /* 深色下把箭头提亮（同一个内联 SVG，只换 stroke 色） */
+        html[data-theme="dark"] #settingsPanel select.modal-input:not(.hidden),
+        html[data-theme="dark"] #settingsPanel select.log-select {
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa4b6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+        }
+        /* 下拉的**聚焦**样式与「模型名」字段对齐（2026-10 用户要求
+           "其他地方下拉栏没做呢，比如深色模式/语音输出/思考…"）。
+           ── 差在哪 ────────────────────────────────────────────────────────
+           下拉带 `.modal-input` 类，聚焦时走 `.modal-input:focus` →
+           出现**绿色边框 + 3px 绿色光晕**；而模型名那边已按用户要求去掉了彩色描边
+           （"我不需要绿边"）。于是同一页里两套聚焦观感。
+           ── 做法 ──────────────────────────────────────────────────────────
+           覆盖为中性聚焦：边框维持普通线色、去掉绿色光晕，只保留底色的轻微变化。
+           `#settingsPanel select:focus`（1 个 id）优先级高于 `.modal-input:focus`
+           （2 个类），所以能稳定压住，不必用 !important。 */
+        #settingsPanel select:focus {
+            border-color: var(--pixso-line);
+            box-shadow: none;
+        }
+
+        /* ==================== 设置下拉：自绘弹出面板====================
+           用户要求"改下拉"——要把原生 <select> 的**弹出面板**换成主题化列表，
+           对齐「模型名」组合框的候选列表（原生面板是系统绘制的，CSS 改不了它）。
+           ── 做法 ──────────────────────────────────────────────────────────
+           `select` 元素本身**不动**（仍负责显示当前值、仍是取值来源），只在
+           `mousedown` 时 `preventDefault()` 阻止原生面板，改为弹出下面这个面板。
+           ── 面板样式 ──────────────────────────────────────────────────────
+           复用 `.model-combo-item`（选项行）；面板贴在 select 下沿、顶部不留边框，
+           分隔线由 select 自身的下边框充当，所以看起来是"select + 列表"连成一块。 */
+        .modal-input.cselect-open,
+        .log-select.cselect-open {
+            border-bottom-left-radius: 0 !important;
+            border-bottom-right-radius: 0 !important;
+        }
+        .cselect-panel {
+            position: fixed;
+            z-index: 100020;                    /* 高于设置遮罩（100001） */
+            max-height: 232px;
+            overflow-y: auto;
+            padding: 4px;
+            border: 1px solid var(--pixso-line);
+            border-top: 0;                      /* 分隔线由 select 下边框充当 */
+            border-radius: 0 0 13px 13px;
+            background: var(--pixso-cream);
+            box-shadow: 0 16px 30px rgba(30, 27, 75, .14);
+        }
+        /* 下方空间不够时面板向上弹：改为顶部圆角、底边无边框 */
+        .cselect-panel--up {
+            border-top: 1px solid var(--pixso-line);
+            border-bottom: 0;
+            border-radius: 13px 13px 0 0;
+        }
+        /* 文件选择按钮（插件页/模型页的上传框）：Tailwind 的 file:bg-indigo-100
+           在深色下是一块亮色，换成主题面板色。 */
+        #tab-mods input[type=file]::file-selector-button,
+        #modSettingsBody input[type=file]::file-selector-button {
+            background: var(--pixso-panel) !important;
+            color: var(--pixso-brown-dark) !important;
+            border: 1px solid var(--pixso-line);
+        }
+        .modal-panel .btn-primary {
+            font-weight: 700;
+        }
+        .modal-panel .btn-primary::before,
+        .modal-panel .btn-secondary::before { display: none; }
+        .modal-panel .btn-primary:hover { color: #fff;  box-shadow: none; }
+        .modal-panel .btn-secondary {
+            font-weight: 650;
+        }
+        .modal-panel .btn-secondary:hover {    box-shadow: none; }
+        #announcementOverlay,
+        #serverAnnounceOverlay,
+        #conversationPromptOverlay { z-index: 1200 !important; }
+        .guide-modal-panel { width: min(92vw, 520px); max-height: min(86vh, 720px); overflow: hidden; }
+        .guide-modal-scroll { overflow-y: auto; padding: 22px 24px 18px; }
+        .guide-eyebrow { color: var(--pixso-orange); font-size: 12px; font-weight: 700; }
+        .guide-title { color: var(--pixso-brown-dark); font-size: 20px; line-height: 1.35; margin-top: 5px; }
+        .guide-copy { color: var(--pixso-brown); font-size: 14px; line-height: 1.8; white-space: pre-wrap; margin-top: 14px; }
+        .guide-field { margin-top: 18px; padding-top: 17px; border-top: 1px solid rgba(166, 137, 119, .24); }
+        .guide-field label { display: block; color: var(--pixso-brown-dark); font-size: 13px; font-weight: 700; margin-bottom: 7px; }
+        .guide-field-hint { color: #9b8579; font-size: 11px; line-height: 1.55; margin-top: 7px; }
+        .guide-error { color: #b8624c; font-size: 12px; margin-top: 7px; }
+        .conversation-prompt-grid { display: grid; gap: 14px; }
+        .conversation-prompt-grid textarea { min-height: 112px; resize: vertical; line-height: 1.65; }
+        .conversation-prompt-meta { display: flex; justify-content: space-between; gap: 12px; color: #9b8579; font-size: 11px; margin-top: 8px; }
+        #conversationPromptCount.is-over { color: #b8624c; font-weight: 700; }
+        @media (max-width: 640px) {
+            .guide-modal-panel { width: 100%; max-height: calc(100vh - 28px); max-height: calc(100dvh - 28px); }
+            .guide-modal-scroll { padding: 20px 18px 16px; }
+            .guide-title { font-size: 18px; }
+            .conversation-prompt-grid textarea { min-height: 96px; }
+        }
+        #settingsContent > section {
+            padding-bottom: 26px;
+            border-bottom: 1px solid var(--pixso-line);
+        }
+        #settingsContent > section:last-child { padding-bottom: 0; border-bottom: 0; }
+        /* 底部按钮栏已删除——
+           原来这条 `#settingsPanel > div:last-child` 现在会指向**内容区**，
+           必须去掉：内容区不需要底色（卡片自己就是主体）。 */
+        #settingsOverlay,
+        #settingsOverlay *,
+        #settingsOverlay *::before,
+        #settingsOverlay *::after {
+            box-sizing: border-box;
+        }
+        #settingsContent,
+        #settingsContent > section { min-width: 0; max-width: 100%; }
+        #settingsPanel { min-width: 0; }
+        #settingsPanel .modal-input,
+        #settingsPanel .modal-textarea,
+        #settingsPanel select {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+        }
+        /* 日志工具栏里的下拉/搜索框**不吃**上面那条 width:100% ——
+           它们是工具栏里的小控件，被拉满整行会把后面的开关/按钮挤到换行，
+           实测截图里工具栏整个竖成一列。这里显式给回自己的宽度。 */
+        #settingsPanel .log-select,
+        #settingsPanel .log-search {
+            width: auto;
+            max-width: 150px;
+        }
+        #settingsPanel .log-search { width: 150px; }
+        #settingsPanel .grid > *,
+        #settingsPanel .flex > * { min-width: 0; }
+        #closeSettings,
+        #categoriesModalClose,
+        #detailClose {
+            appearance: none;
+            -webkit-appearance: none;
+            color: var(--pixso-brown-soft);
+            background: var(--pixso-cream);
+            border: 0;
+            border-radius: 50%;
+            box-shadow: none;
+        }
+        #closeSettings:hover,
+        #categoriesModalClose:hover,
+        #detailClose:hover { color: var(--pixso-orange); background: var(--pixso-panel-soft); }
+        #categoriesBatchBar { background: var(--pixso-panel-soft) !important; border-color: var(--pixso-line) !important; }
+        #categoriesModalList .glass-panel {
+            border-radius: 16px;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        #categoriesModalList .text-violet-400 { color: var(--pixso-green-dark) !important; }
+        #categoriesModalList .bg-pink-50 { background: rgba(167,187,108,.20) !important; }
+        #categoriesModalList .cat-checkbox { accent-color: var(--pixso-green-dark); }
+        .page-secondary-header {
+            color: var(--pixso-brown);
+            /* 2026-10 修：原为写死的 `rgba(255,255,255,.84)` ——
+               深色模式下语笺/日记页顶栏是一块**白条**（实测计算值 rgba(255,255,255,.84)），
+               而文字用深色模式的浅色字，白底浅字看不清。
+               改用主题变量，浅色/深色/6 套主题都自动跟随。
+               `--pixso-panel` 在浅色下是奶油白（与原观感接近），深色下是深灰。 */
+        }
+        .page-secondary-copy { flex: 1 1 auto;  }
+        .page-secondary-subtitle {    line-height: 1.3; }
+        .page-secondary-back {
+            appearance: none;
+            -webkit-appearance: none;
+            justify-content: center;
+            flex: 0 0 auto;
+            font-weight: 700;
+        }
+        .page-secondary-back svg { width: 16px; height: 16px; display: block; flex: 0 0 auto; }
+        #notesPage > .overflow-y-auto { padding: 26px 32px 34px; }
+        #exitNotesBtn {
+            color: var(--pixso-brown);
+            background: var(--pixso-cream);
+            border: 1px solid var(--pixso-line);
+            border-radius: 999px;
+            box-shadow: none;
+        }
+        #exitNotesBtn::before { display: none; }
+        #exitNotesBtn:hover { color: var(--pixso-orange); background: var(--pixso-panel-soft); box-shadow: none; }
+        .notes-tab {
+            font-family: inherit;
+        }
+        .notes-tab:hover { color: var(--pixso-brown) !important; background: var(--pixso-panel-soft) !important; }
+        .notes-tab.tab-active {
+            border-color: var(--pixso-green-dark) !important;
+        }
+        #notesSearch {    box-shadow: none; }
+        #notesSearch:focus { background: #fff;   }
+        #notesSearch + svg { color: var(--pixso-brown-soft) !important; }
+        .notes-subtitle-mobile { display: none; }
+        .notes-toolbar {
+            display: flex;
+            align-items: center;
+            min-width: 0;
+        }
+        .notes-tabs { display: flex; align-items: center; flex: 0 0 auto; min-width: 0; }
+        .notes-toolbar .notes-tab { white-space: nowrap; }
+        .notes-search-wrap { min-width: 0; }
+        .notes-search-wrap > svg {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            width: 16px;
+            height: 16px;
+            transform: translateY(-50%);
+            pointer-events: none;
+        }
+        #notesCount { flex: 0 0 auto; white-space: nowrap; }
+        .sidebar-underlay-hidden { display: none !important; }
+        #notesEmpty p { color: var(--pixso-brown-soft) !important; }
+        .note-role-user {   border: 1px solid var(--pixso-line); }
+        .note-remove-btn {
+            appearance: none;
+            -webkit-appearance: none;
+            border-radius: 50%;
+        }
+
+        #mainContent {
+            background-color: #f7f1e9;
+            background-size: cover;
+        }
+        #mainContent > header {
+            flex: 0 0 74px;
+            min-height: 74px;
+            margin: 0;
+            padding: 0 28px;
+            gap: 16px;
+            border: 0;
+            border-bottom: 1px solid var(--pixso-line);
+            border-radius: 0;
+            background: var(--pixso-surface);
+            box-shadow: none;
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        #mainContent > header #currentConversationTitle {
+            max-width: 300px;
+            color: var(--pixso-brown) !important;
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        #mainContent > header .quote-chip {
+            max-width: min(520px, 100%);
+            min-height: 36px;
+            padding: 0 14px;
+            color: var(--pixso-brown-soft);
+            background: var(--pixso-cream);
+            border: 0;
+            border-radius: 999px;
+            box-shadow: none;
+        }
+        #mainContent > header .quote-chip .text-indigo-800,
+        #mainContent > header .quote-chip .text-indigo-300 { color: var(--pixso-brown-soft) !important; }
+        .header-memory-btn {
+            appearance: none;
+            -webkit-appearance: none;
+            display: inline-flex;
+            align-items: center;
+            white-space: nowrap;
+            transition: background .18s ease, color .18s ease, transform .18s ease;
+        }
+        .header-memory-btn.page-mode-hidden { display: none !important; }
+        .header-memory-btn svg { width: 15px; height: 15px; }
+        /* 顶栏「外观模式」开关（2026-10：从「外观 → 深色模式」下拉搬来，
+           并按用户给的截图改成**三段连体胶囊**）：跟随设备 / 浅色 / 深色 三个
+           图标按钮连成一个胶囊，选中的那个是**填充圆底 + 白图标**。
+           ★「跟随设备」= 原来的「跟随系统」（跟随系统深浅色自动切换）。 */
+        .header-theme-switch {
+            display: inline-flex;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .header-theme-switch .theme-seg {
+            appearance: none;
+            -webkit-appearance: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 30px;
+            height: 30px;
+            flex: 0 0 auto;
+            padding: 0;
+            border: 0;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--pixso-brown-soft);
+            cursor: pointer;
+            transition: background .15s ease, color .15s ease;
+        }
+        .header-theme-switch .theme-seg:hover { color: var(--pixso-brown); }
+        .header-theme-switch .theme-seg svg { width: 16px; height: 16px; }
+        /* 选中段：填充圆底（用主题主色；深色主题下它就是截图里那个亮蓝圆） */
+        .header-theme-switch .theme-seg.is-active {
+            background: var(--pixso-green);
+            color: #fff;
+        }
+        #showSidebar {
+            border: 0;
+            background: transparent;
+        }
+        .greeting-subtitle {
+            line-height: 1.5;
+            letter-spacing: .01em;
+        }
+        #statusText { color: var(--pixso-brown-soft) !important; }
+        .initial-composer-shell .btn-primary {
+            min-height: 42px;
+            padding: 0 18px;
+        }
+        .initial-conversation-mic-btn {
+            box-shadow: none !important;
+        }
+        #conversationHistory > .message-item {
+            width: 100%;
+            margin-bottom: 12px;
+        }
+        #conversationHistory > .message-item > .flex { display: flex; width: 100%; margin-bottom: 8px !important; }
+        #conversationHistory > .message-item > .flex > .flex-1 {
+            flex: 0 1 auto;
+            width: auto;
+            max-width: min(760px, 84%);
+        }
+        #conversationHistory > .message-item-user > .flex { justify-content: flex-end; }
+        #conversationHistory > .message-item-ai > .flex { justify-content: flex-start; }
+        .pixso-chat-avatar {
+            flex: 0 0 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            background: var(--pixso-orange);
+            box-shadow: none;
+        }
+        .pixso-chat-avatar svg { width: 21px; height: 21px; display: block; }
+        .thinking-bubble .thinking-dot {
+            box-shadow: none;
+        }
+        .thinking-label {
+            font-weight: 600;
+        }
+        .bubble-user,
+        .bubble-ai {
+            position: relative;
+            overflow: visible;
+            -webkit-backdrop-filter: none;
+        }
+        /* 气泡小尾巴（::after 三角）已整体移除：
+         * 它是与气泡底色绑定的实色三角，换主题/深色模式时要跟着每个
+         * 主题各配一遍，漏一处就是"深色下突兀的亮三角"。
+         * 圆角本身（16px 16px 0 16px / 16px 16px 16px 0）保留了聊天气泡的
+         * 方向感 —— 靠近发送方的那一角是直角，没有尾巴也一眼能分清谁说的。 */
+        .bubble-user .text-indigo-500,
+        .bubble-user .text-indigo-300,
+        .bubble-user .text-indigo-800,
+        .bubble-ai .text-pink-600,
+        .bubble-ai .text-indigo-300,
+        .bubble-ai .text-indigo-950 { color: var(--pixso-brown-soft) !important; }
+        .bubble-user .text-indigo-500,
+        .bubble-user .text-indigo-800 { color: rgba(255,255,255,0.92) !important; }
+        .bubble-ai .text-pink-600 { color: var(--pixso-orange) !important; }
+        .bubble-ai .text-indigo-950 { color: var(--pixso-brown) !important; }
+        .ai-speaker-name {
+            align-items: center;
+            line-height: 1;
+        }
+        .bubble-user p,
+        .bubble-ai p {
+            font-size: 15px !important;
+            line-height: 1.5 !important;
+            font-weight: 500;
+            letter-spacing: 0;
+        }
+        /* 气泡里的 Markdown 块（标题 / 列表 / 表格 / 引用 / 代码）由 readme-view.js 渲染，
+           .rmd-* 的排版是照"读文档"调的（14px / 行高 1.8）。气泡这边字更大，
+           两种字号挨在一起会跳，所以这几类块在气泡内统一收成 14px 并压缩间距。 */
+        .bubble-user .rmd-h, .bubble-ai .rmd-h { line-height: 1.35 !important; }
+        .bubble-user .rmd-h2, .bubble-ai .rmd-h2 { font-size: 16px; margin: 12px 0 6px; }
+        .bubble-user .rmd-h3, .bubble-ai .rmd-h3,
+        .bubble-user .rmd-h4, .bubble-ai .rmd-h4 { font-size: 15px; margin: 10px 0 4px; }
+        .bubble-user .rmd-p, .bubble-ai .rmd-p { margin: 6px 0; }
+        .bubble-user .rmd-list, .bubble-ai .rmd-list { font-size: 14.5px; line-height: 1.65; margin: 6px 0; padding-left: 18px; }
+        .bubble-user .rmd-quote, .bubble-ai .rmd-quote { font-size: 14px; line-height: 1.65; margin: 8px 0; padding: 8px 12px; border-radius: 10px; }
+        .bubble-user .rmd-table-wrap, .bubble-ai .rmd-table-wrap { margin: 8px 0; border-radius: 10px; }
+        .bubble-user .rmd-table, .bubble-ai .rmd-table { font-size: 13px; }
+        .bubble-user .rmd-table th, .bubble-ai .rmd-table th,
+        .bubble-user .rmd-table td, .bubble-ai .rmd-table td { padding: 6px 10px; line-height: 1.55; }
+        .bubble-user .rmd-code, .bubble-ai .rmd-code { margin: 8px 0; border-radius: 10px; }
+        .bubble-user .rmd-code pre, .bubble-ai .rmd-code pre { padding: 10px 12px; }
+        .bubble-user .rmd-code code, .bubble-ai .rmd-code code { font-size: 12.5px; line-height: 1.6; }
+        .bubble-user .rmd-hr, .bubble-ai .rmd-hr { margin: 12px 0; }
+        .bubble-user .text-xs,
+        .bubble-ai .text-xs { font-size: 11px !important; font-weight: 600; }
+        .ai-voice-card {
+            width: 184px;
+            max-width: 100%;
+            margin-top: 10px;
+            padding: 0;
+            background: transparent;
+            border-radius: 0;
+        }
+        .ai-voice-player {
+            appearance: none;
+            -webkit-appearance: none;
+            width: 100%;
+            min-height: 34px;
+            padding: 6px 7px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border: 0;
+            cursor: pointer;
+            font-family: inherit;
+            transition: background .18s ease, transform .18s ease;
+        }
+        .ai-voice-player:hover {  transform: translateY(-1px); }
+        .ai-voice-player:focus-visible { outline: 2px solid var(--pixso-orange); outline-offset: 2px; }
+        .voice-play-box {
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 20px;
+            color: var(--pixso-brown);
+            border: 0;
+            border-radius: 0;
+        }
+        .voice-play-box svg { width: 12px; height: 12px; }
+        .voice-icon-pause { display: none; }
+        .ai-voice-player.is-playing .voice-icon-play { display: none; }
+        .ai-voice-player.is-playing .voice-icon-pause { display: block; }
+        .ai-voice-player.is-paused .voice-wave-bar { opacity: .55; }
+        .voice-duration {
+            min-width: 30px;
+            font-family: "Outfit Variable", sans-serif;
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: .02em;
+            text-align: left;
+        }
+        .voice-waveform {
+            height: 22px;
+            margin-left: auto;
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+        }
+        .voice-wave-bar {
+            width: 2px;
+            height: 6px;
+            flex: 0 0 2px;
+            background: var(--pixso-brown);
+            border-radius: 2px;
+            transform-origin: center;
+            opacity: .95;
+        }
+        .voice-wave-bar:nth-child(2), .voice-wave-bar:nth-child(8), .voice-wave-bar:nth-child(14) { height: 14px; }
+        .voice-wave-bar:nth-child(3), .voice-wave-bar:nth-child(7), .voice-wave-bar:nth-child(11), .voice-wave-bar:nth-child(15) { height: 19px; }
+        .voice-wave-bar:nth-child(4), .voice-wave-bar:nth-child(10) { height: 12px; }
+        .voice-wave-bar:nth-child(5), .voice-wave-bar:nth-child(9), .voice-wave-bar:nth-child(13) { height: 22px; }
+        .voice-wave-bar:nth-child(6), .voice-wave-bar:nth-child(12) { height: 9px; }
+        .ai-voice-player.is-playing .voice-wave-bar { animation: voice-wave-pulse .58s ease-in-out infinite alternate; }
+        .ai-voice-player.is-playing .voice-wave-bar:nth-child(3n + 1) { animation-delay: -.18s; }
+        .ai-voice-player.is-playing .voice-wave-bar:nth-child(3n + 2) { animation-delay: -.34s; }
+        @keyframes voice-wave-pulse {
+            from { transform: scaleY(.45); opacity: .65; }
+            to { transform: scaleY(1); opacity: 1; }
+        }
+        .ai-voice-player.is-error:hover { background: var(--pixso-warn-bg, rgba(255, 247, 237, .9)); }
+        .ai-voice-player.is-error .voice-wave-bar { background: var(--pixso-warn, #b45309); }
+        .ai-voice-error {
+            display: block;
+            margin-top: 4px;
+            padding: 0 2px;
+            font-size: 10.5px;
+            font-weight: 600;
+            line-height: 1.45;
+            white-space: normal;
+        }
+        .ai-voice-error[hidden] { display: none; }
+        #inputBar .conversation-composer {
+            width: min(100%, 820px);
+        }
+        #textInput,
+        #initialTextInput {   font-weight: 500; }
+        .composer-more-btn {
+            box-shadow: none;
+        }
+        .composer-more-btn:hover,
+        .composer-more-btn[aria-expanded="true"] { color: var(--pixso-orange); background: rgba(255,255,255,0.72); }
+        #inputBar .conversation-mic-btn {
+            box-shadow: none;
+        }
+        #inputBar .conversation-send-btn {
+            width: 44px;
+            min-width: 44px;
+            max-width: 44px;
+            height: 44px;
+            min-height: 44px;
+            padding: 0;
+            display: inline-flex !important;
+            align-items: center;
+            justify-content: center;
+            gap: 0 !important;
+            line-height: 0;
+            color: #fff;
+            background: var(--pixso-green);
+            border: 0;
+            border-radius: 50%;
+            box-shadow: none;
+        }
+        #inputBar .conversation-send-btn:hover { background: var(--pixso-green-dark); }
+        #inputBar .conversation-send-btn svg { display: block; width: 18px; height: 18px; margin: 0; }
+        #inputBar .conversation-send-btn { font-size: 0; }
+        #inputBar .conversation-send-btn.is-hidden { width: 0; height: 44px; }
+        #floatingMic {
+            bottom: auto;
+            transform: none !important;
+        }
+        .floating-mic-surface {
+            width: 100%;
+            min-height: 64px;
+            padding: 8px 10px;
+            color: var(--pixso-brown);
+            border: 1px solid var(--pixso-green);
+            border-radius: 20px;
+            box-shadow: 0 0 0 3px rgba(167,187,108,.18), 0 12px 28px rgba(76,49,35,.12);
+            backdrop-filter: none;
+            -webkit-backdrop-filter: none;
+        }
+        .floating-voice-status {
+            min-width: 0;
+            flex: 1 1 auto;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .floating-voice-status > span:last-child { min-width: 0; display: flex; flex-direction: column; }
+        .floating-voice-status strong { font-size: 13px; font-weight: 750; line-height: 1.25; }
+        .floating-voice-status small { color: var(--pixso-brown-soft); font-size: 10px; font-weight: 500; line-height: 1.35; }
+        .floating-live-dot {
+            width: 9px;
+            height: 9px;
+            flex: 0 0 9px;
+            background: var(--pixso-orange);
+            border-radius: 50%;
+            box-shadow: 0 0 0 5px rgba(255,125,77,.12);
+            animation: floating-live-pulse 1.15s ease-in-out infinite;
+        }
+        #floatingCancelBtn,
+        #floatingEndBtn,
+        #floatingMicBtn {
+            appearance: none;
+            -webkit-appearance: none;
+            border: 0;
+            box-shadow: none;
+        }
+        #floatingCancelBtn { color: var(--pixso-brown-soft); background: #fff; }
+        #floatingCancelBtn:hover { color: var(--pixso-orange); background: var(--pixso-panel-soft); }
+        #floatingMicBtn {
+            width: 48px;
+            height: 48px;
+            color: #fff;
+            background: var(--pixso-orange);
+        }
+        #floatingMicBtn:hover { background: #ee6f42; }
+        #floatingEndBtn { color: #fff; background: var(--pixso-green-dark); }
+        #floatingEndBtn:hover { background: #64763d; }
+        @keyframes floating-live-pulse {
+            0%, 100% { transform: scale(.9); opacity: .7; }
+            50% { transform: scale(1.12); opacity: 1; }
+        }
+        .composer-menu-icon {   border: 0; }
+
+        #conversationHistory::-webkit-scrollbar-thumb { background: #d4c1ba; }
+        #conversationHistory::-webkit-scrollbar-thumb:hover { background: #bca69d; }
+        .diary-toolbar {
+            align-items: center;
+            gap: 12px;
+        }
+        .diary-count { margin-left: auto;   }
+        #exitDiaryBtn {
+            min-height: 36px;
+            padding: 0 13px;
+            color: var(--pixso-brown);
+            background: var(--pixso-cream);
+            border: 0;
+            border-radius: 999px;
+            box-shadow: none;
+        }
+        #exitDiaryBtn:hover { color: var(--pixso-orange); background: var(--pixso-panel-soft); }
+        .diary-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            padding: 14px 32px 34px;
+        }
+        .diary-card {
+            position: relative;
+            min-height: 150px;
+            color: var(--pixso-brown);
+        }
+        /* ==================== 日记分组标题 ====================
+           日记改为**按对话分组**后，每组前面有这么一行。见 ui.js 的
+           renderDiaryPage()。
+
+           ★ `grid-column: 1 / -1` 是必须的：`.diary-grid` 是两列网格，
+             标题若不跨列就会被塞进某一列里，后面同组的卡片也跟着错位
+             （表现为"标题和卡片各占一格、看起来像两列不相关的数据"）。
+           ★ `position: sticky; top: 0` 让当前组一直可见 —— 日记长了以后，
+             滚动时能知道自己在看哪段对话的日记。 */
+        .diary-group-head {
+            grid-column: 1 / -1;
+            top: 0;
+            z-index: 1;
+            border-bottom: 1px solid var(--pixso-line);
+            /* 2026-10：组头也要有入场动画。用户反馈"点左边对话没动画" ——
+               卡片有 animate-fade-in-up，而**组头没有**，于是切换筛选时
+               标题是"啪"地出现、卡片却淡入，观感上就是"没动画"。
+               两处用同一套时长/缓动，切换时才像一个整体在动。 */
+            animation: fade-in-up 0.35s ease-out both;
+        }
+        /* 当前被筛选中的组：左侧一道暖金竖条 + 描边 —— 让"我现在在看哪一段"
+           一眼可见（筛选条已按用户要求移除，缺少视觉落点会让人不知道点中了没有）。 */
+        .diary-group-head.is-focused {
+            border-bottom-color: var(--pixso-orange);
+            box-shadow: inset 3px 0 0 var(--pixso-orange);
+            padding-left: 10px;
+        }
+        .diary-group-head.is-jumpable { cursor: pointer; }
+        .diary-group-head.is-jumpable:hover .diary-group-dot { transform: scale(1.35); }
+        .diary-group-dot {
+              
+            flex: none;
+            transition: transform .15s ease;
+        }
+        .diary-group-title {
+            font-size: 13px; font-weight: 750; 
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            transition: color .15s ease;
+        }
+        .diary-group-count {
+            margin-left: auto; flex: none;
+             
+             
+        }
+        /* 卡片正文截成 4 行（保持网格整齐），**点卡片弹窗看全文** ——
+           见 ui.js 的 openDiaryDetail()。光标给 pointer 提示可点。 */
+        .diary-card-text {     display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+        .diary-essence {      font-weight: 700; }
+        .diary-empty { padding: 90px 24px; color: var(--pixso-brown-soft); text-align: center; }
+
+        /* ==================== 日记：筛选条 / 进入对话 / 详情弹窗 ====================
+           用户要求："点聊天记录只筛选日记、不跳转聊天"，以及"日记能展开看全文"。
+           这一组是配套的样式（结构见 ui.js 的 renderDiaryPage /
+           focusDiaryGroup / openDiaryDetail）。 */
+        .diary-card { cursor: pointer; }
+        .diary-group-enter {
+            flex: none;
+            font-weight: 700;
+            cursor: pointer;
+            transition: color .15s ease, border-color .15s ease;
+        }
+        /* 筛选态提示条：跨整行，紧跟网格顶部 */
+        /* 详情弹窗正文：允许长文换行，别把长串挤成一条 */
+        .diary-detail-meta { font-size: 11px; color: var(--pixso-brown-soft); }
+        .diary-detail-text {
+            color: var(--pixso-brown); font-size: 14px; line-height: 1.85;
+            white-space: pre-wrap; word-break: break-word;
+        }
+
+        /* ==================== 日志分栏（#tab-log） ====================
+           对齐 AstrBot 的「数据与日志 → 日志」：
+             ① 级别药丸（多选，点掉不想看的级别）
+             ② 工具栏（模块 / 关键词 / 排除对话 / 自动滚动 / 刷新 / 清屏）
+             ③ 终端式日志区（等宽、深色、旧在上、新在下）
+             ④ 状态栏
+
+           ★ 日志区**刻意是深色**，不跟随主题：它是终端式输出，深底浅字
+             才能让级别配色（绿/黄/红）有足够对比度；浅底上黄字几乎看不见。
+             这与 bat 面板的观感也一致 —— 用户要的正是"两处能逐行对照"。
+
+           ★ 这一栏**不套卡片**（其它分栏是 `<section>` 卡片）：
+             卡片自带 18px/20px 内边距，日志区要尽量占满高度，
+             套上之后上下各多一圈空白、能看的行数反而变少。 */
+
+        /* 日志区高度：**填满设置内容区的剩余空间**。
+           ★ 为什么不再用 `calc(var(--app-height) - 260px)` 这类"视口减魔法数字"：
+             那是估算，估不准就会两头顶 —— 实测在 360x640 上内容区有 576px，
+             而按公式算出来的日志区只有 192px，**白白空掉 236px（41%）**；
+             反过来在小视口上又会溢出（曾经撑到 1418px）。
+             让 flex 去分配就没有这个矛盾：内容区多高，日志区就吃掉多少。
+           ★ 配套：`#settingsContent` 在显示日志栏时改成**不滚动 + flex 纵向**
+             （见下面 `#settingsContent:has(#tab-log.active-panel)`），
+             这样 `.log-tab-body` 的 `flex:1` 才有确定的父高度可用。
+             滚动交给日志区自己（它本来就是 overflow-y:auto）。 */
+        .log-tab-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1 1 auto;
+            min-height: 0;      /* 关键：不加则 flex 子项不肯收缩，会顶破容器 */
+        }
+
+        .log-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            flex-shrink: 0;
+        }
+        .log-toolbar-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-left: auto;
+        }
+
+        /* ---- 级别药丸 ---- */
+        .log-level-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .log-pill {
+            padding: 3px 11px;
+            font-size: 11px;
+            font-weight: 700;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            letter-spacing: .02em;
+            color: var(--pixso-brown-soft);
+            background: transparent;
+            border: 1px solid var(--pixso-line);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: color .15s ease, border-color .15s ease, background .15s ease;
+        }
+        .log-pill:hover { border-color: var(--pixso-green); color: var(--pixso-brown); }
+        /* 选中态：用该级别自己的颜色（与日志区里的级别文字同色，一眼对应） */
+        .log-pill[aria-pressed="true"][data-level="DEBUG"] { color: #7aa2f7; border-color: #7aa2f7; background: rgba(122,162,247,.12); }
+        .log-pill[aria-pressed="true"][data-level="INFO"] { color: #16a34a; border-color: #16a34a; background: rgba(22,163,74,.12); }
+        .log-pill[aria-pressed="true"][data-level="WARN"] { color: #d97706; border-color: #d97706; background: rgba(217,119,6,.12); }
+        .log-pill[aria-pressed="true"][data-level="ERROR"] { color: #dc2626; border-color: #dc2626; background: rgba(220,38,38,.12); }
+        .log-pill[aria-pressed="true"][data-level="CRITICAL"] { color: #b91c1c; border-color: #b91c1c; background: rgba(185,28,28,.16); }
+        /* 未选中：划掉的感觉 —— 明确"这一类被关掉了" */
+        .log-pill[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
+
+        /* ---- 工具栏控件 ---- */
+        .log-select, .log-search {
+            height: 28px;
+            padding: 0 8px;
+            font-size: 11px;
+            color: var(--pixso-brown);
+            background: var(--pixso-cream);
+            border: 1px solid var(--pixso-line);
+            border-radius: 8px;
+            outline: none;
+        }
+        .log-select { max-width: 150px; }
+        .log-search { width: 150px; }
+        .log-search:focus, .log-select:focus { border-color: var(--pixso-green); }
+        /* 2026-10 改良：原来是一个裸 checkbox（只靠 accent-color 上色），
+           和全站其它开关不是一套观感。现在改成与 .mod-switch 同一套语言的
+           **紧凑版**开关（原生 input 仍在、仍可聚焦，只是视觉隐藏 ——
+           log-viewer.js 读的就是它的 .checked，所以 JS 一行都不用改）。 */
+        .log-switch {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--pixso-brown-soft);
+            cursor: pointer;
+            user-select: none;
+            white-space: nowrap;
+        }
+        .log-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+        .log-switch-track {
+            position: relative;
+            flex: none;
+            width: 30px;
+            height: 17px;
+            border-radius: 999px;
+            background: var(--pixso-line);
+            transition: background .2s;
+        }
+        .log-switch-track::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 13px;
+            height: 13px;
+            border-radius: 999px;
+            background: #fff;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+            transition: transform .2s;
+        }
+        .log-switch input:checked ~ .log-switch-track {
+            background: linear-gradient(90deg, var(--pixso-green), var(--pixso-green-dark));
+        }
+        .log-switch input:checked ~ .log-switch-track::after { transform: translateX(13px); }
+        .log-switch input:focus-visible ~ .log-switch-track {
+            outline: 2px solid var(--pixso-green);
+            outline-offset: 2px;
+        }
+        .log-icon-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            color: var(--pixso-brown-soft);
+            background: var(--pixso-cream);
+            border: 1px solid var(--pixso-line);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: color .15s ease, border-color .15s ease;
+        }
+        .log-icon-btn:hover { color: var(--pixso-orange); border-color: var(--pixso-orange); }
+        .log-icon-btn svg { width: 14px; height: 14px; }
+
+        /* ---- 终端式日志区 ---- */
+        .log-terminal {
+            flex: 1 1 auto;
+            min-height: 0;
+            padding: 10px 12px;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            background: #0f172a;
+            border-radius: 12px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+            font-size: 11px;
+            line-height: 1.65;
+            color: #cbd5e1;
+            /* 长路径/长 JSON 不撑破容器；同时保留换行（多行诊断块要能读） */
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .log-terminal::-webkit-scrollbar { width: 8px; }
+        .log-terminal::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .log-terminal::-webkit-scrollbar-thumb:hover { background: #475569; }
+        .log-line { padding: 1px 4px; border-radius: 4px; }
+        .log-line:hover { background: rgba(255,255,255,.06); }
+        /* 级别配色：与级别药丸同色系，但在深底上要提亮 */
+        .log-line[data-level="DEBUG"] .log-lv { color: #7aa2f7; }
+        .log-line[data-level="INFO"] .log-lv { color: #4ade80; }
+        .log-line[data-level="WARN"] .log-lv { color: #fbbf24; }
+        .log-line[data-level="ERROR"] .log-lv { color: #f87171; }
+        .log-line[data-level="CRITICAL"] .log-lv { color: #fca5a5; font-weight: 700; }
+        .log-time { color: #64748b; }
+        .log-tag { color: #a78bfa; }
+        .log-loc { color: #64748b; }
+        .log-msg { color: #cbd5e1; }
+        .log-empty { color: #64748b; padding: 12px 4px; }
+
+        /* ---- 状态栏 ---- */
+        .log-meta {
+            flex-shrink: 0;
+            padding-top: 2px;
+            color: var(--pixso-brown-soft);
+            font-size: 10px;
+            line-height: 1.5;
+        }
+        .log-meta b { color: var(--pixso-brown); }
+
+        @media (max-width: 1080px) and (min-width: 981px) {
+            #appShell { width: calc(100vw - 28px); height: calc(100vh - 28px); margin: 14px auto; }
+            #sidebar { width: 330px; flex-basis: 330px; }
+            #sidebar::before, .sidebar-rail { width: 96px; }
+            #sidebar > div:not(.sidebar-rail) { width: calc(100% - 96px); margin-left: 96px; }
+            #conversationHistory { padding-left: 24px; padding-right: 24px; }
+        }
+
+        @media (max-width: 980px) {
+            html, body {
+                width: 100%;
+                min-width: 0;
+                height: var(--app-height);
+                min-height: 100%;
+                margin: 0 !important;
+                padding: 0 !important;
+                overflow: hidden;
+            }
+            html, body { background: var(--pixso-cream); }
+            #appShell { position: fixed; top: var(--viewport-offset-top); left: 0; width: 100%; max-width: 100%; height: var(--app-height); min-height: 0; margin: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
+            #sidebar {
+                position: fixed;
+                top: calc(8px + var(--safe-top));
+                bottom: calc(8px + var(--safe-bottom));
+                left: calc(8px + var(--safe-left));
+                width: min(390px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
+                height: auto;
+                flex: 0 0 min(390px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
+                transform: translateX(-115%);
+                opacity: 0;
+                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+                background: var(--pixso-panel);
+                border-radius: 22px;
+                box-shadow: 0 20px 56px rgba(67, 47, 36, .24);
+            }
+            body.sidebar-open #sidebar { transform: translateX(0); opacity: 1; }
+            #sidebar::before {
+                display: block;
+                width: 84px;
+            }
+            .sidebar-rail {
+                display: flex;
+                width: 84px !important;
+                padding: 14px 10px 16px;
+                gap: 8px;
+                overflow-y: auto;
+                overscroll-behavior: contain;
+            }
+            .sidebar-rail-logo {
+                width: 50px;
+                height: 50px;
+                margin-bottom: 14px;
+            }
+            .sidebar-rail-logo svg { width: 28px; height: 28px; }
+            .sidebar-rail-btn { width: 52px; height: 52px; }
+            .sidebar-rail-btn svg { width: 27px; height: 27px; }
+            #sidebar > div:not(.sidebar-rail) { width: calc(100% - 84px); margin-left: 84px; }
+            #sidebarBrand { height: 78px; padding: 14px 12px; }
+            #sidebarBrand > div:first-child { width: 40px; height: 40px; flex: 0 0 40px; }
+            #sidebarBrand .text-sm { font-size: 16px !important; }
+            #folderList .text-sm { font-size: 15px !important; }
+            #folderList .text-\[11px\] { font-size: 12px !important; }
+            #folderList .text-base { font-size: 17px !important; }
+            #folderList .text-xs { font-size: 13px !important; }
+            #mobileSidebarClose {
+                appearance: none;
+                -webkit-appearance: none;
+                width: 34px;
+                height: 34px;
+                margin-left: auto;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 34px;
+                color: var(--pixso-brown-soft);
+                background: rgba(255,255,255,.56);
+                border: 0;
+                border-radius: 50%;
+            }
+            #mobileSidebarClose svg { width: 17px; height: 17px; }
+            #mainContent { width: 100%; max-width: 100%; min-width: 0; margin: 0 !important; overflow: hidden; }
+            body.sidebar-open #mainContent {
+                visibility: visible;
+                pointer-events: none;
+                filter: blur(12px) saturate(.94);
+                transform: scale(1.012);
+                transform-origin: center;
+            }
+            #mainContent > header {
+                flex-basis: 72px;
+                min-height: 72px;
+                margin: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left)) !important;
+                padding: 0 12px;
+                gap: 8px;
+                border: 1px solid var(--pixso-line) !important;
+                border-radius: 20px !important;
+                /* 2026-10 修：这里原本写死 `background: #fff !important` ——
+                   深色模式下顶栏是一块**纯白方块**（实测计算值 rgb(255,255,255)），
+                   而顶栏文字用的是深色模式的浅色字，白底浅字几乎看不清。
+                   改用主题变量：`--pixso-panel` 在浅色下是奶油白、深色下是深灰，
+                   两边都跟着主题走，不需要在 themes.css 里再写一条深色覆盖。
+                   ★ 为什么不直接在 themes.css 加 `html[data-theme="dark"] #mainContent > header`
+                     覆盖：那样只治深色，**其它几套主题**（雾蓝/琥珀/暮紫）
+                     的顶栏仍然是写死的白色，与它们的配色割裂。
+                     根因是"写死了颜色"，就该改根因。 */
+                background: var(--pixso-panel) !important;
+                box-shadow: 0 8px 22px rgba(76, 49, 35, .10) !important;
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+            }
+            #mainContent > header #currentConversationTitle {
+                font-size: 17px;
+                max-width: 150px;
+                color: var(--pixso-brown) !important;
+            }
+            #mainContent > header .quote-chip { display: none !important; }
+            /* 2026-10：手机端公告**不走金句胶囊** —— 上面那条是老设计（为给拥挤的
+               顶栏省地方，手机端整条藏掉胶囊）。公告有自己的入口 #headerAnnounceBtn
+               （沿用 .header-memory-btn，见下面那几条手机规则里对它的处理），
+               所以这里不需要给胶囊做任何"条件显形"。 */
+            .page-secondary-header {
+                flex-basis: 68px;
+                min-height: 68px;
+                margin: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left));
+                padding: 0 14px;
+                border-radius: 20px;
+            }
+            .page-secondary-title { font-size: 18px; }
+            .page-secondary-subtitle { font-size: 11px; }
+            .page-secondary-back {
+                width: 38px;
+                min-width: 38px;
+                height: 38px;
+                min-height: 38px;
+                padding: 0;
+                gap: 0;
+                font-size: 0;
+                border-radius: 50%;
+            }
+            .page-secondary-back svg { width: 18px; height: 18px; }
+            #notesPage > .overflow-y-auto { padding: 14px calc(16px + var(--safe-right)) calc(28px + var(--safe-bottom)) calc(16px + var(--safe-left)); }
+            .notes-subtitle-full { display: none; }
+            .notes-subtitle-mobile { display: inline; }
+            .notes-toolbar {
+                flex-wrap: nowrap;
+                gap: 10px;
+            }
+            #notesPage .notes-tabs { display: none !important; }
+            .notes-search-wrap {
+                display: block !important;
+                flex: 1 1 auto;
+                width: auto;
+                min-width: 0;
+                margin-left: 0 !important;
+            }
+            #notesSearch {
+                box-sizing: border-box;
+                width: 100% !important;
+                min-width: 0;
+                max-width: 100%;
+            }
+            #notesCount {
+                flex: 0 0 auto;
+                white-space: nowrap;
+                font-size: 11px;
+            }
+            .diary-toolbar { padding: 12px calc(16px + var(--safe-right)) 4px calc(16px + var(--safe-left)); }
+            .diary-toolbar .diary-count { margin-left: 0; }
+            /* 日志分栏（手机）：工具栏换行、搜索框收窄。
+               ★ 高度**不在这里改** —— 它由 .log-tab-body 的 flex:1 填满内容区，
+                 与机型无关。这里曾经写过 `height: calc(--app-height - 300px)`
+                 和更早的 `height: auto`，两次都是错的：前者在小屏上白空 40%，
+                 后者让日志区按内容撑到 1418px 把状态栏推出屏幕。 */
+            .log-toolbar { gap: 8px; }
+            .log-toolbar-right { margin-left: 0; width: 100%; }
+            .log-search { flex: 1 1 auto; width: auto; min-width: 0; }
+            .log-select { max-width: 120px; }
+            .log-terminal { font-size: 10.5px; padding: 8px 9px; }
+            #sidebar .p-3.grid {
+                width: calc(100% - 84px);
+                min-width: 0;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+            #sidebar .p-3.grid > * { width: 100%; min-width: 0; }
+            #sidebar .btn-primary,
+            #sidebar .glass-button,
+            #sidebar .modal-input { min-width: 0; max-width: 100%; }
+            #sidebar .modal-input { width: 100%; }
+            #sidebar .relative { min-width: 0; max-width: 100%; }
+            #showSidebar {
+                width: 38px;
+                height: 38px;
+                padding: 0 !important;
+                display: inline-flex !important;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 38px;
+                color: var(--pixso-brown) !important;
+                background: var(--pixso-cream) !important;
+                border-radius: 50%;
+            }
+            #showSidebar svg { width: 18px; height: 18px; color: var(--pixso-brown) !important; stroke: currentColor; }
+            #showSidebar:hover { color: var(--pixso-orange) !important; background: var(--pixso-panel-soft) !important; }
+            .header-memory-btn {
+                width: 38px;
+                height: 38px;
+                min-height: 38px;
+                padding: 0;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 38px;
+                color: var(--pixso-brown) !important;
+                background: var(--pixso-cream) !important;
+                border-radius: 50%;
+            }
+            /* 手机上按钮收成圆图标：隐藏文字，但「状态红点」要保留（两个按钮都有） */
+            .header-memory-btn > span:not(#memoryStatusDot):not(#announceStatusDot) { display: none; }
+            .header-memory-btn svg { width: 18px; height: 18px; }
+            .header-memory-btn:hover { color: var(--pixso-orange) !important; background: var(--pixso-panel-soft) !important; }
+            /* 顶栏外观模式开关：手机上收窄一点，别挤掉「整理记忆」 */
+            .header-theme-switch { padding: 2px; gap: 1px; }
+            .header-theme-switch .theme-seg { width: 26px; height: 26px; }
+            .header-theme-switch .theme-seg svg { width: 15px; height: 15px; }
+            #initialState {
+                justify-content: safe center;
+                overflow-y: auto;
+                overscroll-behavior: contain;
+                padding: calc(26px + var(--safe-top)) calc(16px + var(--safe-right)) calc(30px + var(--safe-bottom)) calc(16px + var(--safe-left));
+            }
+            #greetingText { font-size: 28px; }
+            #conversationHistory { padding: 18px 16px 112px; }
+            #conversationHistory > .message-item > .flex > .flex-1 { max-width: 88%; }
+            #inputBar { box-sizing: border-box; width: 100%; max-width: 100%; padding: 10px calc(12px + var(--safe-right)) calc(14px + var(--safe-bottom)) calc(12px + var(--safe-left)); overflow: visible; }
+            #inputBar .conversation-composer { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; min-height: 58px; margin-left: 0; margin-right: 0; padding: 7px 8px 7px 10px; border-radius: 18px; }
+            #inputBar .composer-tools,
+            #inputBar #textInput,
+            #inputBar .conversation-mic-btn,
+            #inputBar .conversation-send-btn { min-width: 0; }
+            #inputBar .conversation-send-btn { width: 42px; min-width: 42px; max-width: 42px; height: 42px; min-height: 42px; }
+            #inputBar .conversation-send-btn.is-hidden { width: 0; min-width: 0; max-width: 0; }
+            .initial-composer { width: 100%; }
+            .initial-composer-shell { min-height: 58px; padding-left: 10px; }
+            .composer-more-menu { width: min(276px, calc(100vw - 32px)); }
+            .diary-toolbar { padding: 20px 16px 8px; }
+            .diary-grid { grid-template-columns: 1fr; padding: 12px calc(16px + var(--safe-right)) calc(28px + var(--safe-bottom)) calc(16px + var(--safe-left)); }
+            #folderList [data-conv-id] {
+                position: relative;
+                min-height: 54px;
+                touch-action: pan-y;
+                -webkit-user-select: none;
+                user-select: none;
+            }
+            #folderList [data-conv-id].is-context-target {
+                /* 原为写死的 rgba(255,255,255,.74) —— 深色模式下会话项被长按时
+                   会闪一块**白底**。改用主题变量，跟随深浅色。 */
+                background: var(--pixso-panel-soft);
+                box-shadow: inset 3px 0 0 var(--pixso-green), 0 7px 18px rgba(76,49,35,.08);
+            }
+            .conversation-inline-actions {
+                opacity: 1 !important;
+                flex: 0 0 auto;
+            }
+            .conversation-secondary-actions { display: none !important; }
+            .conversation-favorite-btn {
+                appearance: none;
+                -webkit-appearance: none;
+                box-sizing: border-box;
+                width: 36px;
+                height: 36px;
+                padding: 0 !important;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                border: 0 !important;
+                outline: 0;
+                border-radius: 50% !important;
+                /* 原为写死的 rgba(255,255,255,.48) —— 深色下是一枚**白圆片**。
+                   改用主题变量（浅色下仍是淡底，深色下变深）。 */
+                background: var(--pixso-panel-soft);
+                box-shadow: none !important;
+                -webkit-tap-highlight-color: transparent;
+            }
+            .conversation-favorite-btn:focus-visible { outline: 2px solid rgba(135, 154, 82, .65); outline-offset: 1px; }
+            .conversation-favorite-btn svg { width: 18px !important; height: 18px !important; }
+
+            #settingsOverlay {
+                padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left) !important;
+                width: 100%;
+                height: var(--app-height);
+                min-height: 0;
+                top: 0;
+                left: 0;
+                align-items: stretch !important;
+                justify-content: stretch !important;
+                background: var(--chat-liquid-background) !important;
+                background-color: #f7f1e9 !important;
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+            }
+            #settingsPanel {
+                width: 100%;
+                max-width: none;
+                height: 100%;
+                max-height: 100%;
+                min-height: 0;
+                margin: 0;
+                color: var(--pixso-brown);
+                background: transparent;
+                border: 0;
+                border-radius: 0;
+                box-shadow: none;
+                animation: settings-page-enter .24s cubic-bezier(.16, 1, .3, 1) both;
+                backdrop-filter: none;
+                -webkit-backdrop-filter: none;
+            }
+            /* 顶栏（导航 + ✕）：标题行已删，这条改成作用于 #settingsTopBar。
+               ★ 用 id 而不是 div:first-child —— 结构一改（删标题行）索引就错位。
+               ★ 与桌面端保持一致：**无框、无底色、无分隔线** ——
+                 原来这里是"圆角卡片 + 描边 + 阴影"，等于又把导航框起来了，
+                 正是用户否掉的观感（桌面改纯文字后这里也必须跟上，
+                 否则同一个界面在手机/电脑上长得不一样）。 */
+            #settingsTopBar {
+                min-height: 56px;
+                margin: 8px 12px 0;
+                padding: 0 10px;
+                background: transparent;
+                border: 0 !important;
+                border-bottom: 0 !important;
+                border-radius: 0;
+                box-shadow: none;
+            }
+            #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
+            #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
+            /* 手机上的分栏导航：9 个分栏在 360px 宽里放不下，**横向滚动**是
+                 手机上的标准做法（浏览器标签页就是这样），不改成换行 ——
+                 换行会占掉 2-3 行高度，把本就紧张的日志区再压小。
+               ★ 关键是别浪费宽度：桌面那条 `max-width: calc(100% - 120px)` 是
+                 给"标题 + ✕"两侧留位的，而手机上标题行已删、✕ 只有一个且绝对定位，
+                 所以只留 ✕ 的宽度（38px）+ 一点间隙即可。实测这样能让
+                 「日志」「插件」这些靠后的分栏少滚一大截。
+               ★★ `justify-content: flex-start` **不在这里写** ——
+                 它在基础 `#settingsTabNav` 规则里（那是真因，见那条注释）。
+                 我上一版写在这里，被文件更后面的基础规则覆盖掉、一点没生效
+                 （实测仍是 `center` → 头尾被裁且滚不回来）。 */
+            #settingsTabNav {
+                max-width: calc(100% - 66px);
+                /* 触摸滚动更跟手；并让点中的分栏吸附到可视区 */
+                -webkit-overflow-scrolling: touch;
+                scroll-snap-type: x proximity;
+                scroll-padding-inline: 8px;
+                /* 左右各留 2px 内边距：让首/末项与容器边缘有一点呼吸，
+                   也让 scroll-snap 吸附后不贴边（实测贴边时看着像被裁）。
+                   ★ 不用 mask 做"右侧渐隐"了 —— mask 是**视觉遮罩**，
+                     它会把首/末项的文字也一起渐隐掉，与"被遮挡"的观感叠加
+                     反而更像 bug。可滑动的提示交给"露出半个分栏"本身。 */
+                padding: 0 2px !important;
+                mask-image: none;
+                -webkit-mask-image: none;
+            }
+            .settings-tab-btn { scroll-snap-align: start; }
+            /* 手机上**隐藏分栏图标**，只留文字。
+                 两个原因：
+                 ① 宽度：9 个分栏 + 图标在 360px 上要多滚将近一倍
+                    （实测带图标 scrollWidth 341 vs 不带 255）；
+                 ② 可读性：图标是 unicode 符号（◐☺◗♪◉✧⚙☰▣），在安卓的
+                    中文字体里常常**没有对应字形**，会退化成方框或与文字重叠
+                    （实测截图里"外观"的图标和文字叠在一起）。
+                 桌面端宽度充裕、字体也更全，图标保留。
+               ★ 图标是 `display:none`，不占位。 */
+            .settings-tab-btn::before { display: none; }
+            /* 手机上没有悬停，未选中分栏要**更实一点**：
+                 桌面端靠悬停区分选中态，而手机上未选中太淡（opacity .78 + 浅色文字）
+                 在户外/低亮度下几乎看不清"还有哪些分栏可点"。
+                 选中态本来就是主题绿 + 加粗，所以提亮未选中不会混淆。
+               ★★ 注意：分栏的**间距与内边距不在这里改**。
+                 原因：媒体查询在文件里位于**基础 `.settings-tab-btn` 规则之前**，
+                 同权重下后面的基础规则会胜出 —— 我原先在这里写的
+                 `padding/font-size/gap` **全部被覆盖、一点没生效**
+                 （实测 btnPadding 仍是 8px 12px、font-size 仍是 13px）。
+                 这类"规则写了却不生效"不会报错，只能靠量计算样式发现。
+                 所以那些覆盖写在文件后面「手机分栏间距」那一段（基础规则之后）。 */
+            .settings-tab-btn { opacity: .92; color: var(--pixso-brown); }
+            /* 级别药丸在手机上收紧：5 个药丸（DEBUG/INFO/WARNING/ERROR/CRITICAL）
+                 在 360px 上原本要占两行（工具栏 127px 高）。收紧内边距与字号后
+                 仍会换行，但只占两行的一半高度，给日志区多留出可视行数。 */
+            .log-pill { padding: 3px 8px; font-size: 10.5px; }
+            #closeSettings {
+                width: 38px;
+                height: 38px;
+                padding: 0;
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                flex: 0 0 38px;
+            }
+            #closeSettings svg { width: 18px; height: 18px; color: var(--pixso-brown) !important; }
+            .settings-close-desktop { display: none; }
+            .settings-close-mobile { display: block; }
+            #settingsContent {
+                min-height: 0;
+                overflow-y: auto;
+                overscroll-behavior: contain;
+                padding: 18px 14px 26px;
+                background: transparent;
+            }
+            #settingsContent > section,
+            #settingsContent > section:last-child {
+                padding: 17px;
+                /* 原为写死的白色玻璃（rgba(255,255,255,.56) + 白描边 + 白内阴影）——
+                   深色模式下设置卡片会是**白底**，与深色面板割裂。
+                   改用主题变量：浅色下仍是半透明奶油白（观感接近），深色下自动变深。
+                   内阴影的白也去掉（它在深色下是一条刺眼的亮边）。 */
+                background: var(--pixso-panel-soft);
+                border: 1px solid var(--pixso-line) !important;
+                border-radius: 18px;
+                box-shadow: 0 12px 30px rgba(76,49,35,.08);
+                backdrop-filter: blur(16px) saturate(1.08);
+                -webkit-backdrop-filter: blur(16px) saturate(1.08);
+            }
+            #settingsPanel .grid-cols-2 { grid-template-columns: minmax(0, 1fr); }
+            #settingsPanel .flex.gap-4 { flex-wrap: wrap; row-gap: 10px; }
+            /* 底部按钮栏已删除——
+               原来这几条 `#settingsPanel > div:last-child` 现在会指向内容区，
+               会把内容区画成一条带顶边框的底栏。已移除。
+               内容区在移动端就是最后一块，靠自己的 padding 收尾即可。 */
+        }
+
+        @media (max-width: 980px) and (max-height: 620px) {
+            #mainContent > header { flex-basis: 62px; min-height: 62px; }
+            #initialState { justify-content: flex-start; }
+            #greetingText { font-size: 24px; }
+            .sidebar-rail-logo { margin-bottom: 4px; }
+            .sidebar-rail { gap: 4px; padding-top: 8px; padding-bottom: 8px; }
+        }
+
+        @keyframes settings-page-enter {
+            from { opacity: 0; transform: translateX(18px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .composer-more-menu,
+            .composer-send-transition { transition-duration: 0.01ms !important; }
+            #settingsPanel { animation-duration: 0.01ms !important; }
+        }
+    
+    /* ==================== 设置界面====================
+       用户要求：**设置直接覆盖全屏**，而不是一个放大的弹窗。
+
+       结构（沿用现有 DOM，不动那 285 行 HTML）：
+         #settingsOverlay        全屏遮罩（铺满视口、半透明 + 毛玻璃）
+         └ #settingsPanel        全屏面板（无圆角/无阴影/无最大宽度）
+           ├ #settingsTopBar     顶栏（纯文字导航 + 无框 ✕）
+           └ #settingsContent    内容区（居中列，内部卡片两列）
+
+       ★ 2026-10 起面板只有**两个**子元素：原来的「设置」标题行与底部按钮栏
+         都已删除。所以本文件里**不要**再用 `div:first-child` /
+         `div:last-child` 定位它们 —— 那些序号现在指向导航行与内容区，
+         会在错误的地方画出背景和边框（这两次都实测踩到）。一律按 id 定位。
+
+       ★ 为什么用 @media (min-width:981px) 包起来：
+         移动端那块（max-width:980px）**本来就是全屏**（width:100% +
+         height:var(--app-height) + align-items:stretch），不用动；
+         而且它写在文件更靠前的位置 —— 全局规则会因"后者胜"覆盖掉它，
+         反而把手机上的 --app-height 换掉（地址栏收起时高度会错）。
+         只在大屏改，两边都正确。 */
+    @media (min-width: 981px) {
+        /* ① 遮罩：铺满视口、完全不透明 —— 不再是"浮在聊天上的弹窗" */
+        #settingsOverlay {
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            max-height: none !important;
+            padding: 0 !important;
+            /* 必须改掉 flex 居中：元素上有 Tailwind 的
+               `items-center justify-center p-4`，不改的话面板会被居中并留边距，
+               看起来仍是"放大的弹窗"而不是全屏页。 */
+            align-items: stretch !important;
+            justify-content: stretch !important;
+            /* 半透明：设置页背后能透出聊天界面，
+                 配合模糊形成"毛玻璃整页"的观感。
+                 用 color-mix 把主题面板色压到 82% 不透明 ——
+                 深色/浅色/各套模板都自动跟随，不用为每套主题写一份。
+                 （color-mix 现代浏览器都支持；不支持时下面的实色兜底生效。） */
+            background: var(--pixso-panel) !important;
+            background: color-mix(in srgb, var(--pixso-panel) 82%, transparent) !important;
+            backdrop-filter: blur(18px) saturate(1.2) !important;
+            -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
+        }
+        /* ② 面板：同样铺满，去掉弹窗的一切外观（圆角/描边/阴影/限宽）。
+              ★ 面板本身**透明** —— 半透明与模糊交给遮罩一层做，
+                两层都设会叠出双倍模糊，背后内容糊成一团看不清。 */
+        #settingsPanel {
+            width: 100% !important;
+            max-width: none !important;
+            height: 100% !important;
+            max-height: none !important;
+            margin: 0 !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            background: transparent !important;
+            backdrop-filter: none !important;
+            -webkit-backdrop-filter: none !important;
+        }
+        /* ③ 顶栏：**透明**（自己不画背景），只负责定位与那条分隔线。
+              ★ 用户反馈"导航和 ✕ 没有明确划分，都和背景融成一块" ——
+                根因是它们直接铺在通栏背景上、没有任何自己的容器。
+                参照图的做法：导航是一枚**圆角胶囊**（一组项被框住），
+                ✕ 是一枚**独立圆形按钮**。胶囊与圆按钮的样式见下方
+                「导航胶囊」段（放在基础导航规则之后，保证优先级）。 */
+        #settingsTopBar {
+            min-height: 58px !important;
+            margin: 0 !important;
+            padding: 0 20px !important;
+            border: 0 !important;
+            /* 导航下面那条横线**已删除**——
+               原来这里是 `border-bottom: 1px solid var(--pixso-line)`，
+               导航是纯文字浮层、下面再来一条线就又把顶栏切成了一块。
+               元素上还带着 Tailwind 的 `border-b border-white/50`，
+               所以必须写 border: 0 才能真的清掉（只写 border-bottom 会被
+               那条类里的 border-bottom-width 与我的 0 打架）。 */
+            border-bottom: 0 !important;
+            border-radius: 0 !important;
+            background: transparent !important;
+            box-shadow: none !important;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+        /* ✕：**无框**（与导航同一风格 —— 用户明确不要"框死"的观感）。
+              ★ 必须显式清掉背景/边框：文件前面有一条
+                `#closeSettings { background: var(--pixso-cream); border-radius: 50% }`
+                （给别的弹窗关闭按钮用的），不清的话 ✕ 会是一个**实底圆片**，
+                正是用户说的"拿个框框死"。
+              ★ 绝对定位到右端 —— 这样导航用 margin:auto 时能在**整条顶栏**
+                里真正居中，不会被 ✕ 的宽度挤偏。 */
+        #settingsTopBar > #closeSettings {
+            position: absolute;
+            right: 20px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 1;
+            width: 34px;
+            height: 34px;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 9999px;
+            background: transparent !important;
+            border: 0 !important;
+            box-shadow: none !important;
+            opacity: .7;
+            transition: background .15s ease, opacity .15s ease;
+        }
+        #settingsTopBar > #closeSettings:hover {
+            background: rgba(99,102,241,.12) !important;
+            opacity: 1;
+        }
+        /* ④ 内容区：居中列（太宽时眼睛要横着扫，阅读体验差），
+              卡片在这个列里两列排布 */
+        #settingsContent {
+            padding: 22px 28px 30px !important;
+            max-width: 1180px;
+            width: 100%;
+            margin: 0 auto;
+            box-sizing: border-box;
+        }
+        /* 底部按钮栏已删除——
+           原来这里给 `#settingsPanel > div:last-child` 画的底栏样式
+           现在会落到**内容区**上（面板只剩顶栏 + 内容区两个子元素），
+           会在内容底部多出一条分隔线和一块底色。已移除。 */
+    }
+    
+    /* ==================== 导航：纯文字、透明背景（无框）====================
+       用户要求（第三轮，最终形态）：
+         "导航栏应该像一张透明背景只显示导航的文字的那种感觉，
+          而不是拿个框给框死"
+       所以：**没有胶囊、没有边框、没有底色** —— 只有文字与图标，
+       选中项用文字变色 + 加粗表示，悬停只轻微变亮。
+       整条导航浮在设置背景之上（背景是半透明毛玻璃），靠文字自身可读。 */
+    #settingsTabNav {
+        align-items: center;
+        /* `justify-content` 必须是 `flex-start`，**不能是 `center`**！
+           这是 flexbox 的一个经典陷阱，也是用户报"导航头和尾被遮挡、还滑不动"的真因。
+
+           ── 为什么 `center` 会坏 ──────────────────────────────────────────
+           容器 `overflow-x: auto` + 内容比容器宽时，`justify-content: center`
+           会把**溢出部分均分到两侧**：左边溢出 N/2、右边溢出 N/2。
+           而滚动条的 `scrollLeft` 最小只能是 **0** ——
+           **左边那 N/2 永远滚不到**（它不在可滚动范围内）。
+           于是首项被左边缘裁掉、末项被右边缘裁掉，且怎么滑都露不全。
+
+           实测（412px 视口，9 个分栏）：
+             navScrollW 312 / clientW 302 → 只能滚 10px
+             · 首个按钮 left=23，nav left=32 → **左侧被裁 9px，滚不回来**
+             · 末个按钮 right=344，nav right=334 → 右侧被裁 10px
+           截图里就是「外观」被裁成「观」、「插件」被裁成「插」。
+
+           ── 为什么改成 flex-start 就好了 ────────────────────────────────
+           内容从容器**左边缘**开始排，溢出全部落在右侧 ——
+           右侧在可滚动范围里，一路滑到底就能看到最后一项；
+           左侧没有任何溢出，首项天然完整。
+
+           ★ 桌面端同样受益：桌面内容通常不溢出（居中看着更整齐），
+             但窗口一窄（或分栏变多，比如插件注册了新分栏）就会踩同一个坑。
+             所以直接改基础规则，而不是只在移动端媒体查询里覆盖 ——
+             我上一版就是在媒体查询里写 `flex-start`，**被这条基础规则盖掉了**
+             （同权重、基础规则在文件更后面），实测 `justifyContent` 仍是 `center`。 */
+        border: 0 !important;
+        border-bottom: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        border-radius: 0 !important;
+        /* 2026-10 修：导航按钮组要**居中**（用户："导航栏应该是居中的，
+           现在选择靠左"）。
+           ── 为什么之前没居中 ────────────────────────────────────────────
+           下面这两行（`width: max-content` + `margin: 0 auto`）本意就是居中，
+           但元素上还挂着 Tailwind 的 **`flex-1`**（= `flex: 1 1 0%`）——
+           它在 flex 父容器里会**撑满整行**，于是 `width: max-content` 被忽略、
+           `margin: 0 auto` 没有剩余空间可分配 → 按钮组贴在左边，
+           右边空出一大片。实测（1440px 视口）：
+             nav 盒子中心 720（= 视口中心，因为被撑满）
+             按钮组中心 403  →  偏离中心 **317px**
+           ── 修法 ───────────────────────────────────────────────────────
+           把 `flex` 改回 `0 1 auto`，让 `width: max-content` 真正生效：
+             · **放得下时**（桌面）→ 宽度 = 按钮组宽度，`margin: 0 auto` 居中。
+             · **放不下时**（手机，9 个分栏 > 屏宽）→ 被 max-width 钳住，
+               内容溢出，而 `justify-content: flex-start` 保证从**左边缘**开始排、
+               右侧可滚 —— 这正是上面那段长注释里修过的坑，**不能改成 center**
+               （center 会把溢出均分到两侧，左侧那半永远滚不回来）。 */
+        flex: 0 1 auto;
+          /* 两侧给 ✕ 留位置 */
+        scrollbar-width: none;
+    }
+    #settingsTabNav::-webkit-scrollbar { display: none; }
+    .settings-tab-btn {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+                     /* 悬停时的一点圆角，平时看不见 */
+        cursor: pointer;
+        white-space: nowrap;
+        transition: color .15s ease, opacity .15s ease;
+                           /* 未选中稍淡，选中更亮 —— 形成层次 */
+    }
+    /* 分栏图标（参照图里每项都有图标）：用 ::before 挂 unicode 符号，
+         不动 HTML 的按钮文字（那些文字被 JS 与检查脚本依赖，不能改）。
+         用 data-settings-tab 定位，插件注册的分栏没有对应图标就不显示。
+       ★ 用**单色几何符号**而不是 emoji —— 参照图是单色线性图标，
+         emoji 是彩色的，一排看过去很花哨，且不跟随主题色
+         （选中时图标应该和文字一起变成主题绿）。 */
+    .settings-tab-btn::before {
+        line-height: 1;
+        /* 让符号继承按钮文字色（选中时随主题色变绿） */
+    }
+    .settings-tab-btn.active::before { opacity: 1; }
+    .settings-tab-btn:hover {
+                /* 无底色块 —— 只提亮文字 */
+        opacity: 1;
+    }
+    /* 选中态：只有文字与图标变色加粗（没有底色块、没有下划线）——
+       这就是"透明背景只显示导航文字"的观感。 */
+    .settings-tab-btn.active {
+        opacity: 1;
+        box-shadow: none;
+    }
+    .settings-tab-btn.active::after { content: none; }   /* 清掉旧的下划线伪元素 */
+
+    /* ==================== 手机：分栏之间拉开间距 ====================
+       用户反馈"设置的导航栏分开一点，手机端看着太近了"。
+
+       ── 真正的原因不是 gap 太小，而是**按钮被 flex 压缩了** ──────────────
+       实测诊断（360px 视口）：
+         · 每个按钮**需要 25px**（"外观"两个汉字），实际只有 **11.1px**
+         · 9 个按钮内容合计需要 321px，而导航容器只有 196px
+         · 按钮的 `flex-shrink` 是默认值 **1** → flex 把它们**等比压扁**，
+           文字因此溢出、相邻两项**糊在一起**
+       所以"太近"是**文字被压扁造成的视觉重叠**，不是间距数值问题 ——
+       光把 `gap` 调大反而更糟（可分配宽度更少、压得更狠，实测就是这样）。
+
+       ── 怎么改 ──────────────────────────────────────────────────────────
+       ① `flex-shrink: 0` —— 按钮保持内容宽度，**不压缩**；
+          放不下就让导航**横向滚动**（它本来就是 `overflow-x: auto`，
+          浏览器标签页就是这么做的，手机上也是标准交互）。
+       ② `gap: 12px` —— 间距清晰，配合 ① 才不会互相挤压。
+       ③ `padding: 8px 0` —— 间隔全靠 gap，避免 gap+padding 双重叠加
+          让总宽暴涨（9 个分栏要尽量少滚）。
+
+       ★★ 这段必须放在**基础 `.settings-tab-btn` / `#settingsTabNav` 规则之后**！
+         第一版我写在上面的移动端大块里（2664 行的媒体查询）——
+         那个位置**早于**基础规则，同权重下后面的基础规则胜出，
+         于是我写的 padding / font-size / gap **全部被覆盖、一点没生效**
+         （实测 btnPadding 仍是 8px 12px、font-size 仍是 13px）。
+         这类"规则写了却不生效"**不会报任何错**，只能靠量计算样式发现。 */
+    @media (max-width: 980px) {
+        #settingsTabNav {
+            /* `gap: 12px` 让相邻分栏之间有清晰空隙（原来 4px 太挤）。 */
+            gap: 12px !important;
+            /* 容器宽度：给 ✕ 留出刚好够的位置就行。
+               基础规则是 `calc(100% - 120px)` —— 那是给**桌面端"标题 + ✕"两侧**
+               留的（桌面顶栏左边有标题）。而手机上标题行已删、✕ 只有一个且
+               `right: 20px` 绝对定位（宽 38px），所以只需留 38 + 20 + 8(间隙) ≈ 66px。
+               不改的话导航白白少 54px 可视宽度，能看到的完整分栏更少。
+               （`justify-content: flex-start` 已提到基础规则里 ——
+                写在这里会被它盖掉，见基础规则那条注释。） */
+            max-width: calc(100% - 66px);
+            /* 左右留 2px：首/末项不贴边，不会被误看成"被裁掉" */
+            padding: 0 2px !important;
+            /* 去掉 `mask` 渐隐：mask 是**视觉遮罩**，会把首/末项的文字
+               一起渐隐掉 —— 与"头尾被遮挡"的观感叠加，反而更像 bug。
+               可滑动的提示交给"露出半个分栏"本身（手机上这是通用约定）。 */
+            mask-image: none;
+            -webkit-mask-image: none;
+        }
+        .settings-tab-btn {
+            padding: 8px 0;
+            font-size: 12.5px;
+            gap: 0;
+            /* 这一条是关键：不压缩，让导航真的滚动起来 */
+            flex-shrink: 0;
+        }
+    }
+    #closeSettings svg { color: var(--pixso-brown-soft) !important; }
+    /* 不支持 color-mix 的浏览器的兜底：退回**实色主题面板色**。
+     *
+     *   为什么是 @supports 而不是"同一规则写两句"：见上面那段注释 ——
+     *   未定义值不回退，同规则里的实色兜底会被 shorthand 压掉，实测无效。
+     *
+     *   为什么顺序在 color-mix 那条之后：两条都是 `#settingsOverlay` + !important，
+     *   同权重靠后者胜；支持 color-mix 的浏览器里这段被 @supports 判为不成立、
+     *   整块跳过，所以**不会**影响电脑端的 82% 半透明观感。
+     *
+     *   效果：不支持时退化成不透明（颜色还在、模糊仍在），而不是整块透明。 */
+    @supports not (background: color-mix(in srgb, red 82%, transparent)) {
+        #settingsOverlay { background: var(--pixso-panel) !important; }
+    }
+    /* 导航下面的横线已删除（用户要求"彻底没有分割"）——
+       原来这条 `#settingsTopBar { border-color: ... }` 是给那条线配色的，
+       现在没有线了，规则一并去掉。 */
+    /* 底部按钮栏已删除 → 原来这条 `div:last-child` 的边框色规则也去掉
+       （它会落到内容区上，给内容区加一条多余的顶边框）。 */
+    
+    /* ==================== Agent 权限区块的着色面板====================
+       「AI 权限」与「手机操作」里有几块**带色调**的说明面板（警告橙 / 信息蓝紫）。
+       它们在 HTML 里是用内联 style 写死的浅色底（rgba(255,247,237,.75) 之类）+
+       深色文字（#b45309 / #9a3412）—— 浅色主题下没问题，**深色主题下就糊了**：
+          · 内联背景是浅色的（不跟主题走）；
+          · 而文字颜色被 `html[data-theme="dark"] .text-indigo-700` 这类规则
+            统一改成了**浅色**（rgb(205,214,226)）；
+          · 结果：浅底 + 浅字，几乎看不见。实测六个隐私开关的标签全是这样。
+
+       ★ 这与 8.57 记录的是**同一类 bug**：写死的颜色 + 主题驱动的另一半天。
+         修法与插件页那次一致 —— 用主题变量，让两边一起跟随主题。
+
+       ★ 为什么用 `[style*="..."]` 属性选择器而不是给每块加 class：
+         这些内联 style 出现在 9 个地方（三档卡片 + 两块说明 + 后端摘要 + …），
+         逐个改 HTML 容易漏。属性选择器一次覆盖全部，且**新增同类面板自动生效**。
+         （代价：选择器可读性差一点，所以在这里写清来龙去脉。） */
+    #settingsPanel [style*="rgba(249,249,255"],
+    #settingsPanel [style*="rgba(255,247,237"] {
+        background: var(--pixso-panel-soft) !important;
+        border-color: var(--pixso-line) !important;
+    }
+    /* 警示面板要保留"暖色"语义，所以用**专用的** --pixso-warn* 而不是
+       --pixso-orange —— 后者在 iOS 主题下是蓝色，会把警告画成品牌色。 */
+    #settingsPanel [style*="rgba(255,247,237"] {
+        background: var(--pixso-warn-bg) !important;
+        border-color: var(--pixso-warn-line) !important;
+    }
+    /* 警告类文字（写死的 #b45309 橙 / #9a3412 深橙）换成主题变量：
+       深色下会自动提亮（#fbbf24），浅色下保持原来的橙。 */
+    #settingsPanel [style*="color:#b45309"] {
+        color: var(--pixso-warn) !important;
+    }
+    #settingsPanel [style*="color:#9a3412"] {
+        color: var(--pixso-warn-soft) !important;
+    }
+    /* 三档卡片里的说明文字（text-indigo-400 / 300）在深色下本来就偏暗，
+       放在上面那层 panel-soft 底上要再亮一档才够对比。 */
+    #settingsPanel #agentPermissionSection .text-indigo-400,
+    #settingsPanel #agentPermissionSection .text-indigo-300,
+    #settingsPanel #agentPhoneSection .text-indigo-400,
+    #settingsPanel #agentPhoneSection .text-indigo-300 {
+        color: var(--pixso-brown-soft) !important;
+    }
+
+    /* ── 「读取信息」每行右侧的**系统权限现状**小徽标──────────
+       它回答的是「应用能不能拿到」，与同一行那个 .mod-switch（管"让不让 AI 知道"）
+       是两道独立的闸，所以两样东西都要显示。
+       配色与 .tts-sample-status 同一套写法：只走主题变量 + 回调色，
+       不再写死 Tailwind 色 —— 上面那批内联浅色面板就是栽在写死颜色上的。 */
+    #agentPhoneSection .agent-perm-badge {
+        flex: none;
+        font-size: 10px; line-height: 1.5;
+        padding: 2px 7px;
+        border: 1px solid var(--pixso-line, #d3cadd);
+        border-radius: 999px;
+        white-space: nowrap;
+        color: var(--pixso-brown-soft, #5d5878);
+        background: var(--pixso-panel-soft, #f5f0f6);
+    }
+    #agentPhoneSection .agent-perm-badge.is-ok { color: var(--pixso-green, #6d6aa8); }
+    #agentPhoneSection .agent-perm-badge.is-no { color: var(--pixso-warn, #b45309); }
+    /* 可点的徽标（短信/通讯录/日历/通知读取）：点一下直接申请或跳系统设置页。
+       观感仍要像"状态标记"而不是按钮，所以只给指针 + 一点 hover/焦点反馈，
+       不加内边距、不做成实心按钮 —— 否则又变回一排按钮了。 */
+    #agentPhoneSection .agent-perm-badge.is-actionable { cursor: pointer; }
+    #agentPhoneSection .agent-perm-badge.is-actionable:hover {
+        background: var(--pixso-cream, #fbf7ef);
+        border-color: var(--pixso-brown-soft, #5d5878);
+    }
+    #agentPhoneSection .agent-perm-badge.is-actionable:focus-visible {
+        outline: 2px solid var(--pixso-green, #6d6aa8);
+        outline-offset: 2px;
+    }
+
+    /* ==================== 卡片分组 ====================
+       每个分组一张卡片（标题栏 + 分隔线 + 内容），宽项自动跨两列。
+       ★ 纯 CSS 改造，不动那 285 行 HTML —— 现有结构已经是
+         「.settings-tab-panel > section（含 .modal-label 标题 + 内容）」，
+         正是卡片所需。动 HTML 的风险（漏改 tab、破坏 JS 依赖的 id）远大于收益。
+       ★ 覆盖两种卡片结构：多数 tab 用 `<section>`，「外观」页用
+         `<div class="mb-4">`（历史写法）—— 两种都当卡片处理，
+         否则外观页会是"没有卡片的裸内容"，与其它页不一致（实测踩到）。 */
+    #settingsContent .settings-tab-panel > section,
+    #settingsContent .settings-tab-panel > div.mb-4 {
+        position: relative;
+        /* 卡片也半透明（比背景更实一点）—— 配合半透明背景形成层次：
+             背景 82% 透明 → 卡片再压一层，卡片里的文字仍然清楚。
+             用 color-mix 跟随主题色，深浅色都自动适配。 */
+        background: var(--pixso-panel-soft);
+        background: color-mix(in srgb, var(--pixso-panel-soft) 90%, transparent);
+        border: 1px solid var(--pixso-line);
+        border-radius: 16px;
+        padding: 18px 20px;
+        /* 卡片之间留出明确间距（用户要求"各个模块是分开的"）——
+           18px 比 14px 更能看出是独立模块，尤其两列并排时。 */
+        margin-bottom: 18px;
+        transition: border-color .15s ease, box-shadow .15s ease;
+        box-shadow: 0 1px 2px rgba(30,27,75,.04);
+    }
+    #settingsContent .settings-tab-panel > section:hover,
+    #settingsContent .settings-tab-panel > div.mb-4:hover {
+        border-color: var(--pixso-green);
+        box-shadow: 0 4px 14px rgba(30,27,75,.08);
+    }
+    /* 原来用 border-t 分隔的"第二段"（如对话页的思考模式）——
+       它现在也是独立卡片，那条分隔线要收掉，否则卡片里多一条横线。 */
+    #settingsContent .settings-tab-panel > section.mt-4,
+    #settingsContent .settings-tab-panel > section.border-t {
+        margin-top: 0 !important;
+        padding-top: 16px !important;
+        border-top: 1px solid var(--pixso-line) !important;
+    }
+    /* 卡片标题：左侧主题色图标 + 文字，下方一条细分隔线（LingChat 的观感）。
+       ★ 两种标题写法都覆盖：`section > .modal-label`（多数）
+         与 `div.mb-4 > .text-xs.font-semibold`（外观页）。 */
+    #settingsContent .settings-tab-panel > section > .modal-label,
+    #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--pixso-brown-dark);
+        letter-spacing: 0;
+        margin: -2px 0 12px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--pixso-line);
+    }
+    #settingsContent .settings-tab-panel > section > .modal-label > span:first-child,
+    #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child > span:first-child {
+        font-size: 15px;
+        line-height: 1;
+    }
+    /* 卡片内的两列（有些设置项自己用了 grid-cols-2）：窄了自动落成一列 */
+    #settingsContent .settings-tab-panel > section .settings-cols-2,
+    #settingsContent .settings-tab-panel > section > .grid-cols-2 {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+    }
+    
+    /* 大屏下：内容列里卡片两列排布（一屏塞下更多功能） */
+    @media (min-width: 900px) {
+        /* 必须写 `.active-panel` —— 不能只写 `#settingsContent .settings-tab-panel`！
+           基础规则是 `.settings-tab-panel{display:none}`（特异性 0,1,0），
+           而 `#settingsContent .settings-tab-panel`（1,1,0）特异性更高，
+           会把 display:none 覆盖掉 → **所有分栏内容同时显示**（实测踩到：
+           外观 tab 亮着，角色页的人设/角色卡也一起冒出来）。 */
+        #settingsContent .settings-tab-panel.active-panel {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 18px;                  /* 与卡片 margin 一致，模块之间分得开 */
+            align-content: start;
+            /* `align-items: start` 是必须的 —— 默认的 stretch 会把同一行
+               的卡片拉到**等高**：左边「语音输出」很长，右边「语音输入」很短，
+               结果右边被撑成一个巨大的空盒子（参照图里没有这种现象）。
+               start 让每张卡片只占自己内容的高度。 */
+            align-items: start;
+        }
+        /* 每张卡片自己是一格；卡片之间用 gap 而不是 margin */
+        #settingsContent .settings-tab-panel > section,
+        #settingsContent .settings-tab-panel > div.mb-4 {
+            margin-bottom: 0;
+        }
+        /* 通栏判定：**只有确实需要整行**的卡片跨两列 ——
+           插件列表（卡片一列放不下）、主题选择器（本身是网格）、多行文本域。
+           ★ 刻意**不**按"有没有滑杆/输入框"自动通栏：那会让
+             「语音输出（大）」通栏、「语音输入（小）」单独占半行，反而更零碎。
+             参照图里同一行的两张卡片本来就都是半宽。
+           ★ 这条必须**独立成规则**并放在 margin 规则之后 ——
+             之前误把它和上面那条的逗号连在一起，`grid-column` 声明整个丢了
+             （表现为"通栏没生效"，grep 都搜不到那个属性）。 */
+        #settingsContent .settings-tab-panel > section:has(textarea),
+        #settingsContent .settings-tab-panel > section:has(.mod-card),
+        #settingsContent .settings-tab-panel > section:has(#modsList),
+        #settingsContent .settings-tab-panel > div.mb-4:has(#themePickerBox),
+        #settingsContent .settings-tab-panel > section.settings-span-2,
+        #settingsContent .settings-tab-panel > div.mb-4.settings-span-2 {
+            grid-column: 1 / -1;
+        }
+    }
+    /* 插件 tab 的卡片本来就是整块内容，用 block 而不是 grid。
+       ★ 同样必须带 .active-panel —— 否则 !important 会让插件页**永远显示**
+         （与上面 grid 那条是同一类错误）。 */
+    #tab-mods.settings-tab-panel.active-panel { display: block !important; }
+
+    /* 日志分栏同理：它只有**一块**内容（终端式日志区），
+       如果走上面那条 ≥900px 的两列 grid，这一块只会占**半宽** ——
+       实测截图里就是"日志区被挤成窄窄一条、右边一大片空白"。
+       终端输出要的是整行宽度（长路径 / 长报错不换行才好看），所以固定用 block。 */
+    #tab-log.settings-tab-panel.active-panel { display: block !important; }
+    /* 日志区的宽度与高度都交给它自己（见 .log-tab-body），不要被 grid 影响 */
+    #tab-log .log-tab-body { grid-column: 1 / -1; }
+
+    /* 日志分栏激活时，内容区改成**不滚动 + flex 纵向** ——
+       这是让 `.log-tab-body { flex: 1 }` 真正生效的前提：
+       flex 子项要"吃掉剩余高度"，父元素必须是有确定高度的 flex 容器。
+       默认的 `#settingsContent` 是 `overflow-y:auto` 的普通块，
+       子元素 flex:1 拿不到可分配的高度，只会按内容高度走。
+
+       ★ 为什么让**内容区不滚动**、把滚动交给日志区自己：
+         日志区本来就是 `overflow-y:auto`。若两层都可滚动，
+         手指在日志区上滑会先滚日志、滑到头再"穿透"滚外层 ——
+         这种滚动链在手机上体验很差（用户想继续看日志，结果整页跟着动）。
+         现在外层不滚，日志区滚，边界清晰。
+       ★ 用 `:has()` 精确限定：只有"当前激活的是日志栏"时才改布局，
+         其它分栏（卡片式、需要整页滚动）完全不受影响。
+         不支持 `:has()` 的旧 WebView 会忽略这条 —— 退化结果是
+         "日志区按内容高度展开、外层滚动"，仍可用，只是不如现在舒服。 */
+    #settingsContent:has(#tab-log.active-panel) {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 0;
+    }
+    /* 关键第二步：日志栏**自己**必须是 flex 列容器 + 撑满内容区。
+       只把内容区改成 flex 是不够的 —— 实测那样 `#tab-log` 仍是
+       `display: block`（被上面那条 `display:block !important` 定的），
+       它内部的 `.log-tab-body { flex:1 }` 因此无处可依，
+       高度还是按内容撑开（实测 1566px）。
+       这里让 #tab-log 接管 flex 上下文：flex:1 吃掉内容区剩余高度，
+       min-height:0 允许它收缩（不加则 flex 子项会被内容顶破）。
+       特异性 2 个 id > 上面那条的 1 个 id，所以能盖住 `!important`。 */
+    #settingsContent:has(#tab-log.active-panel) > #tab-log.active-panel {
+        display: flex !important;
+        flex-direction: column;
+        flex: 1 1 auto;
+        min-height: 0;
+    }
+
+    .settings-tab-panel{display:none}.settings-tab-panel.active-panel{display:block}
+
+    /* ==================== 扩展页的子分栏（插件 / 技能 / MCP）====================
+       这三个按钮复用 .settings-tab-btn 的视觉，但**不参与** switchSettingsTab ——
+       它们只在 #tab-mods 内部切换三个 .ext-panel。
+       显隐规则必须单独写：上面的 .settings-tab-panel 只认主分栏，管不到 .ext-panel。 */
+    /* ==================== 导航栏里的二次分栏（扩展 › 插件/技能/MCP）====================
+       结构：一个分组容器里放「扩展」父项 + 一组子项。
+
+       ── 为什么子项只在「扩展」被选中时才展开 ──────────────────────────────
+       常驻展开会让导航凭空多三个按钮：实测 1280px 桌面下整条导航就已经溢出
+       （nav 宽 673，内容 700+），扩展组被推到可视区外，用户看不到 —— 而那正是
+       "把三个按钮搬进导航"想解决的问题。收起后导航长度不变，只在进入扩展页时
+       展开三个子项，长度增加也只在那时，且父项本来就在末尾，滚动距离最小。
+
+       为什么不用下拉菜单：下拉要多一次点击，还会盖住下面的内容；
+       而"选中父项就展开兄弟按钮"是零额外操作 —— 用户点「扩展」的那一刻，
+       三个子项正好出现在它旁边。
+
+       ── 为什么子项要缩一号字 ────────────────────────────────────────────
+       它们与父项同排，字号一样会读成"四个平级分栏"，而实际是"一个父项 + 三个子项"。
+       小一号 + 实心选中底色，一眼就能读出层级。 */
+    /* ⚠️ 导航在不同主题下是**两种布局**：横排（默认主题，顶栏一行）或
+       竖排（rd 主题，左侧一列，见 pages-luxe.css 的 flex-direction: column）。
+       二次分栏必须跟着父布局走 —— 横排时子项横着排在父项右边，竖排时子项
+       缩进挂在父项**下面**。写死一种就会在另一种主题里挤成一行（实测：
+       竖排下子项横着塞进去，把「外观」「角色」全挤到下一行，还错位）。 */
+    #settingsExtNav {
+         align-items: center; gap: 2px;
+        flex: 0 0 auto;
+        /* 横排：与左侧分栏之间那条竖线就是分组的存在感 */
+        margin-left: 4px; padding-left: 6px;
+    }
+    /* 默认收起；只有扩展分栏被选中时才展开（判据是父项带 .active） */
+    .ext-nav-children { display: none; align-items: center;  }
+    #settingsExtNav:has(> .settings-tab-btn.active) .ext-nav-children { display: flex; }
+    /* :has() 在很老的 WebView 上不认 —— 兜底由 JS 加 .is-open（见 switchExtTab / ensureExtTab） */
+    #settingsExtNav.is-open .ext-nav-children { display: flex; }
+
+    .ext-nav-btn {
+        flex: 0 0 auto; cursor: pointer; white-space: nowrap;
+         border: 0; background: transparent;
+         line-height: 1.4;
+         
+        transition: color .15s, background .15s;
+    }
+    .ext-nav-btn:hover { color: var(--pixso-brown); background: rgba(0,0,0,.03); }
+    /* 窄屏：子项再缩一点。手机上导航本来就靠横向滚动，长度多 100px 仍在半屏内 */
+    /* ===== 手机（≤719px）：导航图标条 + 页内分段 =====
+       窄屏下导航本身要放 7 个分栏，再塞三个子项就挤不下了；而且 ≤420px 时
+       导航只留图标（font-size:0），下拉菜单从图标堆里冒出来会显得"乱飞"
+       （用户实测反馈）。所以窄屏**收起导航里的子项**，改用页面内的分段条 用页面内的一行小分段切换。 */
+
+
+
+    @media (max-width: 719px) {
+        #settingsExtNav { margin-left: 2px; padding-left: 4px; gap: 1px; }
+        .ext-nav-btn { padding: 3px 6px; font-size: 10.5px; border-radius: 999px; }
+        /* 窄屏的展开/收起完全交给 pages-luxe.css 的下拉规则，
+           这里**不能**再写一条 display 规则 —— 它的特异性（#id .class）比
+           `.ext-nav-children { display:none }` 高，会压掉 is-open / :has() 的展开，
+           表现就是"点了扩展什么都不出现"（实测踩过）。 */
+    }
+    .ext-panel { display: none; }
+    .ext-panel.active-panel { display: block; }
+    /* 扩展页的三个子面板：**不包卡片**，直接铺在设置内容区上。
+       每条用户注册的条目（插件 / 技能 / MCP 服务器）仍用 .mod-card 带框 —— 框表示"这是一条可操作的东西"；
+       而"插件页 / 技能页 / MCP 页"本身是页面，再套一层框只会吃掉半屏高度。
+       ★ 这里**绝不能**写 display：.ext-page 与 .settings-tab-panel 特异性相同（都是两个类），
+         而这条规则排在主分栏的显隐规则之后 —— 等于给插件页加了 display:block，
+         于是切到「外观 / 模型」时插件页仍然显示在下面（用户实测：每个窗口下面都有一块插件列表）。
+         它本来就不需要：.ext-panel 已用 display:none / block 管自己的显隐。 */
+    /* 子面板标题行：左标题 + 右侧按钮，底边一条细线把"页头"和"列表"分开（不需要整块边框） */
+    .ext-head {
+        display: flex; align-items: center; gap: 8px; margin: 0 0 10px;
+        padding: 0 0 10px; border-bottom: 1px solid var(--pixso-line);
+    }
+    .ext-head .modal-label { margin: 0 !important; padding: 0 !important; border-bottom: 0 !important; }
+
+    .l2d-bg-opt.selected { outline: 2px solid #6366f1; outline-offset: 2px; box-shadow: 0 0 0 3px rgba(99,102,241,.35); }
+
+    /* ==================== 插件页====================
+       参照 AstrBot 的插件页：卡片 + iOS 风格开关 + 卡片底部一排操作按钮。
+       全部用变量与柔和阴影，深浅色主题下都能看（宿主主题会改 :root 变量）。
+
+       ★★ 深色模式适配（2026-10 用户反馈"插件页没适配深色"）：
+         此前这里写死了 rgba(255,255,255,…) 与 Tailwind 的 text-indigo-800 之类 ——
+         浅色下正常，深色下卡片仍是白的、文字是深靛蓝，糊成一片。
+         现在统一走主题变量（--pixso-surface / --pixso-line / --pixso-brown 等），
+         它们在深色模板下会自动变暗；Tailwind 的写死色类用下面一组规则压掉。 */
+    #tab-mods .text-indigo-800, #tab-mods .text-indigo-700,
+    #modSettingsBody .text-indigo-800, #modSettingsBody .text-indigo-700 {
+        color: var(--pixso-brown-dark) !important;
+    }
+    #tab-mods .text-indigo-500, #tab-mods .text-indigo-400, #tab-mods .text-indigo-300,
+    #modSettingsBody .text-indigo-500, #modSettingsBody .text-indigo-400,
+    #modSettingsBody .text-indigo-300 {
+        color: var(--pixso-brown-soft) !important;
+    }
+    /* 卡片内的小块背景（如空状态、依赖说明）也要跟着主题走 */
+    #tab-mods .bg-white\/60, #tab-mods .bg-white\/50, #tab-mods .bg-white\/40,
+    #modSettingsBody .bg-white\/60, #modSettingsBody .bg-white\/50,
+    #modSettingsBody .bg-white\/40 {
+        background: var(--pixso-panel) !important;
+    }
+    #tab-mods .border-white\/60, #modSettingsBody .border-white\/60 {
+        border-color: var(--pixso-line) !important;
+    }
+    /* 选中态（模型卡片）：粉底在深色下太亮，换成主题的浅色面板 + 主题描边。
+       选中判据是 border-pink-500 / bg-pink-50/70 两个类，一起压掉。 */
+    #modSettingsBody .bg-pink-50\/70 {
+        background: var(--pixso-panel) !important;
+        box-shadow: inset 0 0 0 1px var(--pixso-green);
+    }
+    #modSettingsBody .border-pink-500 { border-color: var(--pixso-green) !important; }
+    #modSettingsBody .hover\:border-indigo-300:hover { border-color: var(--pixso-green) !important; }
+    .mod-card{
+        position:relative;display:flex;gap:12px;align-items:flex-start;
+        padding:14px 14px 10px;border-radius:16px;
+        /* 用主题变量而不是写死的白色 —— 深色模式下这些变量会变暗，
+           插件页才能跟着适配（此前写死 rgba(255,255,255,…) 导致深色下
+           卡片是白的、文字看不清，用户反馈"没适配深色模式"）。
+           ★ 注意不能用 --pixso-surface：它在 index.html 的 :root 里被兜底
+             写死成 #ffffff，默认模板下深色时**没人改它**（实测仍是纯白）。
+             用 --pixso-panel-soft（深色 #222833 / 浅色 #f1e8e5），两边都合适。 */
+        background:var(--pixso-panel-soft);
+        border:1px solid var(--pixso-line);
+        box-shadow:0 1px 3px rgba(30,27,75,.06);
+        transition:box-shadow .15s,transform .15s,opacity .15s;
+    }
+    .mod-card:hover{box-shadow:0 4px 14px rgba(30,27,75,.10);border-color:var(--pixso-green)}
+    /* 拖拽中的卡片：抬起来跟随指针，效果接近"拖动桌面图标"。
+       ★ position:fixed + 拖拽期间临时清掉设置面板的 transform、把 animation-fill-mode 设为 none：
+         面板入场动画的 fill-mode 会在结束帧留下 identity matrix，它照样是 fixed 的
+         包含块 —— 卡片会被 overflow 裁掉、坐标整体偏移。改掉后 fixed 相对视口，
+         卡片仍留在原 DOM 里，于是 #settingsContent / #tab-mods 的配色、字号、
+         内边距全部保留：拖起来和拖之前是同一张卡，尺寸也不变（不做 scale）。
+       ★ z-index 必须**高过所有弹窗**：若层级低于
+         .modal-overlay（100001）/ 插件设置弹窗（100010），它就会被弹窗整个盖住 ——
+         用户只看到占位块在动，**看不到自己拖的是什么**（实测踩到：
+         卡片中心命中的是 .mod-placeholder，isCardOnTop=false）。
+         这里是 100050：在一切弹窗（≤100010）之上、提示/确认框（100003）之下仍够用，
+         因为拖拽期间不会同时弹对话框。
+       ★ **必须清掉 transition**（这条是"跟着鼠标走"而不是"被鼠标拎着走"的关键）。
+         .mod-card 基类上有 `transition: … transform .15s …`，是给悬停/换位用的。
+         拖动时 JS 每帧写 style.transform，而那条过渡会让浏览器把**每一帧**
+         都当成一段 150ms 的缓动去插值 —— 卡片于是永远落后指针一段距离、
+         匀速追着跑（而不是 1:1 贴在指针下）。这里设 transition:none 覆盖掉它。
+         （松手"放下去"的那一小段过渡由 JS 内联指定，不受影响。） */
+    .mod-card.mod-dragging{
+        position:fixed;z-index:100050;margin:0;pointer-events:none;
+        transition:none;
+        box-shadow:0 18px 40px rgba(30,27,75,.30), 0 0 0 1px color-mix(in srgb, var(--pixso-green) 35%, transparent);
+        cursor:grabbing;
+    }
+    /* 占位块：卡片原来的位置被它顶住，随落点移动 —— 这就是"让出来的空白区域" */
+    .mod-placeholder{
+        border-radius:16px;
+        border:2px dashed color-mix(in srgb, var(--pixso-green) 55%, transparent);
+        background:color-mix(in srgb, var(--pixso-green) 7%, transparent);
+        transition:height .15s;
+    }
+    /* 拖拽期间禁止选中文字（否则拖动会变成划选） */
+    body.mod-dragging-active{user-select:none;-webkit-user-select:none;cursor:grabbing}
+    /* 落点提示线：插到这一张的上方。
+       ★ 2026-10：原来是写死的粉紫渐变 `#ec4899 → #8b5cf6`，与默认主题
+         （暖米绿）对不上 —— 用户反馈"设置页面与对话主题对不上"就是这类。
+         改用主题变量：--pixso-green → --pixso-green-dark（跟随当前模板）。 */
+    /* 插件设置：每个插件一块**专属容器**，打开谁就只显示谁那块。
+       （原先所有插件共用 #modSettingsBody，互相 innerHTML 清空导致内容串台 ——
+        见 host-slots.js 的 settings.modal。这里负责"只显示一块"。）
+       ★ 用 display:none 而不是 Tailwind 的 .hidden：容器是运行期建的，
+         不该依赖类是否被 Tailwind 正确生成；自有一条规则最稳。
+       ★ 隐藏的那块必须 display:none（而不是 visibility/opacity）——
+         否则 #modSettingsBody 上的 space-y-5 仍会给它留出间距，
+         弹窗里会多出一段空白。 */
+    .mod-settings-pane { display: block; }
+    .mod-settings-pane.mod-settings-pane-off { display: none; }
+    /* 拖拽手柄：三条竖线 */
+    .mod-grip{
+        flex:none;width:22px;height:26px;display:flex;align-items:center;justify-content:center;
+        border-radius:8px;color:var(--pixso-brown-soft);opacity:.6;cursor:grab;background:transparent;border:none;padding:0;
+        touch-action:none;   /* 触屏上不要被浏览器当成滚动手势抢走 */
+    }
+    /* ===== 插件分栏（分组） =====
+       ★ 折叠标记是 CSS 空心三角（disclosure triangle）：▶ 收着 / ▼ 展开 ——
+         文件管理器、下拉菜单、树形视图通用的「可展开」符号。
+         实现用 svg path 画实心小三角，展开时 rotate(90deg) 过渡成朝下。 */
+    /* ==================== 卡片网格（宽屏一行多个）====================
+       为什么用 grid + auto-fill 而不是 flex-wrap：列宽由容器决定，窗口一宽就多一列，
+         窄到手机上自然回到单列 —— 不需要任何 JS 断点。
+       why 18rem 下限：卡片里有「星屑之日（10.17 生日） v1.1.0 未启用」这种标题 + 一排图标按钮，
+         再窄就会把标题压成两行、按钮挤到第二排，反而不如一行一个。
+       ★ 分栏（.mod-group）必须独占整行：它是「卡片的一层容器」，排进列里会变成
+         一格套一格的窄盒子。用 grid-column:1/-1 而不是单独给它一个行容器 ——
+         顶层是卡片与分栏混排（拖拽内核要求同一父节点下有固定顺序）。 */
+    /* ★ 列数用 auto-fill + minmax(15rem, 1fr)：列宽由容器宽度决定，窗口一宽就多一列。
+       卡片**不**按"有没有说明"独占整行（第一版那样做，结果三张插件卡都带说明，看起来还
+       是"一行一个"）。多行文字在窄列里改成 3 行截断、鼠标悬停整卡时展开。 */
+    .mod-grid, #skillsList, #mcpList{
+        display:grid;
+        /* 列宽下限 20rem：卡片里是"标题 + 一排图标按钮"，再窄就要折行。 */
+        grid-template-columns:repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+        gap:12px;
+        align-items:stretch;
+    }
+    /* 宽屏**最多两列**：三列时每张卡窄得像条子，说明文字全被截断，
+       而且拖动换位时一跨就跨过中间那张，操作意图容易看错。 */
+    @media (min-width: 1100px){
+        .mod-grid, #skillsList, #mcpList{grid-template-columns:repeat(2, minmax(0, 1fr))}
+    }
+    /* 分栏是「卡片的一层容器」：排进列里会变成格子套格子 → 永远独占整行 */
+    .mod-grid > .mod-group{grid-column:1/-1}
+    /* 卡片沿用原有 flex 三栏（把手 / 头像 / 内容），网格只补收缩与等高：
+       改内部布局会把把手和头像挤成上下两行（第一版踩到，卡片被撑到 260px）。 */
+    .mod-grid > .mod-card, #skillsList > .mod-card, #mcpList > .mod-card{
+        min-width:0;
+        align-self:stretch;
+    }
+
+    /* 说明文字：窄列里 3 行截断，悬停展开（否则一张卡把网格撑成一大块） */
+    .mod-grid > .mod-card .mod-desc,
+    #skillsList > .mod-card .mod-desc{
+        display:-webkit-box;
+        -webkit-box-orient:vertical;
+        -webkit-line-clamp:3;
+        line-clamp:3;
+        overflow:hidden;
+    }
+    .mod-grid > .mod-card:hover .mod-desc,
+    #skillsList > .mod-card:hover .mod-desc{
+        -webkit-line-clamp:unset;
+        line-clamp:unset;
+        overflow:visible;
+    }
+    @media (max-width: 719px) {
+        .mod-grid, #skillsList, #mcpList{grid-template-columns:1fr}
+    }
+
+    /* MCP 的启动命令可能很长：窄列里单行截断 */
+    #mcpList > .mod-card code{
+        display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    }
+
+    .mod-group{
+        border:1px solid var(--pixso-line);
+        border-radius:16px;
+        background:var(--pixso-panel-soft);
+        overflow:hidden;
+        /* 折叠后的"收缩"（用户反馈：折叠起来还占大面积）：
+           分栏外框的上下 padding 也随折叠收到 0，只留一条头部 ——
+           加上过渡让收缩本身也是平滑的。 */
+        transition:padding .25s ease;
+        padding:4px;
+    }
+    .mod-group-collapsed{padding:0}
+    .mod-group-head{
+        display:flex;align-items:center;gap:8px;
+        padding:8px 10px;
+        cursor:pointer;          /* 头部默认是折叠开关（拖拽只从把手发起） */
+        user-select:none;
+        touch-action:none;
+        border-radius:12px;
+    }
+    .mod-group-head.mod-group-hover{
+        background:color-mix(in srgb, var(--pixso-green) 18%, transparent);
+        outline:2px dashed var(--pixso-green);
+        outline-offset:-4px;
+        border-radius:12px;
+    }
+    .mod-group-toggle{
+        flex:none;width:20px;height:20px;display:flex;align-items:center;justify-content:center;
+        border:none;background:transparent;color:var(--pixso-brown-soft);cursor:pointer;padding:0;
+    }
+    .mod-group-toggle svg{width:12px;height:12px;transition:transform .18s ease}
+    .mod-group:not(.mod-group-collapsed) .mod-group-toggle svg{transform:rotate(90deg)}
+    .mod-group-body{padding:6px 8px 10px}
+    /* 折叠/展开动画：
+       之前用 display:none 硬切，没有过渡，很生硬。
+       改用 grid-template-rows 0fr→1fr 过渡 —— 这是纯 CSS 做高度动画的最稳方案
+       （不需要 JS 测内容高度，内容多高都适用；max-height 方案要拍一个大数，
+        内容少时收起会有"等半天"的迟滞感）。
+       overflow:hidden + min-height:0 是让内容行真正收到 0 的必要条件。
+       ★ 折叠态标记 .is-collapsed 加在 **body 自己**身上（JS 切的就是它），
+         不要写成父级选择器 —— 类挂错元素动画永远不生效（第一版踩到）。 */
+    .mod-group-body{
+        display:grid;
+        /* 必须用 minmax(0, 1fr) 而不是裸 1fr —— 裸 fr 的隐式下限是
+           内容的 min-content（0fr 也收不死，实测剩 26px 的提示行）。
+           minmax(0,…) 把下限钳到 0，行才能真的收到 0。 */
+        grid-template-rows:minmax(0, 1fr);
+        transition:grid-template-rows .25s ease, opacity .2s ease, padding .25s ease;
+        opacity:1;
+        overflow:hidden;
+    }
+    .mod-group-body > *{min-height:0;overflow:hidden}
+    .mod-group-body.is-collapsed{
+        grid-template-rows:minmax(0, 0fr);
+        /* 隐式行也钳死：分栏里有卡片时重渲染后 body 可能同时含
+           卡片 + 空状态提示两个子元素，第二个落进**隐式行** ——
+           template-rows 只管显式行，隐式行按内容撑开（实测折叠后
+           多出一行 107px）。grid-auto-rows 把隐式行也钳到 0。 */
+        grid-auto-rows:minmax(0, 0fr);
+        opacity:0;
+        padding-top:0;
+        padding-bottom:0;
+    }
+    /* 分栏的拖拽把手：与插件卡片的 .mod-grip 同款（三条竖线）。
+       ★ 单独给一个类是因为内核的 handleSelector 指到它 ——
+         分栏头其余区域是折叠开关，不能也变成把手。 */
+    .mod-group-grip{cursor:grab}
+    .mod-group-grip:active{cursor:grabbing}
+    /* 分栏头在拖拽中：与卡片拖拽同一套观感（见 .mod-card.mod-dragging 的说明） */
+    .mod-group.mod-dragging{
+        position:fixed;z-index:100050;margin:0;pointer-events:none;
+        transition:none;opacity:.96;
+        box-shadow:0 18px 40px rgba(30,27,75,.30);
+        background:var(--pixso-cream);
+        cursor:grabbing;
+    }
+    .mod-grip:hover{background:rgba(99,102,241,.14);color:var(--pixso-green);opacity:1}
+    .mod-grip:active{cursor:grabbing}
+    .mod-grip svg{width:14px;height:14px;display:block}
+    /* iOS 风格开关：原生 checkbox 视觉隐藏，label 画轨道与滑块 */
+    .mod-switch{position:relative;flex:none;width:44px;height:26px;display:inline-block;cursor:pointer}
+    .mod-switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+    .mod-switch .track{
+        position:absolute;inset:0;border-radius:9999px;background:var(--pixso-line);
+        transition:background .2s;pointer-events:none;
+    }
+    .mod-switch .knob{
+        position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:9999px;background:#fff;
+        box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s;pointer-events:none;
+    }
+    /* 2026-10：同上，写死的粉紫渐变改成主题变量（开关拨到"开"时的轨道色）。 */
+    .mod-switch input:checked ~ .track{background:linear-gradient(90deg,var(--pixso-green),var(--pixso-green-dark))}
+    .mod-switch input:checked ~ .knob{transform:translateX(18px)}
+    .mod-switch input:focus-visible ~ .track{outline:2px solid var(--pixso-green);outline-offset:2px}
+    /* 卡片底部那排图标按钮 */
+    .mod-act{
+        flex:none;width:30px;height:30px;display:inline-flex;align-items:center;justify-content:center;
+        
+        /* 2026-10 修：原来写死 rgba(255,255,255,.7) —— 深色模式下就是**一块白方块**
+           （实测：插件页那排「上传安装 / 重新扫描 / 插件市场」在深色下全是白的）。
+           改用 --pixso-panel：它在每套主题与深色块里都有定义，且比卡片底
+           （--pixso-panel-soft）深一档 —— 两个模式下都读得出"这是个按钮"。 */
+        
+        cursor:pointer;transition:background .15s,color .15s;
+    }
+    /* 悬停同样不能写死颜色（原来是 rgba(99,102,241,.14)，深色下几乎看不见反馈）。
+       用主题色压一档：浅色下是淡绿、深色下是淡蓝，两端都有可见的反馈。 */
+    .mod-act:hover{background:color-mix(in srgb, var(--pixso-green) 20%, var(--pixso-panel))}
+    .mod-act[disabled]{opacity:.4;cursor:not-allowed}
+    .mod-act svg{width:15px;height:15px}
+    .mod-act-danger{color:#e11d48}
+    .mod-act-danger:hover{background:rgba(225,29,72,.12)}
+    /* ---- 说明阅读窗（插件 README / 技能 SKILL.md）----
+       全部用主题变量，浅色与深色自动跟着变；正文按"读文档"的字号（14px / 1.8），
+       而不是原来那种整篇等宽 12px —— 等宽只留给代码块，否则中文说明读起来很累。 */
+    .readme-panel { background: var(--pixso-surface); }
+    .readme-head {
+        gap: 12px; padding: 14px 18px;
+        border-bottom: 1px solid var(--pixso-line);
+        background: linear-gradient(180deg, color-mix(in srgb, var(--pixso-green) 10%, transparent), transparent);
+    }
+    .readme-head-mark {
+        flex: none; width: 30px; height: 30px; border-radius: 11px;
+        display: inline-flex; align-items: center; justify-content: center;
+        font-size: 14px; color: #fff;
+        background: linear-gradient(135deg, var(--pixso-green), var(--pixso-green-dark));
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--pixso-green) 45%, transparent);
+    }
+    .readme-title { font-size: 14px; font-weight: 750; color: var(--pixso-brown); letter-spacing: .01em; }
+    .readme-meta { margin-top: 2px; font-size: 11px; color: var(--pixso-brown-soft); }
+    .readme-close {
+        flex: none; width: 30px; height: 30px; border-radius: 10px;
+        display: inline-flex; align-items: center; justify-content: center;
+        color: var(--pixso-brown-soft); transition: background .15s, color .15s;
+    }
+    .readme-close:hover { background: var(--pixso-panel-soft); color: var(--pixso-brown); }
+    .readme-main { display: flex; }
+    .readme-toc {
+        width: 176px; padding: 16px 8px 16px 16px;
+        border-right: 1px solid var(--pixso-line);
+        overflow-y: auto;
+        background: color-mix(in srgb, var(--pixso-panel-soft) 55%, transparent);
+    }
+    .readme-toc:empty { display: none; }
+    .readme-toc-head { font-size: 10px; letter-spacing: .08em; color: var(--pixso-brown-soft); opacity: .8; padding: 0 8px 8px; }
+    .readme-toc a {
+        display: block; padding: 5px 8px; border-radius: 8px;
+        font-size: 12px; line-height: 1.45; color: var(--pixso-brown-soft);
+        border-left: 2px solid transparent;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .readme-toc a:hover { color: var(--pixso-brown); background: var(--pixso-panel-soft); }
+    .readme-toc a.is-sub { padding-left: 18px; font-size: 11px; opacity: .85; }
+    .readme-body { padding: 20px 26px 32px; max-width: 760px; }
+    @media (max-width: 820px) {
+        .readme-toc { display: none; }
+        .readme-body { padding: 16px 16px 28px; }
+    }
+    .readme-body .rmd-h { color: var(--pixso-brown); font-weight: 750; line-height: 1.35; }
+    .readme-body .rmd-h2 { font-size: 17px; margin: 26px 0 10px; padding-bottom: 8px; border-bottom: 1px solid var(--pixso-line); }
+    .readme-body .rmd-h2:first-child { margin-top: 0; }
+    .readme-body .rmd-h3 { font-size: 14.5px; margin: 20px 0 8px; color: var(--pixso-green-dark); }
+    .readme-body .rmd-h4, .readme-body .rmd-h5, .readme-body .rmd-h6 { font-size: 13.5px; margin: 16px 0 6px; }
+    .readme-body .rmd-p { color: var(--pixso-brown); font-size: 14px; line-height: 1.8; margin: 10px 0; }
+    .readme-body .rmd-list { margin: 8px 0; padding-left: 20px; color: var(--pixso-brown); font-size: 14px; line-height: 1.8; }
+    .readme-body ul.rmd-list { list-style: disc; }
+    .readme-body ol.rmd-list { list-style: decimal; }
+    .readme-body .rmd-li { margin: 3px 0; padding-left: 2px; }
+    .readme-body .rmd-li::marker { color: var(--pixso-green-dark); }
+    .readme-body .rmd-task { list-style: none; margin-left: -18px; display: flex; gap: 7px; align-items: baseline; }
+    .readme-body .rmd-check {
+        flex: none; width: 14px; height: 14px; border-radius: 5px;
+        border: 1.5px solid var(--pixso-line); display: inline-flex;
+        align-items: center; justify-content: center; font-size: 10px; color: #fff;
+        transform: translateY(1px);
+    }
+    .readme-body .rmd-task.is-done .rmd-check { background: var(--pixso-green-dark); border-color: var(--pixso-green-dark); }
+    .readme-body .rmd-task.is-done span:last-child { color: var(--pixso-brown-soft); text-decoration: line-through; }
+    .readme-body code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: .88em; padding: 1px 5px; border-radius: 6px;
+        color: var(--pixso-green-dark);
+        background: color-mix(in srgb, var(--pixso-green) 16%, transparent);
+        border: 1px solid color-mix(in srgb, var(--pixso-green) 22%, transparent);
+    }
+    .readme-body .rmd-code {
+        position: relative; margin: 12px 0; border-radius: 14px; overflow: hidden;
+        border: 1px solid var(--pixso-line);
+        background: var(--pixso-panel-soft);
+    }
+    .readme-body .rmd-code pre { margin: 0; padding: 14px 16px; overflow-x: auto; }
+    .readme-body .rmd-code code {
+        padding: 0; border: 0; background: none; color: var(--pixso-brown);
+        font-size: 12.5px; line-height: 1.7;
+    }
+    .readme-body .rmd-code-lang {
+        position: absolute; top: 8px; right: 10px; font-size: 10px; letter-spacing: .04em;
+        color: var(--pixso-brown-soft); opacity: .75;
+    }
+    .readme-body .rmd-quote {
+        margin: 12px 0; padding: 10px 14px; border-radius: 12px;
+        border-left: 3px solid var(--pixso-green);
+        background: color-mix(in srgb, var(--pixso-green) 9%, transparent);
+        color: var(--pixso-brown-soft); font-size: 13.5px; line-height: 1.8;
+    }
+    .readme-body .rmd-table-wrap {
+        margin: 12px 0; border-radius: 14px; overflow: auto;
+        border: 1px solid var(--pixso-line);
+    }
+    .readme-body .rmd-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .readme-body .rmd-table th, .readme-body .rmd-table td {
+        padding: 9px 12px; text-align: left; vertical-align: top;
+        border-bottom: 1px solid var(--pixso-line); line-height: 1.6;
+    }
+    .readme-body .rmd-table th {
+        color: var(--pixso-brown); font-weight: 700; white-space: nowrap;
+        background: color-mix(in srgb, var(--pixso-green) 12%, transparent);
+    }
+    .readme-body .rmd-table td { color: var(--pixso-brown-soft); }
+    .readme-body .rmd-table tr:last-child td { border-bottom: 0; }
+    .readme-body .rmd-table tbody tr:hover td { background: color-mix(in srgb, var(--pixso-panel-soft) 70%, transparent); }
+    /* 聊天气泡里也有表格（模型爱输出）：溢出时横向滚动，别把气泡撑破 */
+    .rmd-table-wrap { max-width: 100%; }
+    .readme-body .rmd-hr { margin: 22px 0; border: 0; border-top: 1px dashed var(--pixso-line); }
+    .readme-body a { color: var(--pixso-green-dark); text-decoration: underline; text-underline-offset: 2px; }
+    .readme-body a:hover { color: var(--pixso-orange, #ff7d4d); }
+    .readme-body strong { color: var(--pixso-brown); font-weight: 750; }
+    .readme-body .readme-empty {
+        margin: 8px 0; padding: 22px 16px; border-radius: 14px; text-align: center;
+        border: 1px dashed var(--pixso-line); color: var(--pixso-brown-soft); font-size: 13px; line-height: 1.8;
+    }
+    .readme-body .readme-loading { padding: 26px 0; text-align: center; color: var(--pixso-brown-soft); font-size: 13px; }
+    .readme-body .readme-loading::after {
+        content: ''; display: inline-block; width: 12px; height: 12px; margin-left: 8px;
+        vertical-align: -1px; border-radius: 50%;
+        border: 2px solid color-mix(in srgb, var(--pixso-green) 40%, transparent);
+        border-top-color: var(--pixso-green-dark);
+        animation: readmeSpin .8s linear infinite;
+    }
+    @keyframes readmeSpin { to { transform: rotate(360deg); } }
+
+    /* README 弹窗里的正文（旧版整篇等宽；现由 readme-view.js 渲染成结构化排版，
+       保留这个类只为兼容极少数还在用它的外层容器） */
+    .mod-readme{font-size:12px;line-height:1.65;color:#312e81;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+        /* AI Agent 运行状态条：运行期间常驻，随时可停止 */
+        .agent-run-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #34d399; flex: none;
+            animation: agentRunPulse 1.4s ease-in-out infinite;
+        }
+        #agentRunBar.is-stopping .agent-run-dot { background: #fbbf24; animation: none; }
+        @keyframes agentRunPulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(52, 211, 153, .55); }
+            50% { opacity: .5; box-shadow: 0 0 0 6px rgba(52, 211, 153, 0); }
+        }
+        #agentStopBtn:active { transform: scale(.96); }
+        #agentStopBtn:disabled { opacity: .5; cursor: default; }

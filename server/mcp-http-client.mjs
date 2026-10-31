@@ -17,6 +17,8 @@
 // 两者的入口地址不同（老的是 .../sse，新的是 .../mcp），所以按用户填的地址
 // 形态自动判断，不需要用户去理解"我用的是哪一代协议"。
 
+import { buildInitializeParams, flattenToolResult } from './mcp-shared.mjs';
+
 /** 握手超时：远程服务可能要冷启动容器，给宽一点。 */
 // 握手预算给宽：远程服务要冷启动容器，而连接失败时还要走 3 次重试
 //   （每次的连接超时是 8 秒 —— 见下面的 defaultAgent），8×3 + 退避 ≈ 26 秒，
@@ -373,15 +375,6 @@ export function createMcpHttpClient(def, opts = {}) {
         return msg ? msg.result : undefined;
     }
 
-    /** 握手参数：协议版本与客户端身份，抽出来让 start() 只关心"什么时候发"。 */
-    function buildInitializeParams() {
-        return {
-            protocolVersion: PROTOCOL_VERSION,
-            capabilities: { roots: { listChanged: false } },
-            clientInfo: { name: 'ElainaChat', version: String(opts.version || '2.0.0') },
-        };
-    }
-
     /**
      * 协商版本：服务端可能只回它自己支持的版本，就用它继续，后续请求的版本头也跟着改。
      * 版本不同不拒绝 —— 1.x 的工具语义没有破坏性变化，硬拒等于"能用却不让用"。
@@ -398,7 +391,7 @@ export function createMcpHttpClient(def, opts = {}) {
         if (initDone) return serverInfo;
         if (!baseUrl) throw new Error('MCP 服务器「' + id + '」的地址无效');
         log('MCP 连接：' + baseUrl.href);
-        const result = await request('initialize', buildInitializeParams(), INIT_TIMEOUT_MS);
+        const result = await request('initialize', buildInitializeParams({ protocolVersion: PROTOCOL_VERSION, version: opts.version }), INIT_TIMEOUT_MS);
         applyNegotiatedVersion(result);
         serverInfo = result?.serverInfo || null;
         initDone = true;
@@ -419,19 +412,6 @@ export function createMcpHttpClient(def, opts = {}) {
                 ? t.inputSchema
                 : { type: 'object', properties: {} },
         })).filter((t) => t.name);
-    }
-
-    /** 把 content 数组拍平成一段文本；非文本内容降级成一句说明，不会丢成空白。 */
-    function flattenToolResult(result) {
-        const parts = [];
-        for (const item of (Array.isArray(result?.content) ? result.content : [])) {
-            if (item?.type === 'text') parts.push(String(item.text || ''));
-            else if (item?.type === 'image') parts.push('（该工具返回了一张图片，这里只能显示文字）');
-            else if (item?.type === 'resource') parts.push('（该工具返回了一个资源引用：' + String(item.resource?.uri || '无地址') + '）');
-            else parts.push('（该工具返回了 ' + String(item?.type || '未知') + ' 类型的内容）');
-        }
-        const text = parts.join('\n').trim();
-        return { ok: result?.isError !== true, text: text || '（工具没有返回内容）' };
     }
 
     async function callTool(name, args) {

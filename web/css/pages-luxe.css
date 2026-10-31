@@ -818,31 +818,6 @@ html.rd #settingsPanel {
     grid-template-rows: auto minmax(0, 1fr) !important;
 }
 
-html.rd .rd-settings-pagehead {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    position: relative;
-    z-index: 2;
-    padding: 30px 32px 16px;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd .rd-settings-pagehead h1 {
-    margin: 0;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 30px;
-    font-weight: 600;
-    line-height: 1.2;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd .rd-settings-pagehead p {
-    margin-top: 6px;
-    color: var(--rd-text-3);
-    font-size: 12px;
-    line-height: 1.6;
-}
 
 html.rd #settingsTopBar {
     grid-column: 1;
@@ -1204,43 +1179,6 @@ html.rd[data-bubble="compact"] .bubble-user {
     padding: 9px 13px !important;
 }
 
-/* ---------- 设置：分栏页头 ---------- */
-
-html.rd #settingsContent .rd-tab-intro {
-    grid-column: 1 / -1;
-    padding: 2px 2px 18px;
-    margin: 0;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd #settingsContent .rd-tab-intro .rd-page-eyebrow {
-    margin-bottom: 6px;
-}
-
-html.rd #settingsContent .rd-tab-intro h2 {
-    margin: 0;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 24px;
-    font-weight: 600;
-    line-height: 1.25;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd #settingsContent .rd-tab-intro p {
-    margin: 5px 0 0;
-    color: var(--rd-text-3);
-    font-size: 11.5px;
-    line-height: 1.7;
-}
-
-html.rd #settingsContent .rd-tab-intro-compact {
-    padding-bottom: 12px;
-}
-
-html.rd #settingsContent .rd-tab-intro-compact h2 { font-size: 19px; }
-html.rd #settingsContent .rd-tab-intro-compact p { display: none; }
-
 /* ---------- 设置：卡片与表单 ---------- */
 
 html.rd #settingsContent .settings-tab-panel > section,
@@ -1372,7 +1310,6 @@ html.rd .memory-now-btn:hover {
 
 /* ---------- 设置：插件与技能 ---------- */
 
-html.rd #tab-mods .settings-card { padding: 22px 24px !important; }
 
 html.rd #tab-mods .mod-card,
 html.rd #tab-mods #skillsList .mod-card {
@@ -1798,15 +1735,8 @@ html.rd #marketList > * { margin-top: 0 !important; }
         grid-template-rows: auto auto minmax(0, 1fr) !important;
     }
 
-    html.rd .rd-settings-pagehead {
-        grid-column: 1;
-        grid-row: 1;
-        padding: 18px 16px 10px;
-    }
-
-    html.rd .rd-settings-pagehead h1 { font-size: 24px; }
-    html.rd .rd-settings-pagehead p { font-size: 11px; }
-
+    
+        
     html.rd #settingsTopBar {
         grid-column: 1;
         grid-row: 2;
@@ -2006,1729 +1936,8 @@ html.rd #marketList > * { margin-top: 0 !important; }
     html.rd #settingsExtNav { width: auto !important; flex: none !important; }
 }
 
-html.rd #notesPage .page-secondary-header,
-html.rd #diaryPage .page-secondary-header,
-html.rd #achievementsOverlay .page-secondary-header {
-    padding: 36px 40px 20px !important;
-    align-items: flex-end;
-}
-
-html.rd #notesPage .page-secondary-copy,
-html.rd #diaryPage .page-secondary-copy,
-html.rd #achievementsOverlay .page-secondary-copy {
-    position: relative;
-    padding-left: 18px;
-}
-
-html.rd #notesPage .page-secondary-copy::before,
-html.rd #diaryPage .page-secondary-copy::before,
-html.rd #achievementsOverlay .page-secondary-copy::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 4px;
-    bottom: 4px;
-    width: 2px;
-    border-radius: 2px;
-    background: linear-gradient(180deg, var(--rd-accent), transparent);
-}
-
-html.rd #notesPage .page-secondary-title,
-html.rd #diaryPage .page-secondary-title,
-html.rd #achievementsOverlay .page-secondary-title {
-    font-size: 31px !important;
-    font-weight: 600 !important;
-    letter-spacing: var(--rd-letter);
-    line-height: 1.18 !important;
-}
-
-html.rd #notesPage .page-secondary-title::before,
-html.rd #diaryPage .page-secondary-title::before,
-html.rd #achievementsOverlay .page-secondary-title::before {
-    display: block;
-    margin-bottom: 5px;
-    color: var(--rd-accent);
-    font-family: var(--rd-font-ui);
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: .22em;
-}
-
-html.rd #notesPage .page-secondary-title::before { content: "KEEPSAKES"; }
-html.rd #diaryPage .page-secondary-title::before { content: "TRAVEL JOURNAL"; }
-html.rd #achievementsOverlay .page-secondary-title::before { content: "MILESTONES"; }
-
-html.rd #notesPage .page-secondary-subtitle,
-html.rd #diaryPage .page-secondary-subtitle,
-html.rd #achievementsOverlay .page-secondary-subtitle {
-    margin-top: 5px !important;
-    color: var(--rd-text-3) !important;
-    font-size: 12px !important;
-}
-
-html.rd #notesPage .page-secondary-back,
-html.rd #diaryPage .page-secondary-back,
-html.rd #achievementsOverlay .page-secondary-back {
-    height: 34px;
-    padding: 0 13px;
-    border-radius: 999px;
-    border-color: var(--rd-border) !important;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-2) !important;
-    font-size: 11px;
-}
-
-html.rd #notesPage .page-secondary-back:hover,
-html.rd #diaryPage .page-secondary-back:hover,
-html.rd #achievementsOverlay .page-secondary-back:hover {
-    border-color: var(--rd-accent-border) !important;
-    color: var(--rd-accent) !important;
-}
-
-/* ---------- 语笺 ---------- */
-
-html.rd #notesPage > .flex-1 {
-    padding: 22px 40px 46px !important;
-}
-
-html.rd .notes-toolbar {
-    max-width: 1120px;
-    margin: 0 auto 20px !important;
-}
-
-html.rd .notes-tabs {
-    padding: 3px !important;
-    background: var(--rd-surface) !important;
-    border-color: var(--rd-border) !important;
-}
-
-html.rd .notes-tab {
-    min-height: 28px;
-    font-size: 11px !important;
-}
-
-html.rd .notes-tab.tab-active {
-    background: var(--rd-accent) !important;
-    color: var(--rd-accent-contrast) !important;
-    box-shadow: var(--rd-btn-shadow) !important;
-}
-
-html.rd .notes-search-wrap { width: 250px; }
-html.rd #notesSearch {
-    height: 36px;
-    background: var(--rd-surface) !important;
-    border-color: var(--rd-border) !important;
-}
-html.rd #notesCount { color: var(--rd-text-3) !important; }
-
-html.rd #notesGrid {
-    max-width: 1120px;
-    margin: 0 auto;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-    gap: 16px !important;
-}
-
-html.rd .note-card {
-    min-height: 196px !important;
-    padding: 22px 20px 18px 22px !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 18px !important;
-    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2)) !important;
-    box-shadow: var(--rd-shadow-1) !important;
-    overflow: hidden;
-}
-
-html.rd .note-card::before {
-    width: 2px !important;
-    background: linear-gradient(180deg, var(--rd-accent), transparent) !important;
-    opacity: .8 !important;
-}
-
-html.rd .note-card::after {
-    content: "“";
-    position: absolute;
-    right: 14px;
-    top: 2px;
-    color: var(--rd-accent);
-    font-family: var(--rd-font-display);
-    font-size: 58px;
-    line-height: 1;
-    opacity: .12;
-    pointer-events: none;
-}
-
-html.rd .note-card:hover {
-    transform: translateY(-3px);
-    border-color: var(--rd-accent-border) !important;
-    box-shadow: var(--rd-shadow-2) !important;
-}
-
-html.rd .note-role-badge {
-    min-height: 21px;
-    padding: 0 9px;
-    font-size: 9px;
-}
-
-html.rd .note-role-user {
-    color: var(--rd-text-2) !important;
-    background: var(--rd-surface-2) !important;
-    border-color: var(--rd-border) !important;
-}
-
-html.rd .note-role-ai {
-    color: var(--rd-accent) !important;
-    background: var(--rd-accent-soft) !important;
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd .note-role-quote {
-    color: var(--rd-accent-contrast) !important;
-    background: var(--rd-accent) !important;
-}
-
-html.rd .note-card-text {
-    color: var(--rd-text) !important;
-    font-family: var(--rd-font-display) !important;
-    font-size: 15.5px !important;
-    font-weight: 500 !important;
-    line-height: 1.85 !important;
-}
-
-html.rd .note-card-meta {
-    color: var(--rd-text-3) !important;
-    font-size: 10px !important;
-    letter-spacing: .02em;
-}
-
-html.rd .note-remove-btn {
-    color: var(--rd-text-3) !important;
-    background: var(--rd-surface-2) !important;
-    border: 1px solid var(--rd-border) !important;
-}
-
-html.rd #notesEmpty,
-html.rd #diaryEmpty {
-    padding: 96px 20px !important;
-    color: var(--rd-text-3) !important;
-}
-
-html.rd #notesEmpty > div:first-child,
-html.rd #diaryEmpty > div:first-child {
-    display: none !important;
-}
-
-html.rd #notesEmpty::before,
-html.rd #diaryEmpty::before {
-    content: "✦";
-    display: grid;
-    place-items: center;
-    width: 76px;
-    height: 76px;
-    margin: 0 auto 22px;
-    border: 1px solid var(--rd-accent-border);
-    border-radius: 50%;
-    background: var(--rd-accent-soft);
-    color: var(--rd-accent);
-    font-family: var(--rd-font-display);
-    font-size: 28px;
-    box-shadow: 0 0 44px var(--rd-accent-soft);
-}
-
-html.rd #notesEmpty p,
-html.rd #diaryEmpty p {
-    color: var(--rd-text-2) !important;
-    font-family: var(--rd-font-display);
-    font-size: 17px !important;
-    line-height: 1.7;
-}
-
-/* ---------- 旅行日记 ---------- */
-
-html.rd .diary-toolbar { display: none !important; }
-
-html.rd .rd-diary-stats {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-    width: 100%;
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 22px 40px 6px;
-    flex: none;
-}
-
-html.rd .rd-diary-stat {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-    padding: 15px 18px;
-    border: 1px solid var(--rd-border);
-    border-radius: 15px;
-    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2));
-    box-shadow: var(--rd-shadow-1);
-}
-
-html.rd .rd-diary-stat b {
-    color: var(--rd-accent);
-    font-family: var(--rd-font-display);
-    font-size: 26px;
-    font-weight: 600;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-}
-
-html.rd .rd-diary-stat span {
-    color: var(--rd-text-3);
-    font-size: 10.5px;
-    letter-spacing: .04em;
-}
-
-html.rd #diaryGrid {
-    max-width: 1040px;
-    margin: 0 auto;
-    padding: 8px 40px 50px 74px !important;
-}
-
-html.rd #diaryGrid::before {
-    left: 44px;
-    top: 18px;
-    bottom: 34px;
-    width: 1px;
-    background: linear-gradient(180deg, var(--rd-accent-border), var(--rd-border) 40%, transparent) !important;
-}
-
-html.rd .diary-group-head {
-    margin: 28px 0 14px !important;
-    color: var(--rd-text-2) !important;
-    font-size: 14px !important;
-    letter-spacing: .06em !important;
-    background: var(--rd-bg) !important;
-}
-
-html.rd .diary-group-dot {
-    left: -34px !important;
-    width: 10px !important;
-    height: 10px !important;
-    background: var(--rd-accent) !important;
-    box-shadow: 0 0 0 4px var(--rd-accent-soft), 0 0 18px var(--rd-accent-soft) !important;
-}
-
-html.rd .diary-group-count {
-    padding: 2px 8px;
-    border: 1px solid var(--rd-border);
-    border-radius: 999px;
-    background: var(--rd-surface) !important;
-    font-size: 9.5px !important;
-}
-
-html.rd .diary-group-enter {
-    height: 28px;
-    padding: 0 10px;
-    border-radius: 999px;
-    border-color: var(--rd-border) !important;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-3) !important;
-}
-
-html.rd .diary-card {
-    margin-bottom: 14px !important;
-    padding: 22px 24px !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 18px !important;
-    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2)) !important;
-    box-shadow: var(--rd-shadow-1) !important;
-}
-
-html.rd .diary-card:hover {
-    transform: translateY(-3px);
-    border-color: var(--rd-accent-border) !important;
-    box-shadow: var(--rd-shadow-2) !important;
-}
-
-html.rd .diary-card-date {
-    color: var(--rd-accent) !important;
-    font-size: 10px !important;
-    font-weight: 600 !important;
-    letter-spacing: .1em !important;
-    text-transform: uppercase;
-}
-
-html.rd .diary-card-text {
-    margin-top: 8px !important;
-    color: var(--rd-text-2) !important;
-    font-family: var(--rd-font-display) !important;
-    font-size: 14.5px !important;
-    line-height: 1.9 !important;
-}
-
-html.rd .diary-essence {
-    border-color: var(--rd-border) !important;
-    background: var(--rd-surface-2) !important;
-    color: var(--rd-text-3) !important;
-    font-size: 9.5px !important;
-}
-
-/* ---------- 成就：整页（页头走上面的公共结构） ---------- */
-
-html.rd #achievementsOverlay {
-    inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
-    width: auto !important;
-    height: auto !important;
-    background: var(--rd-bg) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    align-items: stretch !important;
-    justify-content: stretch !important;
-    padding: 0 !important;
-}
-
-html.rd #achievementsOverlay .modal-panel {
-    width: 100% !important;
-    max-width: none !important;
-    height: 100% !important;
-    max-height: none !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    background: var(--rd-bg) !important;
-    display: flex;
-    flex-direction: column;
-}
-
-/* 页头右侧：计数靠右，与「管理分类」「返回」排成一组 */
-html.rd #achievementsOverlay .ach-count {
-    margin-left: auto;
-    flex: none;
-}
-
-html.rd .ach-count {
-    padding: 3px 9px;
-    border: 1px solid var(--rd-accent-border);
-    border-radius: 999px;
-    background: var(--rd-accent-soft) !important;
-    color: var(--rd-accent) !important;
-    font-size: 10px !important;
-}
-
-html.rd #achList {
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    width: 100%;
-    /* 内容区随可用宽度伸缩：小窗不低于语笺页宽，超宽屏封顶。
-       高/低 DPI 由系统缩放换算成 CSS 像素后自然落到这条连续区间里，
-       auto-fill 没有分辨率断点，125% / 150% 这类缩放不会踩坑。 */
-    max-width: clamp(1120px, 92%, 1520px);
-    margin: 0 auto;
-    padding: 26px 40px 50px !important;
-    display: grid !important;
-    /* 列数随可用宽度伸缩（auto-fill）：1080p 下四列，窄窗自动收到三列/两列 */
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 14px;
-    align-content: start;
-}
-
-html.rd .rd-ach-hero {
-    grid-column: 1 / -1;
-    display: grid;
-    grid-template-columns: 96px minmax(0, 1fr);
-    gap: 24px;
-    align-items: center;
-    padding: 24px 26px;
-    border: 1px solid var(--rd-accent-border);
-    border-radius: 20px;
-    background: linear-gradient(130deg, var(--rd-accent-soft), var(--rd-surface) 60%);
-    box-shadow: var(--rd-shadow-1);
-    position: relative;
-}
-
-html.rd .rd-ach-hero::after {
-    content: "✦";
-    position: absolute;
-    right: 26px;
-    top: 10px;
-    color: var(--rd-accent);
-    font-family: var(--rd-font-display);
-    font-size: 62px;
-    line-height: 1;
-    opacity: .12;
-    pointer-events: none;
-}
-
-html.rd .rd-ach-ring {
-    --p: 50;
-    width: 96px;
-    height: 96px;
-    border-radius: 50%;
-    display: grid;
-    place-items: center;
-    background: conic-gradient(var(--rd-accent) calc(var(--p) * 1%), var(--rd-surface-2) 0);
-    position: relative;
-    flex: none;
-}
-
-html.rd .rd-ach-ring::after {
-    content: "";
-    position: absolute;
-    inset: 7px;
-    border-radius: 50%;
-    /* 石墨/雾蓝的 surface 带透明度，直接铺会让进度环的颜色透进圆心，白字看不清。
-       叠在实色背景上，既保留主题质感又保证数字可读。 */
-    background: linear-gradient(var(--rd-surface), var(--rd-surface)), var(--rd-bg);
-}
-
-html.rd .rd-ach-ring span {
-    position: relative;
-    z-index: 1;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 20px;
-    font-weight: 700;
-}
-
-html.rd .rd-ach-copy h3 {
-    margin: 0 0 5px;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 21px;
-    font-weight: 600;
-}
-
-html.rd .rd-ach-copy p {
-    margin: 0;
-    color: var(--rd-text-3);
-    font-size: 11.5px;
-    line-height: 1.6;
-}
-
-html.rd .rd-ach-bar {
-    max-width: 360px;
-    height: 4px;
-    margin-top: 11px;
-    border-radius: 999px;
-    background: var(--rd-surface-2);
-    overflow: hidden;
-}
-
-html.rd .rd-ach-bar i {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: var(--rd-accent);
-}
-
-html.rd .ach-card {
-    padding: 16px !important;
-    border-radius: 16px !important;
-    border-color: var(--rd-border) !important;
-    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2)) !important;
-    box-shadow: var(--rd-shadow-1);
-}
-
-html.rd .ach-card.is-unlocked {
-    border-color: var(--rd-accent-border) !important;
-    background: linear-gradient(160deg, var(--rd-accent-soft), var(--rd-surface)) !important;
-}
-
-html.rd .ach-card .ach-icon {
-    width: 42px !important;
-    height: 42px;
-    border-radius: 13px !important;
-    border: 1px solid var(--rd-border);
-    background: var(--rd-surface) !important;
-    font-size: 20px !important;
-}
-
-html.rd .ach-card.is-unlocked .ach-icon {
-    border-color: var(--rd-accent-border);
-    background: var(--rd-accent-soft) !important;
-}
-
-html.rd .ach-name { font-size: 13px !important; }
-html.rd .ach-desc { font-size: 11px !important; }
-html.rd .ach-detail {
-    background: var(--rd-surface-2) !important;
-    border-left-color: var(--rd-accent) !important;
-    color: var(--rd-text-2) !important;
-    border-radius: 0 8px 8px 0;
-}
-
-/* ---------- 插件市场：整页 ---------- */
-
-html.rd #marketOverlay {
-    inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
-    width: auto !important;
-    height: auto !important;
-    background: var(--rd-bg) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-    align-items: stretch !important;
-    justify-content: stretch !important;
-    padding: 0 !important;
-}
-
-html.rd #marketOverlay .modal-panel {
-    width: 100% !important;
-    max-width: none !important;
-    height: 100% !important;
-    max-height: none !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    background: var(--rd-bg) !important;
-    display: flex;
-    flex-direction: column;
-}
-
-html.rd #marketOverlay .modal-panel > div:first-child {
-    flex: none;
-    padding: 30px 40px 16px !important;
-    border-bottom: 1px solid var(--rd-border) !important;
-    background: transparent !important;
-}
-
-html.rd #marketOverlay .text-sm.font-bold {
-    color: var(--rd-text) !important;
-    font-family: var(--rd-font-display) !important;
-    font-size: 30px !important;
-    font-weight: 600 !important;
-    line-height: 1.2 !important;
-}
-
-html.rd #marketOverlay .text-sm.font-bold::before {
-    content: "MOD MARKET";
-    display: block;
-    margin-bottom: 4px;
-    color: var(--rd-accent);
-    font-family: var(--rd-font-ui);
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: .22em;
-}
-
-html.rd #marketRefreshBtn {
-    height: 32px;
-    padding: 0 12px !important;
-    border-radius: 999px !important;
-    font-size: 11px !important;
-}
-
-html.rd #marketClose {
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--rd-border);
-    border-radius: 50% !important;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-3) !important;
-}
-
-html.rd #marketOverlay .modal-panel > div.flex-1 {
-    width: 100%;
-    max-width: 1120px;
-    margin: 0 auto;
-    padding: 24px 40px 44px !important;
-}
-
-html.rd .rd-market-hero {
-    position: relative;
-    overflow: hidden;
-    margin-bottom: 20px;
-    padding: 24px 28px;
-    border: 1px solid var(--rd-accent-border);
-    border-radius: 20px;
-    background: linear-gradient(130deg, var(--rd-accent-soft), var(--rd-surface) 62%);
-    box-shadow: var(--rd-shadow-1);
-}
-
-html.rd .rd-market-hero::after {
-    content: "✦";
-    position: absolute;
-    right: 26px;
-    top: 8px;
-    color: var(--rd-accent);
-    font-family: var(--rd-font-display);
-    font-size: 72px;
-    line-height: 1;
-    opacity: .12;
-    pointer-events: none;
-}
-
-html.rd .rd-page-eyebrow {
-    margin-bottom: 5px;
-    color: var(--rd-accent);
-    font-family: var(--rd-font-ui);
-    font-size: 9px;
-    font-weight: 600;
-    letter-spacing: .22em;
-}
-
-html.rd .rd-market-hero h2 {
-    margin: 0 0 5px;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 24px;
-    font-weight: 600;
-}
-
-html.rd .rd-market-hero p {
-    max-width: 640px;
-    margin: 0;
-    color: var(--rd-text-3);
-    font-size: 11.5px;
-    line-height: 1.7;
-}
-
-html.rd #marketHint {
-    color: var(--rd-text-3) !important;
-    font-size: 10.5px !important;
-    line-height: 1.7 !important;
-    margin-bottom: 14px !important;
-}
-
-html.rd #marketHint b { color: var(--rd-text-2) !important; }
-
-html.rd #marketOverlay .modal-panel .flex.items-center.gap-2.mb-3 > label,
-html.rd #marketOverlay .modal-panel .flex.items-center.gap-2.mt-5 > label {
-    color: var(--rd-text-3) !important;
-    font-size: 10px !important;
-}
-
-html.rd #marketSearch,
-html.rd #marketUrl {
-    height: 34px !important;
-    border-color: var(--rd-border) !important;
-    background: var(--rd-surface) !important;
-    font-size: 11px !important;
-}
-
-html.rd #marketList {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 14px !important;
-}
-
-html.rd #marketList .mod-card {
-    position: relative;
-    padding: 18px 18px 18px 74px !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 16px !important;
-    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2)) !important;
-    box-shadow: var(--rd-shadow-1) !important;
-    overflow: hidden;
-}
-
-html.rd #marketList .mod-card::before {
-    content: "✦";
-    position: absolute;
-    left: 18px;
-    top: 18px;
-    width: 40px;
-    height: 40px;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--rd-accent-border);
-    border-radius: 12px;
-    background: var(--rd-accent-soft);
-    color: var(--rd-accent);
-    font-family: var(--rd-font-display);
-    font-size: 18px;
-}
-
-html.rd #marketList .mod-card:hover {
-    transform: translateY(-2px);
-    border-color: var(--rd-accent-border) !important;
-    box-shadow: var(--rd-shadow-2) !important;
-}
-
-html.rd #marketList .mod-card .text-indigo-800 {
-    color: var(--rd-text) !important;
-    font-size: 13px !important;
-}
-
-html.rd #marketList .mod-card .text-indigo-400,
-html.rd #marketList .mod-card .text-indigo-300,
-html.rd #marketList .mod-card .text-\[11px\] {
-    color: var(--rd-text-3) !important;
-    line-height: 1.65 !important;
-}
-
-html.rd #marketList .mod-card .text-\[10px\] { font-size: 9.5px !important; }
-
-html.rd #marketList .market-install-btn {
-    height: 28px;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 999px !important;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-2) !important;
-    font-size: 10px !important;
-}
-
-html.rd #marketList .market-install-btn:not(:disabled):hover {
-    border-color: var(--rd-accent) !important;
-    color: var(--rd-accent) !important;
-}
-
-html.rd #marketPrereqToggle {
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid var(--rd-border);
-    color: var(--rd-text-3) !important;
-    font-size: 10.5px !important;
-}
-
-/* ---------- 设置：主区整页 ---------- */
-
-/* 整页模式下顶栏后面是原聊天内容，半透明会透出气泡；临时改成不透明底色。 */
-html.rd body.rd-page-overlay-open #mainContent > header {
-    background: linear-gradient(var(--rd-topbar-bg), var(--rd-topbar-bg)), var(--rd-bg) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-}
-
-html.rd #settingsOverlay {
-    /* 原型里设置是主区页面：让出外壳顶栏，不再盖住汉堡、标题和右侧按钮。 */
-    inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
-    width: auto !important;
-    height: auto !important;
-    padding: 0 !important;
-    align-items: stretch !important;
-    justify-content: stretch !important;
-    background: var(--rd-bg) !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
-}
-
-html.rd #settingsPanel {
-    position: relative !important;
-    width: 100% !important;
-    max-width: none !important;
-    height: 100% !important;
-    max-height: none !important;
-    border: 0 !important;
-    border-radius: 0 !important;
-    box-shadow: none !important;
-    background: var(--rd-bg) !important;
-    display: grid !important;
-    grid-template-columns: 190px minmax(0, 1fr) !important;
-    grid-template-rows: auto minmax(0, 1fr) !important;
-}
-
-html.rd .rd-settings-pagehead {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    position: relative;
-    z-index: 2;
-    padding: 30px 32px 16px;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd .rd-settings-pagehead h1 {
-    margin: 0;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 30px;
-    font-weight: 600;
-    line-height: 1.2;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd .rd-settings-pagehead p {
-    margin-top: 6px;
-    color: var(--rd-text-3);
-    font-size: 12px;
-    line-height: 1.6;
-}
-
-html.rd #settingsTopBar {
-    grid-column: 1;
-    grid-row: 2;
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: stretch !important;
-    width: 100% !important;
-    margin: 0 !important;
-    padding: 16px 12px !important;
-    border: 0 !important;
-    border-right: 1px solid var(--rd-border) !important;
-    background: var(--rd-surface-2) !important;
-    position: static !important;
-    min-height: 0;
-    overflow-y: auto;
-}
-
-html.rd #settingsTopBar::before,
-html.rd .rd-settings-title { display: none !important; }
-
-html.rd #settingsContent {
-    grid-column: 2;
-    grid-row: 2;
-    padding: 22px 30px 34px !important;
-    overflow-y: auto !important;
-    max-width: none !important;
-    width: auto !important;
-    margin: 0 !important;
-    background: transparent !important;
-}
-
-html.rd #settingsPanel #settingsTopBar > #closeSettings {
-    position: absolute !important;
-    top: 26px !important;
-    right: 30px !important;
-    transform: none !important;
-    z-index: 5;
-    width: 34px;
-    height: 34px;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 50% !important;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-3) !important;
-}
-
-html.rd #settingsPanel #settingsTopBar > #closeSettings:hover {
-    border-color: var(--rd-accent-border) !important;
-    color: var(--rd-accent) !important;
-    background: var(--rd-accent-soft) !important;
-}
-
-html.rd #settingsTabNav {
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 2px !important;
-    width: 100% !important;
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    overflow-x: hidden !important;
-    overflow-y: auto !important;
-}
-
-
-html.rd .settings-tab-btn:hover {
-    background: var(--rd-hover) !important;
-    color: var(--rd-text) !important;
-}
-
-html.rd .settings-tab-btn.active {
-    background: var(--rd-accent-soft) !important;
-    color: var(--rd-accent) !important;
-    font-weight: 600 !important;
-}
-
-html.rd #settingsContent .settings-tab-panel > section,
-html.rd #settingsContent .settings-tab-panel > div.mb-4 {
-    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2)) !important;
-    border-color: var(--rd-border) !important;
-    border-radius: 16px !important;
-}
-
-html.rd #settingsContent .settings-tab-panel > section .modal-label,
-html.rd #settingsContent .settings-tab-panel > div.mb-4 .text-xs.font-semibold {
-    font-family: var(--rd-font-display);
-    font-size: 14px !important;
-}
-
-html.rd #themePickerBox {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
-    gap: 12px !important;
-}
-
-html.rd .theme-tpl-card {
-    width: auto !important;
-    padding: 9px !important;
-    background: var(--rd-surface-2) !important;
-    border-radius: 13px !important;
-}
-
-html.rd .theme-tpl-card.is-active {
-    background: var(--rd-accent-soft) !important;
-}
-
-/* 主题卡的迷你界面预览：竖栏 / 列表 / 内容线，尺寸与原型保持一致。 */
-html.rd .theme-tpl-preview {
-    display: flex;
-    gap: 0;
-    height: 72px;
-    padding: 0;
-    border: 1px solid var(--rd-border);
-    border-radius: 8px;
-    overflow: hidden;
-    background: var(--pv-bg, var(--rd-surface-2));
-}
-
-html.rd .rd-tpl-rail { width: 16%; background: var(--pv-rail, var(--pv-accent, var(--rd-accent))); }
-html.rd .rd-tpl-list {
-    width: 30%;
-    background: var(--pv-list, rgba(0, 0, 0, .04));
-    border-right: 1px solid rgba(0, 0, 0, .08);
-}
-
-html.rd .rd-tpl-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 8px;
-}
-
-html.rd .rd-tpl-main i {
-    display: block;
-    flex: none;
-    width: 72%;
-    height: 8px;
-    border-radius: 3px;
-    background: var(--pv-line, rgba(0, 0, 0, .12));
-}
-
-html.rd .rd-tpl-main i:nth-child(2) { width: 54%; }
-html.rd .rd-tpl-main i:nth-child(3) { width: 64%; margin-top: auto; background: var(--pv-accent, var(--rd-accent)); }
-
-html.rd .theme-tpl-name {
-    display: block;
-    margin-top: 7px;
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--rd-text);
-}
-
-html.rd .theme-tpl-desc {
-    display: block;
-    margin-top: 1px;
-    font-size: 10px;
-    color: var(--rd-text-3);
-}
-
-/* 内置主题的固定预览配色（与原型一致，不随当前主题变化）。 */
-html.rd .rd-pv-majo { background: #f4eee1; --pv-rail: #241f18; --pv-list: #efe6d4; --pv-line: #d9c8a8; --pv-accent: #8a6a1f; }
-html.rd .rd-pv-olive { background: #f8f5f2; --pv-rail: #2c2117; --pv-list: #f1e8e5; --pv-line: #e6d8cb; --pv-accent: #738746; }
-html.rd .rd-pv-mist { background: #edf5fa; --pv-rail: #28455a; --pv-list: #e2eef6; --pv-line: #cfe3ef; --pv-accent: #4d8fb4; }
-html.rd .rd-pv-glass { background: #0d1016; --pv-rail: #080a0e; --pv-list: #11151d; --pv-line: rgba(255, 255, 255, .12); --pv-accent: #a4b8ff; }
-html.rd .rd-pv-glass .rd-tpl-list { border-right-color: rgba(255, 255, 255, .08); }
-
-html.rd .rd-display-card .set-row {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 14px 0;
-    border-top: 1px solid var(--rd-border);
-}
-
-html.rd .rd-display-card .set-row:first-of-type {
-    padding-top: 4px;
-    border-top: 0;
-}
-
-html.rd .rd-display-card .copy { flex: 1; min-width: 0; }
-html.rd .rd-display-card .copy b {
-    display: block;
-    color: var(--rd-text);
-    font-size: 12.5px;
-    font-weight: 500;
-}
-html.rd .rd-display-card .copy span {
-    display: block;
-    margin-top: 2px;
-    color: var(--rd-text-3);
-    font-size: 10.5px;
-    line-height: 1.5;
-}
-
-html.rd .rd-display-card .segmented {
-    display: inline-flex;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid var(--rd-border);
-    border-radius: 999px;
-    background: var(--rd-surface);
-    flex: none;
-}
-
-html.rd .rd-display-card .segmented button {
-    padding: 6px 12px;
-    border-radius: 999px;
-    color: var(--rd-text-3);
-    font-size: 11px;
-}
-
-html.rd .rd-display-card .segmented button.active {
-    background: var(--rd-accent);
-    color: var(--rd-accent-contrast);
-    box-shadow: var(--rd-btn-shadow);
-}
-
-html.rd #rdCurrentTheme {
-    border: 1px solid var(--rd-accent-border);
-    background: var(--rd-accent-soft);
-    color: var(--rd-accent);
-    font-size: 10px;
-}
-
-html.rd .rd-display-card .switch {
-    position: relative;
-    width: 38px;
-    height: 22px;
-    flex: none;
-    border: 1px solid var(--rd-border);
-    border-radius: 999px;
-    background: var(--rd-surface);
-    cursor: pointer;
-    transition: background .18s, border-color .18s;
-}
-
-html.rd .rd-display-card .switch::after {
-    content: "";
-    position: absolute;
-    left: 2px;
-    top: 2px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: var(--rd-text-3);
-    transition: left .18s, background .18s;
-}
-
-html.rd .rd-display-card .switch.on {
-    background: var(--rd-accent);
-    border-color: var(--rd-accent);
-}
-
-html.rd .rd-display-card .switch.on::after {
-    left: 18px;
-    background: var(--rd-accent-contrast);
-}
-
-html.rd[data-texture="off"] body::before,
-html.rd[data-texture="off"] body::after { display: none !important; }
-
-html.rd[data-bubble="compact"] .bubble-ai,
-html.rd[data-bubble="compact"] .bubble-user {
-    border-radius: 8px !important;
-    padding: 9px 13px !important;
-}
-
-/* ---------- 设置：分栏页头 ---------- */
-
-html.rd #settingsContent .rd-tab-intro {
-    grid-column: 1 / -1;
-    padding: 2px 2px 18px;
-    margin: 0;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd #settingsContent .rd-tab-intro .rd-page-eyebrow {
-    margin-bottom: 6px;
-}
-
-html.rd #settingsContent .rd-tab-intro h2 {
-    margin: 0;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 24px;
-    font-weight: 600;
-    line-height: 1.25;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd #settingsContent .rd-tab-intro p {
-    margin: 5px 0 0;
-    color: var(--rd-text-3);
-    font-size: 11.5px;
-    line-height: 1.7;
-}
-
-html.rd #settingsContent .rd-tab-intro-compact {
-    padding-bottom: 12px;
-}
-
-html.rd #settingsContent .rd-tab-intro-compact h2 { font-size: 19px; }
-html.rd #settingsContent .rd-tab-intro-compact p { display: none; }
-
-/* ---------- 设置：卡片与表单 ---------- */
-
-html.rd #settingsContent .settings-tab-panel > section,
-html.rd #settingsContent .settings-tab-panel > div.mb-4,
-html.rd #settingsContent .settings-card {
-    padding: 20px 22px !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 18px !important;
-    background: linear-gradient(165deg, var(--rd-surface) 0%, var(--rd-surface-2) 100%) !important;
-    box-shadow: 0 1px 0 rgba(255, 255, 255, .02), 0 12px 32px rgba(0, 0, 0, .045);
-}
-
-html.rd #settingsContent .settings-tab-panel > section:hover,
-html.rd #settingsContent .settings-tab-panel > div.mb-4:hover,
-html.rd #settingsContent .settings-card:hover {
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd #settingsContent .settings-tab-panel > section > .modal-label,
-html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child,
-html.rd #settingsContent .settings-card > .flex .modal-label {
-    margin: 0 0 14px !important;
-    padding: 0 0 12px !important;
-    border-bottom: 1px solid var(--rd-border);
-    color: var(--rd-text) !important;
-    font-family: var(--rd-font-display);
-    font-size: 14.5px !important;
-    font-weight: 600 !important;
-    letter-spacing: 0;
-}
-
-html.rd #settingsContent .settings-tab-panel > section > .modal-label > span:first-child,
-html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child > span:first-child,
-html.rd #settingsContent .settings-card > .flex .modal-label > span:first-child {
-    color: var(--rd-accent) !important;
-    opacity: 1;
-}
-
-html.rd #settingsContent .rd-field-hint {
-    margin: 0 0 12px;
-    color: var(--rd-text-3);
-    font-size: 11.5px;
-    line-height: 1.75;
-}
-
-html.rd #settingsContent .settings-tab-panel label.text-xs.block {
-    color: var(--rd-text-3) !important;
-    font-size: 10.5px !important;
-    font-weight: 500 !important;
-    letter-spacing: .02em;
-}
-
-html.rd #settingsContent .settings-tab-panel code {
-    padding: 1px 5px;
-    border-radius: 5px;
-    background: var(--rd-accent-soft);
-    color: var(--rd-accent);
-    font-size: .94em;
-}
-
-html.rd #settingsContent .mod-switch .track {
-    background: var(--rd-surface-3) !important;
-    box-shadow: inset 0 0 0 1px var(--rd-border);
-}
-
-html.rd #settingsContent .mod-switch input:checked ~ .track {
-    background: var(--rd-accent) !important;
-    box-shadow: none;
-}
-
-html.rd #settingsContent .mod-switch .knob {
-    background: var(--rd-text-3);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
-}
-
-html.rd #settingsContent .mod-switch input:checked ~ .knob {
-    background: var(--rd-accent-contrast);
-}
-
-html.rd #agentPermissionSection .space-y-2 > label {
-    background: var(--rd-surface-2) !important;
-    border-color: var(--rd-border) !important;
-    border-radius: 14px !important;
-    transition: background .15s ease, border-color .15s ease;
-}
-
-html.rd #agentPermissionSection .space-y-2 > label:hover {
-    background: var(--rd-hover) !important;
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd #agentPermissionSection .space-y-2 > label:has(input:checked) {
-    background: var(--rd-accent-soft) !important;
-    border-color: var(--rd-accent-border) !important;
-    box-shadow: inset 3px 0 0 var(--rd-accent);
-}
-
-html.rd #agentPhoneSection .agent-perm-badge {
-    background: var(--rd-surface-2) !important;
-    border-color: var(--rd-border) !important;
-}
-
-html.rd #agentPhoneSection .agent-perm-badge.is-actionable:hover {
-    background: var(--rd-hover) !important;
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd .memory-stepper {
-    border-color: var(--rd-border) !important;
-    background: var(--rd-input) !important;
-}
-
-html.rd .memory-step-btn:hover {
-    background: var(--rd-hover) !important;
-    color: var(--rd-text) !important;
-}
-
-html.rd .memory-now-btn {
-    border-color: var(--rd-border) !important;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-2) !important;
-}
-
-html.rd .memory-now-btn:hover {
-    background: var(--rd-hover) !important;
-    color: var(--rd-text) !important;
-    border-color: var(--rd-accent-border) !important;
-}
-
-/* ---------- 设置：插件与技能 ---------- */
-
-html.rd #tab-mods .settings-card { padding: 22px 24px !important; }
-
-html.rd #tab-mods .mod-card,
-html.rd #tab-mods #skillsList .mod-card {
-    background: var(--rd-surface-2) !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 14px !important;
-    box-shadow: none !important;
-}
-
-html.rd #tab-mods .mod-card:hover {
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd #tab-mods #modsHint,
-html.rd #tab-mods #modsBrowseResult {
-    color: var(--rd-text-3) !important;
-}
-
-html.rd #tab-mods #modsBrowseResult {
-    background: var(--rd-surface-2) !important;
-    border-color: var(--rd-border) !important;
-}
-
-html.rd #tab-mods .mod-switch .track {
-    background: var(--rd-surface-3) !important;
-    box-shadow: inset 0 0 0 1px var(--rd-border);
-}
-
-html.rd #tab-mods .mod-switch input:checked ~ .track {
-    background: var(--rd-accent) !important;
-    box-shadow: none;
-}
-
-html.rd #tab-mods .mod-switch .knob { background: var(--rd-text-3); }
-
-html.rd #tab-mods .mod-switch input:checked ~ .knob {
-    background: var(--rd-accent-contrast);
-}
-
-/* ---------- 设置：日志 ---------- */
-
-html.rd #tab-log .log-pill {
-    color: var(--rd-text-3) !important;
-    border-color: var(--rd-border) !important;
-    background: transparent !important;
-}
-
-html.rd #tab-log .log-pill[aria-pressed="true"] {
-    color: var(--rd-accent) !important;
-    border-color: var(--rd-accent-border) !important;
-    background: var(--rd-accent-soft) !important;
-}
-
-html.rd #tab-log .log-pill[aria-pressed="false"] { opacity: .4 !important; }
-
-html.rd #tab-log .log-select,
-html.rd #tab-log .log-search,
-html.rd #tab-log .log-icon-btn {
-    color: var(--rd-text-2) !important;
-    background: var(--rd-input) !important;
-    border-color: var(--rd-border) !important;
-}
-
-html.rd #tab-log .log-select:focus,
-html.rd #tab-log .log-search:focus {
-    border-color: var(--rd-accent) !important;
-}
-
-html.rd #tab-log .log-icon-btn:hover {
-    color: var(--rd-accent) !important;
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd #tab-log .log-switch-track {
-    background: var(--rd-surface-3) !important;
-    box-shadow: inset 0 0 0 1px var(--rd-border);
-}
-
-html.rd #tab-log .log-switch input:checked ~ .log-switch-track {
-    background: var(--rd-accent) !important;
-    box-shadow: none;
-}
-
-html.rd #tab-log .log-terminal {
-    border: 1px solid var(--rd-border);
-    border-radius: 16px !important;
-    background: color-mix(in srgb, var(--rd-rail-bg) 90%, #000) !important;
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05);
-}
-
-html.rd #tab-log .log-meta { color: var(--rd-text-3) !important; }
-
-html.rd #marketList > #marketPrereqToggle {
-    grid-column: 1 / -1;
-    margin-top: 4px !important;
-}
-
-@media (min-width: 900px) {
-    html.rd #tab-advanced.settings-tab-panel.active-panel {
-        grid-template-columns: minmax(0, 1fr);
-    }
-}
-
-/* ---------- 顶栏：公告面板 ---------- */
-
-html.rd #announcePanel {
-    top: calc(100% + 10px) !important;
-    right: 18px !important;
-    width: min(92vw, 430px) !important;
-    max-height: min(72vh, 560px) !important;
-    background: var(--rd-bg) !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 18px !important;
-    box-shadow: 0 24px 64px rgba(0, 0, 0, .38) !important;
-    overflow: hidden;
-}
-
-html.rd .announce-panel-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 16px 18px 12px !important;
-    border-bottom: 1px solid var(--rd-border) !important;
-}
-
-html.rd .rd-announce-copy {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    min-width: 0;
-}
-
-html.rd .rd-announce-copy .rd-page-eyebrow {
-    margin: 0;
-    font-size: 8.5px;
-}
-
-html.rd .announce-panel-title {
-    color: var(--rd-text) !important;
-    font-family: var(--rd-font-display);
-    font-size: 17px !important;
-    font-weight: 600 !important;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd .announce-panel-close {
-    flex: none;
-    width: 28px;
-    height: 28px;
-    padding: 0 !important;
-    border-radius: 50% !important;
-    color: var(--rd-text-3) !important;
-    background: var(--rd-surface-2) !important;
-    border: 1px solid var(--rd-border) !important;
-}
-
-html.rd .announce-panel-close:hover {
-    color: var(--rd-accent) !important;
-    border-color: var(--rd-accent-border) !important;
-    background: var(--rd-accent-soft) !important;
-}
-
-html.rd .announce-list {
-    padding: 2px 18px 16px;
-    overflow-y: auto;
-}
-
-html.rd .announce-item {
-    padding: 14px 0 !important;
-    border-top: 1px solid var(--rd-border) !important;
-}
-
-html.rd .announce-item:first-child {
-    border-top: 0 !important;
-    padding-top: 12px !important;
-}
-
-html.rd .announce-item-top {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-html.rd .announce-item-dot {
-    width: 6px;
-    height: 6px;
-    background: var(--rd-accent) !important;
-    box-shadow: 0 0 0 3px var(--rd-accent-soft);
-}
-
-html.rd .announce-item-title {
-    color: var(--rd-text) !important;
-    font-size: 12.5px !important;
-    font-weight: 600 !important;
-    line-height: 1.5;
-}
-
-html.rd .announce-item-meta {
-    margin-left: auto;
-    padding: 2px 7px;
-    border: 1px solid var(--rd-border);
-    border-radius: 999px;
-    color: var(--rd-text-3) !important;
-    font-size: 9.5px !important;
-    white-space: nowrap;
-}
-
-html.rd .announce-item-body {
-    margin-top: 8px !important;
-    color: var(--rd-text-2) !important;
-    font-size: 11.5px !important;
-    line-height: 1.8 !important;
-}
-
-html.rd .announce-item-act {
-    margin-top: 10px !important;
-    padding: 8px 13px !important;
-    border: 1px solid var(--rd-accent-border) !important;
-    border-radius: 9px !important;
-    background: var(--rd-accent-soft) !important;
-    color: var(--rd-accent) !important;
-    font-size: 11px !important;
-    font-weight: 600 !important;
-    transition: background .15s ease, color .15s ease;
-}
-
-html.rd .announce-item-act:hover {
-    background: var(--rd-accent) !important;
-    color: var(--rd-accent-contrast) !important;
-}
-
-html.rd .announce-empty {
-    padding: 18px 0 !important;
-    color: var(--rd-text-3) !important;
-    font-size: 11.5px !important;
-}
-
-/* ---------- 手机操作：实现方式面板 ---------- */
-
-html.rd #backendList > p[style*="#fffbeb"] {
-    background: var(--rd-warn-bg) !important;
-    border-color: var(--rd-warn-border) !important;
-    color: var(--rd-warn) !important;
-}
-
-html.rd #backendList .backend-card {
-    background: var(--rd-surface-2) !important;
-    border-color: var(--rd-border) !important;
-    transition: background .15s ease, border-color .15s ease;
-}
-
-html.rd #backendList .backend-card:hover {
-    background: var(--rd-hover) !important;
-    border-color: var(--rd-accent-border) !important;
-}
-
-html.rd #backendList .backend-card.is-active {
-    background: var(--rd-accent-soft) !important;
-    border-color: var(--rd-accent-border) !important;
-    box-shadow: inset 3px 0 0 var(--rd-accent);
-}
-
-html.rd #backendList .backend-card .text-indigo-950 {
-    color: var(--rd-text) !important;
-}
-
-html.rd #backendList .backend-card .text-indigo-400,
-html.rd #backendList .backend-card .text-indigo-300 {
-    color: var(--rd-text-3) !important;
-}
-
-html.rd #backendList .backend-card p[style*="color:#059669"] { color: var(--rd-ok) !important; }
-html.rd #backendList .backend-card p[style*="color:#b45309"] { color: var(--rd-warn) !important; }
-html.rd #backendList .backend-card p[style*="color:#db2777"] { color: var(--rd-accent) !important; }
-
-html.rd #backendList span[style*="#ecfdf5"] {
-    color: var(--rd-ok) !important;
-    background: var(--rd-ok-soft) !important;
-}
-
-html.rd #backendList span[style*="#fffbeb"] {
-    color: var(--rd-warn) !important;
-    background: var(--rd-warn-bg) !important;
-}
-
-html.rd #backendList span[style*="#eef2ff"] {
-    color: var(--rd-accent) !important;
-    background: var(--rd-accent-soft) !important;
-}
-
-/* ---------- 响应式 ---------- */
-
-html.rd #achList > *,
-html.rd #marketList > * { margin-top: 0 !important; }
-
-@media (max-width: 1240px) {
-    html.rd #notesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-    html.rd #marketList { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
-}
 
 @media (max-width: 980px) {
-    /* 新版布局把设置/成就/市场铺满整屏，原版为刘海屏预留的 safe-area 内边距
-       被一并覆盖掉了；这里补回，普通设备上 env() 为 0，视觉不变。 */
-    html.rd #settingsOverlay,
-    html.rd #achievementsOverlay,
-    html.rd #marketOverlay {
-        padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left) !important;
-    }
-
-    html.rd #settingsPanel {
-        width: 100% !important;
-        height: 100% !important;
-    }
-
-    html.rd #inputBar {
-        padding: 0 calc(10px + var(--safe-right)) calc(8px + var(--safe-bottom)) calc(10px + var(--safe-left)) !important;
-    }
-
-    html.rd #notesPage .page-secondary-header,
-    html.rd #diaryPage .page-secondary-header,
-    html.rd #achievementsOverlay .page-secondary-header {
-        padding: 22px 16px 14px !important;
-    }
-
-    html.rd #notesPage .page-secondary-title,
-    html.rd #diaryPage .page-secondary-title,
-    html.rd #achievementsOverlay .page-secondary-title { font-size: 25px !important; }
-
-    /* 手机端顶栏原本把「返回」按钮收成 38px 圆图标（字号 0 隐藏文字）。
-       新版选择器提高了优先级，会把文字重新显示出来并竖排换行，这里补回圆图标。 */
-    html.rd #notesPage .page-secondary-back,
-    html.rd #diaryPage .page-secondary-back,
-    html.rd #achievementsOverlay .page-secondary-back {
-        width: 34px;
-        min-width: 34px;
-        height: 34px;
-        padding: 0;
-        gap: 0;
-        border-radius: 50%;
-    }
-
-    html.rd #notesPage .page-secondary-back span,
-    html.rd #diaryPage .page-secondary-back span,
-    html.rd #achievementsOverlay .page-secondary-back span { display: none; }
-
-    html.rd #notesPage .page-secondary-back svg,
-    html.rd #diaryPage .page-secondary-back svg,
-    html.rd #achievementsOverlay .page-secondary-back svg { width: 16px; height: 16px; }
-
-    /* 窄屏页头会换行，计数不再推到最右，跟着按钮组排 */
-    html.rd #achievementsOverlay .ach-count { margin-left: 0; }
-
-    html.rd #notesPage > .flex-1 {
-        padding: 16px calc(16px + var(--safe-right)) calc(30px + var(--safe-bottom)) calc(16px + var(--safe-left)) !important;
-    }
-    html.rd #notesGrid { grid-template-columns: 1fr !important; }
-
-    html.rd .rd-diary-stats {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 8px;
-        padding: 14px 16px 2px;
-    }
-
-    html.rd .rd-diary-stat {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 4px;
-        padding: 11px 12px;
-    }
-
-    html.rd .rd-diary-stat b { font-size: 21px; }
-    html.rd #diaryGrid {
-        padding: 8px calc(16px + var(--safe-right)) calc(34px + var(--safe-bottom)) calc(48px + var(--safe-left)) !important;
-    }
-    html.rd #diaryGrid::before { left: calc(26px + var(--safe-left)); }
-    html.rd .diary-group-dot { left: -27px !important; }
-
-    html.rd #marketOverlay .modal-panel > div:first-child { padding: 20px 16px 12px !important; }
-
-    html.rd #marketOverlay .text-sm.font-bold { font-size: 24px !important; }
-
-    html.rd #achList {
-        grid-template-columns: 1fr !important;
-        padding: 16px !important;
-    }
-
-    html.rd .rd-ach-hero {
-        grid-template-columns: 76px minmax(0, 1fr);
-        gap: 16px;
-        padding: 18px;
-    }
-
-    html.rd .rd-ach-ring { width: 76px; height: 76px; }
-    html.rd .rd-ach-ring span { font-size: 17px; }
-
-    html.rd #marketOverlay .modal-panel > div.flex-1 { padding: 16px !important; }
-    html.rd #marketList { grid-template-columns: 1fr !important; }
-    html.rd .rd-market-hero { padding: 18px; }
-    html.rd .rd-market-hero h2 { font-size: 20px; }
-
-    html.rd #settingsTopBar::before,
-    html.rd .rd-settings-title { display: none !important; }
-
-    html.rd #settingsOverlay,
-    html.rd #achievementsOverlay,
-    html.rd #marketOverlay {
-        inset: var(--rd-header-h) 0 0 0 !important;
-        width: 100% !important;
-    }
-
-    /* 页面顶栏是外壳的一部分：抽屉必须能盖在整页内容之上，汉堡才点得动。 */
-    html.rd #sidebar { z-index: 100005 !important; }
-    html.rd #sidebarOverlay { z-index: 100004 !important; }
-
-    html.rd #achievementsOverlay .modal-panel,
-    html.rd #marketOverlay .modal-panel {
-        width: 100% !important;
-    }
-
-    html.rd #settingsPanel {
-        grid-template-columns: 1fr !important;
-        grid-template-rows: auto auto minmax(0, 1fr) !important;
-    }
-
-    html.rd .rd-settings-pagehead {
-        grid-column: 1;
-        grid-row: 1;
-        padding: 18px 16px 10px;
-    }
-
-    html.rd .rd-settings-pagehead h1 { font-size: 24px; }
-    html.rd .rd-settings-pagehead p { font-size: 11px; }
-
-    html.rd #settingsTopBar {
-        grid-column: 1;
-        grid-row: 2;
-        flex-direction: row !important;
-        align-items: center !important;
-        padding: 8px 12px !important;
-        border-right: 0 !important;
-        border-bottom: 1px solid var(--rd-border) !important;
-        overflow-x: auto;
-        overflow-y: hidden;
-    }
-
-    html.rd #settingsTabNav {
-        flex-direction: row !important;
-        gap: 4px !important;
-        width: auto !important;
-        overflow-x: auto !important;
-        overflow-y: hidden !important;
-    }
 
 
     html.rd .settings-tab-btn {
@@ -4006,3 +2215,213 @@ html.rd #marketDlPanel .text-indigo-400 { color: var(--rd-text-2) !important; }
 html.rd #marketDlPanel .text-indigo-300 { color: var(--rd-text-2) !important; }
 html.rd #marketDlPanel .bg-black\/10 { background: var(--rd-border) !important; }
 html.rd #marketDlPanel #marketDlClear:hover { background: var(--rd-surface-2) !important; }
+
+/* ============================================================================
+ * 设置 · 紧凑版式
+ *
+ * 三件事：
+ *   ① 整条标题行不要 —— 当前分栏已由左侧导航高亮，标题再写一遍只占高度；
+ *      关闭按钮改挂成导航栏的第一项。
+ *   ② 卡片内边距、标题下边距、控件高度各收一档，一屏能多看一两组设置。
+ *   ③ 长说明收进 <details class="rd-more">：默认只占一行，点开仍能看到全文。
+ * ========================================================================== */
+
+html.rd #settingsContent {
+    padding: 14px 24px 26px !important;
+}
+
+/* 分栏之间不需要额外留白：一次只显示一个分栏，而它自己的顶部内边距就是间距
+   （Tailwind 的 space-y-7 会给第二个及以后的分栏再加 28px 上边距）。 */
+html.rd #settingsContent > .settings-tab-panel {
+    margin-top: 0 !important;
+}
+
+/* ---------- 关闭按钮 ---------- */
+
+/* 宽屏：左侧导航的第一项。它本来是绝对定位在标题行右端，标题行删掉后
+   那个位置会压到第一张卡片上，所以改成导航里的一个整宽按钮。 */
+html.rd #settingsPanel #settingsTopBar > #closeSettings {
+    position: static !important;
+    flex: none;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px;
+    width: 100% !important;
+    height: 34px !important;
+    margin: 0 0 10px !important;
+    padding: 0 10px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 10px !important;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-3) !important;
+    font-size: 12px;
+}
+
+html.rd #settingsPanel #settingsTopBar > #closeSettings:hover {
+    border-color: var(--rd-accent-border) !important;
+    color: var(--rd-text) !important;
+}
+
+html.rd .settings-close-label { display: inline; }
+
+
+/* ---------- 卡片与标题 ---------- */
+
+html.rd #settingsContent .settings-tab-panel > section,
+html.rd #settingsContent .settings-tab-panel > div.mb-4,
+html.rd #settingsContent .settings-card,
+html.rd #settingsContent #tab-model > section,
+html.rd #settingsContent #tab-capability > section,
+html.rd #settingsContent #tab-mods > section,
+html.rd #tab-mods .settings-card {
+    padding: 15px 18px !important;
+    border-radius: 14px !important;
+}
+
+html.rd #settingsContent .settings-tab-panel > section > .modal-label,
+html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child,
+html.rd #settingsContent .settings-card > .flex .modal-label {
+    margin: 0 0 10px !important;
+    padding: 0 0 8px !important;
+    font-size: 13px !important;
+}
+
+html.rd #settingsContent .rd-field-hint {
+    margin: 0 0 9px;
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+/* ---------- 表单行 ---------- */
+
+html.rd #settingsContent .settings-tab-panel label.text-xs.block {
+    margin-bottom: 3px !important;
+}
+
+html.rd #settingsContent input[type="text"],
+html.rd #settingsContent input[type="url"],
+html.rd #settingsContent input[type="password"],
+html.rd #settingsContent input[type="number"],
+html.rd #settingsContent select {
+    min-height: 34px;
+    padding: 6px 11px !important;
+}
+
+html.rd #settingsContent select {
+    padding-right: 34px !important;
+}
+
+html.rd #settingsContent .settings-tab-panel > section > .flex.items-center.justify-between {
+    min-height: 34px;
+}
+
+html.rd #settingsContent .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 10px !important;
+}
+
+html.rd #settingsContent .settings-tab-panel.active-panel {
+    gap: 14px !important;
+}
+
+html.rd .rd-display-card .set-row { padding: 9px 0; }
+html.rd .rd-display-card .set-row:first-of-type { padding-top: 0; }
+
+/* 当前主题徽标已并入卡片标题行，这里给它一个明确的小药丸形态 */
+html.rd #rdCurrentTheme {
+    padding: 1px 8px;
+    border-radius: 999px;
+    line-height: 1.6;
+}
+
+/* ---------- 折叠说明 ---------- */
+
+html.rd #settingsContent .rd-more {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.65;
+    color: var(--rd-text-3);
+}
+
+html.rd #settingsContent .rd-more > summary {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--rd-text-2);
+    font-size: 11px;
+    opacity: .8;
+    list-style: none;
+}
+
+html.rd #settingsContent .rd-more > summary::-webkit-details-marker { display: none; }
+
+html.rd #settingsContent .rd-more > summary::before {
+    content: '?';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--rd-border);
+    border-radius: 50%;
+    font-size: 9.5px;
+    line-height: 1;
+}
+
+html.rd #settingsContent .rd-more > summary:hover { opacity: 1; color: var(--rd-accent); }
+
+html.rd #settingsContent .rd-more p { margin: 7px 0 0; }
+html.rd #settingsContent .rd-more p:first-of-type { margin-top: 6px; }
+
+/* 宽屏下「模型」页回到两列：它是最长的一页，单列在 1280px 以上会空掉小半屏。
+   需要整行的卡片（多行文本域 / 插件列表 / 明确标了 settings-span-2 的）
+   仍由上面的通栏规则决定，这里只改列数。 */
+@media (min-width: 1280px) {
+    html.rd #settingsContent #tab-model.active-panel {
+        max-width: none;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    /* 通栏判定里的 :has(textarea) 会命中本页里**藏着的**文本域
+       （音色描述 / 自定义搜索请求体），把两张半宽卡拉成整行 ——
+       那样两列只剩一列在用，反而比单列更高。这里让本页的卡片都按格子排队。 */
+    html.rd #settingsContent #tab-model > section {
+        grid-column: auto !important;
+    }
+    /* 「能力」页保持单列，但不再卡 900px：宽屏下权限说明与警告列表能少折几行。 */
+    html.rd #settingsContent #tab-capability.active-panel {
+        max-width: none;
+    }
+}
+
+@media (max-width: 980px) {
+    /* 页头要给绝对定位的关闭 ✕（top 18 / 高 38）留够高度 */
+
+    html.rd #settingsContent {
+        padding: 12px calc(14px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(14px + var(--safe-left)) !important;
+    }
+
+    /* 窄屏：导航是横排一行，关闭按钮浮在它右侧（导航的 max-width 已为它留出 66px）。 */
+    html.rd #settingsPanel #settingsTopBar > #closeSettings {
+        position: absolute !important;
+        width: 38px !important;
+        height: 38px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border-radius: 50% !important;
+        top: 5px !important;
+        right: calc(12px + var(--safe-right)) !important;
+    }
+
+    html.rd .settings-close-label { display: none; }
+
+    html.rd #settingsContent .settings-tab-panel > section,
+    html.rd #settingsContent .settings-tab-panel > div.mb-4,
+    html.rd #settingsContent .settings-card,
+    html.rd #settingsContent #tab-model > section,
+    html.rd #settingsContent #tab-capability > section,
+    html.rd #settingsContent #tab-mods > section,
+    html.rd #tab-mods .settings-card {
+        padding: 14px 15px !important;
+    }
+}

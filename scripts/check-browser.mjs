@@ -15,9 +15,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { runChecks, ROOT } from './check-harness.mjs';
+import { readHtmlAndStyles } from './frontend-sources.mjs';
 import { extractFunction, extractTopLevelFunctions, extractVariable, makeVmSandbox, runClassicScripts } from './check-source.mjs';
 import { encodeClientFrame, createFrameDecoder } from '../server/ws-client.mjs';
 import { createLineSplitter } from '../server/mcp-client.mjs';
+import { flattenToolResult } from '../server/mcp-shared.mjs';
 import {
     normalizeNavigationUrl, findBrowserExecutable, formatSnapshot,
     runBrowserAction, createBrowserSession, browserCandidates, MAX_SNAPSHOT_ITEMS,
@@ -535,7 +537,8 @@ async function caseMcpClient(c) {
     const serveSrc = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
     const mcpJs = readFileSync(path.join(ROOT, 'web', 'js', 'mcp.js'), 'utf8');
     const opsJs = readFileSync(path.join(ROOT, 'web', 'js', 'agent-ops.js'), 'utf8');
-    const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
+    // 设置页的挂载点在 index.html，扩展导航的样式在 base.css —— 两处都要看
+    const html = readHtmlAndStyles();
 
     // 只做客户端：服务端方向等于把本机文件与命令执行交给任何能连上它的程序
     c.ok(!/createServer\s*\(.*mcp/i.test(clientSrc), '★ 只做客户端方向（不把本机能力暴露成 MCP 服务器）');
@@ -566,9 +569,10 @@ async function caseMcpClient(c) {
     // 服务器反向请求：回 -32601 而不是沉默（沉默会让它一直等）
     c.ok(/-32601/.test(clientSrc), '★ 不支持的反向请求回 -32601，不让对面干等');
 
-    // 拍平 content：宿主的工具通道只吃一段文本
-    c.ok(/type === 'text'/.test(clientSrc) && /isError/.test(clientSrc), '★ 把 MCP 的 content 数组拍平成一段文本');
-    c.ok(/图片/.test(clientSrc), '图片类内容降级成一句说明（不丢成空白）');
+    // 拍平 content：宿主的工具通道只吃一段文本（实现由两种传输共用，见 mcp-shared.mjs）
+    const flat = flattenToolResult({ content: [{ type: 'text', text: 'echo: hi' }, { type: 'image' }, { type: 'resource', resource: { uri: 'file:///x' } }] });
+    c.ok(flat.ok === true && flat.text.startsWith('echo: hi'), '★ 把 MCP 的 content 数组拍平成一段文本');
+    c.ok(/图片/.test(flat.text) && /资源引用/.test(flat.text), '图片类内容降级成一句说明（不丢成空白）');
 
     // 注册表：状态查询不能拉起进程
     c.ok(/function status/.test(regSrc), '注册表有 status');
@@ -909,9 +913,12 @@ async function caseConversationNaming(c) {
     c.ok(/refreshAutoConversationTitle/.test(ui), '有 refreshAutoConversationTitle');
     c.ok(/previousAuto/.test(fnSrc('refreshAutoConversationTitle')), '★ 用"上一次的自动名"判定是否为自动标题');
     c.ok(/saveConversations\(\)/.test(fnSrc('refreshAutoConversationTitle')), '改名后落盘');
-    // 三个发送入口都要走 refresh（只有一个入口改了等于没改）
-    c.ok((voice.match(/refreshAutoConversationTitle\(conversation\)/g) || []).length === 3,
-        '★ 三个发送入口都走同一套命名（文字 / 首屏 / 语音）',
+    // 三个发送入口都要走 refresh（只有一个入口改了等于没改）。
+    //   三条路径共用 commitUserMessage，命名只在那一处调用一次 —— 数"收尾函数被调几次"。
+    const commitCalls = (voice.match(/\n    commitUserMessage\(conversation, message/g) || []).length;
+    c.ok(commitCalls === 3, '★ 三个发送入口都走同一套命名（文字 / 首屏 / 语音）', String(commitCalls));
+    c.ok((voice.match(/refreshAutoConversationTitle\(conversation\)/g) || []).length === 1,
+        '★ 自动命名只在 commitUserMessage 里调用一次（三个入口共用）',
         String((voice.match(/refreshAutoConversationTitle\(conversation\)/g) || []).length));
     c.ok(!/conversation\.title = autoNameConversation/.test(voice), '旧的一次性命名已全部替换');
 }

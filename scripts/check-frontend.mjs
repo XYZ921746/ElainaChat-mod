@@ -11,6 +11,7 @@ import path from 'node:path';
 import { readFrontend } from './frontend-sources.mjs';
 import { runChecks, ROOT } from './check-harness.mjs';
 import { extractFunction, extractClass, stripComments, makeVmSandbox } from './check-source.mjs';
+import { findFullyOverriddenRules, findOverriddenDeclarations } from './css-layers.mjs';
 import vm from 'node:vm';
 
 const HTML_FILE = path.join(ROOT, 'web', 'index.html');
@@ -303,6 +304,59 @@ async function caseCheckSourceTools(c) {
     c.ok(offenders.length === 0, '★ 检查脚本不再各自实现 extractFn / extractClass / stripComments', offenders.join(', '));
 }
 
+// 6. CSS 分层：基础样式层里不得有「注定输给覆盖层」的声明
+//
+// 样式分两层：web/css/base.css 先加载，themes / achievements / redesign /
+// layout-full / pages-luxe 在其后，又普遍带 `html.rd` 前缀和 !important。
+// 同权重靠后加载胜出，所以基础层里有些声明**永远轮不到生效**：看着能改，改完
+// 没反应，排查时还以为是缓存。这类声明应当在写下的那一刻就被挡住，而不是等某天
+// 有人对着它改了半天。
+async function caseCssLayers(c) {
+    const html = readFileSync(HTML_FILE, 'utf8');
+    c.ok(!/<style[\s>]/.test(html), '★ index.html 里没有内联 <style>（样式统一住 web/css/）');
+
+    // 顺序就是语义：基础层最先加载，覆盖层才有机会压住它
+    const order = [...html.matchAll(/<link rel="stylesheet" href="\/css\/([^"]+)">/g)].map((m) => m[1]);
+    const layers = ['themes.css', 'achievements.css', 'redesign.css', 'layout-full.css', 'pages-luxe.css'];
+    c.ok(order[0] === 'base.css' && layers.every((f) => order.indexOf(f) > 0),
+        '★ 加载顺序：base.css 打头，四份覆盖层在其后', order.join(' → '));
+
+    const layerCss = readFileSync(path.join(ROOT, 'web', 'css', 'base.css'), 'utf8');
+    const external = layers.map((f) => ({ file: f, css: readFileSync(path.join(ROOT, 'web', 'css', f), 'utf8') }));
+
+    const deadRules = findFullyOverriddenRules(layerCss, external);
+    c.ok(deadRules.length === 0,
+        '★ 基础样式层里没有整条被覆盖层压掉的规则（删了也看不出差别，改了更看不出）',
+        deadRules.slice(0, 5).map((d) => 'L' + d.line + ' ' + d.selector).join(' | '));
+
+    // 整条规则没死，里面的某条声明仍可能死 —— 那正是"改了这里没反应"的最小单位。
+    const deadDecls = findOverriddenDeclarations(layerCss, external);
+    c.ok(deadDecls.length === 0,
+        '★ 基础样式层里没有注定输给覆盖层的声明（' + deadDecls.length + ' 处）',
+        deadDecls.slice(0, 5).map((d) => 'L' + d.line + ' ' + d.selector + ' { ' + d.prop + ' }').join(' | '));
+
+    // 自测：注释后的声明不能被丢掉。丢了会让"有 z-index 的规则"看起来只剩
+    // 被覆盖的属性，于是整条被误判为死规则 —— 删掉它会直接改掉层级。
+    const synthetic = findFullyOverriddenRules(
+        '.x { /* 说明：z-index 必须压过别的层 */ z-index: 9 !important; color: red; }',
+        [{ file: 'x.css', css: 'html.rd .x { color: blue !important; }' }]
+    );
+    c.ok(synthetic.length === 0, '★ 自测：注释后面的声明不会被丢掉（否则会误删带 z-index 的规则）', JSON.stringify(synthetic));
+    const overridden = findFullyOverriddenRules(
+        '.y { color: red; }',
+        [{ file: 'x.css', css: 'html.rd .y { color: blue !important; }' }]
+    );
+    c.ok(overridden.length === 1, '自测：真被整条覆盖的规则能被认出来', JSON.stringify(overridden));
+
+    // 自测：只死一半的规则要报出**那一条声明**，不能把整条规则算死
+    const halfDead = findOverriddenDeclarations(
+        '.z { color: red; flex: none; }',
+        [{ file: 'x.css', css: 'html.rd .z { color: blue !important; }' }]
+    );
+    c.ok(halfDead.length === 1 && halfDead[0].prop === 'color',
+        '自测：只被覆盖一部分的规则只报被覆盖的声明', JSON.stringify(halfDead));
+}
+
 await runChecks({
     title: '前端结构（DOM 引用 / 内联脚本 / Store 键 / 消息渲染）',
     usage: 'node scripts/check-frontend.mjs',
@@ -312,6 +366,7 @@ await runChecks({
         { name: 'Store 键白名单', fn: caseStoreKeys },
         { name: '消息渲染', fn: caseMessageRender },
         { name: '检查工具自身（源码抽取）', fn: caseCheckSourceTools },
+        { name: 'CSS 分层（基础层不得被覆盖层压掉）', fn: caseCssLayers },
     ],
 });
 

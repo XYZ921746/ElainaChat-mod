@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { launchTestBrowser } from './test-browser.mjs';
 import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
 import { extractFunction as extractFnFrom, stripComments as stripCommentsOf } from './check-source.mjs';
@@ -596,14 +596,17 @@ async function caseTheme(c) {
         c.ok(existsSync(themesCss), 'web/css/themes.css 存在');
 
         const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
-        c.ok(/<script src="\/js\/theme\.js"><\/script>/.test(html), 'index.html 引入 theme.js');
+        c.ok(/<script[^>]*src="\/js\/theme\.js"[^>]*><\/script>/.test(html), 'index.html 引入 theme.js');
         c.ok(/<link rel="stylesheet" href="\/css\/themes\.css">/.test(html), 'index.html 引入 themes.css');
+        c.ok(/<link rel="stylesheet" href="\/css\/base\.css">/.test(html), 'index.html 引入 base.css');
+        c.ok(!/<style[\s>]/.test(html), '★ index.html 不再有内联 <style>（样式统一住 web/css/）');
 
-        // ★ themes.css 必须排在所有内联 <style> 之后（同权重靠后加载胜出）
+        // ★ 基础层必须排在主题覆盖层之前（同权重靠后加载胜出）：
+        //   反过来主题的同权重规则会被基础层压掉，改主题不生效。
+        const baseLinkIdx = html.indexOf('/css/base.css');
         const cssLinkIdx = html.indexOf('/css/themes.css');
-        const lastStyleEnd = html.lastIndexOf('</style>');
-        c.ok(cssLinkIdx > lastStyleEnd, '★ themes.css 排在所有内联 <style> 之后',
-            'link@' + cssLinkIdx + ' lastStyleEnd@' + lastStyleEnd);
+        c.ok(baseLinkIdx > 0 && cssLinkIdx > baseLinkIdx, '★ themes.css 排在 base.css 之后',
+            'base@' + baseLinkIdx + ' themes@' + cssLinkIdx);
 
         // 设置界面容器
         c.ok(/id="themePickerBox"/.test(html), '设置里有 #themePickerBox');
@@ -713,7 +716,8 @@ async function caseTheme(c) {
         c.ok(/addEventListener\('change'/.test(themeJs), '★ 监听系统主题变化（跟随系统要实时响应）');
         c.ok(/applyDarkMode/.test(themeJs), '落 DOM 的逻辑统一在一个入口（用户改 / 系统变都走它）');
 
-        const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
+        // 这段同时断言 DOM（顶栏控件）与样式（移动端块的底色）—— 样式在 base.css
+        const html = readHtmlAndStyles();
         // ★ 2026-10：深色模式从「外观」里的三态下拉**搬到顶栏的三段连体开关**
         //   （跟随设备 / 浅色 / 深色，用户按截图设计），「跟随系统」改名为「跟随设备」。
         c.ok(/id="headerThemeBtn"/.test(html), '★ 外观模式开关已移到顶栏（#headerThemeBtn）');
@@ -859,7 +863,8 @@ async function caseTheme(c) {
 
     console.log('\n=== 3.5 主题设置独立成「外观」分栏 ===');
     {
-        const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
+        // DOM 与 :root 令牌一起看（令牌在 base.css）
+        const html = readHtmlAndStyles();
         // 上游顶部导航里就有「外观」一项；埋在「高级」里要翻两层才找到
         c.ok(/data-settings-tab="tab-appearance">外观</.test(html), '★ 有独立的「外观」Tab');
         c.ok(/id="tab-appearance"/.test(html), '有 #tab-appearance 面板');
@@ -905,34 +910,32 @@ async function caseTheme(c) {
         }
 
         // ★★★ 2026-10 默认主题下不该有**写死的粉紫**（用户："设置页面主题还是粉色的"）
-        // 这类残留查起来很费劲，因为它们是**分散**的写死颜色：
-        //   · body 的粉紫渐变 `#FFF0F5→#FFE4E1→#E6E6FA`（设置遮罩 82% 不透明 → 透出来）
-        //   · 一堆 `rgba(236,72,153,…)` 聚焦描边 / 边框 / 阴影
-        //   · `text-pink-500` 这类 Tailwind 类（**弹窗之外**的地方没被既有规则覆盖）
-        //   · `--color-primary`（#ec4899）被当强调色直接引用
-        // 判据：把这些"粉紫特征值"整体列出来，**除了注释以外**不许出现。
-        // ★ 为什么排除注释：代码里刻意写了注释解释"原来是写死的粉"，
-        //   那些注释会被正则命中（这是第三次踩"注释污染判据"，见 8.60/8.62）。
+        // 判据：整份基础样式层里，除「兜底调色板」那一段外不许出现粉紫特征值。
+        // 兜底调色板（`.fallback-ready …`）镜像的是 Tailwind 自己的 pink / violet，
+        //   只在 Tailwind 引擎缺席时生效 —— 它写的是"Tailwind 的粉色是什么"，
+        //   不是主题配色，扫进来会让判据变成永远失败。
+        // ★ 为什么必须剥注释：代码里刻意写了注释解释"这里是写死的粉"，
+        //   那些注释会被正则命中（踩过三次，见 8.60/8.62）。
         {
-            const stripComments = (s) => String(s)
+            const baseCss = readFileSync(path.join(WEB, 'css', 'base.css'), 'utf8')
                 .replace(/\/\*[\s\S]*?\*\//g, '')
-                .replace(/<!--[\s\S]*?-->/g, '')
-                .replace(/^\s*\/\/.*$/gm, '');
-            const cssNoComments = stripComments(html);
+                .replace(/\.fallback-ready[^{}]*\{[^{}]*\}/g, '');
             const PINK_SIGNS = [
                 { re: /#ec4899/i, label: '#ec4899' },
                 { re: /#8b5cf6/i, label: '#8b5cf6' },
                 { re: /#FFF0F5/i, label: '#FFF0F5（粉渐变起）' },
                 { re: /rgba\(\s*236\s*,\s*72\s*,\s*153/, label: 'rgba(236,72,153)（粉）' },
                 { re: /rgba\(\s*244\s*,\s*114\s*,\s*182/, label: 'rgba(244,114,182)（粉）' },
+                { re: /rgba\(\s*139\s*,\s*92\s*,\s*246/, label: 'rgba(139,92,246)（紫）' },
+                { re: /rgba\(\s*167\s*,\s*139\s*,\s*250/, label: 'rgba(167,139,250)（紫）' },
             ];
             for (const s of PINK_SIGNS) {
-                c.ok(!s.re.test(cssNoComments),
-                    `★ 默认主题下没有写死的粉紫 ${s.label}（注释不计）`);
+                c.ok(!s.re.test(baseCss),
+                    `★ 默认主题下没有写死的粉紫 ${s.label}（注释与兜底调色板不计）`);
             }
             // `--color-primary` 这套只服务"自定义"主题与 Tailwind 兜底，
             // 不该被宿主样式直接当强调色用（那会在默认主题下变粉）。
-            c.ok(!/var\(--color-primary\)|var\(--color-secondary\)|var\(--color-accent\)/.test(cssNoComments),
+            c.ok(!/var\(--color-primary\)|var\(--color-secondary\)|var\(--color-accent\)/.test(baseCss),
                 '★ 宿主规则不再直接引用 --color-*（那套是粉紫，只给自定义主题/兜底用）');
         }
 
@@ -1001,53 +1004,27 @@ async function caseTheme(c) {
         //      左侧那半永远滚不回来（`scrollLeft` 最小是 0）。这条坑在基础规则的
         //      长注释里记着，这里反向钉住，防止有人"顺手"把它改成 center。
         {
-            // ★ 取**基础** #settingsTabNav 规则块 —— 文件里有**三处**同名选择器：
-            //   移动端媒体查询里的两份（只改 max-width/padding 之类）+ 基础规则一份。
-            //   ★★ 提取必须用**花括号配对**，不能用 `\{([\s\S]*?)\n    \}` 这种正则：
-            //      媒体查询里那份的缩进是 12 空格，而正则要求 4 空格，
-            //      于是非贪婪匹配会**一路跑过它自己的 `}`**、吞进后面几百行
-            //      （实测：选出的"基础规则"里混着 .settings-tab-btn 的样式，
-            //        导致 flex / max-content 两条断言假失败）。
-            const navBodies = [];
-            for (let i = 0; i < html.length; i++) {
-                if (!html.startsWith('#settingsTabNav', i)) continue;
-                const open = html.indexOf('{', i);
-                if (open < 0) break;
-                let depth = 0;
-                for (let j = open; j < html.length; j++) {
-                    if (html[j] === '{') depth++;
-                    else if (html[j] === '}') { depth--; if (depth === 0) { navBodies.push(html.slice(open + 1, j)); break; } }
-                }
-                i = open;
-            }
-            c.ok(navBodies.length >= 2, '找到多处 #settingsTabNav 规则（基础 + 移动端）',
-                '实际 ' + navBodies.length + ' 处');
-            // 基础规则 = 含 `flex:` 简写的那一份（移动端那份只有 max-width/padding）
-            const body = navBodies.find((b) => /(^|\s)flex\s*:\s*\d/.test(b)) || '';
-            c.ok(!!body, '找得到基础 #settingsTabNav 规则（含 flex 简写的那一份）');
-            if (body) {
-                // ★ 断言前先**剥掉注释**：这段规则里刻意写了注释解释"flex: 1 1 0% 会撑满整行"
-                //   （说明为什么不能这么写），而那条注释本身会被正则命中 ——
-                //   于是"不该有 flex: 1 1 0%"这条断言被**解释为什么不该有的注释**触发了。
-                //   这是"注释污染判据"的第二次踩坑（第一次见 check-agent-phone.mjs）。
-                const code = body
-                    .replace(/\/\*[\s\S]*?\*\//g, '')
-                    .replace(/\/\/[^\n]*/g, '');
-                c.ok(/flex:\s*0\s+1\s+auto/.test(code),
-                    '★ 导航用 flex: 0 1 auto（写成 flex-1 会撑满整行、居中失效）');
-                c.ok(!/flex:\s*1\s+1\s+0%/.test(code),
-                    '★ 导航不再被 flex: 1 1 0% 撑满（那会让 max-content 失效）');
-                c.ok(/width:\s*max-content/.test(code), '导航宽度是 max-content（才能被 auto margin 居中）');
-                c.ok(/margin:\s*0\s+auto/.test(code), '导航靠 margin: 0 auto 居中');
-                c.ok(/justify-content:\s*flex-start/.test(code),
-                    '★★ justify-content 仍是 flex-start（改成 center 会让溢出部分滚不回来）');
-            }
-            // 元素上不能同时挂 flex-1（那是当初失效的来源）
+            // ★★★ 导航的滚动不变量：`justify-content` 必须是 flex-start。
+            //   容器 `overflow-x: auto` + 内容比容器宽时，`center` 会把溢出部分均分到
+            //   两侧，而 `scrollLeft` 最小是 0 —— 左边那半永远滚不回来（首/末项被裁）。
+            //   这条属性由 redesign.css 的 `html.rd #settingsTabNav` 拥有：基础层那份
+            //   同属性声明被它的 `!important` 压掉，改基础层不会有任何反应。
+            //   ★ 提取必须用**花括号配对**，不能用正则 —— 同文件里有同名选择器好几处，
+            //     缩进各不相同，非贪婪匹配会一路跑过自己的 `}`、吞进后面几百行。
+            const ownerCss = readFileSync(path.join(WEB, 'css', 'redesign.css'), 'utf8');
+            const navOwner = cssBlockAfter(ownerCss, 'html.rd #settingsTabNav {');
+            c.ok(Boolean(navOwner), '找得到 #settingsTabNav 规则的属主（redesign.css）');
+            c.ok(/display:\s*flex/.test(navOwner), '导航是 flex 容器（属主规则里声明）');
+            c.ok(/justify-content:\s*flex-start/.test(navOwner),
+                '★★ justify-content 仍是 flex-start（改成 center 会让溢出部分滚不回来）');
+            c.ok(!/flex:\s*1\s+1\s+0%/.test(ownerCss),
+                '★ 导航没有被 flex: 1 1 0% 撑满（那会让内容宽度失效）');
+            // 元素上不能挂 flex-1（Tailwind 的 flex: 1 1 0%，会盖掉 CSS 的 flex 简写）
             const navTag = html.match(/<div id="settingsTabNav"[^>]*>/);
             c.ok(!!navTag, '找得到 #settingsTabNav 元素');
             if (navTag) {
                 c.ok(!/class="[^"]*\bflex-1\b/.test(navTag[0]),
-                    '★★ 元素上没有 flex-1（有它会盖掉 CSS 里的 flex: 0 1 auto）');
+                    '★★ 元素上没有 flex-1（有它会盖掉 CSS 里的 flex 简写）');
             }
         }
 
@@ -1183,7 +1160,8 @@ async function caseDiary(c) {
             + '\n' + readFileSync(path.join(WEB, 'js', 'ui.js'), 'utf8');
         const core = readFileSync(path.join(WEB, 'js', 'core-state.js'), 'utf8')
         + '\n' + readFileSync(path.join(WEB, 'js', 'core.js'), 'utf8');
-        const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
+        // 日记栅格的样式在 base.css，DOM 挂载点在 index.html
+        const html = readHtmlAndStyles();
 
         // ① 按对话分组
         c.ok(/function renderDiaryPage/.test(ui), '有 renderDiaryPage');

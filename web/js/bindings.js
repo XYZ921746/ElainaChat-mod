@@ -6,7 +6,6 @@
 'use strict';
 
 function bindAppEvents() {
-    elements.micBtn.addEventListener('click', handleMicClick);
     elements.floatingMicBtn.addEventListener('click', handleMicClick);
     elements.floatingEndBtn.addEventListener('click', endListening);
     elements.floatingCancelBtn.addEventListener('click', cancelListening);
@@ -482,11 +481,6 @@ function bindAppEvents() {
         void loadBuiltinMimoCloneSample();
     });
     elements.testChatConnectionBtn.addEventListener('click', testChatConnection);
-    // 对话模型「能不能收图片」：手动探测按钮 + 模型名/地址变化时刷新提示。
-    document.getElementById('probeChatModelVisionBtn')?.addEventListener('click', () => { void detectChatModelVision(); });
-    ['settingChatModel', 'settingBaseUrl'].forEach((id) => {
-        document.getElementById(id)?.addEventListener('change', updateChatModelVisionHint);
-    });
     elements.testTtsConnectionBtn.addEventListener('click', testTtsConnection);
     elements.clearApiKeysBtn.addEventListener('click', clearApiKeys);
     elements.announcementConfirmBtn.addEventListener('click', closeAnnouncement);

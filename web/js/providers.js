@@ -61,7 +61,7 @@ function updateChatFormatUI() {
     const hintEl = document.getElementById('apiFormatHint');
     if (hintEl) hintEl.textContent = preset.hint || '';
     if (elements.chatFormatHint) {
-        elements.chatFormatHint.textContent = `请求从当前设备直接发给 ${preset.label}，不经过作者服务器。Android Key 使用系统 Keystore 加密；Web Key 仅保存在当前标签页会话。`;
+        elements.chatFormatHint.textContent = `请求由本机直接发往 ${preset.label}，不经过作者服务器；Key 只保存本机（Android 走系统 Keystore）。`;
     }
 }
 
@@ -174,8 +174,6 @@ function fillVisionSettings() {
     if (toggle) toggle.checked = on;
     const fields = document.getElementById('visionFields');
     if (fields) fields.classList.toggle('hidden', !on);
-    // 打开设置时顺手把"当前对话模型能不能收图片"的缓存结论显示出来。
-    try { if (typeof updateChatModelVisionHint === 'function') updateChatModelVisionHint(); } catch (e) { /* 提示刷新失败不该挡住设置 */ }
 }
 
 /**

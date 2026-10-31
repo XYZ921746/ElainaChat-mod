@@ -44,6 +44,8 @@ const MODULES = [
     { name: 'check-ui' },
     { name: 'check-pwa' },
     { name: 'check-system' },
+    // 版本检测（GitHub Releases）：版本比较 / 资产归类 / 失败分类 / 接线。
+    { name: 'check-update' },
     { name: 'check-exe' },
     // 浏览器能力（CDP）：协议帧、网址白名单、动作派发、安全接线、真浏览器端到端。
     //   没装 Chrome/Edge 的机器上，需要真浏览器的用例按环境性跳过（不判红）。

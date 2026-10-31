@@ -1536,13 +1536,6 @@ html.rd .theme-tpl-name {
 html.rd #themeSettingsSection > .text-\[11px\] { color: var(--rd-text-3) !important; }
 html.rd #themeCustomEditor { display: none !important; }
 
-html.rd #settingsContent .log-panel,
-html.rd #settingsContent .log-list {
-    background: var(--rd-surface-2) !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 8px !important;
-    color: var(--rd-text-2) !important;
-}
 html.rd #settingsContent .log-line { border-color: var(--rd-border) !important; }
 html.rd #settingsContent .log-time { color: var(--rd-text-3) !important; }
 html.rd #settingsContent .log-level.warn,
@@ -1555,12 +1548,6 @@ html.rd #settingsContent .mod-card {
     background: var(--rd-surface-2) !important;
     border: 1px solid var(--rd-border) !important;
     border-radius: var(--rd-radius-md) !important;
-}
-html.rd #settingsContent .plugin-error,
-html.rd #settingsContent .mod-error {
-    background: var(--rd-danger-soft) !important;
-    border-color: var(--rd-danger-border) !important;
-    color: var(--rd-danger) !important;
 }
 
 /* ---------- 其他浮层 ---------- */

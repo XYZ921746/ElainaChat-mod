@@ -25,7 +25,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
 import { extractFunction, extractTopLevelFunctions, extractVariable, makeVmSandbox, runClassicScripts } from './check-source.mjs';
 
@@ -52,7 +52,8 @@ async function caseStreamAndCot(c) {
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     const streamSrc = readFileSync(path.join(ROOT, 'web', 'js', 'chat-stream.js'), 'utf8');
     const providers = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js'), 'utf8');
-    const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
+    // 下面几条断言看的是"折叠规则在不在 @media 之外"，样式住在 base.css
+    const indexHtml = readHtmlAndStyles();
     const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
@@ -85,7 +86,7 @@ async function caseStreamAndCot(c) {
 
     // ============================================================ 1. 接线
     console.log('=== 1. 脚本接线与加载顺序 ===');
-    c.ok(/<script src="\/js\/chat-stream\.js"><\/script>/.test(indexHtml), 'index.html 引入 chat-stream.js');
+    c.ok(/<script[^>]*src="\/js\/chat-stream\.js"[^>]*><\/script>/.test(indexHtml), 'index.html 引入 chat-stream.js');
     {
         const coreIdx = indexHtml.indexOf('/js/core.js');
         const streamIdx = indexHtml.indexOf('/js/chat-stream.js');

@@ -150,7 +150,7 @@
         const head = [
             'ElainaChat 运行日志导出',
             '导出时间：' + stamp(Date.now()),
-            // 版本号只在侧栏底部（"v2.0.0 · 魔女之旅"）：按 v 前缀全页找，
+            // 版本号只在侧栏底部（"v2.0.1 · 魔女之旅"）：按 v 前缀全页找，
             //   不能写死下标 —— 布局一改就会拿到别处的 "1"
             '版本：' + (Array.from(document.querySelectorAll('[class*="text-[10px]"]'))
                 .map((el) => el.textContent.trim())

@@ -24,6 +24,9 @@ import { createSkillManager } from '../server/skills.mjs';
 // 用户备份时只该拿一个文件（见 server/backup-packages.mjs）。
 import { createPackageBackup } from '../server/backup-packages.mjs';
 import { createLanShare, LAN_SHARE_PREFIX } from '../server/lan-share.mjs';
+// 版本检测：查 GitHub 的最新 Release（设置 → 高级「版本与更新」的数据来源）。
+// 单独成模块：可注入 fetch/时钟，网络失败与限流能被穷举断言。
+import { createUpdateChecker } from '../server/update-check.mjs';
 // 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
 // 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
 // 而它放行的是"第三方 JS 在服务端进程里注册接口"，判定错了后面全是空的。
@@ -346,6 +349,15 @@ if (!process.env.APP_VERSION) {
         APP_VERSION = JSON.parse(readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version || APP_VERSION;
     } catch { /* 读不到就算了 */ }
 }
+
+// 运行形态：桌面壳通过 ELAINA_EDITION 告诉服务端自己是谁 ——
+//   电脑版（C# + WebView2）传 windows；直接跑源码 / 浏览器打开时不传。
+//   版本检测要据此给出对应的安装包，所以只认白名单，
+//   未知值一律当 web（宁可少标一个平台，不可标错）。
+const APP_EDITION = (() => {
+    const raw = String(process.env.ELAINA_EDITION || '').trim().toLowerCase();
+    return raw === 'windows' ? raw : 'web';
+})();
 
 // 消息开头的 [xxx] 会被抽出来当标签，正文里不再重复 —— 所以调用点照旧写
 // `console.log('[relay] ...')` 即可。这里把历史遗留的标签收敛成一套固定词汇，
@@ -2088,6 +2100,10 @@ const lanShare = createLanShare({
     log: (msg) => console.log('[LAN共享] ' + msg),
 });
 
+// 版本检测器：跨请求复用，成功结果缓存十分钟（未登录的 GitHub 接口每小时 60 次）。
+// 仓库名可用 ELAINA_UPDATE_REPO 覆盖 —— 给 fork 的用户留一条不改代码的路。
+const updateChecker = createUpdateChecker({});
+
 /**
  * 校验并收敛 POST /api/store 提交上来的补丁。
  * 只收字符串值（与 localStorage 语义一致）；限制键长与单键体积，
@@ -2752,6 +2768,10 @@ const requestHandler = async (request, response) => {
                 // 现在**同一个端口**就支持 https，所以返回主端口本身
                 httpsPort: certInfo ? port : 0,
                 httpPort: port,
+                // 版本与运行形态：设置页的「版本与更新」要显示当前版本，
+                // 并按形态给出对应的安装包。不含敏感信息，登录页也拿得到。
+                version: APP_VERSION,
+                edition: APP_EDITION,
             });
         }
 
@@ -3028,6 +3048,14 @@ const requestHandler = async (request, response) => {
                 counts,
                 keys: keys.length,
             });
+        }
+
+        // 版本检测：查 GitHub 仓库的最新 Release，供「设置 → 高级 → 版本与更新」用。
+        // 放在鉴权闸门之后：它会替本机去访问外部站点，不能让未登录的访客当跳板。
+        // 只做检测与提示，不做自动替换（三端安装方式不同，见 web/js/update-check.js）。
+        if (pathname === '/api/app/update' && request.method === 'GET') {
+            const result = await updateChecker.check();
+            return jsonResponse(response, 200, Object.assign({ current: APP_VERSION, edition: APP_EDITION }, result));
         }
 
         // 局域网共享数据：与「我的数据」的导出 / 导入配套。

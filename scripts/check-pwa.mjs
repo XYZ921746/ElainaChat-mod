@@ -207,7 +207,7 @@ runChecks({
                         '★ 按钮默认 hidden（只在浏览器给出 beforeinstallprompt 后才显形）');
                 }
 
-                c.ok(/<script src="\/js\/pwa\.js"><\/script>/.test(html), 'index.html 加载了 pwa.js');
+                c.ok(/<script[^>]*src="\/js\/pwa\.js"[^>]*><\/script>/.test(html), 'index.html 加载了 pwa.js');
 
                 c.ok(existsSync(PWA_JS), 'web/js/pwa.js 存在');
                 if (!existsSync(PWA_JS)) return;

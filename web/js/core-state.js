@@ -39,10 +39,7 @@ const state = {
 };
 
 const elements = {
-    micBtn: document.getElementById('micBtn'),
     initialState: document.getElementById('initialState'),
-    pulseRing1: document.getElementById('pulseRing1'),
-    pulseRing2: document.getElementById('pulseRing2'),
     statusText: document.getElementById('statusText'),
     conversationHistory: document.getElementById('conversationHistory'),
     textInput: document.getElementById('textInput'),

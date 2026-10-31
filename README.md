@@ -11,6 +11,7 @@
 - **语音**：云端 ASR 识别（阿里百炼 / 小米 MiMo）与多服务商 TTS（MiMo / MiniMax 克隆音色 / 千问 Qwen-TTS / 兼容 OpenAI TTS）。
 - **自带访问控制**：局域网设备接入需要访问密码，设置密码后本机打开应用也要输入；没设置密码时局域网接口直接关闭、只有本机可用。密码有强度校验与三层防爆破，服务端同时支持 HTTPS 自签证书（手机端语音输入要用）。
 - **数据备份与局域网共享**：在「高级 → 我的数据」导出 / 导入标准 zip（`data/` + `mods/` + `skills/`）；同一局域网的两台设备也能直接开启共享、用 IP / 端口与访问密码互相拉取，不必先拷文件（需先设置访问密码）。
+- **版本检测**：设置 → 高级「版本与更新」直接查 GitHub 仓库的最新 Release；按当前运行形态（手机版 APK / 桌面版 exe / 电脑版源码）给出对应安装包，**只提示与下载，不自动替换程序**。GitHub 被 hosts / DNS 指偏时自动改用公共 DNS 解析真实 IP 直连（证书仍按 api.github.com 校验，不改系统设置）。
 - **PWA**：浏览器打开后点顶栏「安装」，即可装成桌面独立应用。
 
 ## 目录
@@ -112,7 +113,7 @@ ElainaChat-mod/
 ├─ web/                     # 前端本体（唯一前端编辑入口）与本地服务入口
 │  ├─ index.html            # 单页骨架
 │  ├─ js/                   # 前端模块（store / core / data / agent / ui / voice / settings / mods / mcp …）
-│  ├─ css/                  # 主题与页面样式
+│  ├─ css/                  # 样式层：base.css 先加载，其余为主题与页面覆盖层
 │  ├─ vendor/               # 宿主自带库（tailwind / marked / KaTeX / pixi 与 Live2D 运行时）
 │  ├─ audio/  icons/        # 内置参考音频、PWA 图标
 │  ├─ nodejs/               # 安卓端内嵌 Node 的启动骨架（电脑版不用）

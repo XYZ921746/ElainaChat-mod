@@ -525,6 +525,27 @@ function removeStreamingReplyPreview() {
  * 于是 signal 从来没生效过，「停止」按了请求还在跑。
  * 现在请求统一走 requestChatJson，它显式收 opts.signal 并往下传。
  */
+/**
+ * 三条提交路径（语音 / 首屏输入框 / 会话输入框）共用的后半段：
+ * 入队 → 转 thinking → 重载会话 → 按需刷新标题 → 交给 agent。
+ * 各路径的差异（校验、取文本、清空输入）留在调用点；需要在重载前做的清理
+ * 由 beforeLoad 插入，避免三份拷贝各自漂移。
+ */
+function commitUserMessage(conversation, message, beforeLoad) {
+    conversation.messages.push(message);
+    state.thinkingMessageId = message.id;
+    if (beforeLoad) beforeLoad();
+    loadConversation(conversation.id);
+    // 每次发送都算一次（不只是首条）：首条常是招呼语，话题往往在第二条才出现。
+    if (refreshAutoConversationTitle(conversation)) {
+        renderFolderList();
+        updateCurrentConversationTitle();
+    }
+    state.voiceState = 'thinking';
+    updateUI();
+    handleUserInput(message, conversation);
+}
+
 function processVoiceInput(text) {
     if (composerImageProcessing) return;
     if (!text.trim()) return;
@@ -546,22 +567,7 @@ function processVoiceInput(text) {
         timestamp: new Date().toLocaleTimeString()
     }, image);
 
-    conversation.messages.push(message);
-
-    state.thinkingMessageId = message.id;
-
-    loadConversation(conversation.id);
-
-    // 每次发送都算一次（不只是首条）：首条常是招呼语，话题往往在第二条才出现。
-    if (refreshAutoConversationTitle(conversation)) {
-        renderFolderList();
-        updateCurrentConversationTitle();
-    }
-
-    state.voiceState = 'thinking';
-    updateUI();
-
-    handleUserInput(message, conversation);
+    commitUserMessage(conversation, message);
 }
 
 function handleInitialTextSubmit() {
@@ -587,22 +593,11 @@ function handleInitialTextSubmit() {
         timestamp: new Date().toLocaleTimeString()
     }, image);
 
-    conversation.messages.push(message);
-    consumePendingComposerImage();
-    document.getElementById('initialTextInput').value = '';
-    updateComposerSendVisibility();
-    loadConversation(conversation.id);
-
-    // 每次发送都算一次（不只是首条）：首条常是招呼语，话题往往在第二条才出现。
-    if (refreshAutoConversationTitle(conversation)) {
-        renderFolderList();
-        updateCurrentConversationTitle();
-    }
-
-    state.voiceState = 'thinking';
-    updateUI();
-
-    handleUserInput(message, conversation);
+    commitUserMessage(conversation, message, () => {
+        consumePendingComposerImage();
+        document.getElementById('initialTextInput').value = '';
+        updateComposerSendVisibility();
+    });
 }
 
 /**
@@ -642,23 +637,9 @@ function handleTextSubmit() {
         timestamp: new Date().toLocaleTimeString()
     }, image);
 
-    conversation.messages.push(message);
-    consumePendingComposerImage();
-
-    state.thinkingMessageId = message.id;
-
-    loadConversation(conversation.id);
-
-    // 每次发送都算一次（不只是首条）：首条常是招呼语，话题往往在第二条才出现。
-    if (refreshAutoConversationTitle(conversation)) {
-        renderFolderList();
-        updateCurrentConversationTitle();
-    }
-
-    state.voiceState = 'thinking';
-    updateUI();
-
-    handleUserInput(message, conversation);
+    commitUserMessage(conversation, message, () => {
+        consumePendingComposerImage();
+    });
     elements.textInput.value = '';
     updateComposerSendVisibility();
 }

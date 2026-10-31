@@ -40,18 +40,7 @@ function updateUI() {
     };
     elements.statusText.textContent = statusMap[voiceState] || '';
 
-    const micClass = {
-        'listening': 'mic-btn mic-listening relative w-32 h-32 rounded-full flex items-center justify-center',
-        'paused': 'mic-btn mic-paused relative w-32 h-32 rounded-full flex items-center justify-center',
-        'thinking': 'mic-btn mic-thinking relative w-32 h-32 rounded-full flex items-center justify-center',
-        'error': 'mic-btn mic-error relative w-32 h-32 rounded-full flex items-center justify-center',
-        'idle': 'mic-btn mic-idle relative w-32 h-32 rounded-full flex items-center justify-center'
-    };
-    elements.micBtn.className = micClass[voiceState] || micClass['idle'];
-
     const listening = voiceState === 'listening' || voiceState === 'paused';
-    elements.pulseRing1.classList.toggle('hidden', !listening);
-    elements.pulseRing2.classList.toggle('hidden', !listening);
     elements.floatingPulse1.classList.toggle('hidden', !listening);
     elements.floatingPulse2.classList.toggle('hidden', !listening);
 

@@ -27,7 +27,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { launchTestBrowser } from './test-browser.mjs';
 import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
 import { createModManager } from '../server/mods.mjs';
@@ -384,7 +384,7 @@ async function caseModsCore(c) {
 
         // 宿主接线
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        c.ok(/<script src="\/js\/mods\.js"><\/script>/.test(html), 'index.html 引入了 mods.js');
+        c.ok(/<script[^>]*src="\/js\/mods\.js"[^>]*><\/script>/.test(html), 'index.html 引入了 mods.js');
         const iMods = html.indexOf('/js/mods.js');
         const iInit = html.indexOf('/js/init.js');
         c.ok(iMods > 0 && iInit > 0 && iMods < iInit, '★ mods.js 排在 init.js 之前（初始化要读清单）');
@@ -444,7 +444,8 @@ async function caseModsCore(c) {
         // 结果必须画在**独立、可换行**的面板里：塞进不换行的 #modsHint 时，
         //   长路径会被挤出可视区，看起来和"点了没反应"一模一样。
         c.ok(/id="modsBrowseResult"/.test(html), '★ 「浏览目录」有独立结果面板（长路径不会被挤没）');
-        c.ok(/mod-group-toggle/.test(html), '★ 分栏折叠三角（disclosure triangle）');
+        // 折叠三角的样式在基础样式层（web/css/base.css），不在 HTML 骨架里
+        c.ok(/mod-group-toggle/.test(readHtmlAndStyles()), '★ 分栏折叠三角（disclosure triangle）');
         const settings = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         c.ok(/async function refreshModsList/.test(settings), '有 refreshModsList');
@@ -534,6 +535,11 @@ async function caseModsCore(c) {
             '★ 前置区卡片不画拖拽把手（固定分区，不参与用户分栏）');
         c.ok(/modsPrereqOpen/.test(settings) && /modsPrereqBody/.test(settings),
             '★ 插件页前置区默认收起（标题可展开，拨开关重渲染后保持展开态）');
+        // 前置卡片挂在 #modsList **之外**（网格外的固定分区，见 refreshModsList 里"摘掉旧的再插"）。
+        //   事件只绑 #modsList 时，前置卡片上的 README / 设置 / 文件夹 / 删除按钮与开关
+        //   全都没有监听器 —— 用户实测："前置插件的 readme 和设置文件夹都点不动"。
+        c.ok(/getElementById\('modsPrereqBody'\)[\s\S]{0,200}bindModToggle\(root, hint\)[\s\S]{0,120}bindModCardButtons\(root, hint\)/.test(settings),
+            '★ 前置区卡片的按钮与开关也绑事件（它们不在 #modsList 里，只绑 box 会点了没反应）');
         c.ok(/after: Array\.isArray\(e\.manifest\.after\)/.test(modsLoader),
             '★ list() 带出 after（APK/手工目录也判得出前置）');
         c.ok(/elaina_mods_groups/.test(settings), '★ 分栏清单有持久化（与 store.js 的 DATA_KEYS 对应）');
@@ -2145,7 +2151,7 @@ async function caseModScriptRetry(c) {
 
 /** 本次检查用到的临时 mod 前缀 —— 清理与清单过滤都以它为准 */
 const TMP_PREFIX = 'zz-check-';
-const tmpMods = ['zz-check-api', 'zz-check-badapi', 'zz-check-collide', 'zz-check-late', 'zz-check-slots', 'zz-check-tpl'];
+const tmpMods = ['zz-check-api', 'zz-check-badapi', 'zz-check-collide', 'zz-check-late', 'zz-check-slots', 'zz-check-tpl', 'zz-check-prereq'];
 
 /** 写一个只含前端半边的临时 mod */
 function writeFrontMod(id, manifestExtra, indexJs, styleCss) {
@@ -2540,6 +2546,21 @@ async function caseModHostApi(c) {
     })();`,
             '.zz-slot-test{color:red}');
 
+        // ---- 前置扩展区的卡片（挂在 #modsList **之外**）----
+        // 它注册一个 settings.modal，让卡片上出现「设置」齿轮；
+        // 再放一个 README，用来点开说明弹窗。hidden:true → 进「前置扩展」区。
+        writeFrontMod('zz-check-prereq', { defaultEnabled: true, hidden: true },
+            `(function () {
+        window.ElainaMods.register('zz-check-prereq', function (host) {
+            host.slot('settings.modal', {
+                id: 'zz-check-prereq', label: '前置自检', title: '前置自检设置',
+                render: function (c) { c.innerHTML = '<div id="zzPrereqSettingsPanel">PREREQ-SETTINGS-OK</div>'; },
+            });
+            return {};
+        });
+    })();`);
+        writeFileSync(path.join(MODS, 'zz-check-prereq', 'README.md'), '# 前置自检\n\nPREREQ-README-OK\n');
+
         child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
             cwd: ROOT,
             env: {
@@ -2865,6 +2886,69 @@ async function caseModHostApi(c) {
                 c.ok(!tplOff.tab && !tplOff.headerBtn && !tplOff.sidebar && !tplOff.composer
                     && tplOff.msgBtns === 0 && tplOff.styleDisabled === true,
                     '★【模板】停用后五处贡献全部收回（模板自己不留残留）', JSON.stringify(tplOff));
+
+                // ---- ★ 前置扩展区的卡片必须真的能点 ----
+                //   前置卡片挂在 #modsList **之外**（网格外的固定分区），事件只绑 #modsList 时
+                //   卡片上的 README / 设置 / 文件夹 / 开关全都没有监听器 ——
+                //   用户实测："前置插件的 readme 和设置文件夹都点不动"。
+                await page.evaluate(async () => {
+                    openSettings();
+                    switchSettingsTab('tab-mods');
+                    await refreshModsList();
+                    const b = document.getElementById('modsPrereqBody');
+                    if (b && b.classList.contains('hidden')) document.getElementById('modsPrereqToggle').click();
+                });
+                await page.waitForTimeout(500);
+                const preUi = await page.evaluate(async () => {
+                    const card = document.querySelector('.mod-prereq .mod-card[data-mod-id="zz-check-prereq"]');
+                    const out = { card: Boolean(card) };
+                    if (!card) return out;
+                    // README
+                    card.querySelector('.mod-readme-btn').click();
+                    await new Promise((r) => setTimeout(r, 400));
+                    const ov = document.getElementById('modReadmeOverlay');
+                    out.readme = !ov.classList.contains('hidden') && /PREREQ-README-OK/.test(ov.innerText);
+                    ov.classList.add('hidden');
+                    // 设置齿轮（fixture 注册了 settings.modal）
+                    const gear = card.querySelector('.mod-opensettings');
+                    out.gear = Boolean(gear);
+                    if (gear) {
+                        gear.click();
+                        await new Promise((r) => setTimeout(r, 400));
+                        out.settings = Boolean(document.getElementById('zzPrereqSettingsPanel'));
+                        document.querySelectorAll('.modal-overlay').forEach((o) => o.classList.add('hidden'));
+                    }
+                    // 文件夹：拦住请求，避免真的弹出资源管理器
+                    const of = card.querySelector('.mod-openfolder');
+                    out.folderBtn = Boolean(of);
+                    if (of) {
+                        const orig = window.fetch;
+                        window.fetch = function (url) {
+                            if (String(url).includes('/api/plugins/open-folder')) {
+                                return Promise.resolve(new Response(JSON.stringify({ ok: true, path: 'X:/fake' }),
+                                    { status: 200, headers: { 'content-type': 'application/json' } }));
+                            }
+                            return orig.apply(this, arguments);
+                        };
+                        of.click();
+                        await new Promise((r) => setTimeout(r, 400));
+                        out.folderHint = document.getElementById('modsHint').textContent;
+                        window.fetch = orig;
+                    }
+                    // 开关：这个前置没有任何依赖方，可以安全停用
+                    const tg = card.querySelector('.mod-toggle');
+                    tg.checked = false;
+                    tg.dispatchEvent(new Event('change'));
+                    await new Promise((r) => setTimeout(r, 1200));
+                    const st = window.ElainaMods.list().find((m) => m.id === 'zz-check-prereq');
+                    out.toggleWorked = Boolean(st) && st.enabled === false;
+                    return out;
+                });
+                c.ok(preUi.card, '★ 前置区卡片出现在 #modsList 之后（固定分区）', JSON.stringify(preUi));
+                c.ok(preUi.readme === true, '★ 前置区卡片的「README」按钮能打开说明弹窗（事件已挂上）', JSON.stringify(preUi));
+                c.ok(preUi.gear === true && preUi.settings === true, '★ 前置区卡片的「设置」齿轮能打开插件设置窗', JSON.stringify(preUi));
+                c.ok(preUi.folderBtn === true && /已打开/.test(preUi.folderHint || ''), '★ 前置区卡片的「文件夹」按钮有响应', JSON.stringify(preUi));
+                c.ok(preUi.toggleWorked === true, '★ 前置区卡片的开关能拨动（事件已挂上）', JSON.stringify(preUi));
 
                 console.log('  页面错误:', pageErrors.length ? pageErrors.slice(0, 3).join(' | ') : '(无)');
             } finally {

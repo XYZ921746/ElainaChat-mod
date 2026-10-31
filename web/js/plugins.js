@@ -492,10 +492,11 @@ function bindModToggle(box, hint) {
                 hint.textContent = msg;
                 hint.className = 'text-[11px] text-indigo-500';
             }
-            // 波纹要在列表重绘之后发：重绘会换掉全部卡片 DOM，旧元素的环会跟着丢
+            // 波纹要在列表重绘之后发：重绘会换掉全部卡片 DOM，旧元素的环会跟着丢。
+            // 卡片可能落在前置区（不在 box 里），所以按 id 在整个文档里找重绘后的那颗开关。
             const refreshed = refreshModsList();
             void Promise.resolve(refreshed).then(() => {
-                const fresh = box.querySelector('.mod-toggle[data-mod-id="' + id + '"]');
+                const fresh = document.querySelector('.mod-toggle[data-mod-id="' + id + '"]');
                 if (fresh) rippleCard(fresh);
             });
         });
@@ -803,9 +804,14 @@ async function refreshModsList() {
         bindPrereqToggle(document.getElementById('modsPrereqToggle'));
     }
 
-    bindModToggle(box, hint);
-
-    bindModCardButtons(box, hint);
+    // 前置区的卡片是 #modsList **之后**的独立区块（网格外的固定分区，见上面摘除/重建那段），
+    // 不在 box 里。只绑 box 的话，前置卡片上的开关与 README / 设置 / 文件夹 / 删除按钮
+    // 全都没有监听器 —— 看起来是"点了没反应"，实际是事件根本没挂上。
+    const prereqBody = document.getElementById('modsPrereqBody');
+    for (const root of (prereqBody ? [box, prereqBody] : [box])) {
+        bindModToggle(root, hint);
+        bindModCardButtons(root, hint);
+    }
 
     bindModGroupActions(box, normalMods, groupOf, UNGROUPED_ID, readGroups, saveGroups);
 

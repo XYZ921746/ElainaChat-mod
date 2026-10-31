@@ -26,56 +26,6 @@ function parseModelList(payload) {
         .sort((a, b) => a.localeCompare(b));
 }
 
-// 聚合商（OpenRouter / NewAPI 系）的 /models 会带能力元数据，能直接读出"支不支持图片 / 工具"；
-//   纯 OpenAI 兼容端点（如阿里云 MaaS）不带，就只能靠名字规则 + 探针（见本文件后半段）。
-//   索引挂在函数属性上、而不是模块级 const：本仓库的检查脚本按"顶层函数"抽取代码运行，
-//   const 不会被带过去，只有挂函数上才能"页面里能用、检查里也不炸"。
-function modelCapabilityStore() {
-    if (!modelCapabilityStore._map) modelCapabilityStore._map = new Map();
-    return modelCapabilityStore._map;
-}
-function modelCapabilityKey(baseUrl, model) {
-    return String(baseUrl || '').trim().replace(/\/+$/, '') + '|' + String(model || '').trim();
-}
-
-/** 从 /models 的一个条目里抽能力；认不出返回 null（绝不瞎猜）。 */
-function capabilityFromModelItem(item) {
-    if (!item || typeof item !== 'object') return null;
-    const out = {};
-    const arch = item.architecture || {};
-    const inputs = arch.input_modalities || item.input_modalities || item.modalities;
-    if (Array.isArray(inputs)) out.vision = inputs.map((x) => String(x).toLowerCase()).includes('image');
-    const caps = item.capabilities || {};
-    if (typeof caps.vision === 'boolean') out.vision = caps.vision;
-    const params = Array.isArray(item.supported_parameters)
-        ? item.supported_parameters.map((x) => String(x).toLowerCase()) : [];
-    if (params.includes('tools') || params.includes('tool_choice') || params.includes('function_calling')) out.tools = true;
-    if (typeof caps.function_calling === 'boolean') out.tools = caps.function_calling;
-    if (typeof caps.tools === 'boolean') out.tools = caps.tools;
-    return Object.keys(out).length ? out : null;
-}
-
-/** 把一次 /models 响应里的能力元数据收进索引（没有元数据的条目清掉旧值）。 */
-function indexModelCapabilities(baseUrl, payload) {
-    const raw = Array.isArray(payload?.data) ? payload.data : [];
-    for (const item of raw) {
-        if (!item || typeof item !== 'object' || !item.id) continue;
-        const key = modelCapabilityKey(baseUrl, item.id);
-        const caps = capabilityFromModelItem(item);
-        const store = modelCapabilityStore();
-        if (caps) store.set(key, caps);
-        else store.delete(key);
-    }
-}
-
-/** baseUrl + 模型名的能力结论 {vision?, tools?}；完全拿不到返回 null。 */
-function capabilityForModel(baseUrl, model) {
-    const hit = modelCapabilityStore().get(modelCapabilityKey(baseUrl, model));
-    if (hit) return { ...hit };
-    const guess = guessModelSupportsImage(model);
-    return guess === true ? { vision: true } : null;
-}
-
 async function fetchModelList(baseUrl, apiKey, apiFormat) {
     const endpoint = modelsEndpointFor(baseUrl, apiFormat);
     const key = String(apiKey || '').trim();
@@ -104,7 +54,6 @@ async function fetchModelList(baseUrl, apiKey, apiFormat) {
         }
         const models = result.ok ? parseModelList(result.payload) : [];
         if (models.length) {
-            indexModelCapabilities(baseUrl, result.payload);
             return models;
         }
         if (!failure) {
@@ -323,11 +272,10 @@ async function populateModelSelect({ btn, input, select, baseUrl, apiKey, apiFor
 
     } finally {
         btn.textContent = old;
-        try { if (typeof updateChatModelVisionHint === 'function') updateChatModelVisionHint(); } catch (e) { /* 提示刷新失败不影响列表 */ }
     }
 }
 
-// ===== 对话模型「是否支持图片」的识别 =====
+// ===== 对话模型「能否收图片」的缓存结论 =====
 // 为什么不能只看 /models 列表：OpenAI 兼容的 /models 通常只回 id，没有模态字段；
 //   名字规则又会被自定义模型名 / 中转别名骗。所以给两种判据：
 //     ① 名字规则（零成本，只作提示）；
@@ -336,60 +284,6 @@ async function populateModelSelect({ btn, input, select, baseUrl, apiKey, apiFor
 /** 缓存键：同一个 baseUrl + 模型名才算同一次结论，换了任一个都作废。 */
 function modelVisionCacheKey(baseUrl, model) {
     return String(baseUrl || '').trim().replace(/\/+$/, '') + '|' + String(model || '').trim();
-}
-
-/** 按模型名猜是否多模态。零成本但可能不准，只用来给提示，不作硬判据。 */
-function guessModelSupportsImage(model) {
-    const m = String(model || '').toLowerCase();
-    if (!m) return null;
-    if (/(?:^|[-_/])(?:vl|vision|omni)(?:$|[-_/0-9])/.test(m)) return true;
-    if (/gpt-4o|gpt-4\.1|gpt-4-turbo|gpt-5|claude-3|claude-4|gemini|glm-4v|qwen-vl|qwen2\.5-vl|qwen3-vl|internvl|llava|minicpm-v|pixtral|step-1v|ernie-4\.5-vl/.test(m)) return true;
-    return null;
-}
-
-/**
- * 实测一个对话模型是否接受图片输入。返回 true / false / null（探测不了）。
- * 判定：HTTP 2xx → 接受；错误文本命中"不支持图片" → 不接受；其它（鉴权 / 网络 / 路径错） → null。
- */
-async function probeModelImageSupport({ baseUrl, apiKey, apiFormat, model }) {
-    const modelName = String(model || '').trim();
-    const base = String(baseUrl || '').trim().replace(/\/+$/, '');
-    if (!base || !modelName) return null;
-    const key = String(apiKey || '').trim();
-    const fmt = apiFormat || 'openai-compatible';
-    // 探针图：1×1 透明 PNG。写成本地常量而不是模块级 const —— 检查脚本只抽顶层函数。
-    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-    const b64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-    let url; let headers; let body;
-    if (fmt === 'anthropic') {
-        url = /\/v\d+$/.test(base) ? base + '/messages' : base + '/v1/messages';
-        headers = { 'x-api-key': key, 'anthropic-version': '2023-06-01' };
-        body = { model: modelName, max_tokens: 1, messages: [{ role: 'user', content: [
-            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: b64 } },
-            { type: 'text', text: 'ok' }] }] };
-    } else if (fmt === 'openai-responses') {
-        url = /\/responses$/.test(base) ? base : base + '/responses';
-        headers = { Authorization: 'Bearer ' + key };
-        body = { model: modelName, max_output_tokens: 16, input: [{ role: 'user', content: [
-            { type: 'input_image', image_url: dataUrl },
-            { type: 'input_text', text: 'ok' }] }] };
-    } else {
-        url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions';
-        headers = { Authorization: 'Bearer ' + key };
-        body = { model: modelName, max_tokens: 1, messages: [{ role: 'user', content: [
-            { type: 'text', text: 'ok' },
-            { type: 'image_url', image_url: { url: dataUrl } }] }] };
-    }
-    let result;
-    try {
-        result = await postJsonFromDevice(url, body, headers, { timeoutMs: 20000 });
-    } catch (err) {
-        return null;
-    }
-    if (result && result.ok) return true;
-    const msg = String(result?.payload?.error?.message || result?.payload?.message || result?.rawText || '');
-    if (/not a multimodal|not multimodal|does not support (image|vision)|vision.*not supported|multimodal model|image.*not supported|invalid.{0,6}image|image.{0,6}invalid|不支持.{0,6}图片|无法.{0,6}图片/i.test(msg)) return false;
-    return null;
 }
 
 /** 设置里缓存的"主模型能否收图"结论：true / false / null（未测或已过期）。 */
@@ -407,56 +301,3 @@ function rememberModelImageVerdict(verdict, baseUrl, model) {
     state.settings.chatModelVisionKey = verdict === null ? '' : modelVisionCacheKey(baseUrl, model);
     try { persistSettings(); } catch (e) { /* 缓存写不进不该挡住任何主流程 */ }
 }
-
-/** 刷新设置页那行"这个模型能不能收图"的提示。 */
-function updateChatModelVisionHint() {
-    const hint = document.getElementById('chatModelVisionHint');
-    if (!hint) return;
-    const baseUrl = document.getElementById('settingBaseUrl')?.value || '';
-    const model = document.getElementById('settingChatModel')?.value || '';
-    if (!String(model).trim()) { hint.textContent = ''; return; }
-    const key = modelVisionCacheKey(baseUrl, model);
-    const cached = (state.settings.chatModelVisionKey === key) ? state.settings.chatModelVision : null;
-    // 判据优先级：探针实测 > 接口元数据 > 模型名规则。
-    const meta = (typeof capabilityForModel === 'function') ? capabilityForModel(baseUrl, model) : null;
-    const img = (cached === true) ? true
-        : (cached === false) ? false
-            : (meta && typeof meta.vision === 'boolean') ? meta.vision
-                : (guessModelSupportsImage(model) === true ? true : null);
-    const tool = (meta && typeof meta.tools === 'boolean') ? meta.tools : null;
-    const mark = (v) => (v === true ? '✓' : (v === false ? '✗' : '？'));
-    const parts = ['图片 ' + mark(img)];
-    if (tool !== null) parts.push('工具 ' + mark(tool));
-    let detail;
-    if (cached === true) detail = '已实测能收图片，手机截图会直接给它看。';
-    else if (cached === false) detail = '已实测收不了图片，手机会退回读控件树（想看画面请在下面配「视觉模型」）。';
-    else if (meta && meta.vision === false) detail = '接口元数据说它只支持文本（收不了图片）。';
-    else if (meta && meta.vision === true) detail = '接口元数据说它支持图片。';
-    else if (img === true) detail = '按模型名看应该是多模态，建议点「检测图片能力」实测一下。';
-    else detail = '点「检测图片能力」发一张 1×1 小图实测（几乎不耗 token）。';
-    hint.textContent = '🧩 能力：' + parts.join(' · ') + ' —— ' + detail;
-}
-
-/** 手动探测：读当前表单 → 探针 → 写缓存 → 刷新提示。 */
-async function detectChatModelVision() {
-    const baseUrl = document.getElementById('settingBaseUrl')?.value || '';
-    const apiKey = document.getElementById('settingApiKey')?.value || '';
-    const apiFormat = document.getElementById('settingApiFormat')?.value || 'openai-compatible';
-    const model = document.getElementById('settingChatModel')?.value || '';
-    const hint = document.getElementById('chatModelVisionHint');
-    const btn = document.getElementById('probeChatModelVisionBtn');
-    if (!String(baseUrl).trim() || !String(model).trim()) {
-        if (hint) hint.textContent = '先填好 API Base URL 与模型名，再点检测。';
-        return;
-    }
-    if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = '⏳ 检测中…'; }
-    if (hint) hint.textContent = '正在发一个 1×1 小图探测…';
-    let verdict = null;
-    try { verdict = await probeModelImageSupport({ baseUrl, apiKey, apiFormat, model }); }
-    catch (err) { verdict = null; }
-    rememberModelImageVerdict(verdict, baseUrl, model);
-    if (btn) { btn.disabled = false; btn.textContent = btn.dataset.label || '检测图片能力'; }
-    updateChatModelVisionHint();
-    if (verdict === null) showCustomAlert('没能判定这个模型是否支持图片（可能是网络 / 鉴权 / 路径问题）。\n\n可以先用着 —— 实际操作时应用也会自动判断；或检查地址与 Key 后再点一次。', '检测图片能力');
-}
-

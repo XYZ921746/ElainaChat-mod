@@ -407,8 +407,8 @@ const DEFAULT_SETTINGS = {
     visionBaseUrl: '',
     visionApiKey: '',
     visionModel: '',
-    // 对话模型「能不能收图片」的探测结论（见 models.js 的 probeModelImageSupport）。
-    //   null = 没测过/结论已过期；true/false = 实测过。chip 一起存，模型名或地址一变就作废。
+    // 对话模型「能不能收图片」的结论（真实使用中自动学习，见 chat.js 的 callAI）。
+    //   null = 还没遇到过/结论已过期；true/false = 实际收发过一次得出的。key 一起存，模型名或地址一变就作废。
     chatModelVision: null,
     chatModelVisionKey: '',
     // 首次运行的「欢迎使用独立开源版」公告**是否已同意过**。

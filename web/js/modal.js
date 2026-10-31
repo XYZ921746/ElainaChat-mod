@@ -120,7 +120,9 @@ function bindModalInputKeys(elements, { input, multiline, useEditor, readValue, 
             }
             return;
         }
-        if (e.key === 'Enter') {
+        // 输入法组合态下 Enter 是"选词"而不是提交 —— 不挡掉的话，中文输入会把
+        // 半截拼音直接提交出去（keyCode 229 是老 WebView 上组合态的唯一信号）。
+        if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) {
             const val = readValue();
             finish(val);
         }

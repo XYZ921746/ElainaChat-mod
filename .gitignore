@@ -1,16 +1,48 @@
 # 运行期数据与密钥（data/ 下有 auth.json / cert.pem / key.pem / 聊天记录）
 /data/
+/runtime/
+web/.local-auth.json
 
 # 日志
 *.log
 
-# 临时目录
+# 临时目录与依赖
 .tmp-*/
 node_modules/
 
-# 服务端扫描自动生成的插件索引（每次扫描只改 generatedAt）
-mods/index.json
+# 插件源码与模型资源：仓库只推软件本体；插件在应用内安装，模型随扩展包分发
+mods/
+web/mods/
+web/live2d/models/*
 
-# 打包产物（dist/Android/scripts/sync-web.mjs 是检查夹具，必须保留）
-dist/*.exe
-dist/Windows/
+# 本机打包产物与工具链（成品走 GitHub Releases，不进仓库）
+#
+# dist/ 只保留 check-log / check-mod / check-ui 读取的 sync-web.mjs 检查夹具，
+# 其余（Windows 打包工具、产物、README）留在本机：夹具缺失会让这三个模块
+# 在干净克隆里直接抛错，所以它必须随仓库走。
+dist/*
+!dist/Android
+dist/Android/*
+!dist/Android/scripts
+dist/Android/scripts/*
+!dist/Android/scripts/sync-web.mjs
+android-app/
+dev-only/
+*.zip
+*.apk
+*.exe
+*.jks
+*.keystore
+local.properties
+.env
+.env.*
+
+# 本机 AI 协作内容（保留在本地）
+AGENTS.md
+.aiinclude
+.trae/
+.workbuddy-ai/
+
+# 软件本体零依赖（见 README），无需锁文件；编辑器配置保留在本地
+package-lock.json
+.editorconfig
