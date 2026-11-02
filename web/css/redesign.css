@@ -542,7 +542,6 @@ html.rd #mainContent > header .quote-chip {
 html.rd #mainContent > header .quote-chip .text-indigo-800,
 html.rd #mainContent > header .quote-chip .text-indigo-300 { color: var(--rd-text-2) !important; }
 html.rd #mainContent > header .quote-chip .text-pink-500 { color: var(--rd-accent) !important; }
-html.rd #quoteLikeBtn,
 html.rd #quoteFavBtn { color: var(--rd-text-3) !important; }
 
 html.rd .header-memory-btn {
@@ -640,6 +639,38 @@ html.rd .message-item-ai::before {
     /* 伊蕾娜头像用应用图标（与侧栏 logo / PWA 安装同一份素材），取景与左上角 logo 一致：全图 cover */
     background: var(--rd-avatar-ai-bg) url("/icons/icon-192.png") center / cover no-repeat;
 }
+/* 本对话绑定了人设卡：头像换成卡名首字（renderMessage 在行根节点下发
+   is-bound-card + data-card-initial），图标只代表"跟随全局"的那一位 */
+html.rd .message-item-ai.is-bound-card::before {
+    content: attr(data-card-initial);
+    border: 1px solid var(--rd-avatar-ai-border);
+    background: var(--rd-avatar-ai-bg);
+}
+
+/* 消息行头像只由上面的伪元素画：行内若再出现 .ai-msg-avatar（旧缓存脚本会插）
+   就是第二个头像 —— 显示层直接摁掉，宁缺勿重。 */
+html.rd #conversationHistory .message-item-ai .ai-msg-avatar { display: none !important; }
+
+/* ---------- 对话列表行的头像（桌面侧栏与手机首页列表同源） ----------
+   绑卡 = 卡名首字（底色与消息行 AI 头像同源），跟随全局 = 应用图标。
+   手机列表复用 .mmc-avatar 当容器，所以这里只管桌面容器与两种内容的通用样式。 */
+html.rd .conv-row-avatar {
+    flex: none;
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    overflow: hidden;
+    display: grid;
+    place-items: center;
+    background: var(--rd-avatar-ai-bg);
+    color: var(--rd-avatar-ai-fg);
+    font-family: var(--rd-font-display);
+    font-size: 14px;
+    font-weight: 700;
+}
+html.rd .conv-avatar-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+html.rd .mmc-avatar .conv-avatar-img { border-radius: inherit; }
+html.rd .conv-avatar-chip { display: inline-block; line-height: 1; }
 html.rd .message-item-user::before {
     /* 首字与头像都由用户资料下发（CSS 变量，见 data.js 的 applyUserProfileToUi）；
        没设头像时回落到首字 + 主题底色 */
@@ -785,6 +816,12 @@ html.rd .ai-voice-player {
 html.rd .ai-voice-player:hover { background: var(--rd-hover) !important; }
 html.rd .voice-duration { color: var(--rd-text-2) !important; }
 html.rd .voice-waveform i { background: var(--rd-accent) !important; }
+html.rd .ai-voice-player.is-error {
+    background: var(--rd-warn-bg) !important;
+    box-shadow: inset 0 0 0 1px var(--rd-warn-border) !important;
+}
+html.rd .ai-voice-player.is-error .voice-wave-bar { background: var(--rd-warn) !important; }
+html.rd .ai-voice-error { color: var(--rd-warn) !important; }
 
 html.rd #thinking-bubble {
     max-width: 100%;
@@ -1450,6 +1487,37 @@ html.rd #settingsContent .settings-tab-panel > section:hover,
 html.rd #settingsContent .settings-tab-panel > div.mb-4:hover { box-shadow: var(--rd-shadow-1) !important; transform: none !important; }
 html.rd #settingsContent .modal-label { color: var(--rd-text) !important; font-size: 13px !important; font-weight: 600 !important; }
 html.rd #settingsContent .modal-label span:first-child { color: var(--rd-accent) !important; }
+
+/* ---------- 扩展页：三个子面板不带外框 ----------
+ * 插件 / 技能 / MCP 各自就是"这一页"，外面再套一层卡片等于把内容装进套娃：
+ *   一屏只放得下半个列表，而框本身不传达任何信息。
+ * 保留框的是**用户自己注册的条目**（.mod-card：插件 / 技能 / MCP 服务器）——
+ *   那里的框表示"这是一条可操作的东西"，与"这是一页"不是同一件事。
+ * 页头（标题行）改用一条细线分隔，既划出范围又不吃高度。
+ */
+html.rd #tab-mods .ext-panel {
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+}
+
+html.rd #tab-mods .ext-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 10px;
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--rd-border);
+}
+
+html.rd #tab-mods .ext-head .modal-label {
+    margin: 0 !important;
+    padding: 0 !important;
+    border-bottom: 0 !important;
+    font-size: 14px !important;
+}
 html.rd #settingsContent .text-xs.font-semibold { color: var(--rd-text) !important; }
 html.rd #settingsContent .text-\[11px\],
 html.rd #settingsContent .text-indigo-300,
@@ -1499,13 +1567,6 @@ html.rd .theme-tpl-name {
 html.rd #themeSettingsSection > .text-\[11px\] { color: var(--rd-text-3) !important; }
 html.rd #themeCustomEditor { display: none !important; }
 
-html.rd #settingsContent .log-panel,
-html.rd #settingsContent .log-list {
-    background: var(--rd-surface-2) !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 8px !important;
-    color: var(--rd-text-2) !important;
-}
 html.rd #settingsContent .log-line { border-color: var(--rd-border) !important; }
 html.rd #settingsContent .log-time { color: var(--rd-text-3) !important; }
 html.rd #settingsContent .log-level.warn,
@@ -1518,12 +1579,6 @@ html.rd #settingsContent .mod-card {
     background: var(--rd-surface-2) !important;
     border: 1px solid var(--rd-border) !important;
     border-radius: var(--rd-radius-md) !important;
-}
-html.rd #settingsContent .plugin-error,
-html.rd #settingsContent .mod-error {
-    background: var(--rd-danger-soft) !important;
-    border-color: var(--rd-danger-border) !important;
-    color: var(--rd-danger) !important;
 }
 
 /* ---------- 其他浮层 ---------- */
@@ -1841,3 +1896,35 @@ html.rd .profile-impression-box {
 }
 html.rd .profile-impression-text { color: var(--rd-text) !important; }
 html.rd .profile-impression-text.is-empty { color: var(--rd-text-3) !important; }
+
+/*
+ * 保存失败提示条（见 ui.js 的 showStoreSaveAlert）。
+ *
+ * 为什么是底部横条而不是弹窗：它只报告"数据还在内存、没落盘"，不该挡住用户
+ *   去点「导出备份」。底部居中不压输入框，手机上也够得着；同时它是"坏消息"，
+ *   所以用提示色而不是主题强调色 —— 默认主题下强调色是橄榄绿，看起来像成功。
+ * 遮罩层 z-index 之上、但 pointer-events 关掉，永不拦截点击。
+ */
+html.rd .store-save-alert {
+    position: fixed;
+    left: 50%;
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    transform: translate(-50%, 12px);
+    max-width: min(560px, calc(100vw - 32px));
+    padding: 10px 16px;
+    border-radius: 14px;
+    border: 1px solid var(--rd-danger-border, var(--rd-border));
+    background: var(--rd-toast-bg);
+    color: var(--rd-toast-fg);
+    font-size: 12.5px;
+    line-height: 1.55;
+    box-shadow: 0 12px 30px rgb(0 0 0 / 0.18);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 80;
+    transition: opacity .18s ease, transform .18s ease;
+}
+html.rd .store-save-alert.is-visible {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}

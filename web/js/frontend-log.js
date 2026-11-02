@@ -1,5 +1,4 @@
 // 前端日志转发：把 error / warn / 未捕获异常发到服务端，显示在启动窗口里。
-// IIFE 包裹，不向全局泄露任何名字。
     (function () {
         if (window.__logRelayInstalled) return;
         window.__logRelayInstalled = true;
@@ -12,15 +11,14 @@
             for (var i = 0; i < args.length; i++) {
                 var a = args[i];
                 try {
-                    // Error 取 stack 而不只是 message：前端报错的原因常常在调用链上
-                    // （"哪个函数调的、参数是什么"），只发一句 message 过去基本查不出东西。
+                    // 取 stack 而不只是 message：报错原因常常在调用链上（谁调的、参数是什么）
                     if (a instanceof Error) parts.push(a.stack || a.message);
                     else if (typeof a === 'object' && a !== null) parts.push(JSON.stringify(a));
                     else parts.push(String(a));
                 } catch (e) { parts.push('[无法序列化]'); }
             }
-            // 旧值是 300，恰好把最关键的上游报错砍在半截（`requestedModel":"Qwen3.8-` 就断了）。
-            // 服务端主日志留 2000 字、完整原文进追踪日志，这里跟着放宽。
+            // 上限 2000 与服务端主日志一致：更短会把最关键的上游报错砍在半截
+            // （`requestedModel":"Qwen3.8-` 就断了）。
             return parts.join(' ').slice(0, 2000);
         }
 
@@ -45,27 +43,17 @@
         console.error = function () { origError.apply(console, arguments); push('error', toText(arguments)); };
         var origWarn = console.warn;
         console.warn = function () { origWarn.apply(console, arguments); push('warn', toText(arguments)); };
-        // console.debug 也转发（记为 DBUG）：前端自己现在没调用它，但 pixi / Live2D 这些
-        // 第三方库会调 —— 出问题时那些输出正是最需要看到的。服务端只在落盘级别为 DEBUG 时
-        // 才把它写进文件，所以平时不会造成噪音。
+        // console.debug 也转发（记为 DBUG）：pixi / Live2D 等第三方库会调，出问题时那些输出
+        // 正是最需要看到的；服务端只在落盘级别为 DEBUG 时才写文件，平时不造成噪音。
         var origDebug = console.debug;
         if (typeof origDebug === 'function') {
             console.debug = function () { origDebug.apply(console, arguments); push('debug', toText(arguments)); };
         }
 
-        // console.log 也转发，但**只转 mod 相关的那几条**。
-        //
-        // 为什么必须补：插件的加载是"看不见的过程" ——
-        //   · 成功时插件走 host.log()，而它落到 console.log → 启动窗口里一条都没有；
-        //   · 失败时才有 [Mod:…] 的 error → 于是"没有 mod 日志"既可能是成功、
-        //     也可能是 mods.js 压根没跑，**两者在启动窗口里长得一模一样**。
-        //   实测就踩了这个坑：用户报"日志里没有 mod 开头的日志"，无法据此判断
-        //   到底是没加载还是加载成功。
-        //
-        // 为什么不转发**所有** console.log：宿主自己有大量正常日志
-        // （每轮对话、每次请求），全转发会把启动窗口刷满、把真正的错误埋掉 ——
-        // 这正是当初只挂 error/warn/debug 的原因。这里只认 mod 前缀，
-        // 代价小、收益明确：插件装没装、启没启、加载成没成，一眼可查。
+        // console.log 只转发 `[Mod:` 前缀的那几条：插件加载成功走 host.log() 落到 console.log，
+        // 失败才有 [Mod:…] 的 error —— 不补这一段，"没有 mod 日志"既可能是成功也可能是
+        // mods.js 压根没跑，两者在启动窗口里长得一模一样。
+        // 不转发全部 console.log：宿主日志量大，全转会把启动窗口刷满、把真正的错误埋掉。
         var origLog = console.log;
         console.log = function () {
             origLog.apply(console, arguments);

@@ -1,14 +1,8 @@
-// ============================================================================
 //  数据备份：导出 / 导入（APK 侧）
-// ============================================================================
-//
 //  APK 没有 Node 后端，/api/data/* 不存在，但用户数据存在应用私有目录，
 //  卸载即丢失、手动也拷不出来，所以 APK 侧比 Web 侧更需要备份。
-//
 //  备份格式与 Web 版完全一致（同一套 zip 结构），两端可互相导入。
-//
 //  清单直接复用 Store.DATA_KEYS，不再抄第二份：加键只需改 store.js 一处。
-//
 //  zip 用零依赖的最小实现（store 模式，不压缩）：浏览器里没有 node:zlib，
 //  引第三方库会破坏零依赖；对话记录体积不大，不值得为此加依赖。
 
@@ -31,7 +25,10 @@
     }
 
     const FORMAT = 'elainachat-backup';
-    const VERSION = 2;   // 与后端一致：v2 = zip
+    const VERSION = 3;   // 与后端一致：v3 = zip + data/ 目录（v2 仍可导入）
+    // 聊天数据的顶层目录：与电脑版一致，解压后 data/ 与（电脑版的）mods/、skills/ 平级。
+    // 手机端没有 skills/，插件也不进本机备份（只能从市场重装），所以 APK 包里只有 data/。
+    const DATA_PREFIX = 'data/';
 
     // ------------------------------------------------------------------ CRC32
     // zip 要求每个条目带 CRC32。浏览器没有内置实现，这里用标准查表法（约 15 行）。
@@ -211,20 +208,12 @@
     }
 
     /**
-     * 生成备份 zip（与 Web 版同构：manifest / settings / characters / conversations / memory）。
+     * 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
      * 好处：用户能解压开直接看，也能拿去 Web 版导入。
      */
-    async function buildBackupBlob() {
-        const data = collectLocalData();
-        const entries = [];
-
-        // 人设卡 / 对话 / 记忆拆出来（与后端 store.mjs 的目录结构对齐）
-        let cards = [];
-        let convs = [];
-        try { cards = JSON.parse(data['elaina_open_character_cards'] || '[]'); } catch { /* 忽略 */ }
-        try { convs = JSON.parse(data['elaina_open_conversations'] || '[]'); } catch { /* 忽略 */ }
-
-        entries.push({
+    /** manifest.json：格式号、导出时间、来源与条数。 */
+    function buildManifestEntry(cards, convs) {
+        return {
             name: 'manifest.json',
             text: JSON.stringify({
                 format: FORMAT,
@@ -234,61 +223,94 @@
                 note: '这是 ElainaChat（安卓版）的数据备份，可在 Web 版导入。',
                 counts: { characters: cards.length, conversations: convs.length },
             }, null, 2),
-        });
+        };
+    }
 
-        // settings.json：除人设卡/对话/记忆之外的键
+    /** settings.json：除人设卡 / 对话 / 记忆之外的键。 */
+    function buildSettingsEntry(data) {
         const settings = {};
         for (const [k, v] of Object.entries(data)) {
             if (k === 'elaina_open_character_cards' || k === 'elaina_open_conversations' || k === 'elaina_open_memory_core') continue;
             settings[k] = v;
         }
-        entries.push({ name: 'settings.json', text: JSON.stringify(settings, null, 2) });
+        return { name: DATA_PREFIX + 'settings.json', text: JSON.stringify(settings, null, 2) };
+    }
 
-        // characters/
-        if (Array.isArray(cards) && cards.length) {
-            const order = [];
-            for (const card of cards) {
-                if (!card || typeof card !== 'object') continue;
-                const id = (typeof card.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(card.id)) ? card.id : ('card_' + order.length);
-                order.push(id);
-                entries.push({ name: `characters/${id}.json`, text: JSON.stringify(card, null, 2) });
-            }
-            entries.push({
-                name: 'characters/index.json',
-                text: JSON.stringify({ version: 1, currentCardId: data['elaina_open_current_card'] || '', order }, null, 2),
-            });
+    /** characters/：一卡一文件 + index.json。 */
+    function buildCharacterEntries(data, cards) {
+        if (!Array.isArray(cards) || !cards.length) return [];
+        const out = [];
+        const order = [];
+        for (const card of cards) {
+            if (!card || typeof card !== 'object') continue;
+            const id = (typeof card.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(card.id)) ? card.id : ('card_' + order.length);
+            order.push(id);
+            out.push({ name: `${DATA_PREFIX}characters/${id}.json`, text: JSON.stringify(card, null, 2) });
         }
+        out.push({
+            name: DATA_PREFIX + 'characters/index.json',
+            text: JSON.stringify({ version: 1, currentCardId: data['elaina_open_current_card'] || '', order }, null, 2),
+        });
+        return out;
+    }
 
-        // conversations/
-        if (Array.isArray(convs) && convs.length) {
-            const order = [];
-            for (const conv of convs) {
-                if (!conv || typeof conv !== 'object') continue;
-                const id = (typeof conv.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(conv.id)) ? conv.id : ('conv_' + order.length);
-                order.push(id);
-                entries.push({ name: `conversations/${id}.json`, text: JSON.stringify(conv, null, 2) });
-            }
-            entries.push({ name: 'conversations/index.json', text: JSON.stringify({ version: 1, order }, null, 2) });
+    /** conversations/：一对话一文件 + index.json。 */
+    function buildConversationEntries(convs) {
+        if (!Array.isArray(convs) || !convs.length) return [];
+        const out = [];
+        const order = [];
+        for (const conv of convs) {
+            if (!conv || typeof conv !== 'object') continue;
+            const id = (typeof conv.id === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(conv.id)) ? conv.id : ('conv_' + order.length);
+            order.push(id);
+            out.push({ name: `${DATA_PREFIX}conversations/${id}.json`, text: JSON.stringify(conv, null, 2) });
         }
+        out.push({ name: DATA_PREFIX + 'conversations/index.json', text: JSON.stringify({ version: 1, order }, null, 2) });
+        return out;
+    }
 
-        // memory/：与后端同构 —— 按类目拆成一类一文件。
-        // 记忆在前端是一个对象 { diary, promise, preference, plan, motivation, pivotal_memory }，
-        // 这里逐类目写出去（未知类目也写，不丢数据）。
-        if (typeof data['elaina_open_memory_core'] === 'string') {
-            try {
-                const memObj = JSON.parse(data['elaina_open_memory_core']);
-                if (memObj && typeof memObj === 'object' && !Array.isArray(memObj)) {
-                    for (const [category, value] of Object.entries(memObj)) {
-                        if (!/^[A-Za-z0-9_-]{1,80}$/.test(category)) continue;   // 类目名当文件名，必须过白名单
-                        entries.push({
-                            name: `memory/${category}.json`,
-                            text: JSON.stringify({ version: 1, value }, null, 2),
-                        });
-                    }
+    /**
+     * memory/：与后端同构 —— 按类目拆成一类一文件。
+     * 记忆在前端是一个对象 { diary, promise, preference, plan, motivation, pivotal_memory }，
+     * 这里逐类目写出去（未知类目也写，不丢数据）。
+     */
+    function buildMemoryEntries(data) {
+        if (typeof data['elaina_open_memory_core'] !== 'string') return [];
+        const out = [];
+        try {
+            const memObj = JSON.parse(data['elaina_open_memory_core']);
+            if (memObj && typeof memObj === 'object' && !Array.isArray(memObj)) {
+                for (const [category, value] of Object.entries(memObj)) {
+                    if (!/^[A-Za-z0-9_-]{1,80}$/.test(category)) continue;   // 类目名当文件名，必须过白名单
+                    out.push({
+                        name: `${DATA_PREFIX}memory/${category}.json`,
+                        text: JSON.stringify({ version: 1, value }, null, 2),
+                    });
                 }
-            } catch { /* 记忆不是合法 JSON 就跳过，不阻塞其它数据 */ }
-        }
+            }
+        } catch { /* 记忆不是合法 JSON 就跳过，不阻塞其它数据 */ }
+        return out;
+    }
 
+    /**
+     * 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
+     * 好处：用户能解压开直接看，也能拿去 Web 版导入。
+     */
+    async function buildBackupBlob() {
+        const data = collectLocalData();
+        // 人设卡 / 对话 / 记忆拆出来（与后端 store.mjs 的目录结构对齐）
+        let cards = [];
+        let convs = [];
+        try { cards = JSON.parse(data['elaina_open_character_cards'] || '[]'); } catch { /* 忽略 */ }
+        try { convs = JSON.parse(data['elaina_open_conversations'] || '[]'); } catch { /* 忽略 */ }
+
+        const entries = [
+            buildManifestEntry(cards, convs),
+            buildSettingsEntry(data),
+            ...buildCharacterEntries(data, cards),
+            ...buildConversationEntries(convs),
+            ...buildMemoryEntries(data),
+        ];
         return buildZip(entries);
     }
 
@@ -319,7 +341,8 @@
         for (const e of raw) {
             byName.set(e.name, e.deflated ? await inflateEntry(e.deflated) : e.text);
         }
-        const get = (n) => (byName.has(n) ? byName.get(n) : null);
+        // 两种写法都认：v3 在 data/ 下，v2 直接摊在 zip 根上（老备份照常能导）。
+        const get = (n) => (byName.has(n) ? byName.get(n) : (byName.has(DATA_PREFIX + n) ? byName.get(DATA_PREFIX + n) : null));
         const data = {};
 
         const settingsText = get('settings.json');
@@ -365,11 +388,13 @@
         }
 
         // memory/：一类目一文件 → 拼回一个对象。
-        // 同时兼容 v2 中期的单文件 memory.json（{value:…}），老备份照样能导。
+        // 同时兼容 v3 的 data/memory/、v2 的根 memory/，以及 v2 中期的单文件
+        // memory.json（{value:…}），老备份照样能导。
         const memObj = {};
         for (const e of raw) {
-            if (!/^memory\/[A-Za-z0-9_-]+\.json$/.test(e.name)) continue;
-            const category = e.name.slice('memory/'.length, -'.json'.length);
+            const m = /^(?:data\/)?memory\/([A-Za-z0-9_-]+)\.json$/.exec(e.name);
+            if (!m) continue;
+            const category = m[1];
             try {
                 const text = e.deflated ? await inflateEntry(e.deflated) : e.text;
                 const rec = JSON.parse(text);
@@ -421,3 +446,4 @@
         _keys: backupKeys,
     };
 })();
+

@@ -16,6 +16,11 @@
 
     function currentModel() {
         try {
+            // 多提供商后真正生效的是「默认模型」那张卡的模型名（state.settings.model
+            //   只是迁移源，不再跟随用户切换）。
+            if (typeof activeChatSettings === 'function') {
+                return String(activeChatSettings().model || '');
+            }
             if (typeof state !== 'undefined' && state && state.settings && state.settings.model) {
                 return String(state.settings.model);
             }
@@ -59,6 +64,9 @@
                     } else if (state.diaryMode) {
                         titleText = '旅行日记';
                         subText = '把值得记住的旅途片段按时间收好';
+                    } else if (state.memoryPageMode) {
+                        titleText = '记忆';
+                        subText = '她记得的那些事，都收在这里';
                     }
                 }
             } catch (e) { /* 忽略 */ }
@@ -76,8 +84,10 @@
 
     const modelPill = byId('rdModelPill');
     if (modelPill) {
+        // 胶囊在顶栏常驻，是「调这段对话的人设」最顺手的落点；切模型仍走设置页。
         modelPill.addEventListener('click', function () {
-            openSettingsTab('tab-model');
+            if (typeof openConversationPromptEditor === 'function') openConversationPromptEditor();
+            else openSettingsTab('tab-model');
         });
     }
 
@@ -129,7 +139,7 @@
     });
 
     // 语笺/日记/对话之间切换后，顶栏副标题跟着原型更新。
-    ['railChatBtn', 'railNotesBtn', 'exitNotesBtn', 'exitDiaryBtn'].forEach(function (id) {
+    ['railChatBtn', 'railNotesBtn', 'exitNotesBtn', 'exitDiaryBtn', 'railMemoryBtn', 'exitMemoryBtn'].forEach(function (id) {
         const btn = byId(id);
         if (btn) btn.addEventListener('click', function () { window.setTimeout(syncHeaderCopy, 80); });
     });
@@ -215,13 +225,14 @@
         });
     }
 
-    const settingsBtn = byId('railSettingsBtn');
-    if (settingsBtn) {
-        settingsBtn.addEventListener('click', function () {
+    // 两个设置入口（宽屏竖栏 / 窄屏顶栏）是同一件事，同步逻辑两边都要挂。
+    [byId('railSettingsBtn'), byId('headerSettingsBtn')].forEach(function (btn) {
+        if (!btn) return;
+        btn.addEventListener('click', function () {
             window.setTimeout(syncDisplayControls, 220);
             window.setTimeout(syncHeaderCopy, 220);
         });
-    }
+    });
     window.setTimeout(syncDisplayControls, 800);
 
     function applyVisualPrefs() {
@@ -267,7 +278,7 @@
             notes: 'railNotesBtn',
             diary: 'railDiaryBtn',
             achievements: 'railCategoriesBtn',
-            settings: 'railSettingsBtn'
+            memory: 'railMemoryBtn'
         };
         const isOpen = function (id) {
             const el = byId(id);
@@ -277,12 +288,14 @@
             let active = 'chat';
             try {
                 if (typeof state !== 'undefined' && state) {
-                    if (state.diaryMode) active = 'diary';
+                    if (state.memoryPageMode) active = 'memory';
+                    else if (state.diaryMode) active = 'diary';
                     else if (state.notesMode) active = 'notes';
                 }
             } catch (e) { /* 忽略 */ }
+            // 设置是顶栏打开的整页覆盖层，底部导航里已经没有对应格子：
+            //   覆盖层开着时底部保持"无选中"，比错亮某一格更诚实。
             if (isOpen('marketOverlay')) active = '';
-            else if (isOpen('settingsOverlay')) active = 'settings';
             else if (isOpen('achievementsOverlay')) active = 'achievements';
 
             items.forEach(function (btn) {
@@ -360,7 +373,7 @@
 
         const settings = byId('settingsOverlay');
         if (settings && !settings.classList.contains('hidden') &&
-            !event.target.closest('#railSettingsBtn')) {
+            !event.target.closest('#railSettingsBtn') && !event.target.closest('#headerSettingsBtn')) {
             const close = byId('closeSettings');
             if (close) close.click();
         }

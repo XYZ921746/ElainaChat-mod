@@ -7,27 +7,31 @@
 /* ---------- 语笺 / 日记 / 成就公共页头 ---------- */
 
 html.rd #notesPage,
-html.rd #diaryPage {
+html.rd #diaryPage,
+html.rd #memoryPage {
     background: transparent !important;
 }
 
 html.rd #notesPage .page-secondary-header,
 html.rd #diaryPage .page-secondary-header,
-html.rd #achievementsOverlay .page-secondary-header {
+html.rd #achievementsOverlay .page-secondary-header,
+html.rd #memoryPage .page-secondary-header {
     padding: 36px 40px 20px !important;
     align-items: flex-end;
 }
 
 html.rd #notesPage .page-secondary-copy,
 html.rd #diaryPage .page-secondary-copy,
-html.rd #achievementsOverlay .page-secondary-copy {
+html.rd #achievementsOverlay .page-secondary-copy,
+html.rd #memoryPage .page-secondary-copy {
     position: relative;
     padding-left: 18px;
 }
 
 html.rd #notesPage .page-secondary-copy::before,
 html.rd #diaryPage .page-secondary-copy::before,
-html.rd #achievementsOverlay .page-secondary-copy::before {
+html.rd #achievementsOverlay .page-secondary-copy::before,
+html.rd #memoryPage .page-secondary-copy::before {
     content: "";
     position: absolute;
     left: 0;
@@ -40,7 +44,8 @@ html.rd #achievementsOverlay .page-secondary-copy::before {
 
 html.rd #notesPage .page-secondary-title,
 html.rd #diaryPage .page-secondary-title,
-html.rd #achievementsOverlay .page-secondary-title {
+html.rd #achievementsOverlay .page-secondary-title,
+html.rd #memoryPage .page-secondary-title {
     font-size: 31px !important;
     font-weight: 600 !important;
     letter-spacing: var(--rd-letter);
@@ -49,7 +54,8 @@ html.rd #achievementsOverlay .page-secondary-title {
 
 html.rd #notesPage .page-secondary-title::before,
 html.rd #diaryPage .page-secondary-title::before,
-html.rd #achievementsOverlay .page-secondary-title::before {
+html.rd #achievementsOverlay .page-secondary-title::before,
+html.rd #memoryPage .page-secondary-title::before {
     display: block;
     margin-bottom: 5px;
     color: var(--rd-accent);
@@ -62,10 +68,12 @@ html.rd #achievementsOverlay .page-secondary-title::before {
 html.rd #notesPage .page-secondary-title::before { content: "KEEPSAKES"; }
 html.rd #diaryPage .page-secondary-title::before { content: "TRAVEL JOURNAL"; }
 html.rd #achievementsOverlay .page-secondary-title::before { content: "MILESTONES"; }
+html.rd #memoryPage .page-secondary-title::before { content: "MEMORY"; }
 
 html.rd #notesPage .page-secondary-subtitle,
 html.rd #diaryPage .page-secondary-subtitle,
-html.rd #achievementsOverlay .page-secondary-subtitle {
+html.rd #achievementsOverlay .page-secondary-subtitle,
+html.rd #memoryPage .page-secondary-subtitle {
     margin-top: 5px !important;
     color: var(--rd-text-3) !important;
     font-size: 12px !important;
@@ -73,7 +81,8 @@ html.rd #achievementsOverlay .page-secondary-subtitle {
 
 html.rd #notesPage .page-secondary-back,
 html.rd #diaryPage .page-secondary-back,
-html.rd #achievementsOverlay .page-secondary-back {
+html.rd #achievementsOverlay .page-secondary-back,
+html.rd #memoryPage .page-secondary-back {
     height: 34px;
     padding: 0 13px;
     border-radius: 999px;
@@ -85,7 +94,8 @@ html.rd #achievementsOverlay .page-secondary-back {
 
 html.rd #notesPage .page-secondary-back:hover,
 html.rd #diaryPage .page-secondary-back:hover,
-html.rd #achievementsOverlay .page-secondary-back:hover {
+html.rd #achievementsOverlay .page-secondary-back:hover,
+html.rd #memoryPage .page-secondary-back:hover {
     border-color: var(--rd-accent-border) !important;
     color: var(--rd-accent) !important;
 }
@@ -240,7 +250,8 @@ html.rd #diaryEmpty::before {
 }
 
 html.rd #notesEmpty p,
-html.rd #diaryEmpty p {
+html.rd #diaryEmpty p,
+html.rd #memoryEmpty p {
     color: var(--rd-text-2) !important;
     font-family: var(--rd-font-display);
     font-size: 17px !important;
@@ -371,6 +382,78 @@ html.rd .diary-essence {
     background: var(--rd-surface-2) !important;
     color: var(--rd-text-3) !important;
     font-size: 9.5px !important;
+}
+
+/* ---------- 记忆页：按类目分区 ---------- */
+
+/* 计数行不复用 .diary-toolbar：那一条在全站被判"日记页专用"并隐藏，
+   记忆页需要一个**一直可见**的计数。 */
+html.rd .memory-toolbar {
+    display: flex;
+    width: 100%;
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 14px 40px 0;
+}
+
+html.rd #memoryBody {
+    max-width: 1040px;
+    margin: 0 auto;
+    padding: 6px 40px 50px;
+}
+
+html.rd .memory-section { margin-top: 22px; }
+html.rd .memory-section:first-child { margin-top: 2px; }
+
+html.rd .memory-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--rd-border);
+}
+
+html.rd .memory-section-icon { font-size: 14px; line-height: 1; }
+
+html.rd .memory-section-title {
+    color: var(--rd-text-2) !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    letter-spacing: .04em;
+}
+
+html.rd .memory-section-count {
+    margin-left: auto;
+    padding: 2px 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-3) !important;
+    font-size: 9.5px !important;
+}
+
+html.rd .memory-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+}
+
+html.rd .memory-item {
+    padding: 14px 16px;
+    border: 1px solid var(--rd-border);
+    border-radius: 14px;
+    background: linear-gradient(160deg, var(--rd-surface), var(--rd-surface-2));
+    box-shadow: var(--rd-shadow-1);
+}
+
+/* 记忆文本里的换行是模型自己写的断句，保留换行比压成一行更好读。 */
+html.rd .memory-item-text {
+    color: var(--rd-text-2) !important;
+    font-size: 13px !important;
+    line-height: 1.72 !important;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 /* ---------- 成就：整页（页头走上面的公共结构） ---------- */
@@ -818,31 +901,6 @@ html.rd #settingsPanel {
     grid-template-rows: auto minmax(0, 1fr) !important;
 }
 
-html.rd .rd-settings-pagehead {
-    grid-column: 1 / -1;
-    grid-row: 1;
-    position: relative;
-    z-index: 2;
-    padding: 30px 32px 16px;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd .rd-settings-pagehead h1 {
-    margin: 0;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 30px;
-    font-weight: 600;
-    line-height: 1.2;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd .rd-settings-pagehead p {
-    margin-top: 6px;
-    color: var(--rd-text-3);
-    font-size: 12px;
-    line-height: 1.6;
-}
 
 html.rd #settingsTopBar {
     grid-column: 1;
@@ -907,6 +965,53 @@ html.rd #settingsTabNav {
     overflow-y: auto !important;
 }
 
+/* ===== 扩展的二次分栏在**竖排**导航下的形态 =====
+   rd 主题的导航是左侧一列（见上面 flex-direction: column），所以：
+     · 分组容器本身也变成纵向，占满一列宽度；
+     · 去掉横排那条竖分隔（竖排里它没有意义），改成子项整体缩进 + 一条细竖线；
+     · 子项占满宽度、左对齐，与父项同一个视觉体系，只是更小一号、缩进一级。 */
+/* 分组容器 = 导航列里的一项。
+   ⚠️ 宽度要跟着**导航方向**走，不能一律写 auto：
+     · 宽屏（导航竖排一列）→ 占满列宽，否则子项的缩进会让分组变窄、
+       子项往右溢出到导航列外面（实测：分组只有 79px 宽，而列宽 165px，
+       子项左边缘 461 超出列右边缘 447 —— 用户看到的就是"错位"）；
+     · 窄屏（导航横排一行）→ 必须 auto，铺满会把其余分栏全挤出屏幕。 */
+html.rd #settingsExtNav {
+    display: block !important;
+    width: 100% !important;
+    border-left: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+/* 判据是"**导航本身是竖排**"，而 rd 主题下导航**在任何宽度**都是竖排
+   （见上面 html.rd #settingsTabNav 的 flex-direction: column，没有媒体查询）。
+   所以这段不需要断点 —— 加断点反而会让手机上（rd 主题、竖排导航）用横排子项，
+   子项被挤成一行小字。 */
+html.rd .ext-nav-children {
+    flex-direction: column !important;
+    gap: 1px !important;
+    /* 缩进一级 + 左侧一条细线：层级靠这两样表达，不靠字号 */
+    margin: 1px 0 3px 14px !important;
+    padding-left: 7px !important;
+    border-left: 1px solid var(--rd-line, var(--pixso-line)) !important;
+}
+html.rd .ext-nav-btn {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    padding: 6px 8px !important;
+    border-radius: 7px !important;
+    font-size: 11.5px !important;
+    color: var(--rd-text-3, var(--pixso-brown-soft)) !important;
+}
+/* 选中项：**无底色**。分支是"线 + 文字"的极简构成，
+   加底色块会立刻变回"胶囊按钮"，与展开动画的观感冲突。
+   区分只靠文字颜色与字重（见窄屏那段）。 */
+html.rd .ext-nav-btn.is-active {
+    color: var(--rd-accent, var(--pixso-brown)) !important;
+    background: transparent !important;
+}
+
 html.rd .settings-tab-btn {
     width: 100%;
     justify-content: flex-start !important;
@@ -947,6 +1052,11 @@ html.rd .settings-tab-btn[data-settings-tab="tab-capability"] { order: 4; }
 html.rd .settings-tab-btn[data-settings-tab="tab-advanced"] { order: 5; }
 html.rd .settings-tab-btn[data-settings-tab="tab-mods"] { order: 6; }
 html.rd .settings-tab-btn[data-settings-tab="tab-log"] { order: 7; }
+/* ⚠️ 「扩展」被包进了 #settingsExtNav 分组，而上面那条 order 只作用于**按钮本身** ——
+   分组容器没有 order，默认 0，于是整组跑到导航最前面（比"外观"的 1 还小）。
+   用户看到的正是"设置顺序被改了"。分组必须显式继承"扩展"的位置（6）。 */
+html.rd #settingsExtNav { order: 6; }
+html.rd #settingsExtNav .settings-tab-btn[data-settings-tab="tab-mods"] { order: 0; }
 
 html.rd .settings-tab-btn:hover {
     background: var(--rd-hover) !important;
@@ -1152,43 +1262,6 @@ html.rd[data-bubble="compact"] .bubble-user {
     padding: 9px 13px !important;
 }
 
-/* ---------- 设置：分栏页头 ---------- */
-
-html.rd #settingsContent .rd-tab-intro {
-    grid-column: 1 / -1;
-    padding: 2px 2px 18px;
-    margin: 0;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd #settingsContent .rd-tab-intro .rd-page-eyebrow {
-    margin-bottom: 6px;
-}
-
-html.rd #settingsContent .rd-tab-intro h2 {
-    margin: 0;
-    color: var(--rd-text);
-    font-family: var(--rd-font-display);
-    font-size: 24px;
-    font-weight: 600;
-    line-height: 1.25;
-    letter-spacing: var(--rd-letter);
-}
-
-html.rd #settingsContent .rd-tab-intro p {
-    margin: 5px 0 0;
-    color: var(--rd-text-3);
-    font-size: 11.5px;
-    line-height: 1.7;
-}
-
-html.rd #settingsContent .rd-tab-intro-compact {
-    padding-bottom: 12px;
-}
-
-html.rd #settingsContent .rd-tab-intro-compact h2 { font-size: 19px; }
-html.rd #settingsContent .rd-tab-intro-compact p { display: none; }
-
 /* ---------- 设置：卡片与表单 ---------- */
 
 html.rd #settingsContent .settings-tab-panel > section,
@@ -1320,7 +1393,6 @@ html.rd .memory-now-btn:hover {
 
 /* ---------- 设置：插件与技能 ---------- */
 
-html.rd #tab-mods .settings-card { padding: 22px 24px !important; }
 
 html.rd #tab-mods .mod-card,
 html.rd #tab-mods #skillsList .mod-card {
@@ -1642,19 +1714,22 @@ html.rd #marketList > * { margin-top: 0 !important; }
 
     html.rd #notesPage .page-secondary-header,
     html.rd #diaryPage .page-secondary-header,
-    html.rd #achievementsOverlay .page-secondary-header {
+    html.rd #achievementsOverlay .page-secondary-header,
+    html.rd #memoryPage .page-secondary-header {
         padding: 22px 16px 14px !important;
     }
 
     html.rd #notesPage .page-secondary-title,
     html.rd #diaryPage .page-secondary-title,
-    html.rd #achievementsOverlay .page-secondary-title { font-size: 25px !important; }
+    html.rd #achievementsOverlay .page-secondary-title,
+    html.rd #memoryPage .page-secondary-title { font-size: 25px !important; }
 
     /* 手机端顶栏原本把「返回」按钮收成 38px 圆图标（字号 0 隐藏文字）。
        新版选择器提高了优先级，会把文字重新显示出来并竖排换行，这里补回圆图标。 */
     html.rd #notesPage .page-secondary-back,
     html.rd #diaryPage .page-secondary-back,
-    html.rd #achievementsOverlay .page-secondary-back {
+    html.rd #achievementsOverlay .page-secondary-back,
+    html.rd #memoryPage .page-secondary-back {
         width: 34px;
         min-width: 34px;
         height: 34px;
@@ -1665,11 +1740,13 @@ html.rd #marketList > * { margin-top: 0 !important; }
 
     html.rd #notesPage .page-secondary-back span,
     html.rd #diaryPage .page-secondary-back span,
-    html.rd #achievementsOverlay .page-secondary-back span { display: none; }
+    html.rd #achievementsOverlay .page-secondary-back span,
+    html.rd #memoryPage .page-secondary-back span { display: none; }
 
     html.rd #notesPage .page-secondary-back svg,
     html.rd #diaryPage .page-secondary-back svg,
-    html.rd #achievementsOverlay .page-secondary-back svg { width: 16px; height: 16px; }
+    html.rd #achievementsOverlay .page-secondary-back svg,
+    html.rd #memoryPage .page-secondary-back svg { width: 16px; height: 16px; }
 
     /* 窄屏页头会换行，计数不再推到最右，跟着按钮组排 */
     html.rd #achievementsOverlay .ach-count { margin-left: 0; }
@@ -1678,6 +1755,14 @@ html.rd #marketList > * { margin-top: 0 !important; }
         padding: 16px calc(16px + var(--safe-right)) calc(30px + var(--safe-bottom)) calc(16px + var(--safe-left)) !important;
     }
     html.rd #notesGrid { grid-template-columns: 1fr !important; }
+
+    html.rd .memory-toolbar {
+        padding: 12px calc(16px + var(--safe-right)) 0 calc(16px + var(--safe-left));
+    }
+    html.rd #memoryBody {
+        padding: 6px calc(16px + var(--safe-right)) calc(30px + var(--safe-bottom)) calc(16px + var(--safe-left));
+    }
+    html.rd .memory-list { grid-template-columns: 1fr; }
 
     html.rd .rd-diary-stats {
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1746,15 +1831,8 @@ html.rd #marketList > * { margin-top: 0 !important; }
         grid-template-rows: auto auto minmax(0, 1fr) !important;
     }
 
-    html.rd .rd-settings-pagehead {
-        grid-column: 1;
-        grid-row: 1;
-        padding: 18px 16px 10px;
-    }
-
-    html.rd .rd-settings-pagehead h1 { font-size: 24px; }
-    html.rd .rd-settings-pagehead p { font-size: 11px; }
-
+    
+        
     html.rd #settingsTopBar {
         grid-column: 1;
         grid-row: 2;
@@ -1774,6 +1852,189 @@ html.rd #marketList > * { margin-top: 0 !important; }
         overflow-x: auto !important;
         overflow-y: hidden !important;
     }
+
+    /* ===== 手机：点「扩展」后，子项**竖着排在它正下方**，每项与「扩展」同宽同高 =====
+       位置由**绝对定位 + 父项作为定位参照**决定：
+         · 参照是 #settingsExtNav（position: relative），所以它天然跟着「扩展」
+           一起滚动、一起被裁切 —— 不像定位于视口那样父容器一滚就脱队
+           （实测：滚内容区时浮层停在原地，和导航"裂"成两块）；
+         · 又因为脱离文档流，导航栏高度不变（仍是 32px），
+           其余分栏不会被推到新的一行。
+       导航栏是横向滚动容器（overflow-x: auto），子项超出右边缘会被裁 ——
+       所以下面把 #settingsTabNav 的裁剪在展开期间放开（.is-open 由 JS 维护）。 */
+    html.rd #settingsExtNav {
+        position: relative !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        width: auto !important;
+        flex: 0 0 auto !important;
+    }
+    /* ===== 手机：点「扩展」后，子项以"线 + 文字"的形式从按钮下方展开 =====
+       构成只有三样东西，**没有框**（无边框 / 无底色块 / 无阴影 / 无圆点）：
+         · 竖线（容器 ::before）：从「扩展」按钮内部往下，到末行横线为止；
+         · 横线（每个按钮的 ::before）：从竖线向右伸 9px；
+         · 文字（按钮里的 span）：淡入 + 轻微右移。
+       末行的横线与竖线相接形成 └ 拐角，竖线不再往下 —— 这是"收尾"的视觉信号。
+
+       为什么容器是透明的：它是定位容器，不是卡片。任何底色/阴影都会让它
+       读成"另插进来的浮层"，而不是「扩展」这一项长出来的分支。
+
+       子项被 JS 挂到 #settingsPanel 下（见 init.js），因为落在
+       #settingsTabNav / #settingsTopBar 这类 overflow:auto 容器里会被裁掉，
+       而放开它们的 overflow 会让滚动失效（用户报过"展开后别的地方拖不动"）。 */
+    html.rd .ext-nav-children.ext-menu-floating {
+        position: absolute !important;
+        top: var(--ext-menu-top, 0) !important;
+        left: var(--ext-menu-left, 0) !important;
+        width: max-content !important;
+        min-width: var(--ext-menu-width, 45px) !important;
+        z-index: 60;
+        display: none;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        background: transparent !important;   /* 无底色：否则读成"浮层" */
+        box-shadow: none !important;
+        overflow: visible;
+    }
+    /* 竖线：起点抬到按钮内部（-12px），长度到末行横线所在的中线。
+       两个数值互相配合 —— 改一个必须同时改另一个，否则末行横线会脱开竖线。 */
+    html.rd .ext-nav-children.ext-menu-floating::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: -12px;
+        width: 1.5px;
+        height: calc(var(--ext-menu-item-h, 30px) * 2.5 + 12px);
+        background: var(--rd-accent, var(--pixso-brown));
+        border-radius: 1px;
+        opacity: .85;
+        transform: scaleY(0);
+        transform-origin: top center;
+        pointer-events: none;
+    }
+    /* 展开判据**只看** .is-open（由 switchExtTab 唯一维护）。
+       不用 :has()：它判的是"父项有没有 active"，而 active 由事件委托在别的
+       监听器里改，两者顺序不稳定 —— 实测会"类已清掉但 :has() 仍命中"，
+       表现就是"点两下才展开"。 */
+    html.rd #settingsExtNav.is-open .ext-nav-children,
+    html.rd #settingsPanel > .ext-nav-children.is-open { display: flex; }
+
+    /* 竖线：自上而下长出来 */
+    html.rd #settingsPanel > .ext-nav-children.is-open::before {
+        animation: ext-spine-grow .26s cubic-bezier(.3,.8,.3,1) forwards;
+    }
+    @keyframes ext-spine-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+
+    /* 子项：高度与「扩展」一致，宽度按内容（不再撑满，因为没有底色块） */
+    html.rd .ext-nav-btn {
+        position: relative !important;
+        box-sizing: border-box !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        height: var(--ext-menu-item-h, 30px) !important;
+        /* 左内边距 = 横线长度 + 6px：文字紧贴横线末端 */
+        padding: 0 6px 0 calc(9px + 6px) !important;
+        font-size: 12.5px !important;
+        line-height: 1 !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background: transparent !important;
+        text-align: left !important;
+        white-space: nowrap !important;
+        color: var(--rd-text-2, var(--pixso-brown)) !important;
+        cursor: pointer;
+    }
+    /* 横线：从竖线向右伸，与竖线同一个 x */
+    html.rd .ext-nav-btn::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 50%;
+        width: 9px;
+        height: 1.5px;
+        background: var(--rd-accent, var(--pixso-brown));
+        border-radius: 1px;
+        opacity: .85;
+        transform: scaleX(0);
+        transform-origin: left center;
+        translate: 0 -50%;
+        pointer-events: none;
+    }
+    /* 文字单独一层，才能"横线先出、文字后现" */
+    html.rd .ext-nav-btn .ext-nav-label {
+        opacity: 0;
+        transform: translateX(-5px);
+    }
+    /* 三行依次错开：横线先，文字后，整体自上而下 */
+    html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(1)::before { animation: ext-tick-grow .12s ease-out .10s forwards; }
+    html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(2)::before { animation: ext-tick-grow .12s ease-out .17s forwards; }
+    html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(3)::before { animation: ext-tick-grow .12s ease-out .24s forwards; }
+    html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(1) .ext-nav-label { animation: ext-label-in .2s ease-out .18s forwards; }
+    html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(2) .ext-nav-label { animation: ext-label-in .2s ease-out .26s forwards; }
+    html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(3) .ext-nav-label { animation: ext-label-in .2s ease-out .34s forwards; }
+    @keyframes ext-tick-grow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    @keyframes ext-label-in { to { opacity: 1; transform: translateX(0); } }
+
+    /* 选中项：文字与横线都换成主色 + 加粗（没有底色块，只能靠这两样区分） */
+    html.rd .ext-nav-btn.is-active { color: var(--rd-accent, var(--pixso-brown)) !important; }
+    html.rd .ext-nav-btn.is-active .ext-nav-label { font-weight: 600; }
+
+    /* ===== 「扩展」按钮在展开时的呼应 =====
+       只变颜色不够：竖线从按钮下方长出来，按钮本身毫无形态变化，
+       读起来像"线自己飘出来"、按钮不参与 —— 这就是"割裂"。
+
+       做法：**按钮底边开口 + 竖线接在开口处**。
+         · 收起：普通胶囊（浅色底）；
+         · 展开：底色转透明、四周细描边、**底边描边断掉**，
+           分支的竖线正好从断开处往下走 —— 视觉上按钮和分支是
+           "同一个形状的两段"，而不是两个不相干的东西。
+       为什么不用箭头：窄屏按钮只有 67px（"▣ 扩展"占满），
+         放右下角会被导航栏裁掉一半，放行内会把文字挤出按钮 —— 两条路都试过。 */
+    html.rd #settingsExtNav .settings-tab-btn.active {
+        background: transparent !important;
+        color: var(--rd-accent, var(--pixso-brown)) !important;
+        /* 用四个方向的 inset 阴影画描边，只画上/左/右 —— 底边故意留空，
+           让分支竖线从那里接出去。border 做不到"只断底边"。 */
+        box-shadow:
+            inset 0 1px 0 0 var(--rd-accent-border, var(--pixso-line)),
+            inset 1px 0 0 0 var(--rd-accent-border, var(--pixso-line)),
+            inset -1px 0 0 0 var(--rd-accent-border, var(--pixso-line)) !important;
+        border-radius: 9px 9px 0 0 !important;
+    }
+
+    /* ===== 收起动画：展开的逆序 =====
+       顺序刻意反过来 —— 展开是"线先出、文字后现"，收起就"文字先走、线最后退"，
+       否则会出现"文字还挂着、骨架先没了"的断层感。
+       时机：文字 0ms 起淡出；横线 60/100/140ms 依次收回；竖线 200ms 后缩回。
+       收起过程中菜单仍保持 display: flex（.is-closing），
+       等动画播完再由 JS 摘掉类，否则会立刻消失、看不到动画。 */
+    html.rd #settingsPanel > .ext-nav-children.is-closing { display: flex !important; }
+    html.rd #settingsPanel > .ext-nav-children.is-closing .ext-nav-label {
+        animation: ext-label-out .12s ease-in forwards !important;
+    }
+    html.rd #settingsPanel > .ext-nav-children.is-closing .ext-nav-btn:nth-child(1)::before { animation: ext-tick-shrink .1s ease-in .06s forwards !important; }
+    html.rd #settingsPanel > .ext-nav-children.is-closing .ext-nav-btn:nth-child(2)::before { animation: ext-tick-shrink .1s ease-in .10s forwards !important; }
+    html.rd #settingsPanel > .ext-nav-children.is-closing .ext-nav-btn:nth-child(3)::before { animation: ext-tick-shrink .1s ease-in .14s forwards !important; }
+    html.rd #settingsPanel > .ext-nav-children.is-closing::before {
+        animation: ext-spine-shrink .18s ease-in .2s forwards !important;
+    }
+    /* 反向动画从"完全展开"的状态往回缩，所以起点必须是 scale 1 / opacity 1 */
+    @keyframes ext-label-out { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(-5px); } }
+    @keyframes ext-tick-shrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+    @keyframes ext-spine-shrink { from { transform: scaleY(1); } to { transform: scaleY(0); } }
+    /* 窄屏（导航横排一行）：分组必须只占自身宽度，否则铺满会把其余分栏挤出屏幕 */
+    html.rd #settingsExtNav { width: auto !important; flex: none !important; }
+}
+
+
+@media (max-width: 980px) {
+
 
     html.rd .settings-tab-btn {
         width: auto;
@@ -1815,6 +2076,15 @@ html.rd #marketList > * { margin-top: 0 !important; }
     /* 原型在超窄屏只留设置分栏图标，避免横向滚动条太长。 */
     html.rd .settings-tab-btn { font-size: 0 !important; padding: 8px 10px !important; }
     html.rd .settings-tab-btn::before { font-size: 14px; }
+    /* ⚠️ 但**下拉面板里的子项**必须恢复字号：它们是 .ext-nav-btn（不带那类名），
+       可"扩展"父项是 .settings-tab-btn —— 若在这里一并压成 0，菜单会变成
+       一条空白面板（文字全隐形）。所以子项显式给字号，优先级用 !important 压回来。 */
+    html.rd .ext-nav-btn {
+        font-size: 12.5px !important;
+        /* 内边距必须与展开动画的"横线 9px + 间距 6px"一致，
+           否则 420px 以下横线和文字会错位 */
+        padding: 0 6px 0 15px !important;
+    }
 }
 
 /* ============================================================================
@@ -1822,9 +2092,14 @@ html.rd #marketList > * { margin-top: 0 !important; }
  * ========================================================================== */
 
 html.rd #settingsContent #tab-model.active-panel,
-html.rd #settingsContent #tab-capability.active-panel,
-html.rd #settingsContent #tab-mods.active-panel {
+html.rd #settingsContent #tab-capability.active-panel {
     max-width: 900px;
+}
+/* 扩展页**不设**上限：插件 / 技能 / MCP 是卡片网格，列数本来就随宽度自适应；
+   卡在 900px 会让 1920 宽的窗口右侧空出一大块（用户报「右边大量未使用」）。
+   模型 / 能力两页仍是长表单，保留 900px 的阅读宽度。 */
+html.rd #settingsContent #tab-mods.active-panel {
+    max-width: none;
 }
 
 @media (min-width: 900px) {
@@ -2036,3 +2311,213 @@ html.rd #marketDlPanel .text-indigo-400 { color: var(--rd-text-2) !important; }
 html.rd #marketDlPanel .text-indigo-300 { color: var(--rd-text-2) !important; }
 html.rd #marketDlPanel .bg-black\/10 { background: var(--rd-border) !important; }
 html.rd #marketDlPanel #marketDlClear:hover { background: var(--rd-surface-2) !important; }
+
+/* ============================================================================
+ * 设置 · 紧凑版式
+ *
+ * 三件事：
+ *   ① 整条标题行不要 —— 当前分栏已由左侧导航高亮，标题再写一遍只占高度；
+ *      关闭按钮改挂成导航栏的第一项。
+ *   ② 卡片内边距、标题下边距、控件高度各收一档，一屏能多看一两组设置。
+ *   ③ 长说明收进 <details class="rd-more">：默认只占一行，点开仍能看到全文。
+ * ========================================================================== */
+
+html.rd #settingsContent {
+    padding: 14px 24px 26px !important;
+}
+
+/* 分栏之间不需要额外留白：一次只显示一个分栏，而它自己的顶部内边距就是间距
+   （Tailwind 的 space-y-7 会给第二个及以后的分栏再加 28px 上边距）。 */
+html.rd #settingsContent > .settings-tab-panel {
+    margin-top: 0 !important;
+}
+
+/* ---------- 关闭按钮 ---------- */
+
+/* 宽屏：左侧导航的第一项。它本来是绝对定位在标题行右端，标题行删掉后
+   那个位置会压到第一张卡片上，所以改成导航里的一个整宽按钮。 */
+html.rd #settingsPanel #settingsTopBar > #closeSettings {
+    position: static !important;
+    flex: none;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 6px;
+    width: 100% !important;
+    height: 34px !important;
+    margin: 0 0 10px !important;
+    padding: 0 10px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 10px !important;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-3) !important;
+    font-size: 12px;
+}
+
+html.rd #settingsPanel #settingsTopBar > #closeSettings:hover {
+    border-color: var(--rd-accent-border) !important;
+    color: var(--rd-text) !important;
+}
+
+html.rd .settings-close-label { display: inline; }
+
+
+/* ---------- 卡片与标题 ---------- */
+
+html.rd #settingsContent .settings-tab-panel > section,
+html.rd #settingsContent .settings-tab-panel > div.mb-4,
+html.rd #settingsContent .settings-card,
+html.rd #settingsContent #tab-model > section,
+html.rd #settingsContent #tab-capability > section,
+html.rd #settingsContent #tab-mods > section,
+html.rd #tab-mods .settings-card {
+    padding: 15px 18px !important;
+    border-radius: 14px !important;
+}
+
+html.rd #settingsContent .settings-tab-panel > section > .modal-label,
+html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child,
+html.rd #settingsContent .settings-card > .flex .modal-label {
+    margin: 0 0 10px !important;
+    padding: 0 0 8px !important;
+    font-size: 13px !important;
+}
+
+html.rd #settingsContent .rd-field-hint {
+    margin: 0 0 9px;
+    font-size: 11px;
+    line-height: 1.6;
+}
+
+/* ---------- 表单行 ---------- */
+
+html.rd #settingsContent .settings-tab-panel label.text-xs.block {
+    margin-bottom: 3px !important;
+}
+
+html.rd #settingsContent input[type="text"],
+html.rd #settingsContent input[type="url"],
+html.rd #settingsContent input[type="password"],
+html.rd #settingsContent input[type="number"],
+html.rd #settingsContent select {
+    min-height: 34px;
+    padding: 6px 11px !important;
+}
+
+html.rd #settingsContent select {
+    padding-right: 34px !important;
+}
+
+html.rd #settingsContent .settings-tab-panel > section > .flex.items-center.justify-between {
+    min-height: 34px;
+}
+
+html.rd #settingsContent .space-y-3 > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 10px !important;
+}
+
+html.rd #settingsContent .settings-tab-panel.active-panel {
+    gap: 14px !important;
+}
+
+html.rd .rd-display-card .set-row { padding: 9px 0; }
+html.rd .rd-display-card .set-row:first-of-type { padding-top: 0; }
+
+/* 当前主题徽标已并入卡片标题行，这里给它一个明确的小药丸形态 */
+html.rd #rdCurrentTheme {
+    padding: 1px 8px;
+    border-radius: 999px;
+    line-height: 1.6;
+}
+
+/* ---------- 折叠说明 ---------- */
+
+html.rd #settingsContent .rd-more {
+    margin: 8px 0 0;
+    font-size: 11px;
+    line-height: 1.65;
+    color: var(--rd-text-3);
+}
+
+html.rd #settingsContent .rd-more > summary {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--rd-text-2);
+    font-size: 11px;
+    opacity: .8;
+    list-style: none;
+}
+
+html.rd #settingsContent .rd-more > summary::-webkit-details-marker { display: none; }
+
+html.rd #settingsContent .rd-more > summary::before {
+    content: '?';
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--rd-border);
+    border-radius: 50%;
+    font-size: 9.5px;
+    line-height: 1;
+}
+
+html.rd #settingsContent .rd-more > summary:hover { opacity: 1; color: var(--rd-accent); }
+
+html.rd #settingsContent .rd-more p { margin: 7px 0 0; }
+html.rd #settingsContent .rd-more p:first-of-type { margin-top: 6px; }
+
+/* 宽屏下「模型」页回到两列：它是最长的一页，单列在 1280px 以上会空掉小半屏。
+   需要整行的卡片（多行文本域 / 插件列表 / 明确标了 settings-span-2 的）
+   仍由上面的通栏规则决定，这里只改列数。 */
+@media (min-width: 1280px) {
+    html.rd #settingsContent #tab-model.active-panel {
+        max-width: none;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    /* 通栏判定里的 :has(textarea) 会命中本页里**藏着的**文本域
+       （音色描述 / 自定义搜索请求体），把两张半宽卡拉成整行 ——
+       那样两列只剩一列在用，反而比单列更高。这里让本页的卡片都按格子排队。 */
+    html.rd #settingsContent #tab-model > section {
+        grid-column: auto !important;
+    }
+    /* 「能力」页保持单列，但不再卡 900px：宽屏下权限说明与警告列表能少折几行。 */
+    html.rd #settingsContent #tab-capability.active-panel {
+        max-width: none;
+    }
+}
+
+@media (max-width: 980px) {
+    /* 页头要给绝对定位的关闭 ✕（top 18 / 高 38）留够高度 */
+
+    html.rd #settingsContent {
+        padding: 12px calc(14px + var(--safe-right)) calc(24px + var(--safe-bottom)) calc(14px + var(--safe-left)) !important;
+    }
+
+    /* 窄屏：导航是横排一行，关闭按钮浮在它右侧（导航的 max-width 已为它留出 66px）。 */
+    html.rd #settingsPanel #settingsTopBar > #closeSettings {
+        position: absolute !important;
+        width: 38px !important;
+        height: 38px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border-radius: 50% !important;
+        top: 5px !important;
+        right: calc(12px + var(--safe-right)) !important;
+    }
+
+    html.rd .settings-close-label { display: none; }
+
+    html.rd #settingsContent .settings-tab-panel > section,
+    html.rd #settingsContent .settings-tab-panel > div.mb-4,
+    html.rd #settingsContent .settings-card,
+    html.rd #settingsContent #tab-model > section,
+    html.rd #settingsContent #tab-capability > section,
+    html.rd #settingsContent #tab-mods > section,
+    html.rd #tab-mods .settings-card {
+        padding: 14px 15px !important;
+    }
+}

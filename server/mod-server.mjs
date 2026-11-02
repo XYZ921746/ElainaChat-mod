@@ -1,18 +1,12 @@
 // mod 的**服务端半边**：按 manifest.json 里的 `server` 声明装载路由与"上传目录"。
-//
 // ── 为什么需要这一层（也给 Live2D 搬迁铺路）────────────────────────────────
-//
 // Live2D 有四个接口（/api/live2d/upload、/models、/models/:name、/rename）现在硬编码在
 // serve.mjs 里。它们要跟着 Live2D 一起搬进 mod，可 mod 系统此前**没有服务端注册机制** ——
 // 插件只能加前端代码，服务端能力只能改宿主。
-//
 // ── 安全：这是 mod 系统最大的风险面 ───────────────────────────────────────
-//
 // mod 的宿主半边是**在服务端进程里执行第三方 JS**。这比前端那半边严重得多：
 // 前端最多同源 XSS（用户自己那台机器上的浏览器），服务端是**文件系统 + 命令执行 + 局域网**。
-//
 // 所以这里刻意**不开"注册任意路由"的口子**，而是：
-//
 //   ① 能力必须**在 manifest.json 里声明**（routes / uploads），宿主据此决定放行什么。
 //      mod 代码里**不能**临时注册一个没声明过的前缀 —— 声明与实现分离，
 //      用户（和人）看清单就知道这个插件要占哪些地址、碰哪些目录。
@@ -23,9 +17,7 @@
 //   ⑤ 上传目录必须落在插件自己的目录内（`..`/绝对路径/符号链接一律拒绝）。
 //   ⑥ 单个 mod 装载失败**只标记它自己**（与前端的失败隔离一致）—— 一个坏 mod
 //      不能让服务起不来，否则用户连"去设置里关掉它"都做不到。
-//
 // ── 与前端清单的关系 ──────────────────────────────────────────────────────
-//
 // 前端那套（mods.js）读的是同一份 manifest.json。`server` 段是**宿主半边**的声明，
 // 前端加载器不解释它（也不会因为它而认为插件有问题）。这与 DSH 的
 // `dsh.bundle.patch`（宿主半边）+ `dsh.client`（浏览器半边）是同一个分层思路。
@@ -135,19 +127,8 @@ export function createModServer({
     const loaded = new Map();
     let loadedAt = 0;
 
-    /** 归一化 manifest.server；不合法时返回 { error } 而不是抛错（要能报告给用户） */
-    function readDeclaration(manifest) {
-        const raw = manifest && manifest.server;
-        if (raw == null) return null;                      // 没声明服务端半边：正常情况
-        if (typeof raw !== 'object' || Array.isArray(raw)) {
-            return { error: 'manifest.json 的 server 必须是对象（{ entry, routes, uploads }）' };
-        }
-        const entry = String(raw.entry || '').trim();
-        if (!entry) return { error: 'manifest.json 的 server 缺少 entry（服务端入口文件名）' };
-        if (!/\.(mjs|js)$/i.test(entry)) return { error: 'server.entry 必须是 .js / .mjs 文件：' + entry };
-        if (!isSafeRelDir(entry)) return { error: 'server.entry 不能含路径成分或 ..：' + entry };
-
-        const routesRaw = raw.routes == null ? [] : raw.routes;
+    function readRoutePrefixes(rawRoutes) {
+        const routesRaw = rawRoutes == null ? [] : rawRoutes;
         if (!Array.isArray(routesRaw)) return { error: 'server.routes 必须是字符串数组（路由前缀）' };
         const prefixes = [];
         for (const item of routesRaw) {
@@ -158,8 +139,11 @@ export function createModServer({
             if (prefixes.includes(p)) return { error: 'server.routes 里有重复的前缀：' + p };
             prefixes.push(p);
         }
+        return { prefixes };
+    }
 
-        const uploadsRaw = raw.uploads == null ? [] : raw.uploads;
+    function readUploadDirs(rawUploads) {
+        const uploadsRaw = rawUploads == null ? [] : rawUploads;
         if (!Array.isArray(uploadsRaw)) return { error: 'server.uploads 必须是字符串数组（目录名）' };
         const uploads = [];
         for (const item of uploadsRaw) {
@@ -168,16 +152,18 @@ export function createModServer({
             if (uploads.includes(u)) return { error: 'server.uploads 里有重复的目录：' + u };
             uploads.push(u);
         }
+        return { uploads };
+    }
 
+    function readStaticMappings(rawStatic) {
         // static：把**非 /api** 的 URL 前缀映射到自己目录里的某个子目录
         //   例：{ "/live2d/models": "models" } —— 用户上传的模型仍能从
         //   `/live2d/models/<名字>/…` 取到，但文件其实落在 mod 自己的目录里。
-        //
         // 为什么需要它：Live2D 的模型 URL 是 `/live2d/models/<名>/`，而磁盘位置要从
         //   `web/live2d/models/` 搬到 `web/mods/live2d/models/`。URL 不变、磁盘变，
         //   于是要有这层映射；顺带把"用户上传内容"与"宿主代码目录"在物理上分开
         //   （前者天然不该和 index.html 住在一起）。
-        const staticRaw = raw.static == null ? [] : raw.static;
+        const staticRaw = rawStatic == null ? [] : rawStatic;
         const statics = [];
         if (Array.isArray(staticRaw)) {
             // 数组形式收两种写法，因为它们各自解决一件事：
@@ -205,14 +191,41 @@ export function createModServer({
         } else {
             return { error: 'server.static 必须是数组或对象（{ "URL前缀": "目录名" }）' };
         }
+        return { statics };
+    }
+
+    /** 归一化 manifest.server；不合法时返回 { error } 而不是抛错（要能报告给用户） */
+    function readDeclaration(manifest) {
+        const raw = manifest && manifest.server;
+        if (raw == null) return null;                      // 没声明服务端半边：正常情况
+        if (typeof raw !== 'object' || Array.isArray(raw)) {
+            return { error: 'manifest.json 的 server 必须是对象（{ entry, routes, uploads }）' };
+        }
+        const entry = String(raw.entry || '').trim();
+        if (!entry) return { error: 'manifest.json 的 server 缺少 entry（服务端入口文件名）' };
+        if (!/\.(mjs|js)$/i.test(entry)) return { error: 'server.entry 必须是 .js / .mjs 文件：' + entry };
+        if (!isSafeRelDir(entry)) return { error: 'server.entry 不能含路径成分或 ..：' + entry };
+
+        const routes = readRoutePrefixes(raw.routes);
+        if (routes.error) return { error: routes.error };
+        const uploads = readUploadDirs(raw.uploads);
+        if (uploads.error) return { error: uploads.error };
+        const statics = readStaticMappings(raw.static);
+        if (statics.error) return { error: statics.error };
 
         // 能力声明单独校验：它的错误必须和别的声明错误一样**整份驳回**，
         // 而不是悄悄带一个 error 字段进去（那样 caps 会是空集，插件跑起来才发现
         // 什么都用不了，报错点离声明很远）。
-        const caps = readCapabilities(raw, prefixes, uploads, statics);
+        const caps = readCapabilities(raw, routes.prefixes, uploads.uploads, statics.statics);
         if (caps.error) return { error: caps.error };
 
-        return { entry, routes: prefixes, uploads, statics, capabilities: caps };
+        return {
+            entry,
+            routes: routes.prefixes,
+            uploads: uploads.uploads,
+            statics: statics.statics,
+            capabilities: caps,
+        };
     }
 
     /**
@@ -331,57 +344,13 @@ export function createModServer({
     }
 
     /**
-     * 装载一个 mod 的服务端半边。
+     * 构造交给插件 register(ctx) 的上下文。
      *
-     * 装载失败只记录、不抛出 —— 一个坏 mod 不该让服务起不来（前端那半边的
-     * 失败隔离是同一个理由，见 mods.js 的说明）。
+     * 每个有副作用的成员都先经 need() 校验能力声明：manifest 里没写，
+     * 取用时当场报错，而不是给一个静默的空实现。
      */
-    async function loadOne(manifest) {
-        const modId = manifest.id;
-        const dir = path.join(modsDir, manifest.dir || modId);
-        const decl = readDeclaration(manifest);
-        if (!decl) return null;                            // 没声明：不参与
-        if (decl.error) {
-            log('[' + modId + '] 服务端半边未装载：' + decl.error);
-            loaded.set(modId, { id: modId, ok: false, error: decl.error, routes: [], uploads: [] });
-            return null;
-        }
-
-        const err = checkCollision(modId, decl, routes, statics);
-        if (err) {
-            log('[' + modId + '] 服务端半边未装载：' + err);
-            loaded.set(modId, { id: modId, ok: false, error: err, routes: [], uploads: [] });
-            return null;
-        }
-
-        const entryPath = path.join(dir, decl.entry);
-        // 双保险：解析后的绝对路径必须仍在插件目录内
-        if (entryPath !== dir && !entryPath.startsWith(dir + path.sep)) {
-            const e = 'server.entry 解析后越出了插件目录：' + decl.entry;
-            log('[' + modId + '] 服务端半边未装载：' + e);
-            loaded.set(modId, { id: modId, ok: false, error: e });
-            return null;
-        }
-        const info = await stat(entryPath).catch(() => null);
-        if (!info || !info.isFile()) {
-            const e = 'server.entry 不存在：' + decl.entry;
-            log('[' + modId + '] 服务端半边未装载：' + e);
-            loaded.set(modId, { id: modId, ok: false, error: e });
-            return null;
-        }
-
-        // 这个 mod 本次装载中登记的项（失败时整体回滚，不留半套）
-        const added = [];
-        /** 声明的能力清单（readDeclaration 已校验过，这里直接用） */
-        const caps = new Set((decl.capabilities && decl.capabilities.list) || []);
-        /** 没声明某项能力时，取用它必须**当场报错**，而不是静默给个空实现 */
-        const need = (cap, what) => {
-            if (caps.has(cap)) return;
-            throw new Error('插件「' + modId + '」没有声明能力 ' + cap + '，不能使用 ' + what
-                + '。要使用它，请在 manifest.json 的 server.capabilities 里加上「' + cap + '」。'
-                + '（已声明：' + ([...caps].join('、') || '无') + '）');
-        };
-        const ctx = {
+    function createModContext({ modId, dir, decl, caps, need, added }) {
+        return {
             modId,
             dir,
             log: (...a) => log('[' + modId + '] ' + a.map((x) => (typeof x === 'string' ? x : String(x))).join(' ')),
@@ -488,13 +457,66 @@ export function createModServer({
                 return abs;
             },
         };
+    }
+
+    /**
+     * 装载一个 mod 的服务端半边。
+     *
+     * 装载失败只记录、不抛出 —— 一个坏 mod 不该让服务起不来（前端那半边的
+     * 失败隔离是同一个理由，见 mods.js 的说明）。
+     */
+    async function loadOne(manifest) {
+        const modId = manifest.id;
+        const dir = path.join(modsDir, manifest.dir || modId);
+        const decl = readDeclaration(manifest);
+        if (!decl) return null;                            // 没声明：不参与
+        if (decl.error) {
+            log('[' + modId + '] 服务端半边未装载：' + decl.error);
+            loaded.set(modId, { id: modId, ok: false, error: decl.error, routes: [], uploads: [] });
+            return null;
+        }
+
+        const err = checkCollision(modId, decl, routes, statics);
+        if (err) {
+            log('[' + modId + '] 服务端半边未装载：' + err);
+            loaded.set(modId, { id: modId, ok: false, error: err, routes: [], uploads: [] });
+            return null;
+        }
+
+        const entryPath = path.join(dir, decl.entry);
+        // 双保险：解析后的绝对路径必须仍在插件目录内
+        if (entryPath !== dir && !entryPath.startsWith(dir + path.sep)) {
+            const e = 'server.entry 解析后越出了插件目录：' + decl.entry;
+            log('[' + modId + '] 服务端半边未装载：' + e);
+            loaded.set(modId, { id: modId, ok: false, error: e });
+            return null;
+        }
+        const info = await stat(entryPath).catch(() => null);
+        if (!info || !info.isFile()) {
+            const e = 'server.entry 不存在：' + decl.entry;
+            log('[' + modId + '] 服务端半边未装载：' + e);
+            loaded.set(modId, { id: modId, ok: false, error: e });
+            return null;
+        }
+
+        // 这个 mod 本次装载中登记的项（失败时整体回滚，不留半套）
+        const added = [];
+        /** 声明的能力清单（readDeclaration 已校验过，这里直接用） */
+        const caps = new Set((decl.capabilities && decl.capabilities.list) || []);
+        /** 没声明某项能力时，取用它必须**当场报错**，而不是静默给个空实现 */
+        const need = (cap, what) => {
+            if (caps.has(cap)) return;
+            throw new Error('插件「' + modId + '」没有声明能力 ' + cap + '，不能使用 ' + what
+                + '。要使用它，请在 manifest.json 的 server.capabilities 里加上「' + cap + '」。'
+                + '（已声明：' + ([...caps].join('、') || '无') + '）');
+        };
+        const ctx = createModContext({ modId, dir, decl, caps, need, added });
 
         try {
             // 超时保护：第三方代码可能同步死循环、可能 await 一个永不 resolve 的
             // Promise（例如在 register 里先去拉一次网络）。没有超时的话，一个坏插件
             // 会让**服务启动整个卡住** —— 用户看到的是"双击启动.bat 之后什么都没有"，
             // 连设置界面都进不去，也就没法把那个插件关掉。
-            //
             // 注意 Promise.race 只能让**调用方**放弃等待，无法真正终止已经跑起来的
             // 代码。所以这只是"不让它拖住启动"，不是沙箱 —— 真正的隔离要靠进程。
             const mod = await withTimeout(
@@ -607,7 +629,10 @@ export function createModServer({
                 }
                 if (cur.ok === false && cur.enabled === false) continue;   // 未启用：不是问题，无需重启
                 if (!cur.ok) { failed.push({ id: m.id, error: cur.error }); continue; }
-                const sig = JSON.stringify({ entry: decl.entry, routes: decl.routes, uploads: decl.uploads, statics: decl.statics });
+                // 必须与 loadOne 记录 signature 时**同一形状**（loadOne 存的是 JSON.stringify(decl)，
+                // 含 capabilities）。只挑 entry/routes/uploads/statics 比会因键集不同而永远不相等，
+                // 于是每个装载成功的插件都被误报"声明变了，需重启"。
+                const sig = JSON.stringify(decl);
                 if (cur.signature !== sig) {
                     needsRestart.push({ id: m.id, why: '该插件的服务端声明变了，重启服务后生效' });
                 }

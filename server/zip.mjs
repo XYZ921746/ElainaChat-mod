@@ -1,14 +1,9 @@
-// ============================================================================
 //  ZIP 读写（零依赖，只用 Node 内置 zlib）
-// ============================================================================
-//
 //  为什么要自己写：备份导出需要打包成标准 zip（用户能用任何解压工具打开、
 //  也方便一次拖进来看全部数据）。引第三方 zip 库会破坏"零依赖、双击即用"这个前提，
 //  而 zip 的格式足够简单 —— 写一个只有几百行，读一个已有的实现（模型上传用的）也在。
-//
 //  写：deflateRawSync + crc32（都是 node:zlib 内置）
 //  读：完整解析中央目录（zip 的权威元数据），兼容 GBK 文件名
-//
 //  标准兼容性：生成的是最保守的 zip ——
 //    · 只用 deflate(8) 与 store(0) 两种方法
 //    · 文件名统一 UTF-8，并置 bit 11（EFS）标志，让 Windows 资源管理器正确显示中文
@@ -44,13 +39,10 @@ function crc32(buf) {
     return (c ^ -1) >>> 0;
 }
 
-// ============================================================================
 //  危险扩展名（解压落盘的安全底线）
-//
 //  这份清单原来在 web/serve.mjs 里。合并解压实现时一起搬到这里 ——
 //  它属于"解压"这件事的安全约束，跟着实现走才能保证所有调用方都受保护。
 //  serve.mjs 仍然从这里 import 使用（agentWrite 也要用它）。
-// ============================================================================
 export const BLOCKED_EXT = new Set([
     '.html', '.htm', '.xhtml', '.shtml', '.hta', '.mhtml',
     '.js', '.mjs', '.cjs', '.jsx', '.ts',
@@ -106,7 +98,9 @@ export function effectiveExt(name) {
 export function isUnsafeEntryName(name) {
     if (!name) return true;
     if (name.startsWith('/') || /^[A-Za-z]:/.test(name)) return true;
-    return name.split('/').some((seg) => seg === '..');
+    // 反斜杠也要按分隔符算：解压实现会先归一，但这里是"所有落盘调用方共用"的判据 ——
+    //   谁漏了一次归一，`..\\x` 在 Windows 上就是一次真实的路径穿越。
+    return name.split(/[\\/]+/).some((seg) => seg === '..');
 }
 
 /**
@@ -225,6 +219,84 @@ function gbkDecode(buf) {
     }
 }
 
+/** 读中央目录（权威元数据）；EOCD 缺失/损坏时返回空表，让调用方回退到 local header。 */
+function readCentralEntries(buf, decodeName) {
+    const entries = [];
+    let fromCentral = false;
+    const eocdOff = findEocd(buf);
+    if (eocdOff >= 0) {
+        const total = buf.readUInt16LE(eocdOff + 10);
+        const cdSize = buf.readUInt32LE(eocdOff + 12);
+        const cdOff = buf.readUInt32LE(eocdOff + 16);
+        const isZip64 = cdOff === 0xFFFFFFFF || cdSize === 0xFFFFFFFF || total === 0xFFFF;
+        if (!isZip64 && cdOff + cdSize <= buf.length) {
+            let off = cdOff;
+            let ok = true;
+            for (let i = 0; i < total; i++) {
+                if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) { ok = false; break; }
+                const flags = buf.readUInt16LE(off + 8);
+                const method = buf.readUInt16LE(off + 10);
+                const compSize = buf.readUInt32LE(off + 20);
+                const nameLen = buf.readUInt16LE(off + 28);
+                const extraLen = buf.readUInt16LE(off + 30);
+                const commentLen = buf.readUInt16LE(off + 32);
+                const localOff = buf.readUInt32LE(off + 42);
+                const nameRaw = buf.subarray(off + 46, off + 46 + nameLen);
+                entries.push({ name: decodeName(nameRaw, flags), method, compSize, localOff });
+                off += 46 + nameLen + extraLen + commentLen;
+            }
+            fromCentral = ok;
+            if (!ok) entries.length = 0;
+        }
+    }
+    return { entries, fromCentral };
+}
+
+/** 回退：没有可用中央目录时按 local header 顺序读（data descriptor 无法可靠定位，直接拒绝）。 */
+function readLocalEntries(buf, decodeName) {
+    const entries = [];
+    let off = 0;
+    while (off + 30 <= buf.length) {
+        if (buf.readUInt32LE(off) !== 0x04034b50) break;
+        const flags = buf.readUInt16LE(off + 6);
+        const method = buf.readUInt16LE(off + 8);
+        const compSize = buf.readUInt32LE(off + 18);
+        const nameLen = buf.readUInt16LE(off + 26);
+        const extraLen = buf.readUInt16LE(off + 28);
+        const nameRaw = buf.subarray(off + 30, off + 30 + nameLen);
+        if (flags & 0x8) throw new Error('该 zip 缺少中央目录且用了 data descriptor，无法可靠读取');
+        entries.push({ name: decodeName(nameRaw, flags), method, compSize, localOff: off });
+        off = off + 30 + nameLen + extraLen + compSize;
+    }
+    return entries;
+}
+
+/**
+ * 取出一个条目的内容。local header 不合法时返回 null（调用方跳过该条）；
+ * 体积超限 / 压缩方式不支持 / 解压失败都抛错 —— 这些是整包拒绝的理由。
+ */
+function extractEntryContent(buf, e, name, maxEntry, maxTotal, total) {
+    if (e.localOff + 30 > buf.length || buf.readUInt32LE(e.localOff) !== 0x04034b50) return null;
+    const lNameLen = buf.readUInt16LE(e.localOff + 26);
+    const lExtraLen = buf.readUInt16LE(e.localOff + 28);
+    const dataStart = e.localOff + 30 + lNameLen + lExtraLen;
+    const data = buf.subarray(dataStart, dataStart + e.compSize);
+
+    if (e.method !== 0 && e.method !== 8) throw new Error(`不支持的压缩方式 ${e.method}（${name}）`);
+    if (e.compSize > maxEntry || total + e.compSize > maxTotal) {
+        throw new Error('备份解压后体积超过上限，已拒绝');
+    }
+    if (e.method === 0) return Buffer.from(data);
+    try {
+        return inflateRawSync(data, { maxOutputLength: Math.min(maxEntry, maxTotal - total) });
+    } catch (err) {
+        if (err && (err.code === 'ERR_BUFFER_TOO_LARGE' || /too large/i.test(String(err.message)))) {
+            throw new Error('备份解压后体积超过上限，已拒绝');
+        }
+        throw new Error(`条目解压失败：${name}（${err.message}）`);
+    }
+}
+
 /**
  * 解压 zip。
  *
@@ -272,52 +344,9 @@ export function readZip(buf, opts = {}) {
         return utf8.includes('\uFFFD') ? gbkDecode(nameRaw) : utf8;
     };
 
-    // 中央目录是权威元数据，优先用它
-    const entries = [];
-    let fromCentral = false;
-    const eocdOff = findEocd(buf);
-    if (eocdOff >= 0) {
-        const total = buf.readUInt16LE(eocdOff + 10);
-        const cdSize = buf.readUInt32LE(eocdOff + 12);
-        const cdOff = buf.readUInt32LE(eocdOff + 16);
-        const isZip64 = cdOff === 0xFFFFFFFF || cdSize === 0xFFFFFFFF || total === 0xFFFF;
-        if (!isZip64 && cdOff + cdSize <= buf.length) {
-            let off = cdOff;
-            let ok = true;
-            for (let i = 0; i < total; i++) {
-                if (off + 46 > buf.length || buf.readUInt32LE(off) !== 0x02014b50) { ok = false; break; }
-                const flags = buf.readUInt16LE(off + 8);
-                const method = buf.readUInt16LE(off + 10);
-                const compSize = buf.readUInt32LE(off + 20);
-                const nameLen = buf.readUInt16LE(off + 28);
-                const extraLen = buf.readUInt16LE(off + 30);
-                const commentLen = buf.readUInt16LE(off + 32);
-                const localOff = buf.readUInt32LE(off + 42);
-                const nameRaw = buf.subarray(off + 46, off + 46 + nameLen);
-                entries.push({ name: decodeName(nameRaw, flags), method, compSize, localOff });
-                off += 46 + nameLen + extraLen + commentLen;
-            }
-            fromCentral = ok;
-            if (!ok) entries.length = 0;
-        }
-    }
-
-    // 回退：按 local header 顺序走
-    if (!fromCentral) {
-        let off = 0;
-        while (off + 30 <= buf.length) {
-            if (buf.readUInt32LE(off) !== 0x04034b50) break;
-            const flags = buf.readUInt16LE(off + 6);
-            const method = buf.readUInt16LE(off + 8);
-            const compSize = buf.readUInt32LE(off + 18);
-            const nameLen = buf.readUInt16LE(off + 26);
-            const extraLen = buf.readUInt16LE(off + 28);
-            const nameRaw = buf.subarray(off + 30, off + 30 + nameLen);
-            if (flags & 0x8) throw new Error('该 zip 缺少中央目录且用了 data descriptor，无法可靠读取');
-            entries.push({ name: decodeName(nameRaw, flags), method, compSize, localOff: off });
-            off = off + 30 + nameLen + extraLen + compSize;
-        }
-    }
+    // 中央目录是权威元数据，优先用它；坏了再回退到 local header。
+    const { entries: centralEntries, fromCentral } = readCentralEntries(buf, decodeName);
+    const entries = fromCentral ? centralEntries : readLocalEntries(buf, decodeName);
 
     if (!entries.length) throw new Error('zip 内没有文件');
 
@@ -333,29 +362,8 @@ export function readZip(buf, opts = {}) {
         // 后者会被 x.html::$DATA 这类 Windows 写法绕过（落盘仍是 x.html）
         if (isBlocked(name)) { blocked.push(name); continue; }
 
-        if (e.localOff + 30 > buf.length || buf.readUInt32LE(e.localOff) !== 0x04034b50) continue;
-        const lNameLen = buf.readUInt16LE(e.localOff + 26);
-        const lExtraLen = buf.readUInt16LE(e.localOff + 28);
-        const dataStart = e.localOff + 30 + lNameLen + lExtraLen;
-        const data = buf.subarray(dataStart, dataStart + e.compSize);
-
-        if (e.method !== 0 && e.method !== 8) throw new Error(`不支持的压缩方式 ${e.method}（${name}）`);
-        if (e.compSize > maxEntry || total + e.compSize > maxTotal) {
-            throw new Error('备份解压后体积超过上限，已拒绝');
-        }
-        let content;
-        if (e.method === 0) {
-            content = Buffer.from(data);
-        } else {
-            try {
-                content = inflateRawSync(data, { maxOutputLength: Math.min(maxEntry, maxTotal - total) });
-            } catch (err) {
-                if (err && (err.code === 'ERR_BUFFER_TOO_LARGE' || /too large/i.test(String(err.message)))) {
-                    throw new Error('备份解压后体积超过上限，已拒绝');
-                }
-                throw new Error(`条目解压失败：${name}（${err.message}）`);
-            }
-        }
+        const content = extractEntryContent(buf, e, name, maxEntry, maxTotal, total);
+        if (!content) continue;
         total += content.length;
         if (total > maxTotal) throw new Error('备份解压后总大小超过上限');
         files.push({ name, data: content });
@@ -365,3 +373,4 @@ export function readZip(buf, opts = {}) {
     // （模型上传、mod 安装）拿 { files, blocked }
     return returnBlocked ? { files, blocked } : files;
 }
+

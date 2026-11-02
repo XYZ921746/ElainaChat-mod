@@ -1,21 +1,15 @@
 // 插件（mod）的服务端支持：扫描目录 / 自动解压 zip / 生成清单 / 安装与卸载。
-//
 // ── 为什么需要服务端参与 ──────────────────────────────────────────────────
-//
 // 浏览器**无法列目录**。前端想知道"有哪些 mod"，只有两条路：
 //   ① 有一份清单文件（谁生成？手工维护最容易忘）
 //   ② 服务端扫描目录后生成清单（Node 能列目录）
-//
 // 这里走 ②：把 `xxx.zip` 丢进 mods/ 就会被自动解压、写进清单，
 // 前端只管读清单。这样"装一个 mod"真的就是"丢个 zip 进去"。
 //   插件目录在**项目根**的 mods/（与 data/ 平级），不在 web/ 静态根里 ——
 //  插件是运行期内容，与随仓库分发的前端资源不是一类东西。
-//
 // ── 安全（这是 mod 系统最大的风险面）──────────────────────────────────────
-//
 // mod 的本质是**在同源下执行第三方 JS** —— 和我们修过的 `.html::$DATA`
 // 存储型 XSS 是同一类风险。所以解压必须严防三件事：
-//
 //   ① **路径穿越**：zip 里写 `../../web/serve.mjs` 就能覆盖宿主代码。
 //      防护：复用 isUnsafeEntryName + 解析后的绝对路径必须仍在插件目录内（双保险）。
 //   ② **覆盖宿主文件**：插件只能写进 mods/<id>/，不能碰 index.html / app-*.js。
@@ -26,7 +20,6 @@
 //      并且在界面上明确告知用户"安装 mod = 信任它的代码"。
 //      同时仍然拦掉 .exe/.dll/.bat 这类**本机可执行**文件 —— 它们在浏览器里
 //      本来也不会被执行，但会被下载到磁盘，属于不必要的风险。
-//
 // ── 与 Live2D 上传的区别 ─────────────────────────────────────────────────
 // Live2D 走的是"用户在界面上传 zip"（handleUpload）。插件这里是
 // "文件已经在 mods/ 目录里了，服务端自己去发现" —— 因为用户可能是
@@ -47,7 +40,7 @@ import path from 'node:path';
  *   两者共用同一个正则的话，把插件目录改成中文就会**直接扫不到**
  *   （连 manifest 都不读），表现为"改个名字插件就消失了"。
  */
-const MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+export const MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /**
  * 插件**目录名**的合法性（比 id 宽松）。
@@ -60,7 +53,7 @@ const MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  * 长度上限 128，避免异常长的名字。
  */
 const MOD_DIR_RE = /^[^\\/:*?"<>|\u0000-\u001f]{1,128}$/;
-function isSafeModDirName(name) {
+export function isSafeModDirName(name) {
     const n = String(name || '');
     if (!n || n === '.' || n === '..') return false;
     if (n.startsWith('.')) return false;              // 隐藏目录 / . ..
@@ -103,7 +96,7 @@ export function normalizeModId(rawName) {
 }
 
 /** 插件目录里允许落盘的本机可执行类型（拦掉，避免用户误双击） */
-const MOD_BLOCKED_EXT = new Set([
+export const MOD_BLOCKED_EXT = new Set([
     '.exe', '.dll', '.com', '.scr', '.msi', '.bat', '.cmd',
     '.ps1', '.psm1', '.vbs', '.wsf', '.jar', '.sh', '.app', '.deb', '.rpm',
 ]);
@@ -138,6 +131,8 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
      */
     let installReport = { at: 0, results: [] };
     const INSTALL_REPORT_TTL = 5 * 60 * 1000;   // 5 分钟，足够用户打开设置页看到
+    // index.json 的写盘队列（见写入处的说明）。串行化 + rename 原子替换。
+    let indexWriteQueue = Promise.resolve();
 
     /**
      * 读插件目录里的 manifest.json（优先）或从目录名推断。
@@ -218,7 +213,6 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
 
         const targetDir = path.join(modsDir, id);
         // 先写到**临时目录**，全部条目落盘后再整体改名成正式目录。
-        //
         // 为什么不能直接写 targetDir：`/mods/index.json` 与 `/api/plugins` 每次
         //   请求都会 scanAndSync()，而扫描认的是"目录存在就算已安装"。直接往
         //   mods/<id>/ 里逐个写文件的话，中途那一刻目录已经存在、index.js 还没写完 ——
@@ -297,12 +291,59 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
      *   · 前端请求 /api/plugins 时（用户可能在服务运行期间拷了 zip 进来）
      *   · 前端请求 /mods/index.json 时（清单必须新鲜，见 serve.mjs 里的说明）
      */
+    /**
+     * 把已安装目录映射成清单条目。
+     * 同时给出 id（归一化身份，用于 after 依赖与资源 URL）与 dir（磁盘真实目录名，前端拼 URL 用），
+     * 两者可能不一致（历史版本把 elaina-avatar-1.0.0 当目录名装过）。
+     */
+    async function buildPluginList(installed) {
+        const list = [];
+        for (const it of installed) {
+            const m = await readManifest(it.dir, it.id);
+            const dirName = path.basename(it.dir);
+            list.push({
+                id: m.id,
+                dir: dirName,
+                name: m.name || m.id,
+                version: m.version || '',
+                description: m.description || '',
+                entry: m.entry || 'index.js',
+                // scripts：额外的脚本文件（按顺序注入，entry 仍是第一个）。
+                // 让一个插件能拆成"注册装配 / 设置面板 / 实现主体"几个文件 ——
+                // 硬塞进一个文件只会越来越难维护（Live2D 插件就是这么拆的）。
+                scripts: Array.isArray(m.scripts) ? m.scripts.filter((s) => typeof s === 'string' && s) : [],
+                styles: Array.isArray(m.styles) ? m.styles : [],
+                // 默认关闭（与 web/js/mods.js 的 isModEnabled 同语义）：只有显式写
+                //   "defaultEnabled": true 才算默认开，漏写/写别的都算关 ——
+                //   插件会改动界面，不该在用户不知情时生效。
+                defaultEnabled: m.defaultEnabled === true,
+                after: Array.isArray(m.after) ? m.after : [],
+                hidden: m.hidden === true,
+                // 前端 host API 的能力组（AGENTS.md D18 / 表 A22）：原样搬运。
+                // **必须带出去** —— 前端 createHostApi 靠它决定给插件下发哪些成员；
+                // 漏了这一行，插件声明的 theme/achievements/dragSort/openFolder
+                // 全部拿不到，而症状是"插件加载成功但功能静默失效"。
+                // 没声明时不写这个字段（同 server 的理由：避免给每个插件加一行噪音）。
+                ...(Array.isArray(m.capabilities) && m.capabilities.length
+                    ? { capabilities: m.capabilities.filter((s) => typeof s === 'string' && s) }
+                    : {}),
+                // 宿主半边（服务端路由 / 上传目录）的**声明**，原样带出去交给 serve.mjs 装配。
+                // 这里只搬运不解释：声明是否合法由 server/mod-server.mjs 判定并报错 ——
+                // 扫描器不该长着"路由前缀怎么写才合法"的知识。
+                // 没声明时**不写这个字段**：绝大多数插件没有服务端半边，给每个插件都加一行
+                // "server": null 只会让清单变长、让每次重新生成都产生无意义 diff。
+                ...(m.server && typeof m.server === 'object' && !Array.isArray(m.server) ? { server: m.server } : {}),
+                hasManifest: await exists(path.join(it.dir, 'manifest.json')),
+            });
+        }
+        return list;
+    }
+
     async function scanAndSync() {
         await mkdir(modsDir, { recursive: true }).catch(() => {});
         const entries = await readdir(modsDir, { withFileTypes: true }).catch(() => []);
 
         // 清掉**安装中途留下的临时目录**（`.installing-*`）。
-        //
         //   为什么需要：安装是先写临时目录再原子改名（见 writePluginFiles），
         //   而进程若在中途被杀（用户关窗口、断电），那份临时目录就留在磁盘上 ——
         //   隐藏、不会被扫成插件（isSafeModDirName 跳过 `.` 开头），但会白占
@@ -338,24 +379,18 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         }
 
         // 解压待安装的 zip。id = zip 文件名去掉扩展名。
-        //
         // 装成功后**删掉 zip**（一次性安装包）。
-        //
         // 为什么必须删：zip 是"待安装"的源，只要它还在目录里，**每次扫描都会
         // 重新解压安装**。于是用户手动删掉插件目录后，下一次扫描（打开设置就会触发）
         // 又把它装回来 —— 表现就是"我明明卸载了，插件列表里还在"。
         // 点「卸载」按钮那条路是对的（它会删 zip），但用户直接删目录时就没辙了。
-        //
         // 删掉之后语义就清楚了：目录存在 = 已安装；要重装就再放一次 zip。
         // 这也让"删目录"变成真正有效的卸载方式。
-        //
         // 装完的**结果要留住**，不能扫完就丢。
-        //
         //   为什么：安装结果（尤其"哪些文件被拦下了"）是给用户看的反馈。
         //   zip 装成功后会被删掉，所以下一次扫描时 zips 已经空了 ——
         //   若结果只存在本次调用的局部变量里，用户打开设置页那次扫描
         //   就会看到一片空白，以为"装了什么都没发生"。
-        //
         //   实现用**时间窗**而不是"读一次就清"：同一个 zip 装完之后，
         //   前端可能先后请求 /mods/index.json（页面加载）与 /api/plugins
         //   （设置页），"读一次就清"会让先到的那次把结果吃掉。
@@ -396,64 +431,28 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
             }
         }
 
-        // 收集已安装插件的清单
-        //
-        // 这里同时给出两个名字，各有各的用途：
-        //   id  —— 归一化后的**身份**：依赖匹配（after）与资源 URL 的基准。
-        //          它等于 manifest.id（缺失时才回落到目录名）。
-        //   dir —— 磁盘上的**实际目录名**：前端按它拼脚本/样式的 URL。
-        // 二者不一致的情况真实存在（历史版本把 `elaina-avatar-1.0.0` 当目录名装过），
-        // 只给一个名字必然有一处 404 —— 要么脚本加载不到，要么图片加载不到。
-        const list = [];
-        for (const it of installed) {
-            const m = await readManifest(it.dir, it.id);
-            const dirName = path.basename(it.dir);
-            list.push({
-                id: m.id,
-                dir: dirName,
-                name: m.name || m.id,
-                version: m.version || '',
-                description: m.description || '',
-                entry: m.entry || 'index.js',
-                // scripts：额外的脚本文件（按顺序注入，entry 仍是第一个）。
-                // 让一个插件能拆成"注册装配 / 设置面板 / 实现主体"几个文件 ——
-                // 硬塞进一个文件只会越来越难维护（Live2D 插件就是这么拆的）。
-                scripts: Array.isArray(m.scripts) ? m.scripts.filter((s) => typeof s === 'string' && s) : [],
-                styles: Array.isArray(m.styles) ? m.styles : [],
-                // 默认关闭（与 web/js/mods.js 的 isModEnabled 同语义）：只有显式写
-                //   `"defaultEnabled": true` 才算默认开，漏写/写别的都算关 ——
-                //   插件会改动界面，不该在用户不知情时生效。
-                defaultEnabled: m.defaultEnabled === true,
-                after: Array.isArray(m.after) ? m.after : [],
-                hidden: m.hidden === true,
-                // 前端 host API 的能力组（AGENTS.md D18 / 表 A22）：原样搬运。
-                // **必须带出去** —— 前端 createHostApi 靠它决定给插件下发哪些成员；
-                // 漏了这一行，插件声明的 theme/achievements/dragSort/openFolder
-                // 全部拿不到，而症状是"插件加载成功但功能静默失效"。
-                // 没声明时不写这个字段（同 server 的理由：避免给每个插件加一行噪音）。
-                ...(Array.isArray(m.capabilities) && m.capabilities.length
-                    ? { capabilities: m.capabilities.filter((s) => typeof s === 'string' && s) }
-                    : {}),
-                // 宿主半边（服务端路由 / 上传目录）的**声明**，原样带出去交给 serve.mjs 装配。
-                // 这里只搬运不解释：声明是否合法由 server/mod-server.mjs 判定并报错 ——
-                // 扫描器不该长着"路由前缀怎么写才合法"的知识。
-                // 没声明时**不写这个字段**：绝大多数插件没有服务端半边，给每个插件都加一行
-                // `"server": null` 只会让清单变长、让每次重新生成都产生无意义 diff。
-                ...(m.server && typeof m.server === 'object' && !Array.isArray(m.server) ? { server: m.server } : {}),
-                hasManifest: await exists(path.join(it.dir, 'manifest.json')),
-            });
-        }
+        const list = await buildPluginList(installed);
 
         // 写清单。**注意**：保留手工维护的额外字段（比如注释），只覆盖 plugins 数组。
-        let prev = {};
-        try { prev = JSON.parse(await readFile(INDEX_FILE, 'utf8')); } catch { /* 首次运行 */ }
-        const out = {
-            ...(prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {}),
-            comment: '本文件由服务端扫描 mods/ 自动生成（见 server/mods.mjs）。手工改动会在下次扫描时被覆盖。',
-            generatedAt: new Date().toISOString(),
-            plugins: list,
-        };
-        await writeFile(INDEX_FILE, JSON.stringify(out, null, 2), 'utf8');
+        // ★ index.json 的写盘必须串行：同一时刻可能有两次扫描（打开设置页 + 另一个接口），
+        //   各自 read-modify-write 同一文件 —— 后写者用旧缓存覆盖前者的内容，
+        //   并发写同一路径还会让读端撞到写了一半的文件（实测 check-mod 偶发
+        //   "Unexpected non-whitespace character after JSON"、以及清单里 demo-mod 缺字段）。
+        //   改为：读取放队列里一起做，写临时文件再 rename（原子替换）。
+        indexWriteQueue = indexWriteQueue.then(async () => {
+            let prev = {};
+            try { prev = JSON.parse(await readFile(INDEX_FILE, 'utf8')); } catch { /* 首次运行 */ }
+            const out = {
+                ...(prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {}),
+                comment: '本文件由服务端扫描 mods/ 自动生成（见 server/mods.mjs）。手工改动会在下次扫描时被覆盖。',
+                generatedAt: new Date().toISOString(),
+                plugins: list,
+            };
+            const tmp = INDEX_FILE + '.tmp';
+            await writeFile(tmp, JSON.stringify(out, null, 2), 'utf8');
+            await rename(tmp, INDEX_FILE);
+        }).catch((err) => { log('插件清单写入失败：' + String((err && err.message) || err)); });
+        await indexWriteQueue;
 
         // 安装结果的留存（见 installReport 的说明）：
         //   · 本次真的装了东西 → 记下来，并把时间戳刷新

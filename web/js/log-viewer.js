@@ -1,34 +1,18 @@
 // 软件内日志模块（"数据与日志"页）。
-//
 // 日志是排查工具、不是日常入口，所以放设置里的独立分栏（#tab-log）：
 // 放主界面 rail 会占位，放「设置 → 高级」末尾会被内容区高度挤出屏幕。
-//
-// 界面结构：
-//   ① 级别药丸 DEBUG / INFO / WARNING / ERROR / CRITICAL —— 多选，点掉即从视图移除
-//   ② 工具栏 模块下拉 / 关键词 / 排除用户对话 / 自动滚动 / 刷新 / 清屏
-//   ③ 日志区 终端式深色区，等宽字体，旧在上、新在下
-//   ④ 状态栏 总条数 / 当前显示 / 缓冲占用 / 日志文件位置
-//
 // 数据源：GET /api/logs/tail（服务端内存缓冲，全量、不受落盘级别约束）。
-// 级别 / 模块 / 关键词过滤在服务端做；"排除用户对话"按正文特征过滤，
-// 只影响显示，所以放前端。
-//
-// 轮询而非 WebSocket：服务端是零依赖静态服务，没有 ws 升级层；
-// 日志页是低频操作，2 秒轮询的代价可以忽略。
-//
+// 级别 / 模块 / 关键词过滤在服务端做；"排除用户对话"按正文特征过滤，只影响显示，所以放前端。
+// 轮询而非 WebSocket：服务端是零依赖静态服务，没有 ws 升级层；日志页是低频操作，2 秒轮询可以忽略。
 // 日志正文本身是英文（检索友好），这里的**界面文案**用中文（给人看）。
 (function () {
     'use strict';
 
     /**
-     * 级别药丸的顺序与短码。**与服务端 LEVEL_SHORT 同一套**。
-     *
-     * 为什么查看器也要用短码：落盘文件与控制台显示的就是短码（DBUG/ERRO/CRIT），
-     * 查看器若显示长名，同一行日志在两个窗口里级别文字就不一样 ——
-     * 用户对照着看时会以为"两边的日志不同"。
-     *
-     * 药丸上显示长名（WARNING/CRITICAL）是为了**可读**，但送进接口的是短码 ——
-     * 这样界面好看、数据对齐，两件事都成立。
+     * 级别药丸的顺序与短码，**与服务端 LEVEL_SHORT 同一套**。
+     * 落盘文件与控制台显示的是短码（DBUG/ERRO/CRIT）；查看器若显示长名，
+     * 同一行日志在两个窗口里级别文字就不一样，用户会以为"两边的日志不同"。
+     * 药丸上显示长名只为可读，送进接口的仍是短码。
      */
     const LEVELS = [
         { short: 'DBUG', long: 'DEBUG', full: 'DEBUG' },
@@ -43,12 +27,9 @@
     /**
      * "排除用户对话"的判据。
      *
-     * 服务端在追踪对话时会打 `[chat] 提问：…` / `[chat] 回复：…` 这类摘要
-     * （见 serve.mjs 的对话追踪）。这些行含用户与角色的**真实聊天内容**，
-     * 排查程序问题时是纯噪音，而且在录屏/截图分享日志时是隐私面。
-     *
-     * 判据刻意**窄**：只认 `[chat]` 模块 + 提问/回复/自动功能这几种正文，
-     * 不用"含中文就排除"这类宽判据 —— 那会把真正要看的中文报错也一起藏掉。
+     * 服务端追踪对话时会打 `[chat] 提问：…` / `[chat] 回复：…` 摘要（见 serve.mjs 的对话追踪），含真实聊天内容：
+     * 排障时是纯噪音，录屏/截图分享日志时是隐私面。判据刻意**窄** —— 只认这几种正文，
+     * 不用"含中文就排除"这类宽判据（那会把真正要看的中文报错一起藏掉）。
      */
     const CHAT_LINE_RE = /^(提问|回复|提问来自自动功能)/;
 
@@ -59,11 +40,8 @@
     let bound = false;
     /**
      * 请求序号：只渲染**最后一次**发起的请求的结果。
-     *
-     * 为什么需要它：连续点级别药丸时会并发发出多个 refresh，
-     *   而它们的返回顺序**不保证与发出顺序一致**。于是先发的（旧过滤条件）可能后到，
-     *   把后发的（新过滤条件）结果覆盖掉 —— 表现是"点了药丸，界面显示的却是上一个状态"，
-     *   而且再点一次又对了（看起来像"偶尔失灵"）。加了序号闸门后，过期的响应直接丢弃。
+     * 连点药丸会并发发出多个 refresh，返回顺序不保证与发出顺序一致；
+     * 旧过滤条件的结果后到就会盖掉新结果（表现为"点了药丸，界面却是上一个状态"）。
      */
     let reqSeq = 0;
 
@@ -80,7 +58,6 @@
         return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
     }
 
-    /** 当前选中的级别短码集合（药丸的 aria-pressed="true"） */
     function selectedLevels() {
         const out = [];
         document.querySelectorAll('#logLevelPills .log-pill').forEach((btn) => {
@@ -92,11 +69,9 @@
     /**
      * 把选中的级别换算成服务端的 `level` 查询参数。
      *
-     * 服务端的 level 是"最低级别（含）"的语义，而药丸是**多选**（可以只留
-     * DEBUG + ERROR 这种不连续的组合）。两者不能直接对应，所以：
-     *   · 全选 / 只选了一个最低的 → 传那个最低级别（等价，且省流量）
-     *   · 其它组合 → 不传 level（拿全量），由前端按选中集合精确筛
-     * 这样"服务端过滤"与"多选药丸"两个目标都成立，也不会漏掉任何一类。
+     * 服务端的 level 是"最低级别（含）"，药丸是**多选**（可以只留 DEBUG + ERROR 这种
+     * 不连续的组合），两者不能直接对应：全选或选中的正好是连续前缀 → 传那个最低级别；
+     * 其它组合 → 不传 level（拿全量）由前端精确筛，这样不漏也不白拉。
      */
     function levelParam() {
         const sel = selectedLevels();
@@ -105,12 +80,10 @@
         const order = LEVELS.map((l) => l.full);
         const idx = sel.map((s) => order.indexOf(s)).filter((i) => i >= 0);
         const min = Math.min(...idx);
-        // 选中的正好是"从最低级别到某一档"的连续前缀时，可以用服务端过滤
         const isPrefix = idx.length === (order.length - min);
         return isPrefix ? order[min] : '';
     }
 
-    /** 一条记录是否该显示（前端这一侧：级别多选 + 排除对话） */
     function passesLocalFilter(e) {
         const sel = selectedLevels();
         if (!sel.length) return false;
@@ -123,15 +96,8 @@
 
     /**
      * 一条记录 → 一行 HTML。
-     *
-     * 字段顺序、级别写法都**与 bat 面板/日志文件对齐**：
-     *     面板/文件： [时刻] [模块] [级别] [来源]: 正文
-     *     本查看器：  [时刻] [模块] [级别] [来源] 正文
-     *   顺序必须一致：若本查看器写成 `时刻 [级别] [模块] 正文`，级别与模块
-     *   **位置就是反的**，同一行日志在两个窗口里看起来像两件事。
-     *
-     * 级别用**四位短码**（DBUG/ERRO/CRIT）而不是长名：落盘文件与控制台用的就是短码，
-     * 用长名会让"同一行"在两边显示成不同的级别文字。
+     * 字段顺序、级别写法都**与 bat 面板/日志文件对齐**（[时刻] [模块] [级别] [来源] 正文）：
+     * 顺序一旦不同，同一行日志在两个窗口里看起来像两件事；级别用四位短码也是同理。
      */
     function renderEntry(e) {
         const short = LEVEL_SHORT[e.level] || e.level;
@@ -143,32 +109,158 @@
             + `<span class="log-msg">${esc(e.message)}</span></div>`;
     }
 
+    /** 按当前过滤条件取回要导出的日志条目；没有可导出内容时说明原因并返回 null。 */
+    async function collectExportEntries(say) {
+        const params = new URLSearchParams();
+        const lv = levelParam();
+        if (lv === '__none__') { say('所有级别都被关掉了 —— 没有可导出的内容'); return null; }
+        if (lv) params.set('level', lv);
+        const tag = el('logTagSelect')?.value || '';
+        if (tag) params.set('tags', tag);
+        const search = el('logSearchInput')?.value?.trim() || '';
+        if (search) params.set('search', search);
+        params.set('limit', '3000');   // 缓冲容量（RING_CAPACITY），一次拿全
+        const res = await fetch('/api/logs/tail?' + params.toString(), { cache: 'no-store' });
+        const json = await res.json().catch(() => null);
+        if (!res.ok || !json || !json.ok) { say('导出失败：日志服务不可用'); return null; }
+        const entries = (json.entries || []).slice().reverse()
+            .filter(passesLocalFilter);
+        if (!entries.length) { say('当前过滤下没有日志可导出'); return null; }
+        return { entries, lv, tag, search };
+    }
+
+    /** 把条目拼成可直接保存的文本（含表头与过滤说明），并生成文件名。 */
+    function buildExportText(entries, lv, tag, search) {
+        const p = (n, w = 2) => String(n).padStart(w, '0');
+        const stamp = (ts) => {
+            const d = new Date(ts);
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
+                + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+        };
+        const lines = entries.map((e) => {
+            const short = LEVEL_SHORT[e.level] || e.level;
+            return `[${stamp(e.ts)}] [${e.tag}] [${short}]` + (e.loc ? ` [${e.loc}]:` : '') + ` ${e.message}`;
+        });
+        const filters = [
+            lv && lv !== 'DEBUG' ? '级别≥' + lv : '',
+            tag ? '模块=' + tag : '',
+            search ? '关键词=' + search : '',
+            el('logHideChat')?.checked ? '已排除对话' : '',
+        ].filter(Boolean).join('，') || '无';
+        const head = [
+            'ElainaChat 运行日志导出',
+            '导出时间：' + stamp(Date.now()),
+            // 版本号只在侧栏底部（"v2.0.1 · 魔女之旅"）：按 v 前缀全页找，
+            //   不能写死下标 —— 布局一改就会拿到别处的 "1"
+            '版本：' + (Array.from(document.querySelectorAll('[class*="text-[10px]"]'))
+                .map((el) => el.textContent.trim())
+                .find((t) => /^v\d/.test(t)) || ''),
+            '环境：' + navigator.userAgent,
+            '条数：' + lines.length + '（过滤：' + filters + '）',
+            '――――――――――――――――――――――――――',
+        ].join('\n');
+        const text = head + '\n' + lines.join('\n') + '\n';
+
+        const d = new Date();
+        const fname = 'elainachat-log-'
+            + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
+            + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.txt';
+        return { text, fname, count: lines.length };
+    }
+
+    /**
+     * 按运行环境选择保存方式：
+     *   ① APK：原生 ElainaExport 拉 SAF「创建文档」选择器（自选目录与文件名，无需存储权限）。
+     *      WebView 里做不到 —— showSaveFilePicker 在 Android WebView 上不存在，
+     *      a[download] 的 blob 会被 DownloadListener 静默丢掉（界面说"已导出"，全盘找不到文件）。
+     *      选择器打不开的极罕见环境回落固定目录：公共 Download（Android 11+ 无需权限）→ CACHE。
+     *   ② 电脑：showSaveFilePicker（真正的系统"另存为"）；桌面 navigator.share 只有 Outlook 类
+     *      目标，不选它。③ 手机浏览器：navigator.share。④ 兜底：a[download]。
+     */
+    async function saveExportText(text, fname, count, say) {
+        const file = new File([text], fname, { type: 'text/plain' });
+
+        // ① APK：系统「创建文档」选择器 —— 自选保存位置（SAF，无需权限）
+        const cap = window.Capacitor;
+        const capFs = cap && cap.Plugins && cap.Plugins.Filesystem;
+        const capExport = cap && cap.Plugins && cap.Plugins.ElainaExport;
+        if (capFs && capExport && typeof capExport.saveText === 'function') {
+            const r = await capExport.saveText({ data: text, fileName: fname });
+            if (r && r.ok) { say('已保存到所选位置（' + count + ' 条）'); return; }
+            if (r && r.reason === 'cancelled') { say('已取消导出'); return; }
+            // 选择器打不开等异常 → 在状态栏说明原因，落到固定目录兜底
+            say((r && r.text) || '系统选择器不可用，改存固定位置…');
+        }
+        if (capFs) {
+            const tryWrite = async (directory, path, okMsg) => {
+                await capFs.writeFile({ path, data: text, directory, encoding: 'utf8', recursive: true });
+                say(okMsg);
+            };
+            try {
+                // Android 11+（API 30+）：公共 Download 创建自己的文件无需任何权限
+                await tryWrite('EXTERNAL_STORAGE', 'Download/' + fname,
+                    '已保存到「下载」文件夹：' + fname + '（' + count + ' 条）');
+                return;
+            } catch (e) {
+                // Android 10 及更老的权限模型写公共目录会失败 → 回落缓存，至少给得出路径
+                try {
+                    await tryWrite('CACHE', 'log-exports/' + fname,
+                        '已导出到应用缓存：log-exports/' + fname + '（公共下载不可写：' + String((e && e.message) || e) + '）');
+                    return;
+                } catch (e2) { /* 缓存也失败 → 落到 ②③ */ }
+            }
+        }
+
+        // ② 电脑：系统「另存为」对话框（File System Access API）
+        if (typeof window.showSaveFilePicker === 'function') {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: fname,
+                    types: [{ description: '文本文件', accept: { 'text/plain': ['.txt'] } }],
+                });
+                const w = await handle.createWritable();
+                await w.write(file);
+                await w.close();
+                say('已保存到所选位置（' + count + ' 条）');
+                return;
+            } catch (e) {
+                if (e && e.name === 'AbortError') { say('已取消导出'); return; }
+                /* 手势丢失等异常 → 落到 ③④ */
+            }
+        }
+
+        // ③ 手机浏览器（仅移动端）：系统分享面板（桌面共享面板没有文件落点，跳过）
+        const mobile = (typeof IS_MOBILE_DEVICE !== 'undefined') && IS_MOBILE_DEVICE;
+        if (mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+            try {
+                await navigator.share({ files: [file], title: fname });
+                say('已通过系统分享发出 ' + fname);
+                return;
+            } catch (e) {
+                if (e && e.name === 'AbortError') { say('已取消分享'); return; }   // 用户关掉分享面板不算失败
+                /* 不支持 files 的 share 会 throw —— 落到 ④ */
+            }
+        }
+        // ④ 兜底：浏览器下载（受浏览器"每次询问"设置控制）
+        try {
+            const url = URL.createObjectURL(file);
+            const a = document.createElement('a');
+            a.href = url; a.download = fname;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 5000);
+            say('已导出 ' + fname + '（' + count + ' 条）');
+        } catch (e) {
+            say('导出失败：当前环境不支持保存，请截图或长按复制日志');
+        }
+    }
+
     /**
      * 导出当前过滤下的全部缓冲日志（「日志」栏工具栏的导出按钮）。
      *
-     * 为什么要导出：手机上几百行等宽小字没法看，用户实际需要的是"把日志
-     *   发给懂的人"。分发顺序（系统选择器本身就是"是否 + 存哪里"的确认）：
-     *   ① APK：原生 ElainaExport 插件拉 **SAF「创建文档」选择器**
-     *      （ACTION_CREATE_DOCUMENT）—— 用户在系统文件管理器里自选目录和
-     *      文件名，选中即写入，无需任何存储权限。WebView 里做不到：
-     *      showSaveFilePicker 在 Android WebView 上不存在，a[download] 的
-     *      blob 会被 DownloadListener 静默丢掉（实测：UI 说"已导出"但全盘
-     *      找不到文件）。选择器打不开的极罕见环境回落固定目录：
-     *      公共 Download（Android 11+ 无需权限）→ CACHE（给出路径）。
-     *   ② 电脑：`showSaveFilePicker`（File System Access API）—— 真正的
-     *      系统"另存为"对话框，自选位置。Windows Chrome/Edge 也有
-     *      navigator.share，但桌面共享面板只有 Outlook 类目标，不选它。
-     *   ③ 手机浏览器（IS_MOBILE_DEVICE 且 canShare files）：navigator.share。
-     *   ④ 兜底：a[download]（Firefox/Safari 等无 FSA 的桌面浏览器；
-     *      下载受浏览器"每次询问"设置控制）。全部失败在状态栏说明。
-     *
-     * 过滤与页面**同一套**（级别药丸 / 模块 / 关键词 / 排除对话）——
-     *   导出"看到的"而不是"全部的"：用户排障时往往已经把范围收窄了。
-     *   要全量就把过滤清空再导。
-     *
-     * 文本格式与落盘日志对齐（`[时刻] [模块] [级别] [来源]: 正文`），但时刻
-     *   带完整日期 —— 页面上"今天几点"就够，文件是拿走的，必须自带日期。
-     *   文件头附环境信息（版本 / UA / 条数 / 过滤条件），给懂的人看的就是它。
+     * 手机上几百行等宽小字没法看，用户真正要的是"把日志发给懂的人"，
+     * 所以按环境选保存方式（见 saveExportText）。过滤与页面**同一套**
+     * （导出"看到的"而不是"全部的"）；时刻带完整日期 ——
+     * 页面只看"今天几点"，文件是拿走的，必须自带日期。
      */
     async function exportLogs() {
         const meta = el('logPageMeta');
@@ -176,130 +268,10 @@
         const btn = el('logExportBtn');
         if (btn) btn.disabled = true;
         try {
-            const params = new URLSearchParams();
-            const lv = levelParam();
-            if (lv === '__none__') { say('所有级别都被关掉了 —— 没有可导出的内容'); return; }
-            if (lv) params.set('level', lv);
-            const tag = el('logTagSelect')?.value || '';
-            if (tag) params.set('tags', tag);
-            const search = el('logSearchInput')?.value?.trim() || '';
-            if (search) params.set('search', search);
-            params.set('limit', '3000');   // 缓冲容量（RING_CAPACITY），一次拿全
-            const res = await fetch('/api/logs/tail?' + params.toString(), { cache: 'no-store' });
-            const json = await res.json().catch(() => null);
-            if (!res.ok || !json || !json.ok) { say('导出失败：日志服务不可用'); return; }
-            const entries = (json.entries || []).slice().reverse()   // 旧 → 新
-                .filter(passesLocalFilter);
-            if (!entries.length) { say('当前过滤下没有日志可导出'); return; }
-
-            const p = (n, w = 2) => String(n).padStart(w, '0');
-            const stamp = (ts) => {
-                const d = new Date(ts);
-                return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} `
-                    + `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
-            };
-            const lines = entries.map((e) => {
-                const short = LEVEL_SHORT[e.level] || e.level;
-                return `[${stamp(e.ts)}] [${e.tag}] [${short}]` + (e.loc ? ` [${e.loc}]:` : '') + ` ${e.message}`;
-            });
-            const filters = [
-                lv && lv !== 'DEBUG' ? '级别≥' + lv : '',
-                tag ? '模块=' + tag : '',
-                search ? '关键词=' + search : '',
-                el('logHideChat')?.checked ? '已排除对话' : '',
-            ].filter(Boolean).join('，') || '无';
-            const head = [
-                'ElainaChat 运行日志导出',
-                '导出时间：' + stamp(Date.now()),
-                // 版本写在侧栏底部（"v2.0.0 · 魔女之旅"）—— 全页找 v 开头的那一个，
-                //   写死下标会因布局改动拿错元素（实测拿到过别处的 "1"）
-                '版本：' + (Array.from(document.querySelectorAll('[class*="text-[10px]"]'))
-                    .map((el) => el.textContent.trim())
-                    .find((t) => /^v\d/.test(t)) || ''),
-                '环境：' + navigator.userAgent,
-                '条数：' + lines.length + '（过滤：' + filters + '）',
-                '――――――――――――――――――――――――――',
-            ].join('\n');
-            const text = head + '\n' + lines.join('\n') + '\n';
-
-            const d = new Date();
-            const fname = 'elainachat-log-'
-                + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate())
-                + '-' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.txt';
-            const file = new File([text], fname, { type: 'text/plain' });
-
-            // ① APK：系统「创建文档」选择器 —— 自选保存位置（SAF，无需权限）
-            const cap = window.Capacitor;
-            const capFs = cap && cap.Plugins && cap.Plugins.Filesystem;
-            const capExport = cap && cap.Plugins && cap.Plugins.ElainaExport;
-            if (capFs && capExport && typeof capExport.saveText === 'function') {
-                const r = await capExport.saveText({ data: text, fileName: fname });
-                if (r && r.ok) { say('已保存到所选位置（' + lines.length + ' 条）'); return; }
-                if (r && r.reason === 'cancelled') { say('已取消导出'); return; }
-                // 选择器打不开等异常 → 在状态栏说明原因，落到固定目录兜底
-                say((r && r.text) || '系统选择器不可用，改存固定位置…');
-            }
-            if (capFs) {
-                const tryWrite = async (directory, path, okMsg) => {
-                    await capFs.writeFile({ path, data: text, directory, encoding: 'utf8', recursive: true });
-                    say(okMsg);
-                };
-                try {
-                    // Android 11+（API 30+）：公共 Download 创建自己的文件无需任何权限
-                    await tryWrite('EXTERNAL_STORAGE', 'Download/' + fname,
-                        '已保存到「下载」文件夹：' + fname + '（' + lines.length + ' 条）');
-                    return;
-                } catch (e) {
-                    // Android 10 及更老的权限模型写公共目录会失败 → 回落缓存，至少给得出路径
-                    try {
-                        await tryWrite('CACHE', 'log-exports/' + fname,
-                            '已导出到应用缓存：log-exports/' + fname + '（公共下载不可写：' + String((e && e.message) || e) + '）');
-                        return;
-                    } catch (e2) { /* 缓存也失败 → 落到 ②③ */ }
-                }
-            }
-
-            // ② 电脑：系统「另存为」对话框（File System Access API）
-            if (typeof window.showSaveFilePicker === 'function') {
-                try {
-                    const handle = await window.showSaveFilePicker({
-                        suggestedName: fname,
-                        types: [{ description: '文本文件', accept: { 'text/plain': ['.txt'] } }],
-                    });
-                    const w = await handle.createWritable();
-                    await w.write(file);
-                    await w.close();
-                    say('已保存到所选位置（' + lines.length + ' 条）');
-                    return;
-                } catch (e) {
-                    if (e && e.name === 'AbortError') { say('已取消导出'); return; }
-                    /* 手势丢失等异常 → 落到 ③④ */
-                }
-            }
-
-            // ③ 手机浏览器（仅移动端）：系统分享面板（桌面共享面板没有文件落点，跳过）
-            const mobile = (typeof IS_MOBILE_DEVICE !== 'undefined') && IS_MOBILE_DEVICE;
-            if (mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
-                try {
-                    await navigator.share({ files: [file], title: fname });
-                    say('已通过系统分享发出 ' + fname);
-                    return;
-                } catch (e) {
-                    if (e && e.name === 'AbortError') { say('已取消分享'); return; }   // 用户关掉分享面板不算失败
-                    /* 不支持 files 的 share 会 throw —— 落到 ④ */
-                }
-            }
-            // ④ 兜底：浏览器下载（受浏览器"每次询问"设置控制）
-            try {
-                const url = URL.createObjectURL(file);
-                const a = document.createElement('a');
-                a.href = url; a.download = fname;
-                document.body.appendChild(a); a.click(); a.remove();
-                setTimeout(() => URL.revokeObjectURL(url), 5000);
-                say('已导出 ' + fname + '（' + lines.length + ' 条）');
-            } catch (e) {
-                say('导出失败：当前环境不支持保存，请截图或长按复制日志');
-            }
+            const collected = await collectExportEntries(say);
+            if (!collected) return;
+            const { text, fname, count } = buildExportText(collected.entries, collected.lv, collected.tag, collected.search);
+            await saveExportText(text, fname, count, say);
         } catch (err) {
             say('导出失败：' + String((err && err.message) || err));
         } finally {
@@ -321,7 +293,7 @@
     async function refresh(full) {
         const box = el('logPageBox');
         if (!box) return;
-        const myReq = ++reqSeq;          // 本次请求的序号（见 reqSeq 的说明）
+        const myReq = ++reqSeq;
         try {
             const tag = el('logTagSelect')?.value || '';
             const search = el('logSearchInput')?.value?.trim() || '';
@@ -337,9 +309,8 @@
             if (lv) params.set('level', lv);
             if (tag) params.set('tags', tag);
             if (search) params.set('search', search);
-            // 增量要用**两个**游标：时间戳 + 写入序号。
-            //   只传时间戳会让同一毫秒里的后续记录被永久跳过（一次启动就有一批同毫秒日志），
-            //   表现是"bat 面板刷过好几行、查看器里少几行"。详见 server/log-buffer.mjs。
+            // 增量要用**两个**游标：时间戳 + 写入序号。只传时间戳会让同一毫秒里的
+            //   后续记录被永久跳过（一次启动就有一批同毫秒日志），表现是"面板刷过好几行、查看器少几行"。
             if (!full && lastTs) {
                 params.set('since', String(lastTs));
                 if (lastSeq >= 0) params.set('sinceSeq', String(lastSeq));
@@ -349,12 +320,9 @@
             if (!res.ok) { showUnavailable(); return; }
             const json = await res.json();
             if (!json.ok) { showUnavailable(); return; }
-            // 过期响应丢弃：期间又发起过请求的话，这个结果已经不代表当前过滤条件了。
-            //   不加这道闸门会"偶尔显示上一个状态"（见 reqSeq 的说明）。
             if (myReq !== reqSeq) return;
 
-            // 服务恢复了：清掉上一轮的"不可用"空态（否则空态文案会一直挂着，
-            // 新日志还会被追加在它后面）
+            // 服务恢复了：清掉上一轮的"不可用"空态，否则空态文案会一直挂着、新日志追加在它后面
             const wasUnavailable = unavailableShown;
             if (wasUnavailable) {
                 unavailableShown = false;
@@ -362,7 +330,6 @@
                 if (boxNow) boxNow.innerHTML = '';
             }
 
-            // 模块下拉框：把缓冲里出现过的模块补进去（只增不减）
             const tagSel = el('logTagSelect');
             if (tagSel && Array.isArray(json.tags)) {
                 for (const t of json.tags) {
@@ -378,13 +345,9 @@
             const entries = json.entries || [];
             if (!entries.length && !full && !wasUnavailable) return;   // 增量没有新东西，不动 DOM
 
-            // 顺序**与 bat 面板一致：旧在上、新在下**。
-            //
-            //   服务端返回的是新→旧（查询是从最新的往回扫），这里翻过来再渲染。
-            //   为什么值得翻：面板是"旧在上、新在下、跟 tail -f 一样"，
-            //   查看器必须**同一个方向** —— 两个窗口顺序相反就无法逐行对照，
-            //   用户会说"对不上"。
-            const ordered = entries.slice().reverse();   // 旧 → 新
+            // 顺序**与 bat 面板一致：旧在上、新在下**（服务端返回新→旧，这里翻过来）。
+            //   两个窗口顺序相反就无法逐行对照，用户会说"对不上"。
+            const ordered = entries.slice().reverse();
             // 前端这一侧再筛一遍（级别多选 / 排除对话）。
             // 服务端已经按 level/tag/search 筛过，这里只处理它表达不了的两件事。
             const visible = ordered.filter(passesLocalFilter);
@@ -392,7 +355,7 @@
             if (full) {
                 box.innerHTML = visible.map(renderEntry).join('')
                     || '<div class="log-empty">（没有匹配的日志）</div>';
-                box.scrollTop = box.scrollHeight;        // 全量后停在最新（底部）
+                box.scrollTop = box.scrollHeight;
             } else {
                 if (visible.length) box.insertAdjacentHTML('beforeend', visible.map(renderEntry).join(''));
                 // 只在用户本来就贴着底部、且开了「自动滚动」时才滚 ——
@@ -402,9 +365,8 @@
                     if (nearBottom) box.scrollTop = box.scrollHeight;
                 }
             }
-            // 记录本次拉到的最新条目的游标（entries[0] 是最新的）。
-            // 序号与时间戳必须**成对**更新 —— 只更新时间戳会让下一轮把同一毫秒的
-            // 后续记录当成"已经见过"而丢掉。
+            // 记录最新条目的游标（entries[0] 是最新的）。序号与时间戳必须**成对**更新 ——
+            // 只更新时间戳会让下一轮把同一毫秒的后续记录当成"已经见过"而丢掉。
             if (entries.length) {
                 lastTs = entries[0].ts;
                 lastSeq = Number(entries[0].seq ?? -1);
@@ -421,9 +383,8 @@
                 '完整历史在日志文件里',
             ]);
         } catch (e) {
-            // 服务不在（桌面服务挂了 / 手机端内嵌服务未就绪）时给出可见的空态，
-            // 而不是静默 return —— "这一页是死的还是没日志"必须一眼分得清。
-            // 平台中立：这里不做任何环境判断，两端共用同一个表现。
+            // 服务不在（桌面服务挂了 / 手机端内嵌服务未就绪）时给可见的空态，而不是静默 return ——
+            // "这一页是死的还是没日志"必须一眼分得清；这里不做环境判断，两端共用同一表现。
             showUnavailable();
         }
     }
@@ -443,12 +404,8 @@
 
     /**
      * 这一栏是否真的显示着（决定轮询要不要干活）。
-     *
-     * 日志现在住在设置面板的一个分栏里，所以"可见"有两层条件：
-     *   ① 设置面板本身是打开的（否则整个面板 hidden）
-     *   ② 当前选中的分栏就是 tab-log（其它分栏时本栏是 display:none）
-     *   漏掉 ① 会让"关掉设置后轮询还在跑"（服务端日志被自噪音刷屏）；
-     *   漏掉 ② 会让"停在别的分栏时也在拉"，白耗流量。
+     * "可见"有两层条件：① 设置面板本身打开 ② 当前分栏是 tab-log。
+     * 漏掉 ① 会让"关掉设置后轮询还在跑"（服务端日志被自噪音刷屏）；漏掉 ② 会白耗流量。
      */
     function isVisible() {
         const panel = el('tab-log');
@@ -470,7 +427,6 @@
         if (timer) { clearInterval(timer); timer = null; }
     }
 
-    /** 级别药丸：点一下切换选中，并立刻重拉 */
     function togglePill(btn) {
         const on = btn.getAttribute('aria-pressed') === 'true';
         btn.setAttribute('aria-pressed', on ? 'false' : 'true');
@@ -506,12 +462,9 @@
     }
 
     /**
-     * 进入这一栏（由分栏切换时调用）：绑事件、首次全量拉、开轮询。
-     *
-     * 为什么不再需要"页面模式"（藏聊天区 / 切 rail 高亮 / state.logMode）：
-     *   日志已经是设置面板里的一个分栏，面板打开时聊天区本来就藏着，
-     *   rail 高亮本来就是「设置」。所以不需要 enterLogMode/exitLogMode 那套
-     *   "独立全屏页"的开关：分栏化之后整块都是多余状态。
+     * 进入这一栏（分栏切换时调用）：绑事件、首次全量拉、开轮询。
+     * 不需要 enterLogMode/exitLogMode 那类"独立全屏页"开关：面板打开时聊天区本来就藏着，
+     * rail 高亮本来就是「设置」。
      */
     function open() {
         if (!bind()) return;

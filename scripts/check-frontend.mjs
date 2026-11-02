@@ -1,29 +1,26 @@
 // 前端结构检查：DOM 引用、内联脚本语法、Store 键白名单、消息渲染。
-//
 // 合并自四个独立脚本（check-dom-refs / check-inline-scripts /
 // check-store-keys / check-message-render）—— 它们测的都是"前端源码的静态结构"，
 // 共享同一份 readFrontend()，拆成四个文件只是各自多抄一遍样板。
-//
 // 每段用例在自己的函数作用域里跑，断言经 ctx.ok 记账，
 // 失败信息形如「DOM 引用 :: 第 812 行：getElementById('x') —— HTML 里没有这个 id」。
-//
 // 用法：node scripts/check-frontend.mjs
 
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { readFrontend } from './frontend-sources.mjs';
 import { runChecks, ROOT } from './check-harness.mjs';
+import { extractFunction, extractClass, stripComments, makeVmSandbox } from './check-source.mjs';
+import { findFullyOverriddenRules, findOverriddenDeclarations } from './css-layers.mjs';
+import vm from 'node:vm';
 
 const HTML_FILE = path.join(ROOT, 'web', 'index.html');
 const JS_DIR = path.join(ROOT, 'web', 'js');
 
-// ────────────────────────────────────────────────────────────
 // 1. DOM 引用落地
-//
 // 单文件应用没有构建期检查，`document.getElementById('x')` 写错一个字母
 // 只会得到 null，然后在某个不常走的代码路径上炸成 "Cannot read properties
 // of null"。改 id、重命名元素时尤其容易漏。这段在打开浏览器之前就报出来。
-// ────────────────────────────────────────────────────────────
 
 /**
  * 用花括号配对取出一段对象字面量的内容。
@@ -107,12 +104,9 @@ async function caseDomRefs(c) {
         problems.length ? `\n      · ${problems.join('\n      · ')}` : '');
 }
 
-// ────────────────────────────────────────────────────────────
 // 2. 内联脚本语法
-//
 // 单文件应用的内联 <script> 没有任何构建期语法检查，写错一个括号要等到
 // 打开页面白屏才发现。这里用 vm.SourceTextModule 真正解析一遍。
-// ────────────────────────────────────────────────────────────
 
 async function caseInlineScripts(c) {
     const vm = await import('node:vm');
@@ -161,15 +155,12 @@ async function caseInlineScripts(c) {
         errors.length ? `\n      · ${errors.join('\n      · ')}` : '');
 }
 
-// ────────────────────────────────────────────────────────────
 // 3. Store DATA_KEYS 白名单 ↔ 实际使用的键
-//
 // Store 有个特性（也是坑）：setItem 只对 **DATA_KEYS 白名单里的键**入队推送
 // （写进 data/），其余键**只写内存缓存** —— 表现为"生效了，刷新就回去"。
 // 这个坑踩过三次（elaina_mods_order / elaina_live2d_model_order /
 // elaina_mods_top_order），每次的修复都是"把键加回白名单"，
 // 但没有检查盯着的话，下一个新键还会漏。
-// ────────────────────────────────────────────────────────────
 
 async function caseStoreKeys(c) {
     const storeSrc = readFileSync(path.join(JS_DIR, 'store.js'), 'utf8');
@@ -213,23 +204,20 @@ async function caseStoreKeys(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 4. 消息渲染（Markdown + LaTeX）
-//
 // ① **安全**：聊天内容来自模型，模型输出受提示词影响，而提示词可被对话内容影响。
 //    因此渲染器必须把输入一律当**纯文本**：先转义再拼标签，原始 HTML 只能以字面量
 //    出现。这条边界现在由 web/js/readme-view.js 统一提供（renderChat），
 //    不再依赖"先 escapeHtml 再交给 marked"这种调用顺序 —— 顺序漏一处就是 XSS。
-//
 // ② **回落**：渲染器 / katex 任一缺失（脚本没同步、离线失败）时，
 //    必须静默降级为纯文本转义，而不是抛错或白屏。
-// ────────────────────────────────────────────────────────────
 
 async function caseMessageRender(c) {
     const html = readFrontend();
     const ui = readFileSync(path.join(JS_DIR, 'ui.js'), 'utf8');
     const view = readFileSync(path.join(JS_DIR, 'readme-view.js'), 'utf8');
-    const mods = readFileSync(path.join(JS_DIR, 'mods.js'), 'utf8');
+    const mods = readFileSync(path.join(JS_DIR, 'mods-host-core.js'), 'utf8')
+        + '\n' + readFileSync(path.join(JS_DIR, 'mods.js'), 'utf8');
 
     c.ok(/function renderMessageText/.test(ui), 'ui.js 里有 renderMessageText');
     c.ok(/ElainaReadme/.test(ui) && /renderChat\(/.test(view), '★ 消息与说明共用 readme-view.js 的自写渲染器');
@@ -267,6 +255,108 @@ async function caseMessageRender(c) {
         'mod 系统提供 system 提示词注入（场景切换指令靠它送达模型）');
 }
 
+/**
+ * 检查工具自身：源码抽取必须能处理真实 JS（而不是只对“没有字符串的样例”成立）。
+ * 这些样本专门踩过 extractFn 的坑：参数默认值 {}、字符串里的 '}'、模板串里的 ${}。
+ */
+async function caseCheckSourceTools(c) {
+    const sample = [
+        'function plain(a) { return a; }',
+        "async function defaults(opts = {}, cb = () => {}) { const s = '}'; return s; }",
+        'function tpl(v) { return \u0060x${v ? \'{}\' : \'}\'}y\u0060; }',
+        'function re(x) { return /filename="?([^";]+)"?/.test(x) && /}{/.test(x); }',
+        'function nested(v) { return \u0060a${v ? \u0060b${v}\u0060 : \'c\'}d\u0060; }',
+        "class Foo extends Bar { m() { return '}'; } }",
+    ].join('\n');
+
+    const fn = extractFunction(sample, 'defaults');
+    c.ok(fn.startsWith('async function defaults(') && fn.includes("const s = '}'") && fn.trim().endsWith('}'),
+        '★ extractFunction：async + 默认参数 {} + 字符串里的 } 都能完整取出', JSON.stringify(fn));
+
+    const tpl = extractFunction(sample, 'tpl');
+    c.ok(tpl.includes('x${v ?') && tpl.trim().endsWith('}'),
+        '★ extractFunction：模板串里的 ${} 不影响花括号配对', JSON.stringify(tpl));
+
+    const reFn = extractFunction(sample, 're');
+    c.ok(reFn.includes('/filename="?([^";]+)"?/') && reFn.includes('/}{/') && reFn.trim().endsWith('}'),
+        '★ extractFunction：正则字面量里的引号/花括号不会带跑配对', JSON.stringify(reFn));
+
+    const nested = extractFunction(sample, 'nested');
+    c.ok(nested.includes('\u0060a${v ?') && nested.includes('d\u0060; }') && nested.trim().endsWith('}'),
+        '★ extractFunction：模板串里的嵌套模板 / ${} 不会提前截断', JSON.stringify(nested));
+
+    const cls = extractClass(sample, 'Foo');
+    c.ok(cls.startsWith('class Foo') && cls.includes("return '}'") && cls.trim().endsWith('}'),
+        '★ extractClass：类体内的字符串 } 不会截断', JSON.stringify(cls));
+
+    const stripped = stripComments('// line\nconst x=1; /* block */\nconst y=2;');
+    c.ok(stripped.includes('const x=1;') && stripped.includes('const y=2;') && !stripped.includes('//') && !stripped.includes('/*'),
+        'stripComments：去掉行注释与块注释，保留代码');
+
+    const sandbox = makeVmSandbox({ x: 2 });
+    c.ok(vm.runInContext('x + 3', sandbox) === 5, 'makeVmSandbox：提供可执行的 VM 上下文');
+
+    // 元检查：不允许检查脚本再各自复制这份工具（复制品正是花括号 bug 的来源）
+    const scriptDir = path.join(ROOT, 'scripts');
+    const offenders = readdirSync(scriptDir)
+        .filter((f) => f.endsWith('.mjs') && f !== 'check-source.mjs')
+        .filter((f) => /function\s+extractFn|function\s+extractClassFrom|const\s+stripCommentsOf\s*=/.test(readFileSync(path.join(scriptDir, f), 'utf8')));
+    c.ok(offenders.length === 0, '★ 检查脚本不再各自实现 extractFn / extractClass / stripComments', offenders.join(', '));
+}
+
+// 6. CSS 分层：基础样式层里不得有「注定输给覆盖层」的声明
+//
+// 样式分两层：web/css/base.css 先加载，themes / achievements / redesign /
+// layout-full / pages-luxe 在其后，又普遍带 `html.rd` 前缀和 !important。
+// 同权重靠后加载胜出，所以基础层里有些声明**永远轮不到生效**：看着能改，改完
+// 没反应，排查时还以为是缓存。这类声明应当在写下的那一刻就被挡住，而不是等某天
+// 有人对着它改了半天。
+async function caseCssLayers(c) {
+    const html = readFileSync(HTML_FILE, 'utf8');
+    c.ok(!/<style[\s>]/.test(html), '★ index.html 里没有内联 <style>（样式统一住 web/css/）');
+
+    // 顺序就是语义：基础层最先加载，覆盖层才有机会压住它
+    const order = [...html.matchAll(/<link rel="stylesheet" href="\/css\/([^"]+)">/g)].map((m) => m[1]);
+    const layers = ['themes.css', 'achievements.css', 'redesign.css', 'layout-full.css', 'pages-luxe.css'];
+    c.ok(order[0] === 'base.css' && layers.every((f) => order.indexOf(f) > 0),
+        '★ 加载顺序：base.css 打头，四份覆盖层在其后', order.join(' → '));
+
+    const layerCss = readFileSync(path.join(ROOT, 'web', 'css', 'base.css'), 'utf8');
+    const external = layers.map((f) => ({ file: f, css: readFileSync(path.join(ROOT, 'web', 'css', f), 'utf8') }));
+
+    const deadRules = findFullyOverriddenRules(layerCss, external);
+    c.ok(deadRules.length === 0,
+        '★ 基础样式层里没有整条被覆盖层压掉的规则（删了也看不出差别，改了更看不出）',
+        deadRules.slice(0, 5).map((d) => 'L' + d.line + ' ' + d.selector).join(' | '));
+
+    // 整条规则没死，里面的某条声明仍可能死 —— 那正是"改了这里没反应"的最小单位。
+    const deadDecls = findOverriddenDeclarations(layerCss, external);
+    c.ok(deadDecls.length === 0,
+        '★ 基础样式层里没有注定输给覆盖层的声明（' + deadDecls.length + ' 处）',
+        deadDecls.slice(0, 5).map((d) => 'L' + d.line + ' ' + d.selector + ' { ' + d.prop + ' }').join(' | '));
+
+    // 自测：注释后的声明不能被丢掉。丢了会让"有 z-index 的规则"看起来只剩
+    // 被覆盖的属性，于是整条被误判为死规则 —— 删掉它会直接改掉层级。
+    const synthetic = findFullyOverriddenRules(
+        '.x { /* 说明：z-index 必须压过别的层 */ z-index: 9 !important; color: red; }',
+        [{ file: 'x.css', css: 'html.rd .x { color: blue !important; }' }]
+    );
+    c.ok(synthetic.length === 0, '★ 自测：注释后面的声明不会被丢掉（否则会误删带 z-index 的规则）', JSON.stringify(synthetic));
+    const overridden = findFullyOverriddenRules(
+        '.y { color: red; }',
+        [{ file: 'x.css', css: 'html.rd .y { color: blue !important; }' }]
+    );
+    c.ok(overridden.length === 1, '自测：真被整条覆盖的规则能被认出来', JSON.stringify(overridden));
+
+    // 自测：只死一半的规则要报出**那一条声明**，不能把整条规则算死
+    const halfDead = findOverriddenDeclarations(
+        '.z { color: red; flex: none; }',
+        [{ file: 'x.css', css: 'html.rd .z { color: blue !important; }' }]
+    );
+    c.ok(halfDead.length === 1 && halfDead[0].prop === 'color',
+        '自测：只被覆盖一部分的规则只报被覆盖的声明', JSON.stringify(halfDead));
+}
+
 await runChecks({
     title: '前端结构（DOM 引用 / 内联脚本 / Store 键 / 消息渲染）',
     usage: 'node scripts/check-frontend.mjs',
@@ -275,5 +365,8 @@ await runChecks({
         { name: '内联脚本语法', fn: caseInlineScripts },
         { name: 'Store 键白名单', fn: caseStoreKeys },
         { name: '消息渲染', fn: caseMessageRender },
+        { name: '检查工具自身（源码抽取）', fn: caseCheckSourceTools },
+        { name: 'CSS 分层（基础层不得被覆盖层压掉）', fn: caseCssLayers },
     ],
 });
+

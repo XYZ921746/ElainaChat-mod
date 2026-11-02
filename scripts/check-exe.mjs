@@ -1,5 +1,4 @@
 // 单文件 exe 打包（dist/Windows/scripts/pack-exe.mjs + dist/Windows/launcher/launcher.cjs）的回归检查。
-//
 // 打包这层的失败几乎都**不在构建期暴露**，而在用户双击那一刻：
 //   · 内嵌资源取出来的类型不对（getRawAsset 给 ArrayBuffer，writeFileSync 不收）
 //   · 入口用了 ESM（SEA 只支持 CJS）
@@ -7,10 +6,8 @@
 //   · 把 data/ 也内嵌，于是每次启动覆盖用户的聊天记录
 // 所以这里既做静态断言（形状），也**真跑一次 exe**：没有这一步，"打出来了"
 // 与"打得能用"是两件事。
-//
 // 真跑那一项会解出 4 MB 程序文件到一个临时目录 —— 用 mkdtemp 隔离、finally 删干净，
 // 不碰项目 data/ 与用户的 mods/。
-//
 // 用法：node scripts/check-exe.mjs           跑全部
 //       node scripts/check-exe.mjs 启动器     只跑名字含该子串的用例
 

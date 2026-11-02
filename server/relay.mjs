@@ -1,20 +1,16 @@
 // 本地中转 /api/relay —— **电脑端与手机端共用**的这一份实现。
-//
 // 从 web/serve.mjs 抽成独立模块：serve.mjs 太长了，而这段逻辑与路由表无关，
 // 单独成文件才好读、好测。
-//
 //   为什么抽：这台"中转"是把请求搬到 Node 侧发出（Node 没有 CORS 这回事），
 //   而两端**都需要它** —— 电脑版是 BYOK 直连被 CORS 挡住时的唯一出路，
 //   手机版更彻底：WebView 页面在 https://localhost，而内嵌服务在
 //   http://127.0.0.1:<随机端口>，本来就跨源。复制两份实现意味着"同一个 Key、
 //   同一个地址，在电脑上能通、在手机上通不了"这类问题要查两遍。
-//
 //   依赖注入而不是 import 宿主：唯一真正需要注入的是 `traceLine`
 //   （电脑版把追踪日志写进 data/logs/<启动时刻>.trace.log，手机端另有落法），
 //   以及三个**安全判定**（是否本机请求 / 是否回环主机名 / 是否内网地址）。
 //   后三个电脑端定义在 serve.mjs 里（局域网里还有别的设备能打到它），
 //   手机端只绑 127.0.0.1、由内嵌入口自己给出等价实现 —— 见 createRelay 的说明。
-//
 // 为什么需要它（原文保留）：BYOK 的"直连"是让浏览器自己去请求服务商，而浏览器会强制 CORS。
 // 大量中转站（自建 OneAPI、厂商内测网关、Ollama 之类）根本不发 Access-Control-Allow-Origin，
 // 预检 OPTIONS 甚至直接 405 —— 这时 fetch() 只会抛一句 "Failed to fetch"，
@@ -24,6 +20,55 @@
 
 import dns from 'node:dns';
 import { jsonResponse, readJsonBody } from './http-util.mjs';
+
+/**
+ * 有些网络只对 **TLS 1.3 的 ClientHello 丢包**，对 TLS 1.2 却放行。
+ *
+ * 实测（同一台机器、同一个 IPv4）：
+ *   · TCP 连 api.tavily.com 每秒都能建（250ms）；
+ *   · TLS 握手用 1.3 必然卡到超时（8s 无响应），**限制成 1.2 立刻 250ms 完成并拿到 401**；
+ *   · 同环境下 api.exa.ai 的 1.3 正常 —— 所以不是"整体被墙"，而是特定路径的中间设备
+ *     只处理 1.2（按 SNI / ClientHello 版本分流的老网关很常见）。
+ *
+ * 表现是 fetch 报 `UND_ERR_CONNECT_TIMEOUT (attempted addresses: …:443)`：看着像"连不上"，
+ *   实际 TCP 早通了，卡在握手。只报地址会把排查引向"网络不通"的错判。
+ *
+ * 为什么不无条件用 1.2：等于让所有上游都降级（1.3 有前向保密、往返更少），
+ *   为一个局部网络问题付全站代价不划算。所以只在**握手类失败**时回退一次。
+ *
+ * 为什么判据要看 err.cause：undici 把底层错误包在 cause 里，顶层只是 "fetch failed"。
+ *   业务失败（4xx/5xx）不会抛，压根到不了这里。
+ */
+function isTlsHandshakeFailure(err) {
+    const c = err && err.cause;
+    const code = String((c && c.code) || '');
+    const msg = String((c && c.message) || (err && err.message) || '');
+    if (code === 'UND_ERR_CONNECT_TIMEOUT') return true;
+    if (/ECONNRESET|EPROTO|SSL|TLS|HANDSHAKE/i.test(code)) return true;
+    return /connect timeout|secure TLS|handshake|ssl/i.test(msg);
+}
+
+/** 限制到 TLS 1.2 的重试。拿不到 undici 就返回 null（调用方按原样报错） */
+async function retryWithTls12(target, options, traceLine) {
+    // Node 未导出 undici 的稳定入口，所以动态 import —— 只在**真要重试**时才付出这个开销。
+    //   零依赖项目里 undici 是 Node 内置的，正常情况下 import 得到；被裁剪过的运行时才拿不到。
+    const undici = await import('undici').catch(() => null);
+    if (!undici || !undici.Agent) return null;
+    if (!retryWithTls12._agent) {
+        retryWithTls12._agent = new undici.Agent({
+            connect: { maxVersion: 'TLSv1.2', timeout: 30000 },
+            connectTimeout: 30000,
+        });
+    }
+    try {
+        const upstream = await fetch(target, { ...options, dispatcher: retryWithTls12._agent });
+        traceLine(`===== TLS 握手失败，已用 TLS 1.2 重试成功 ${target.host} =====`);
+        return upstream;
+    } catch {
+        // 重试也失败：交给调用方报**原始**错误 —— 第一个才是"为什么一开始不行"的事实。
+        return null;
+    }
+}
 
 // 对话历史、语音 base64、图片 base64 都会走这条通道，给宽一点（和端侧数据同一个量级）。
 export const RELAY_BODY_LIMIT = 32 * 1024 * 1024;
@@ -41,10 +86,8 @@ const TRACE_BODY_MAX = 64 * 1024;          // 写进追踪日志的单次响应�
 const TRACE_ACCUM_MAX = 256 * 1024;
 
 // ===== 对话追踪 =====
-//
 // 为什么埋在中转这一层：`/api/relay` 是**所有对外 AI 请求的唯一出口**（三种对话格式、
 // 获取模型、语音、视觉全走它），在这一层埋点就能覆盖全部，前端一行都不用改。
-//
 // 主日志只留一行摘要（提问 / 回复各截一段），完整内容进追踪日志。
 // 旧日志只有「谁在什么时候调了哪个接口」—— 出问题时根本还原不出当时问了什么、答了什么、
 // 上游到底为什么拒，这正是这次要补上的。
@@ -176,6 +219,121 @@ export function parseSseError(rawText) {
 }
 
 /**
+ * 空闲超时 + 客户端断开处理：每收到一块数据就续期，只有真正卡死才 abort。
+ *
+ * 为什么不是"总时长"超时：长回复（几千字）正常说完就要好几分钟，高思考强度模型的
+ *   首字节本身也常超过 120 秒 —— 按总时长砍会表现成"AI 不能正常流式输出"。
+ *   同时必须有 RELAY_TIMEOUT_MAX 的总时长硬顶：否则"上游一直发心跳、但永远不说正文"
+ *   就能把一个连接永远占住（逐块透传没有上限就是免费长连接）。
+ */
+function createRelayAbort(response, timeoutMs) {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const hardDeadline = startedAt + RELAY_TIMEOUT_MAX;
+    let timer = null;
+    let abortedByClient = false;
+    const armIdleTimer = (ms) => {
+        if (timer) clearTimeout(timer);
+        const remaining = hardDeadline - Date.now();
+        if (remaining <= 0) { controller.abort(); return; }
+        timer = setTimeout(() => controller.abort(), Math.min(ms, remaining));
+    };
+    armIdleTimer(timeoutMs);   // 第一段：等响应头（TTFB）
+    // 客户端自己走了就别再等上游；writableEnded 为真说明是正常结束，不算中断。
+    response.on('close', () => {
+        if (!response.writableEnded) { abortedByClient = true; controller.abort(); }
+    });
+    return {
+        controller,
+        startedAt,
+        armIdleTimer,
+        stop() { if (timer) clearTimeout(timer); },
+        get abortedByClient() { return abortedByClient; },
+    };
+}
+
+/** 中转超时参数的上下界：默认 120s，最少 1s，最多 RELAY_TIMEOUT_MAX。 */
+function relayTimeoutMs(payload) {
+    return Math.min(Math.max(Number(payload?.timeoutMs) || 120000, 1000), RELAY_TIMEOUT_MAX);
+}
+
+/** 按方法与 payload.body 组装要发给上游的 body，并解析一份"只给日志用"的 JSON。 */
+function readRelayBody(payload, method) {
+    const sendBody = !(method === 'GET' || method === 'HEAD');
+    const bodyValue = typeof payload?.body === 'string'
+        ? payload.body
+        : (payload?.body === undefined || payload?.body === null ? undefined : JSON.stringify(payload.body));
+    const reqRaw = typeof bodyValue === 'string' ? bodyValue : '';
+    // 解析请求体只为了记日志。超大请求（图片 / 语音 base64）跳过：JSON.parse 一个
+    //   几十 MB 的对象要几百毫秒，为了日志给每次对话平白加延迟不划算。
+    let reqJson = null;
+    if (reqRaw && Buffer.byteLength(reqRaw) <= RELAY_TRACE_PARSE_MAX) {
+        try { reqJson = JSON.parse(reqRaw); } catch { reqJson = null; }
+    }
+    return { sendBody, bodyValue, reqRaw, reqJson };
+}
+
+/** 组装 fetch 参数。redirect 必须 manual：3xx 的 Location 是攻击者可控的，跟随它可绕过 SSRF 校验。 */
+function buildRelayFetchOptions({ method, headers, bodyValue, sendBody, signal }) {
+    return {
+        method,
+        headers,
+        body: sendBody ? bodyValue : undefined,
+        signal,
+        redirect: 'manual',
+    };
+}
+
+/** 把一个失败翻译成能直接 grep 的文案；AbortError 单独说"超时"。 */
+function formatRelayFailure(err, timeoutMs) {
+    const cause = err?.cause;
+    if (err?.name === 'AbortError') return `超过 ${Math.round(timeoutMs / 1000)} 秒没有响应`;
+    return String(cause?.message || err?.message || err) + (cause?.code ? ` [${cause.code}]` : '');
+}
+
+/** 写上游响应头并立即 flush：fetch 收到头就 resolve，不 flush 会让"开始流式"整体后移。 */
+function writeUpstreamHeaders(upstream, response) {
+    const contentType = upstream.headers.get('content-type') || 'application/json; charset=utf-8';
+    response.writeHead(upstream.status, {
+        'Content-Type': contentType,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        // SSE 必须关掉缓冲：否则中间层会攒够一块才发，增量变成"一批一批蹦"。
+        ...(/text\/event-stream/i.test(upstream.headers.get('content-type') || '')
+            ? { 'X-Accel-Buffering': 'no' } : {}),
+    });
+    if (typeof response.flushHeaders === 'function') {
+        try { response.flushHeaders(); } catch { /* 已经发过头了 */ }
+    }
+}
+
+/**
+ * 边透传边攒一份日志用的响应文本。攒到 TRACE_ACCUM_MAX 就停止记录但**继续透传**，
+ * 免得一个长回答把内存吃掉；流式正文稍后由 parseSseReply 从 data: 行拼回来。
+ */
+async function forwardUpstreamBody(upstream, response, armIdleTimer, timeoutMs, isAbortedByClient) {
+    const traceChunks = [];
+    let traceBytes = 0;
+    if (upstream.body) {
+        try {
+            for await (const chunk of upstream.body) {
+                if (isAbortedByClient()) break;
+                // 每收到一块就续期：只要上游还在吐数据，长回复就永远不会被自己的超时砍断。
+                armIdleTimer(timeoutMs);
+                response.write(chunk);
+                if (traceBytes < TRACE_ACCUM_MAX) {
+                    traceChunks.push(chunk);
+                    traceBytes += chunk.length;
+                }
+            }
+        } catch (err) {
+            if (!isAbortedByClient()) console.error('[relay] 透传响应中断:', String(err?.message || err));
+        }
+    }
+    return traceChunks.length ? Buffer.concat(traceChunks).toString('utf8') : '';
+}
+
+/**
  * 造一个中继处理器。
  *
  * @param {object} deps
@@ -197,6 +355,71 @@ export function createRelay(deps) {
     for (const [name, fn] of [['isLocalRequest', isLocalRequest], ['isLoopbackHostname', isLoopbackHostname], ['isInternalAddress', isInternalAddress]]) {
         if (typeof fn !== 'function') throw new Error(`createRelay 缺少依赖 ${name}（它决定 SSRF 防护，不能省）`);
     }
+
+    /**
+     * 校验中转目标地址（协议 / 云元数据 / SSRF）。
+     * 任一检查不通过就直接回错并返回 null；调用方见到 null 立即 return。
+     */
+    async function resolveRelayTarget(request, response, payload) {
+        let target;
+        try { target = new URL(String(payload?.url || '')); }
+        catch {
+            console.warn('[relay] 目标地址无效：' + String(payload?.url || '(空)').slice(0, 200));
+            jsonResponse(response, 400, { ok: false, relayError: true, message: '中转目标地址无效' });
+            return null;
+        }
+
+        if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+            console.warn(`[relay] 不支持的协议 ${target.protocol}//${target.host}，只允许 http/https`);
+            jsonResponse(response, 400, { ok: false, relayError: true, message: '中转只支持 http/https' });
+            return null;
+        }
+        if (RELAY_DENY_HOSTS.has(target.hostname.toLowerCase())) {
+            console.warn(`[relay] 拒绝访问云元数据地址 ${target.host}（防本机凭据泄露）`);
+            jsonResponse(response, 403, { ok: false, relayError: true, message: '该地址不允许通过中转访问' });
+            return null;
+        }
+        // 局域网设备不能把本机当中转跳板去打本机的其它服务（SSRF）。
+        // 本机自己发起的请求放行 —— Ollama 这类就住在 127.0.0.1。
+        if (!isLocalRequest(request) && isLoopbackHostname(target.hostname)) {
+            console.warn(`[relay] 拒绝非本机请求访问本机地址 ${target.host}（防 SSRF）`);
+            jsonResponse(response, 403, { ok: false, relayError: true, message: '本机地址只能由本机发起中转' });
+            return null;
+        }
+        // 只拦字面回环主机名还不够：攻击者可以让自己的域名解析到 127.0.0.1（DNS rebinding），
+        // 或直接填局域网地址、或用 ::ffff:127.0.0.1 这类 IPv4-mapped IPv6 写法绕开前缀比较。
+        // 先解析成 IP 再判一遍 —— 解析不出来就放行（真连不上时 fetch 自己会报错）。
+        if (!isLocalRequest(request)) {
+            let targetIps = [];
+            try { targetIps = await dns.promises.lookup(target.hostname, { all: true }); } catch { /* DNS 失败交给 fetch 报错 */ }
+            const dangerous = targetIps.some(({ address }) => isInternalAddress(address));
+            if (dangerous) {
+                console.warn(`[relay] 拒绝非本机请求访问内网地址 ${target.host} -> ${targetIps.map(i => i.address).join(',')}（防 SSRF）`);
+                jsonResponse(response, 403, { ok: false, relayError: true, message: '本机与内网地址只能由本机发起中转' });
+                return null;
+            }
+        }
+        return target;
+    }
+
+    /** 过滤浏览器身份头与逐跳头，返回要转发给上游的请求头。 */
+    function buildForwardHeaders(payload) {
+        const headers = {};
+        const rawHeaders = payload?.headers;
+        if (rawHeaders && typeof rawHeaders === 'object') {
+            for (const [k, v] of Object.entries(rawHeaders)) {
+                const key = String(k);
+                // Host / Content-Length 交给 undici 自己算；Cookie、Origin 之类浏览器身份信息不该外发。
+                if (/^(host|content-length|cookie|origin|referer|connection|transfer-encoding)$/i.test(key)) continue;
+                if (v === null || v === undefined) continue;
+                headers[key] = String(v);
+            }
+        }
+        // 不让上游压缩：一是 SSE 要能逐块透传，二是省得再解一遍。
+        headers['accept-encoding'] = 'identity';
+        return headers;
+    }
+
 
     /** 「问了什么」：请求全文进追踪日志，主日志只留最后一问（一眼看出这次聊了什么） */
     function traceRelayRequest({ method, target, reqJson, reqRaw }) {
@@ -289,39 +512,8 @@ export function createRelay(deps) {
             return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转请求体无效或过大' });
         }
 
-        let target;
-        try { target = new URL(String(payload?.url || '')); }
-        catch {
-            console.warn('[relay] 目标地址无效：' + String(payload?.url || '(空)').slice(0, 200));
-            return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转目标地址无效' });
-        }
-
-        if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-            console.warn(`[relay] 不支持的协议 ${target.protocol}//${target.host}，只允许 http/https`);
-            return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转只支持 http/https' });
-        }
-        if (RELAY_DENY_HOSTS.has(target.hostname.toLowerCase())) {
-            console.warn(`[relay] 拒绝访问云元数据地址 ${target.host}（防本机凭据泄露）`);
-            return jsonResponse(response, 403, { ok: false, relayError: true, message: '该地址不允许通过中转访问' });
-        }
-        // 局域网设备不能把本机当中转跳板去打本机的其它服务（SSRF）。
-        // 本机自己发起的请求放行 —— Ollama 这类就住在 127.0.0.1。
-        if (!isLocalRequest(request) && isLoopbackHostname(target.hostname)) {
-            console.warn(`[relay] 拒绝非本机请求访问本机地址 ${target.host}（防 SSRF）`);
-            return jsonResponse(response, 403, { ok: false, relayError: true, message: '本机地址只能由本机发起中转' });
-        }
-        // 只拦字面回环主机名还不够：攻击者可以让自己的域名解析到 127.0.0.1（DNS rebinding），
-        // 或直接填局域网地址、或用 ::ffff:127.0.0.1 这类 IPv4-mapped IPv6 写法绕开前缀比较。
-        // 先解析成 IP 再判一遍 —— 解析不出来就放行（真连不上时 fetch 自己会报错）。
-        if (!isLocalRequest(request)) {
-            let targetIps = [];
-            try { targetIps = await dns.promises.lookup(target.hostname, { all: true }); } catch { /* DNS 失败交给 fetch 报错 */ }
-            const dangerous = targetIps.some(({ address }) => isInternalAddress(address));
-            if (dangerous) {
-                console.warn(`[relay] 拒绝非本机请求访问内网地址 ${target.host} -> ${targetIps.map(i => i.address).join(',')}（防 SSRF）`);
-                return jsonResponse(response, 403, { ok: false, relayError: true, message: '本机与内网地址只能由本机发起中转' });
-            }
-        }
+        const target = await resolveRelayTarget(request, response, payload);
+        if (!target) return;
 
         const method = String(payload?.method || 'GET').toUpperCase();
         if (!['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -329,142 +521,51 @@ export function createRelay(deps) {
             return jsonResponse(response, 400, { ok: false, relayError: true, message: '中转不支持的请求方法' });
         }
 
-        const headers = {};
-        const rawHeaders = payload?.headers;
-        if (rawHeaders && typeof rawHeaders === 'object') {
-            for (const [k, v] of Object.entries(rawHeaders)) {
-                const key = String(k);
-                // Host / Content-Length 交给 undici 自己算；Cookie、Origin 之类浏览器身份信息不该外发。
-                if (/^(host|content-length|cookie|origin|referer|connection|transfer-encoding)$/i.test(key)) continue;
-                if (v === null || v === undefined) continue;
-                headers[key] = String(v);
-            }
-        }
-        // 不让上游压缩：一是 SSE 要能逐块透传，二是省得再解一遍。
-        headers['accept-encoding'] = 'identity';
+        const headers = buildForwardHeaders(payload);
 
-        const timeoutMs = Math.min(Math.max(Number(payload?.timeoutMs) || 120000, 1000), RELAY_TIMEOUT_MAX);
-        const controller = new AbortController();
-        // 这里的超时必须是**空闲**超时，不是从发起到结束的**总时长**。
-        //
-        //   用 `setTimeout(() => controller.abort(), timeoutMs)` 一直挂到整条响应体
-        //   转发完才 clearTimeout 的话，语义就变成"这次请求总共只能花 timeoutMs"，
-        //   而这对流式**是错的**：
-        //     · 长回复（几千字）正常说完就要好几分钟；
-        //     · 高思考强度模型的首字节本身就常超过 120 秒。
-        //   表现是一句 `超过 120 秒没有响应（120020ms）` 之后前端退回非流式。
-        //   用户看到的就是"AI 不能正常流式输出"：要么干等、要么整段蹦出来。
-        //
-        //   改成每收到一块数据就**续期**：只要上游还在吐数据就永不超时（流式长回复
-        //   因此可以正常走完），只有真正卡死（连接在、但一个字节都不来）才按
-        //   timeoutMs 砍。语义从"总共多久"变成"多久没动静"—— 这才是流式该有的超时。
-        //
-        //   ⚠️ 空闲续期必须配一条**总时长**硬顶，否则"上游一直发心跳、但永远不说正文"
-        //     就能把这条连接永远占住（转发是逐块透传，没有上限就等于免费长连接）。
-        //     硬顶取 RELAY_TIMEOUT_MAX（10 分钟）：正常对话（哪怕边想边说几分钟）
-        //     都在其内，占用也被封住。
-        const relayStartedAt = Date.now();
-        const hardDeadline = relayStartedAt + RELAY_TIMEOUT_MAX;
-        let timer = null;
-        const armIdleTimer = (ms) => {
-            if (timer) clearTimeout(timer);
-            const remaining = hardDeadline - Date.now();
-            if (remaining <= 0) { controller.abort(); return; }
-            timer = setTimeout(() => controller.abort(), Math.min(ms, remaining));
-        };
-        armIdleTimer(timeoutMs);   // 第一段：等响应头（TTFB）
-        let abortedByClient = false;
-        response.on('close', () => {
-            if (!response.writableEnded) { abortedByClient = true; controller.abort(); }
-        });
+        const timeoutMs = relayTimeoutMs(payload);
+        const relayAbort = createRelayAbort(response, timeoutMs);
+        const { controller, startedAt: relayStartedAt, armIdleTimer } = relayAbort;
 
-        const sendBody = !(method === 'GET' || method === 'HEAD');
-        const bodyValue = typeof payload?.body === 'string'
-            ? payload.body
-            : (payload?.body === undefined || payload?.body === null ? undefined : JSON.stringify(payload.body));
-        const reqRaw = typeof bodyValue === 'string' ? bodyValue : '';
-        // 解析请求体**只为了记日志**。超大请求（图片 / 语音 base64）跳过：JSON.parse 一个几十 MB 的
-        // 对象要几百毫秒，为了日志给每次对话平白加延迟不划算 —— 那种情况只记大小。
-        let reqJson = null;
-        if (reqRaw && Buffer.byteLength(reqRaw) <= RELAY_TRACE_PARSE_MAX) {
-            try { reqJson = JSON.parse(reqRaw); } catch { reqJson = null; }
-        }
-
+        const { sendBody, bodyValue, reqRaw, reqJson } = readRelayBody(payload, method);
+        const fetchOptions = buildRelayFetchOptions({ method, headers, bodyValue, sendBody, signal: controller.signal });
         let upstream;
         try {
-            upstream = await fetch(target, {
-                method,
-                headers,
-                body: sendBody ? bodyValue : undefined,
-                signal: controller.signal,
-                // 不跟随上游重定向：302 Location 是攻击者可控的，跟随它可以把"对公网 API 的请求"
-                // 重定向到本机/内网地址，绕过上面的 SSRF 校验。3xx 原样透传给前端自己处理。
-                redirect: 'manual',
-            });
+            upstream = await fetch(target, fetchOptions);
         } catch (err) {
-            clearTimeout(timer);
-            if (abortedByClient) return;                       // 客户端自己走了，不用回话
-            const cause = err?.cause;
-            // 这一句比浏览器那句 "Failed to fetch" 有用得多：能看出是 DNS、TLS 还是连接被拒。
-            // 带上 cause.code（ENOTFOUND / ECONNREFUSED / UND_ERR_CONNECT_TIMEOUT …），方便直接 grep。
-            const detail = err?.name === 'AbortError'
-                ? `超过 ${Math.round(timeoutMs / 1000)} 秒没有响应`
-                : String(cause?.message || err?.message || err) + (cause?.code ? ` [${cause.code}]` : '');
-            // 连不上时把**请求内容**也写进追踪日志：否则只看到"连接被拒"，
-            // 不知道当时问的是什么、模型名有没有写错 —— 而这恰恰是最常见的原因。
-            traceRelayRequest({ method, target, reqJson, reqRaw });
-            traceLine(`===== 请求失败 ${method} ${target.href} =====\n${detail}（${Date.now() - relayStartedAt}ms）`);
-            console.error(`[relay] 请求失败 ${method} ${target.href} -> ${detail} (${Date.now() - relayStartedAt}ms)`);
-            return jsonResponse(response, 502, { ok: false, relayError: true, message: `本地中转无法连接目标：${detail}` });
-        }
-
-        response.writeHead(upstream.status, {
-            'Content-Type': upstream.headers.get('content-type') || 'application/json; charset=utf-8',
-            'Cache-Control': 'no-store',
-            'X-Content-Type-Options': 'nosniff',
-            // SSE 必须**关掉缓冲**：否则中间层（Node 自己的 socket、以及某些
-            //   反向代理）会攒够一块才发，增量就变成了"一批一批蹦"。identity 编码
-            //   已在上面设过，这里再补一条代理侧的显式指令。
-            ...(/text\/event-stream/i.test(upstream.headers.get('content-type') || '')
-                ? { 'X-Accel-Buffering': 'no' } : {}),
-        });
-        // 立刻把头送出去。浏览器的 fetch() 是**收到响应头就 resolve**，之后才开始
-        //    读 body；不 flush 的话头可能和第一块数据一起才发出，前端"开始流式"的时间
-        //    就整体后移 —— 表现上就是"点发送后要愣一愣才开始出字"。
-        if (typeof response.flushHeaders === 'function') {
-            try { response.flushHeaders(); } catch { /* 已经发过头了 */ }
-        }
-        // 头已到 → 空闲计时器重新起算，进入"等正文"阶段（见上面 armIdleTimer 的说明）。
-        armIdleTimer(timeoutMs);
-
-        // 边透传边攒一份给日志用。攒到上限就停止记录（**继续透传**），
-        // 免得一个长回答把内存吃掉；流式的正文稍后由 parseSseReply 从 data: 行拼回来。
-        const traceChunks = [];
-        let traceBytes = 0;
-        if (upstream.body) {
-            try {
-                for await (const chunk of upstream.body) {
-                    if (abortedByClient) break;
-                    // 每收到一块就续期：只要上游还在吐数据，长回复就永远不会被
-                    //   自己的超时砍断；只有"连接还在但一个字节都不来"才会被 abort。
-                    armIdleTimer(timeoutMs);
-                    response.write(chunk);
-                    if (traceBytes < TRACE_ACCUM_MAX) {
-                        traceChunks.push(chunk);
-                        traceBytes += chunk.length;
-                    }
-                }
-            } catch (err) {
-                if (!abortedByClient) console.error('[relay] 透传响应中断:', String(err?.message || err));
+            // 有些网络只对 TLS 1.3 的 ClientHello 丢包（TCP 通、握手必卡）。
+            //   这种情况 fetch 报的是 UND_ERR_CONNECT_TIMEOUT，看着像"连不上"。
+            //   用限制到 TLS 1.2 的策略重试一次 —— 实测能把 10s 超时变成 250ms 拿到响应。
+            //   只在**握手类**失败时重试：业务错误（4xx/5xx）根本不抛，不会走到这里。
+            const retry = (!controller.signal.aborted && isTlsHandshakeFailure(err))
+                ? await retryWithTls12(target, fetchOptions, traceLine)
+                : null;
+            if (retry) {
+                upstream = retry;
+            } else {
+                relayAbort.stop();
+                if (relayAbort.abortedByClient) return;       // 客户端自己走了，不用回话
+                const detail = formatRelayFailure(err, timeoutMs);
+                // 连不上时把**请求内容**也写进追踪日志：否则只看到"连接被拒"，
+                // 不知道当时问的是什么、模型名有没有写错 —— 而这恰恰是最常见的原因。
+                traceRelayRequest({ method, target, reqJson, reqRaw });
+                traceLine(`===== 请求失败 ${method} ${target.href} =====\n${detail}（${Date.now() - relayStartedAt}ms）`);
+                console.error(`[relay] 请求失败 ${method} ${target.href} -> ${detail} (${Date.now() - relayStartedAt}ms)`);
+                return jsonResponse(response, 502, { ok: false, relayError: true, message: `本地中转无法连接目标：${detail}` });
             }
         }
-        clearTimeout(timer);
+
+        writeUpstreamHeaders(upstream, response);
+        // 头已到 → 空闲计时器重新起算，进入"等正文"阶段。
+        armIdleTimer(timeoutMs);
+
+        const respRaw = await forwardUpstreamBody(upstream, response, armIdleTimer, timeoutMs, () => relayAbort.abortedByClient);
+        relayAbort.stop();
         response.end();
 
-        if (abortedByClient) return;
+        if (relayAbort.abortedByClient) return;
         // 每个中转请求留一条完整记录：目标是哪家、什么状态、耗时多少、问了什么、答了什么 / 为什么失败。
-        // 排查"偶发失败"时这是唯一能还原现场的东西 —— 旧日志只有一行状态码，看不出原因。
-        const respRaw = traceChunks.length ? Buffer.concat(traceChunks).toString('utf8') : '';
+        // 排查"偶发失败"时这是唯一能还原现场的东西。
         let respJson = null;
         if (respRaw) {
             try { respJson = JSON.parse(respRaw); } catch { respJson = null; }

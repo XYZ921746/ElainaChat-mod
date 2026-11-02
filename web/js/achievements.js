@@ -29,12 +29,9 @@
         ));
     }
 
-    // ========================================================================
     //  成就定义
-    //
     //  顺序即展示顺序：**事件成就排前面**（它们是"故事"，用户最想看），
     //    判定类成就（进度型）排后面。
-    // ========================================================================
 
     const DEFS = [
         // ---- 生日纪念（事件成就，由 birthday.js 上报）----
@@ -149,9 +146,7 @@
         },
     ];
 
-    // ========================================================================
     //  读写
-    // ========================================================================
 
     /** 已解锁记录：{ [id]: { unlockedAt, detail } } */
     let unlocked = {};
@@ -287,7 +282,6 @@
         if (!DEFS.some((d) => d.id === id)) return false;
         if (unlocked[id]) {
             // 已解锁：**允许刷新**纪念正文。
-            //
             // 为什么是"覆盖"而不是"只在为空时补写"：
             //   生日纪念的正文是**分两步**生成的 —— 打开应用那天先写一句
             //   "10 月 17 日 · 星屑之日"，等他选完「记得 / 忘了」之后，
@@ -318,9 +312,7 @@
         }));
     }
 
-    // ========================================================================
     //  界面
-    // ========================================================================
 
     let overlay = null;
 
@@ -399,6 +391,9 @@
         render();
         overlay.classList.remove('hidden');
         overlay.classList.add('flex');
+        // 成就页是"看内容"的整页：宽屏把对话面板收起来，页面拿整幅宽度。
+        //   这个浮层是打开时才建的，watchSidePanel 启动时还观察不到它，所以这里显式同步。
+        try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
         try { if (typeof setRailActive === 'function') setRailActive('categories'); }
         catch (e) { /* 忽略 */ }
     }
@@ -407,6 +402,7 @@
         if (!overlay) return;
         overlay.classList.add('hidden');
         overlay.classList.remove('flex');
+        try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
         try { if (typeof syncRailActive === 'function') syncRailActive(); }
         catch (e) { /* 忽略 */ }
     }
@@ -415,9 +411,7 @@
         return Boolean(overlay && !overlay.classList.contains('hidden'));
     }
 
-    // ========================================================================
     //  对外接口
-    // ========================================================================
 
     load();
 
@@ -445,3 +439,4 @@
         esc,
     };
 })();
+

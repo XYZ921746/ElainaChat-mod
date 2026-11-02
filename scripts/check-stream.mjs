@@ -1,63 +1,65 @@
 // 流式输出与回合过程的回归检查。
-//
 // 合并自一个脚本（check-stream-and-cot）。之所以按"模块"命名而不是按原脚本名，
 // 是因为这一块本身就是**一条链路**：
 //   思考开关/强度 → 请求参数 → 流式增量 → 回合过程区（思考行 + 工具调用行 + 总览）
 // 拆成多个文件会让"参数发出去了但界面不显示"这种跨层断裂漏检。
 // 将来这块若再加入口（例如原生层的流通道检查），也直接进本文件的用例列表。
-//
 // 盯住的关键契约（都是踩过或极易踩的坑）：
-//
 //   ① DeepSeek 现在**服务端默认开启思考**。所以"关掉开关"必须显式发
 //      `thinking:{type:'disabled'}` —— 不发字段不等于关，用户会白等几十秒、
 //      白花思考 token，而界面上什么都看不到。这条最隐蔽。
-//
 //   ② 工具调用行**不受思考开关影响**（用户明确要求："思考模式关闭的情况下
 //      思维链还是要显示工具调用的"）。关掉思考只是不显示"思考"那一行，
 //      不能连"AI 改了哪个文件"也一起藏掉。
-//
 //   ③ 过程行默认**折叠**。这是聊天应用，正文才是主角；思考动辄上千字，
 //      默认展开会把对话顶出屏幕。但摘要行必须常驻 —— 折叠不等于藏起来。
-//
 //   ④ 流式失败要能**退回非流式**。中转站可能把 SSE 缓冲掉、上游可能不支持
 //      stream、APK 原生层根本没有流通道。任一条路断了都不能让用户发不出消息。
-//
 //   ⑤ 已经吐出内容之后**不能**再回退重试 —— 否则用户会看到内容闪一下、
 //      或者同一段话出现两遍。
-//
 // 每段用例在自己的函数作用域里跑（源脚本顶层的 html/core/ui/voice/settings/init… 全部
 // 搬进用例函数），断言经 c.ok 记账，失败信息形如「流式与思考模式 :: 断言原文」。
-//
 // 用法：node scripts/check-stream.mjs          跑全部
 //       node scripts/check-stream.mjs 回合      只跑名字含该子串的用例
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
+import { extractFunction, extractTopLevelFunctions, extractVariable, makeVmSandbox, runClassicScripts } from './check-source.mjs';
 
-// ────────────────────────────────────────────────────────────
 // 1. 流式输出 + 思考模式适配 + 回合过程（思维链 / 工具调用）展示
-//
 // 源脚本 check-stream-and-cot.mjs 的全部断言，按原来的分节顺序：
 //   1 接线 / 2 思考参数 / 3 流式解析 / 4 流式接线与回退 /
 //   5 回合过程 UI / 6 流式正文预览 / 6b 流式可达性 / 6c 中转超时语义 / 7 设置界面
-// ────────────────────────────────────────────────────────────
 
 async function caseStreamAndCot(c) {
     const html = readFrontend();
-    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-    const ui = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
-    const voice = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
-    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-    const init = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+    const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-state.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-relay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const ui = readFileSync(path.join(ROOT, 'web', 'js', 'process.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
+    const voice = readFileSync(path.join(ROOT, 'web', 'js', 'asr.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
+    const settings = readFileSync(path.join(ROOT, 'web', 'js', 'save.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+    const init = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
     const streamSrc = readFileSync(path.join(ROOT, 'web', 'js', 'chat-stream.js'), 'utf8');
     const providers = readFileSync(path.join(ROOT, 'web', 'js', 'chat-providers.js'), 'utf8');
-    const indexHtml = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-    const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
+    // 下面几条断言看的是"折叠规则在不在 @media 之外"，样式住在 base.css
+    const indexHtml = readHtmlAndStyles();
+    const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
     // 6h 用例要看 doAgentCommand / doAgentFile 的确认分支（等待提示与计时重置）
-    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
+    const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-files.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
     // ★★ 2026-10：本地中继（含它那套流式超时/透传行为）搬进了 server/relay.mjs，
     //   成为电脑端与手机端**共用**的一份实现。所以下面第 6c 节要在新文件里找，
     //   而不是在 serve.mjs 里 —— 搬走之后留了一份转发壳，细节全在那边。
@@ -84,7 +86,7 @@ async function caseStreamAndCot(c) {
 
     // ============================================================ 1. 接线
     console.log('=== 1. 脚本接线与加载顺序 ===');
-    c.ok(/<script src="\/js\/chat-stream\.js"><\/script>/.test(indexHtml), 'index.html 引入 chat-stream.js');
+    c.ok(/<script[^>]*src="\/js\/chat-stream\.js"[^>]*><\/script>/.test(indexHtml), 'index.html 引入 chat-stream.js');
     {
         const coreIdx = indexHtml.indexOf('/js/core.js');
         const streamIdx = indexHtml.indexOf('/js/chat-stream.js');
@@ -97,30 +99,18 @@ async function caseStreamAndCot(c) {
 
     // ============================================================ 2. 思考参数
     console.log('\n=== 2. 思考参数（各家真实字段）===');
-    // 从真实实现里取函数来实跑，而不是只做正则匹配 —— 正则会匹配注释里的假代码
-    function extractFn(name, src = core) {
-        const start = src.indexOf('function ' + name + '(');
-        if (start < 0) throw new Error('找不到函数 ' + name);
-        let i = src.indexOf('(', start), paren = 0;
-        for (; i < src.length; i++) {
-            if (src[i] === '(') paren++;
-            else if (src[i] === ')') { paren--; if (paren === 0) { i++; break; } }
-        }
-        let depth = 0;
-        i = src.indexOf('{', i);
-        for (; i < src.length; i++) {
-            if (src[i] === '{') depth++;
-            else if (src[i] === '}') { depth--; if (depth === 0) { i++; break; } }
-        }
-        return src.slice(start, i);
-    }
-    const buildThinkingParams = new Function('isDeepSeekOfficial', `
-        const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
-        ${extractFn('mapThinkingEffort')}
-        ${extractFn('detectThinkingVendor')}
-        ${extractFn('buildThinkingParams')}
-        return buildThinkingParams;
-    `)((url) => /api\.deepseek\.com/i.test(String(url || '')));
+    // 从真实实现里取**整个 core.js 的顶层函数环境**来实跑：
+    //   · 不再只抠 mapThinkingEffort / detectThinkingVendor / buildThinkingParams 三个函数；
+    //   · 以后 buildThinkingParams 再拆出 helper，这个检查也不用改（helper 自动在场）。
+    //   · 只装函数声明 + 它依赖的常量，不执行 core.js 的顶层副作用（DOM/存储初始化）。
+    const extractFn = (name, src = core) => extractFunction(src, name);
+    const thinkingSandbox = makeVmSandbox({ URL });
+    vm.runInContext(
+        extractVariable(core, 'THINKING_EFFORTS') + '\n' + extractTopLevelFunctions(core),
+        thinkingSandbox,
+        { filename: 'core.js#thinking-env' },
+    );
+    const buildThinkingParams = thinkingSandbox.buildThinkingParams;
 
     const ds = (enabled, effort) => buildThinkingParams(enabled, effort, 'openai-compatible',
         { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-flash' });
@@ -172,19 +162,45 @@ async function caseStreamAndCot(c) {
     // 断言行为而不是文本：deepseek-reasoner 仍然可以作为**输入**被识别（老用户设置里存着它），
     // 但它不能是**输出** —— 那正是要取消的行为。
     {
-        const legacy = new Function(`
-            ${extractFn('legacyDeepSeekModel', providers)}
-            return legacyDeepSeekModel;
-        `)();
-        c.ok(legacy('deepseek-chat', true) !== 'deepseek-reasoner',
-            '★ thinking 开着时不再把 deepseek-chat 换成 deepseek-reasoner', legacy('deepseek-chat', true));
-        c.ok(legacy('deepseek-reasoner', true) === 'deepseek-flash',
+        // 整脚本装载 chat-providers.js，用**公开的 forFormat + 假网络出口**断言“最终发出去的 model”，
+        //   而不是抠 legacyDeepSeekModel 单测。这样测的是线上真正跑的那条路。
+        const cpSandbox = makeVmSandbox({ ChatDeps: null });
+        runClassicScripts([path.join(ROOT, 'web', 'js', 'chat-providers.js')], cpSandbox);
+        const CP = cpSandbox.ChatProviders;
+        let sentBody = null;
+        cpSandbox.ChatDeps = {
+            ClientApiError: class ClientApiError extends Error {
+                constructor(code, message, extra) { super(message); this.code = code; Object.assign(this, extra || {}); }
+            },
+            getChatBaseUrl: (s) => String(s.baseUrl || '').replace(/\/$/, ''),
+            isDeepSeekOfficial: (u) => /deepseek\.com/.test(u || ''),
+            requestChatJson: async (endpoint, body) => {
+                sentBody = body;
+                return { ok: true, status: 200, payload: { choices: [{ message: { content: 'OK' } }] } };
+            },
+            buildThinkingParams: () => ({}),
+            normalizeChatReply: (content) => ({ content }),
+            throwProviderResponseError: async () => { throw new Error('不该走到这里'); },
+        };
+        const sentModel = async (model, thinking) => {
+            sentBody = null;
+            await CP.forFormat('openai-compatible')(
+                [{ role: 'user', content: 'x' }],
+                { thinking, thinkingEffort: 'off', maxTokens: 10 },
+                { apiKey: 'k', model, baseUrl: 'https://api.deepseek.com/v1' },
+            );
+            return sentBody && sentBody.model;
+        };
+        const chatModel = await sentModel('deepseek-chat', true);
+        c.ok(chatModel !== 'deepseek-reasoner',
+            '★ thinking 开着时不再把 deepseek-chat 换成 deepseek-reasoner', chatModel);
+        c.ok(await sentModel('deepseek-reasoner', true) === 'deepseek-flash',
             '老用户存着 deepseek-reasoner → 映射到当前模型 deepseek-flash');
-        c.ok(legacy('deepseek-v4-pro', true) === 'deepseek-v4-pro',
+        c.ok(await sentModel('deepseek-v4-pro', true) === 'deepseek-v4-pro',
             '★ 用户明确选的 deepseek-v4-pro 不被降级（那是花他的钱还改他的选择）');
-        c.ok(legacy('deepseek-flash', false) === 'deepseek-flash',
+        c.ok(await sentModel('deepseek-flash', false) === 'deepseek-flash',
             '当前模型名原样透传');
-        c.ok(legacy('gpt-4.1-mini', true) === 'gpt-4.1-mini',
+        c.ok(await sentModel('gpt-4.1-mini', true) === 'gpt-4.1-mini',
             '非 DeepSeek 模型名完全不受影响');
     }
 
@@ -349,9 +365,9 @@ async function caseStreamAndCot(c) {
         c.ok(/signal: opts\.signal/.test(body), `${fn} 把 signal 透传下去（停止按钮）`);
     }
 
-    // postJsonFromDevice 的 5 参签名被另一个检查盯着，这里确认没有加第 6 个形参
-    c.ok(/async function postJsonFromDevice\(url, body, headers = \{\}, timeoutMs = 120000, signal = null\)/.test(core),
-        'postJsonFromDevice 签名保持 5 个形参（不再有"第 6 个实参被静默丢弃"的 bug）');
+    // timeoutMs / signal 收进 options 对象后仍必须两个都在，避免又被静默丢弃
+    c.ok(/async function postJsonFromDevice\(url, body, headers = \{\}, \{ timeoutMs = 120000, signal = null \} = \{\}\)/.test(core),
+        'postJsonFromDevice 的 timeoutMs / signal 收在 options 对象里，未丢参数');
     c.ok(/async function fetchWithTimeout\(url, options, timeoutMs, signal = null\)/.test(voice),
         'fetchWithTimeout 显式收外部 signal（不再被 options.signal 覆盖掉）');
 
@@ -388,10 +404,8 @@ async function caseStreamAndCot(c) {
     c.ok(/个操作完成|操作完成/.test(ui), '总览里体现操作完成数量');
 
     // ★★ 手机端把过程区折叠成一行（2026-10 用户报"AI 思考部分会挡住下面的内容"）
-    //
     //    实测（412×915）：过程区每行一条卡片，5 行叠起来占 176px，
     //    把 AI 正文推到 383px 处；多步操作（上限 8 步）时正文直接被挤出首屏。
-    //
     // ★★ 2026-10 改为**两段式下拉**（用户要求）：
     //    第一段（点总览行）→ 展开时间线：思考段落与工具调用按先后排列
     //    第二段（点时间线里某条）→ 展开那条的详细内容
@@ -419,17 +433,32 @@ async function caseStreamAndCot(c) {
             }
             return null;
         }
-        const mobileMq = cssBlockAfter(indexHtml, '@media (max-width: 860px) {');
-        c.ok(mobileMq !== null, '能找到移动端媒体查询块');
-        // ★ 关键：折叠规则在**媒体查询之外**（两端一致），这正是"桌面也能下拉"的前提
-        const outside = mobileMq ? indexHtml.replace(mobileMq, '') : indexHtml;
-        c.ok(/\.turn-process \.process-row\s*\{\s*display:\s*none;\s*\}/.test(outside),
-            '★★ 明细"默认收起"规则在移动端媒体查询**之外**（桌面也生效 —— 两段式统一）');
-        c.ok(/\.turn-process\.is-expanded \.process-row\s*\{\s*display:\s*block;\s*\}/.test(outside),
+        // 这条判据的**本意**是"折叠规则不属于某个手机断点，而是两端统一"。
+        //   所以不该要求某个具体断点存在 —— 断点值会随布局调整（本项目已从
+        //   860px 挪到 719/980px），钉死它会让检查在"断点改名"时假失败，
+        //   而它想防的回归（折叠规则被重新塞回手机媒体查询里）跟断点号无关。
+        //   现在的判据：把**所有** @media 块都摘掉，折叠规则仍必须在文件里。
+        //   这样无论断点叫什么、有几个，只要规则在媒体查询外就通过。
+        const withoutMedia = (() => {
+            let out = indexHtml;
+            for (let guard = 0; guard < 50; guard++) {
+                const at = out.indexOf('@media');
+                if (at < 0) break;
+                const open = out.indexOf('{', at);
+                if (open < 0) break;
+                let depth = 0, end = open;
+                for (; end < out.length; end++) {
+                    if (out[end] === '{') depth++;
+                    else if (out[end] === '}') { depth--; if (depth === 0) { end++; break; } }
+                }
+                out = out.slice(0, at) + out.slice(end);
+            }
+            return out;
+        })();
+        c.ok(/\.turn-process \.process-row\s*\{\s*display:\s*none;\s*\}/.test(withoutMedia),
+            '★★ 明细"默认收起"规则在所有媒体查询**之外**（桌面也生效 —— 两段式统一）');
+        c.ok(/\.turn-process\.is-expanded \.process-row\s*\{\s*display:\s*block;\s*\}/.test(withoutMedia),
             '★★ 展开时间线的规则同样两端生效');
-        // 反向：媒体查询里**不该**再有这条（重复定义会让"哪条生效"变得含糊）
-        c.ok(!/\.turn-process \.process-row\s*\{\s*display:\s*none/.test(mobileMq || ''),
-            '媒体查询内不再重复定义折叠规则（避免两处定义打架）');
     }
 
     // ★★ 箭头（第一段的视觉开关）必须两端都显示 ——
@@ -459,7 +488,6 @@ async function caseStreamAndCot(c) {
         '★ 流式增量按帧合并渲染（逐 token 重建 DOM 会明显卡顿）');
 
     // ==================================================== 5d. 时间线外观（参考 DSH 的步骤流）
-    //
     // 用户要的是"思考、工具调用、结果在同一条流里，一步步往下走"，而不是一堆并列卡片。
     // 这里钉住让那个观感成立的三件事 —— 它们都属于"改样式时容易被顺手删掉"的部分。
     console.log('\n=== 5d. 时间线外观 ===');
@@ -503,8 +531,14 @@ async function caseStreamAndCot(c) {
     //   agent 相关选项是在 aiRequestOptions 之上叠加的（变量名会变），
     //   改名不该让这条断言误红。赋值语句不带 const：请求外面包着"可重试失败自动
     //   再试一次"的循环，正文来自**最后一次成功**的 callAI 返回值。
-    c.ok(/rawResponse = await callAI\(message\.text,\s*requestOpts\)/.test(voice),
+    //   第三参是"失败回退模型"的 settings 覆盖（见 voice.js 回退段），可缺省 ——
+    //   它不改变"正文来自完整返回值"这个不变量，所以正则放行可选的第三参。
+    c.ok(/rawResponse = await callAI\(message\.text,\s*requestOpts(?:,\s*[A-Za-z_$][\w$.| ]*)?\)/.test(voice),
         '★ 仍以 callAI 的**完整**返回值作为正文来源（流式只负责先让用户看见）');
+    // 配了「失败回退模型」时：默认失败要真的切过去（同一组请求选项，只换凭据）
+    c.ok(/const fallbackSettings = fallbackChatSettings\(\)/.test(voice)
+        && /requestSettings = fallbackSettings/.test(voice),
+        '★ 配了回退模型时默认失败会切换回退（复用同一套请求选项）');
     // requestOpts 必须真的由 aiRequestOptions 派生 —— 否则就是另起了一套请求选项，
     // 思考/语音/中断器等设置会被悄悄丢掉。
     c.ok(/const requestOpts = Object\.assign\(\{\}, aiRequestOptions/.test(voice),
@@ -519,16 +553,13 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6b. 流式真的能到用户眼前
-    //
     // ★★ 2026-10 用户报「AI 不能正常流式输出」+「必须语音生成成功才能发送全部消息」。
     //    两条都是**真 bug**，且都不在 chat-stream.js 的解析逻辑里（那段本来就是好的）：
-    //
     //    ⓐ 第三人称模式（state.settings.thirdPerson）在 callAI 里是**提前 return**，
     //       走 generateThirdPersonReply。而它第二段 —— 也就是**用户看到的正文** ——
     //       传的是 `onDelta: null`，于是整条链路一个增量都不回调，界面永远只有一个
     //       "三点气泡"，直到两段请求都跑完才一次性蹦出全文。
     //       第一段（GM 讲述，不进 UI）必须保持 null，第二段必须透传。
-    //
     //    ⓑ 同步模式（simultaneous）的正文提交挂在 handleVoiceStart 里，也就是
     //       **TTS 真的出声了才提交**。TTS 失败时旧代码只弹一句"回复没有显示"就丢掉了
     //       整条回复 —— 连聊天记录都不留。语音是增强不是闸门，失败必须降级成纯文字。
@@ -554,7 +585,9 @@ async function caseStreamAndCot(c) {
             c.ok(/tools: options\.tools \|\| null/.test(p1seg) && /replyInfo: options\.replyInfo \|\| null/.test(p1seg),
                 '★★ 第一段（GM）透传 tools/replyInfo（第三人称模式下工具通道的唯一入口）');
         }
-        c.ok(/return await generateThirdPersonReply\(text, options\)/.test(dataSrc),
+        // 第三参同上：回退模型的 settings 覆盖要一路传进两段式（否则开第三人称时
+        // 回退请求仍走默认模型），正则放行可选的第三参。
+        c.ok(/return await generateThirdPersonReply\(text, options(?:,\s*\w+)?\)/.test(dataSrc),
             'callAI 在第三人称开启时提前 return（所以这条路上必须自己接好 onDelta）');
         // ── 第二段：正文与思考都照收 ──
         // ★ 断言跑在**去注释**的源码上 —— 注释里引用了坏代码的原文（"原先写的是
@@ -575,7 +608,6 @@ async function caseStreamAndCot(c) {
         c.ok(/recordTurnPhase\(phase\)/.test(voice), 'voice 层实际调用 recordTurnPhase');
 
         // ── ⓒ GM 提示词必须**主张**自己的最高优先级 ──────────────────────────
-        //
         // 实测故障（用户报「第一阶段输出变成一句第一人称问候」）：
         //   GM 提示词确实在 messages[0]（最高优先级），但它**从没声明**要覆盖角色卡。
         //   而 mergeLeadingSystemMessages 会把开头所有 system 合并成**一条**，
@@ -607,7 +639,6 @@ async function caseStreamAndCot(c) {
         }
 
         // ── ⓓ legacy 回滚路径不能"少一半"（两条真实缺口）─────────────────────
-        //
         // 分层路径有、legacy 路径没有的两样东西（本次修掉）：
         //   ① `if (options.thirdPerson) … THIRD_PERSON_GM_PROMPT`
         //      —— 缺了它，切成 legacy 后第三人称第一段**根本不变 GM 视角**，
@@ -632,7 +663,6 @@ async function caseStreamAndCot(c) {
         }
 
         // ── ⓔ 两段式生成的**两段**都要有中文思维链要求 ────────────────────────
-        //
         // 实测（用户报「第一阶段中文思维链、第二阶段英文思维链」）：
         //   第一段走 buildLayeredRoleplayMessages()，那里有 THINKING_LANGUAGE_PROMPT；
         //   第二段是**手搭的最小消息数组**（转换提示词 + 可选 voice_jp），
@@ -686,7 +716,6 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6c. 中转超时必须是"空闲"语义
-    //
     // ★★ 这是"AI 不能流式"的**服务端根因**。旧实现把 timeoutMs 当成"整条请求的
     //    总时长"：`setTimeout(abort, timeoutMs)` 一直挂到响应体转发完。而流式的
     //    长回复正常就要好几分钟、高思考强度模型首字节本身就常 >120 秒 ——
@@ -714,16 +743,13 @@ async function caseStreamAndCot(c) {
             '★ callChatAPI 按 thinking 开关选超时预算');
 
         // ==================================================== 6d. 退回非流式后思考不能丢
-        //
         // ★★ 这是"思考内容时有时无"的根因（真实模型实测确认）。
-        //
         //    requestChatJson 在"流式一个字都没吐就失败"时会**静默退回非流式**。
         //    那条路上 onDelta 再也不会触发 —— 思考明明就在响应体里
         //    （openai-compatible 的 reasoning_content / anthropic 的 thinking block /
         //    responses 的 reasoning item），却没有任何东西把它交给时间线。
         //    用户看到的是"这一轮没有思考"，而真实原因是换了条传输路径，
         //    界面上完全没有线索。
-        //
         //    实测同一份请求：流式拿到 1398 字思考；非流式响应体里有 2437 字，
         //    但只返回正文的写法会让那 2437 字被直接丢弃。
         console.log('\n=== 6d. 退回非流式时思考不丢 ===');
@@ -752,7 +778,6 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6e. 超时要有下文：提示 + 重试，不许静默
-    //
     // ★★ 三条真实故障（用户报"没有模型超时和重试的提示"）：
     //    ⓐ fetchWithTimeout 超时 → AbortError → handleUserInput 把**任何** AbortError
     //       按"用户点了停止"安静收尾 —— 用户等 2~5 分钟后一个提示都没有。
@@ -796,7 +821,6 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6f. 流式期间过程区的展开交互
-    //
     // ★★ 用户报"思考内容经常打不开"。根因：流式期间过程区每帧 innerHTML 整体重建，
     //    用户按下到松开之间行元素已被替换 —— 浏览器只在 mousedown/mouseup 目标
     //    一致时才派发 click，绑在被替换元素上的内联 onclick 一个事件都收不到。
@@ -817,7 +841,6 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6g. 流式期间的滚动不被打扰
-    //
     // ★★ 用户实测两条（2026-10-19）：
     //    ⓐ "生成过程中打开思考内容时无法滑动，一滑就立马回到最上面" ——
     //       思考正文/结果 pre 有 max-height+overflow:auto，用户展开后往下看；
@@ -838,7 +861,6 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6h. 确认等待不算耗时
-    //
     // ★★ 用户实测："agent 操作时间过长"（一条删除命令显示 20s）。构成其实是：
     //    服务端正确拒绝（needApproval）→ 用户在弹窗上犹豫 ~17 秒 → 真执行 ~2.7 秒。
     //    耗时从第一次发请求起算，把"等用户做决定"也算了进去 —— 正常的确认流程
@@ -861,7 +883,6 @@ async function caseStreamAndCot(c) {
     }
 
     // ============================================================ 6i. 过程区增量渲染（修"思考越长越卡"）
-    //
     // ★★ 用户实测："思考内容过长（内部滚动条出现后）就开始卡顿"。
     //    根因：renderTurnProcess 每帧 `host.innerHTML = 全部内容` ——
     //    对全部思考文本做 6 趟正则转义 + 整块 HTML 解析 + 全部节点重建，
@@ -941,7 +962,9 @@ async function caseStreamAndCot(c) {
     c.ok(/updateThinkingModeHint/.test(voice) && /id="thinkingModeHint"/.test(indexHtml),
         '有动态说明（告诉用户当前档位对当前服务商意味着什么）');
     // 请求侧接线
-    c.ok(/thinkingEffort: state\.settings\.thinkingEffort/.test(readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8')),
+    c.ok(/thinkingEffort: state\.settings\.thinkingEffort/.test(readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8')),
         'callAI 把思考强度带进请求');
 
     // html 只在上面用于前置读取（与源脚本一致）；显式引用一下，避免被当成未使用变量清掉
@@ -962,3 +985,4 @@ await runChecks({
 });
 
 void wait; void freePort;
+

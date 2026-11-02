@@ -1,24 +1,17 @@
-// ============================================================================
 //  对话 API 格式适配器（从 index.html 拆分而来）
-// ============================================================================
-//
 //  这里放"同一件事、三种协议"的实现：
 //    openai-compatible  POST /v1/chat/completions   （DeepSeek / 硅基流动 / OneAPI / Ollama…）
 //    anthropic          POST /v1/messages           （Claude 官方）
 //    openai-responses   POST /v1/responses          （OpenAI 官方，协议和上面两个都不同）
-//
 //  为什么要拆出来：
 //    · 这三套协议加起来 300+ 行，占了 index.html 相当一块，而它们与界面毫无关系；
 //    · 新增一种格式时，只该动这个文件 + 往下面的 PROVIDERS 表加一行，
 //      不该再去改 index.html 里的分发逻辑（改漏一处就是"某格式静默失效"）。
-//
 //  依赖注入而不是 import
-//  ----------------------
 //  这是普通 <script>（不是 ES module），文件之间作用域独立 —— 拆出去后直接调用
 //  index.html 里的 getChatBaseUrl() 会拿到 undefined。
 //  所以依赖统一从 window.ChatDeps 取（由 index.html 在加载本文件之前挂上）。
 //  这样做的好处：**调用方一行都不用改**，风险只在"依赖有没有挂全"。
-//
 //  加载顺序（index.html 里必须保证）：
 //    1. <script src="/js/chat-providers.js"></script>   ← 先加载（只定义，不执行依赖）
 //    2. 主脚本挂 window.ChatDeps
@@ -159,9 +152,7 @@
         return d;
     }
 
-    // ========================================================================
     //  1. OpenAI 兼容（/v1/chat/completions）
-    // ========================================================================
 
     /**
      * 把已废弃的 DeepSeek 模型名映射到现在的名字。
@@ -223,21 +214,18 @@
         });
         let result = await requestChatJson(endpoint, buildBody(thinkingFields, toolFields),
             { Authorization: 'Bearer ' + apiKey }, {
-                signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
-            }, 'openai-compatible');
+                signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream, format: 'openai-compatible',
+            });
 
         // 严格网关兼容：400 + 报错点名某参数 → 剥掉它重试。
-        //
         //   背景：`thinking` 不是 OpenAI Chat Completions
         //   标准字段（只有 DeepSeek 系认），`reasoning_effort` 也有网关不认（如 OpenAI
         //   Responses 系模型报"moved to reasoning.effort"）；甚至有的网关报
         //   "cannot specify both 'thinking' and 'reasoning_effort'"。**没有一个字段
         //   全网通用**，hermes-agent #34786 等项目的做法都是"先发，被 400 拒了按
         //   报错剥参数重试"。这里照做，且按 OpenAI 风格错误里的 `param` 字段精确剥：
-        //
         //     "thinking" is not supported …（AMD，param: "thinking"）→ 只剥 thinking
         //     Invalid 'reasoning_effort' …          → 只剥 reasoning_effort
-        //
         //   剥掉 thinking 后 DeepSeek 系网关会回到"模型默认思考"状态 —— 这是没办法
         //   的事（网关不支持就是不支持），但至少对话能通，好过整个请求失败。
         //   记忆结论：同一 baseUrl 只撞一次 400，之后直接跳过被拒字段（见 supportsParam）。
@@ -260,8 +248,8 @@
             }
             result = await requestChatJson(endpoint, buildBody(thinkingFields, toolFields),
                 { Authorization: 'Bearer ' + apiKey }, {
-                    signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
-                }, 'openai-compatible');
+                    signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream, format: 'openai-compatible',
+                });
         }
         if (!result.ok) await throwProviderResponseError(result, '对话服务请求失败');
         if (!result.payload) throw new ClientApiError('UPSTREAM_UNAVAILABLE', '对话服务返回格式异常');
@@ -281,9 +269,7 @@
         return normalizeChatReply(message.content, reasoningText, toolCalls);
     }
 
-    // ========================================================================
     //  2. Anthropic（/v1/messages）
-    // ========================================================================
     /** 把 OpenAI 形态的 content 转成 Anthropic 的 content blocks */
     function anthropicContentBlocks(content) {
         const { stripThinkTags, extractTextContent } = deps();
@@ -418,8 +404,8 @@
             //   {type, budget_tokens} 结构，和这里的开关同名不同义，发错会 400。
             ...buildThinkingParams(opts.thinking, opts.thinkingEffort, 'anthropic', settings)
         }, { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' }, {
-            signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
-        }, 'anthropic');
+            signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream, format: 'anthropic',
+        });
         if (!result.ok) await throwProviderResponseError(result, 'Anthropic 请求失败');
         if (!result.payload) throw new ClientApiError('UPSTREAM_UNAVAILABLE', 'Anthropic 返回格式异常');
         const blocks = Array.isArray(result.payload.content) ? result.payload.content : [];
@@ -438,9 +424,7 @@
         return normalizeChatReply(text, reasoning, toolCalls);
     }
 
-    // ========================================================================
     //  3. OpenAI 官方 Responses（/v1/responses）
-    // ========================================================================
     /*  它和 chat/completions 不是同一套协议，必须单独适配，不能靠改个路径蒙混：
      *    · 系统提示走顶层 instructions，不是 messages 里的一条
      *    · 对话内容走 input 数组，每项 { role, content: [{ type:'input_text'|'output_text'|'input_image' }] }
@@ -548,8 +532,8 @@
             // 所以关思考时这里不发字段（buildThinkingParams 里说明了原因）。
             ...buildThinkingParams(opts.thinking, opts.thinkingEffort, 'openai-responses', settings)
         }, { Authorization: 'Bearer ' + apiKey }, {
-            signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream,
-        }, 'openai-responses');
+            signal: opts.signal, onDelta: opts.onDelta, stream: opts.stream, format: 'openai-responses',
+        });
         if (!result.ok) await throwProviderResponseError(result, 'OpenAI 请求失败');
         if (!result.payload) throw new ClientApiError('UPSTREAM_UNAVAILABLE', 'OpenAI 返回格式异常');
         // 部分兼容实现会把全文直接放在顶层 output_text，先认这个，省得再遍历一遍
@@ -579,9 +563,7 @@
         return normalizeChatReply(text, reasoning, toolCalls);
     }
 
-    // ========================================================================
     //  分发：格式 → 实现
-    // ========================================================================
     /*  用**表**而不是 if 链。
      *  差别不在"好看"，而在"加新格式时的漏改风险"：
      *    if 链要改两处（加分支 + 记得加顺序），表只要加一行；
@@ -622,3 +604,4 @@
         toolsAllowedFor,
     };
 })();
+

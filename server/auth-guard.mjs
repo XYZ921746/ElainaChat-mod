@@ -1,21 +1,15 @@
 // 登录防爆破 —— 失败计数、指数退避、全局限流。
-//
 // ── 为什么单独成模块（不写进 serve.mjs）────────────────────────────────
-//
 //  ① **可测**：锁定策略算错了，密码强度再高也是空的。这里全是可注入时钟的纯逻辑，
 //     能脱离 HTTP 层穷举断言"第 N 次失败该锁多久""换 IP 能不能绕开"。
 //  ② serve.mjs 已 2900+ 行，安全判定该往外挪（与 pc-command.mjs / activity.mjs 同一理由）。
 //  ③ 策略会长期演进（分布式爆破的手法在变），集中一处才好维护。
-//
 // ── 为什么这块在"局域网可执行命令"之后变得关键 ────────────────────────
-//
 //  放开之前，局域网设备即使猜中密码，也只能聊天 + 读写 web/；
 //  放开之后，**它可以直接在这台电脑上执行任意 PowerShell 命令**。
 //  也就是说：密码从"聊天室的钥匙"变成了"整台电脑的钥匙"，
 //  而密码是唯一还站着的那道门 —— 所以暴力破解防护不再是加分项，是必需项。
-//
 // ── 三层防护，缺一不可 ─────────────────────────────────────────────────
-//
 //  ① **单 IP 指数退避**：连续失败后锁定时间逐次翻倍（30s → 1m → 2m … 上限 1h）。
 //     固定窗口（"5 次 / 锁 60 秒"）等于告诉攻击者"每 60 秒可以试 5 次" ——
 //     保持低频就能无限试下去，一天能试七千多次。
@@ -23,7 +17,6 @@
 //     只按 IP 锁挡不住换 IP 的爆破（局域网里换地址尤其容易，DHCP 续租就行）。
 //  ③ **计数只在成功时清零**：锁定到期**不重置**计数，所以持续攻击的锁定时间只增不减。
 //     若到期即归零，攻击者每轮都能拿满 5 次机会，指数退避就形同虚设。
-//
 //  另外，每次校验都走 scrypt（见 serve.mjs 的 verifyPassword）—— 单次尝试本身就
 //  要几十毫秒 CPU。这道"固有成本"配合上面的限流，才让 8 位以上的密码真正安全。
 
@@ -54,6 +47,29 @@ const SEQUENCES = [
 ];
 
 /**
+ * 常见弱口令及其"加个尾巴"的变体；命中时返回给用户看的原因，否则 null。
+ */
+function weakPasswordMessage(lower) {
+    // ① 精确命中常见弱口令
+    if (WEAK_PASSWORDS.has(lower)) {
+        return '这个密码太常见了，很容易被猜到，请换一个';
+    }
+    // ② 弱口令 + 少量后缀/前缀（admin123a、password1x 这类"加个尾巴"的写法）
+    //    实测必要性：不拦这个，`admin123a` 会因为"多了一个 a"而通过 ——
+    //    而它在任何字典攻击里都是第一梯队。
+    for (const w of WEAK_PASSWORDS) {
+        if (w.length < 6) continue;
+        if (lower.startsWith(w) && lower.length - w.length <= 2) {
+            return '这个密码是在常见弱口令后面加了几位，很容易被猜到，请换一个';
+        }
+        if (lower.endsWith(w) && lower.length - w.length <= 2) {
+            return '这个密码是在常见弱口令前面加了几位，很容易被猜到，请换一个';
+        }
+    }
+    return null;
+}
+
+/**
  * 校验新密码强度。
  *
  * 规则（按用户要求）：至少 8 位，且**同时**含数字、小写字母、大写字母。
@@ -80,30 +96,14 @@ export function validatePasswordStrength(pwd) {
     }
 
     const lower = s.toLowerCase();
-    // ① 精确命中常见弱口令
-    if (WEAK_PASSWORDS.has(lower)) {
-        return { ok: false, message: '这个密码太常见了，很容易被猜到，请换一个' };
-    }
-    // ② 弱口令 + 少量后缀/前缀（admin123a、password1x 这类"加个尾巴"的写法）
-    //
-    //    实测必要性：不拦这个，`admin123a` 会因为"多了一个 a"而通过 ——
-    //    而它在任何字典攻击里都是第一梯队。
-    for (const w of WEAK_PASSWORDS) {
-        if (w.length < 6) continue;
-        if (lower.startsWith(w) && lower.length - w.length <= 2) {
-            return { ok: false, message: '这个密码是在常见弱口令后面加了几位，很容易被猜到，请换一个' };
-        }
-        if (lower.endsWith(w) && lower.length - w.length <= 2) {
-            return { ok: false, message: '这个密码是在常见弱口令前面加了几位，很容易被猜到，请换一个' };
-        }
-    }
+    const weak = weakPasswordMessage(lower);
+    if (weak) return { ok: false, message: weak };
     // ③ 短模式重复（Ab1Ab1Ab1、abcabcabc 这类）
     //    注：单字符重复（aaaaaaaa）到不了这里 —— 它已经因为"缺数字/大写"被上面挡掉了。
     if (/^(.{1,4})\1+$/.test(s)) {
         return { ok: false, message: '新密码是同一段内容重复，请换一个' };
     }
     // ③b 字符种类太少（Aaa1aaaa：只有 a/A/1 三种，熵极低但字面满足"三类字符"）
-    //
     //     实测必要性：上面所有规则都拦不住它，而它的实际强度远低于"8 位随机"。
     //     要求至少 4 种不同字符是个便宜的兜底 —— 正常密码（Elaina2024、MyPc-2024）
     //     都远超这个数，只有刻意敷衍的才会卡住。
@@ -112,7 +112,6 @@ export function validatePasswordStrength(pwd) {
         return { ok: false, message: '新密码用到的字符太少了（至少要用 4 种不同字符），请换一个' };
     }
     // ④ 顺子 / 键盘序：找**最长**的连续段，若去掉它之后剩不下什么，就是敷衍写法。
-    //
     //    为什么按"最长连续段"判、而不是"是否包含某个 6 连"：
     //    `12345678aA` 里含 '123456'，但用"包含即拒"会把 `xKp123456zQ`
     //    这种正常密码也误杀。按"剩余长度"判既能拦住顺子为主体的密码，
@@ -162,6 +161,7 @@ function longestSequentialRun(lower) {
  * @param {number} [opts.globalWindowMs]  全局失败计数的滑动窗口
  * @param {number} [opts.globalMaxFails]  窗口内累计多少次失败触发全局冻结
  * @param {number} [opts.globalLockMs]    全局冻结时长
+ * @param {number} [opts.pruneIdleMs]     多久没再失败就丢弃该 IP 的记录（见 prune()）
  * @param {() => number} [opts.now]       时钟（默认 Date.now）
  */
 export function createLoginGuard(opts = {}) {
@@ -172,10 +172,11 @@ export function createLoginGuard(opts = {}) {
         globalWindowMs: opts.globalWindowMs ?? 10 * 60 * 1000,
         globalMaxFails: opts.globalMaxFails ?? 30,
         globalLockMs: opts.globalLockMs ?? 5 * 60 * 1000,
+        pruneIdleMs: opts.pruneIdleMs ?? 24 * 60 * 60 * 1000,
         now: opts.now ?? (() => Date.now()),
     };
 
-    const perIp = new Map();     // ip -> { count, lockUntil }
+    const perIp = new Map();     // ip -> { count, lockUntil, last }（last = 最后一次失败的时间）
     let globalFails = [];        // 失败时间戳（滑动窗口）
     let globalLockUntil = 0;
 
@@ -217,8 +218,9 @@ export function createLoginGuard(opts = {}) {
     function fail(ip) {
         const now = cfg.now();
         pruneGlobal(now);
-        const rec = perIp.get(ip) || { count: 0, lockUntil: 0 };
+        const rec = perIp.get(ip) || { count: 0, lockUntil: 0, last: now };
         rec.count += 1;
+        rec.last = now;
         if (rec.count >= cfg.maxFails) {
             const over = rec.count - cfg.maxFails;
             const lockMs = Math.min(cfg.baseLockMs * Math.pow(2, over), cfg.maxLockMs);
@@ -240,6 +242,25 @@ export function createLoginGuard(opts = {}) {
         perIp.delete(ip);
     }
 
+    /**
+     * 清掉"已经不用再记"的 IP 记录。
+     *
+     * 为什么需要：perIp 只在**该 IP 成功登录**或整体 reset 时才删；一台长期运行的机器上，
+     *   换源的扫描、DHCP 续租、浏览器的 IPv6 隐私地址都会不断产生新键 —— 只增不减就是一条
+     *   慢速内存泄漏。这里只删"锁定已过期且失败计数停在阈值以下"的记录，
+     *   与计数只在成功时清零的规则不冲突（还欠着次数的记录保留，继续攻击照样越锁越久）。
+     * @returns {number} 清掉的条数
+     */
+    function prune(now = cfg.now()) {
+        let removed = 0;
+        for (const [ip, rec] of perIp) {
+            if (rec.lockUntil > now) continue;              // 正在锁定，留着
+            if (rec.count >= cfg.maxFails) continue;        // 已到阈值：再来一次就该锁定，别把账抹掉
+            if (now - rec.last >= cfg.pruneIdleMs) { perIp.delete(ip); removed++; }
+        }
+        return removed;
+    }
+
     /** 全清（改密码时用：旧密码的失败记录不该留给新密码） */
     function reset() {
         perIp.clear();
@@ -247,7 +268,7 @@ export function createLoginGuard(opts = {}) {
         globalLockUntil = 0;
     }
 
-    return { status, fail, succeed, reset, _cfg: cfg, _perIp: perIp };
+    return { status, fail, succeed, reset, prune, _cfg: cfg, _perIp: perIp };
 }
 
 export const __test__ = { WEAK_PASSWORDS, SEQUENCES };

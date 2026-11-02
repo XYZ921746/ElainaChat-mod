@@ -1,5 +1,4 @@
 // 系统能力（PC 命令 / data 存储布局）的回归检查。
-//
 // 合并自三个脚本（check-pc-command / check-store-layout / check-chat-backup）——
 // 它们测的都是"程序跟操作系统与磁盘打交道的那一层"：
 //   · PC 命令：权限双模式 + 电脑命令执行 + 危险命令授权（含真起一次 serve.mjs 打 HTTP）
@@ -7,15 +6,12 @@
 //   · APK 侧数据备份：导出/导入往返一致、能读 Web 版导出的 zip、能读 v1 旧备份
 // 三者共用同一份 zip 实现（server/zip.mjs）与同一套"起服务 → 打真实接口 → 落盘校验 → 清理"
 // 的样板，拆成三个文件时每个都要各自重抄一遍 ok/汇总与端口分配。
-//
 // ⚠️ 每个用例都必须**自己清理自己起的进程与临时目录**（try/finally）：
 //    check-pc-command / check-store-layout 会 spawn web/serve.mjs、mkdtempSync 建临时
 //    DATA_DIR，漏掉任一处就会在机器上留下孤儿进程和临时目录 —— 合并后这些资源都收在
 //    各自用例的函数作用域里，谁起的谁收。
-//
 // 每段用例在自己的函数作用域里跑，断言经 c.ok 记账，失败信息形如
 // 「电脑命令与授权 :: <断言原文>」。
-//
 // 用法：node scripts/check-system.mjs          跑全部
 //       node scripts/check-system.mjs 存储      只跑名字含该子串的用例
 
@@ -31,28 +27,20 @@ import { createZip, readZip } from '../server/zip.mjs';
 import { classifyCommand, buildShellArgv, availableShells, __test__ } from '../server/pc-command.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
 
-// ────────────────────────────────────────────────────────────
 // 1. PC 端权限双模式 + 电脑命令执行与危险命令授权（第二阶段 ④）
-//
 // 这一块的核心风险是「防护看起来有、实际没有」，所以检查必须打在真实链路上，
 // 而不是只做正则匹配（正则会匹配注释里的假代码）：
-//
 //   ① **危险判定必须穷举断言**。它是整个 ④ 的地基 —— 判错了，
 //      后面所有授权弹窗都是摆设。所以直接 import 真模块跑真函数。
-//
 //   ② **服务端必须自己判危险，不能只信前端的 approved**。
 //      前端可以被绕过（直接 POST /api/agent/exec）。所以起真服务、
 //      用真 HTTP 打一遍：不带 approved 的 `del` 必须被拒（403 + needApproval），
 //      带 approved 才放行；而 `dir` 不带 approved 也要能跑通（"其他放行"）。
-//
 //   ③ **限制模式必须整体拒绝命令**。命令能做的事远超文件读写，
 //      "仅应用文件夹"语义下没有安全的执行子集 —— 必须 403。
-//
 //   ④ **局域网必须拒绝**。命令执行只对本机开放，与文件操作的 isLocal 同一条底线。
-//
 //   ⑤ **命令必须作为单个 argv 传递**，不能字符串拼接进 shell ——
 //      否则 `; rm -rf /` 这类内容会逃出命令边界。这条用真实 argv 断言。
-// ────────────────────────────────────────────────────────────
 
 async function casePcCommand(c) {
     // 写入探针文件名（越界批准不能绕过 web/ 内的可执行类型拦截）
@@ -177,9 +165,12 @@ async function casePcCommand(c) {
     // 端口向内核要（不复用固定端口），每个用例各自拿一个新的
     const PORT = await c.freePort();
     const BASE = `http://127.0.0.1:${PORT}`;
+    // 数据目录必须隔离：否则本机一旦设置过访问密码，本机请求会被要求登录，
+    // 这组 agent 链路断言就全变成 401。
+    const DATA_TMP = await mkdtemp(path.join(os.tmpdir(), 'elaina-system-pc-'));
     const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(PORT), LOG_TO_FILE: '0', LOG_CHAT: '0' },
+        env: { ...process.env, PORT: String(PORT), LOG_TO_FILE: '0', LOG_CHAT: '0', DATA_DIR: DATA_TMP, LOG_DIR: path.join(DATA_TMP, 'logs') },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let serverOut = '';
@@ -210,7 +201,6 @@ async function casePcCommand(c) {
         }).then(async (r) => ({ status: r.status, json: await r.json().catch(() => null) }));
 
         // ---- 三档：strict 每条都问 / auto 只问危险 / full 从不问 ----
-        //
         // ★★ 2026-10 权限模型重构。旧模型是 app（整体拒绝命令）/ computer（放行，
         //    危险命令要授权）两档。新模型三档都能执行命令，区别只在"要不要问"：
         //      strict → 一律要求 approved（连 dir 也要）
@@ -267,7 +257,6 @@ async function casePcCommand(c) {
             c.ok(r.status === 403, '非法档位收敛到 strict（仍然要求授权）', `status=${r.status}`);
         }
         // ---- ★ `off` 档：电脑操作整体关闭（读也不给，不只是"不问"）----
-        //
         // 这是 2026-10 新增的一档：用户选了它，AI 就**没有**电脑能力可言。
         // 与 strict/auto/full 的差别是"能力不存在"而不是"要不要问" —— 所以读取类
         // （ls/read/roots）也必须被拒，这正是不再泄露电脑信息的落点。
@@ -327,7 +316,6 @@ async function casePcCommand(c) {
         }
 
         // ---- 越界申请：限制模式碰 web/ 之外 → 403 + needEscalation，批准后放行 ----
-        //
         // 这是 ④ 里"需申请越界"的落点。旧行为是硬 403 让用户自己去设置页改全局权限；
         // 现在改成就这一次问一次。必须打在真实 HTTP 上，因为"是否放行"是服务端说了算。
         {
@@ -370,12 +358,10 @@ async function casePcCommand(c) {
         }
 
         // ---- 写入闸门：三档语义不同（strict 新建与覆盖都要问 / auto 与 full 直接放行）----
-        //
         // ★★ 2026-10：旧模型下"两种模式都必须先经用户同意"；新模型下**只有 strict 问**。
         //    这是用户明确选的：「自动通过」的定义就是不再逐条确认。
         //    ⚠️ 已知代价（刻意接受）：auto 档只禁删除、不禁覆盖，
         //       所以 AI 能用"写入同名文件"绕过删除禁令。设置页里写明了这一点。
-        //
         // ★★ 2026-10 修复：strict 档下**新建文件也必须先确认**（回 needCreate）。
         //    早期实现只拦"覆盖已有文件"，于是最低档下 AI 仍能在桌面无声新建文件 ——
         //    与设置页文案「写入……每一次都会问你」不符。下面的 ①/①b 钉住这条修复。
@@ -438,7 +424,6 @@ async function casePcCommand(c) {
         }
 
         // ---- ★★ 删除接口（2026-10 新增能力）----
-        //
         // 这是本次改造里**唯一新增的破坏性能力**，所以三档语义必须逐条钉死：
         //   strict → 回 needDelete 让前端确认，批准后执行
         //   auto   → **整体拒绝**（这一档的定义就是禁止删除）
@@ -487,7 +472,6 @@ async function casePcCommand(c) {
                 c.ok(r.status === 404, '删除不存在的目标返回 404', `status=${r.status}`);
 
                 // ⑥ ★ 危险位置保护：整锅端的目录不能删，但**里面的单个文件可以**
-                //
                 //   这个区分是刻意的：「完全访问」的定义是"AI 能做任何事"，
                 //   把 web/ 下所有文件都禁掉会让这一档名不副实
                 //   （AI 连自己刚建的临时文件都删不掉）。所以只挡"整锅端"。
@@ -535,18 +519,27 @@ async function casePcCommand(c) {
     } finally {
         // 自己起的进程自己收 —— 漏掉它会留下一个占着端口的孤儿 node
         try { child.kill(); } catch { /* ignore */ }
+        try { await rm(DATA_TMP, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 
     // ============================================================ 4. 前端接线
     console.log('\n=== 4. 前端接线 ===');
     {
         const html = readFrontend();
-        const agent = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8'));
+        const agent = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-backend.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-continue.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-access.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-result.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-files.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8')
+            + '\n' + m.readFileSync(path.join(ROOT, 'web', 'js', 'agent-runtime.js'), 'utf8'));
         /* 插件不随仓库分发：本地没有 mods/live2d 时用空串（下面的断言会自然跳过相关检查） */
         const live2d = (await import('node:fs')).existsSync(path.join(ROOT, 'mods', 'live2d', 'index.js'))
             ? (await import('node:fs')).readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8')
             : '';
-        const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
+        const data = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
 
         c.ok(/agentCommandOperation\(raw\)/.test(agent), 'agentActions 有电脑命令入口');
         c.ok(/doAgentCommand\(/.test(agent), '有 doAgentCommand 执行层');
@@ -593,7 +586,9 @@ async function casePcCommand(c) {
         // 提示词侧（data.js）必须：off 档不注入能力清单、改注入"已关闭"说明；
         // 且迁移白名单要包含 'off'，否则老用户存下的 off 会被重置成 strict。
         {
-            const dataJs = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
+            const dataJs = await import('node:fs').then(m => m.readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8'));
             c.ok(/agentDisabledSkillText\(\)/.test(dataJs) && /agentAccessDisabled\(\)/.test(dataJs),
                 '★ 提示词侧在 off 档下不注入能力清单，改注入"已关闭"说明');
             c.ok(/\['off', 'strict', 'auto', 'full'\]/.test(dataJs),
@@ -647,7 +642,6 @@ async function casePcCommand(c) {
 
         // 分发顺序：电脑命令必须排在文件操作之前，否则命令正文里的
         // "查看文件" 这类词会被文件分支吃掉。
-        //
         // ★ 分发逻辑已从 live2d-video.js 移到宿主自有模块 web/js/agent-tags.js
         //   （解耦：Live2D 是可卸的，不能让它持有全部 [操作:] 的分发权）。
         //   这里断言新位置，并在 live2d 那侧确认它**不再**持有该分支。
@@ -716,13 +710,10 @@ async function casePcCommand(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 3. APK 侧数据备份（web/js/chat-backup.js）
-//
 // 为什么需要：APK 里没有后端，「我的数据」原本整块是隐藏的 —— 而**用户数据在 APK 里更危险**
 // （存在应用私有目录，卸载即丢，用户连手动拷出来都做不到）。
 // 这个模块让 APK 也能导出/导入，且格式与 Web 版同构（两边可互相导入）。
-//
 // 检查重点：
 //   1. 键清单与 store.js 的 DATA_KEYS 一致（不一致 = 导出会漏数据）
 //   2. 导出的 zip 是**标准格式**（能被 Node 的 zip 读取器解开、CRC 正确）
@@ -730,10 +721,8 @@ async function casePcCommand(c) {
 //   4. 能读 Web 版（后端 store.mjs）导出的 zip —— 这是"两边互通"的关键
 //   5. 能读 v1 单 JSON 旧备份
 //   6. 边界：空备份、非法文件、越界键都要有明确行为
-//
 // 全程**不碰浏览器、不触发下载**（见开发文档 8.31 的教训）。
 // 沙箱里不落盘、不起进程 —— 这一节没有需要清理的资源。
-// ────────────────────────────────────────────────────────────
 
 async function caseChatBackup(c) {
     const src = readFileSync(path.join(ROOT, 'web', 'js', 'chat-backup.js'), 'utf8');
@@ -876,34 +865,39 @@ async function caseChatBackup(c) {
         const names = files.map((f) => f.name);
         console.log('  zip 内 ' + names.length + ' 个文件: ' + names.join(', '));
         c.ok(names.includes('manifest.json'), '含 manifest.json');
-        c.ok(names.includes('settings.json'), '含 settings.json');
-        c.ok(names.includes('characters/index.json'), '含 characters/index.json');
-        c.ok(names.includes('characters/card_a.json'), '含 characters/card_a.json');
-        c.ok(names.includes('characters/card_b.json'), '含 characters/card_b.json');
-        c.ok(names.includes('conversations/index.json'), '含 conversations/index.json');
-        c.ok(names.includes('conversations/conv_a.json'), '含 conversations/conv_a.json');
-        c.ok(names.some((n) => /^memory\/[A-Za-z0-9_-]+\.json$/.test(n)), '含 memory/<类目>.json');
+        // 顶层：根上只有 manifest.json，聊天数据统一在 data/ 下（与电脑版同构）
+        c.ok(names.filter((n) => !n.includes('/')).join(',') === 'manifest.json',
+            '根上只有 manifest.json（数据都在 data/ 下）', names.filter((n) => !n.includes('/')).join(','));
+        c.ok(names.every((n) => !n.includes('/') || n.startsWith('data/')),
+            '除了 manifest.json 全部在 data/ 下', names.filter((n) => n.includes('/') && !n.startsWith('data/')).join(','));
+        c.ok(names.includes('data/settings.json'), '含 data/settings.json');
+        c.ok(names.includes('data/characters/index.json'), '含 data/characters/index.json');
+        c.ok(names.includes('data/characters/card_a.json'), '含 data/characters/card_a.json');
+        c.ok(names.includes('data/characters/card_b.json'), '含 data/characters/card_b.json');
+        c.ok(names.includes('data/conversations/index.json'), '含 data/conversations/index.json');
+        c.ok(names.includes('data/conversations/conv_a.json'), '含 data/conversations/conv_a.json');
+        c.ok(names.some((n) => /^data\/memory\/[A-Za-z0-9_-]+\.json$/.test(n)), '含 data/memory/<类目>.json');
 
         const get = (n) => files.find((f) => f.name === n).data.toString('utf8');
         const manifest = JSON.parse(get('manifest.json'));
         c.ok(manifest.format === 'elainachat-backup', 'manifest 格式标识正确');
-        c.ok(manifest.version === 2, 'manifest 版本为 2', String(manifest.version));
+        c.ok(manifest.version === 3, 'manifest 版本为 3', String(manifest.version));
         c.ok(manifest.source === 'apk', 'manifest 标明来源是 apk');
         c.ok(manifest.counts.characters === 2, 'manifest 统计人设卡数', JSON.stringify(manifest.counts));
         c.ok(manifest.counts.conversations === 2, 'manifest 统计对话数', JSON.stringify(manifest.counts));
 
-        const settings = JSON.parse(get('settings.json'));
+        const settings = JSON.parse(get('data/settings.json'));
         c.ok(settings.elaina_open_settings !== undefined, 'settings.json 含设置');
         c.ok(settings.elainachat_open_api_secrets !== undefined, 'settings.json 含 API Key');
         c.ok(settings['live2d.bg'] !== undefined, 'settings.json 含 Live2D 偏好');
         c.ok(settings.elaina_open_character_cards === undefined, 'settings.json 不含人设卡（已拆出去）');
         c.ok(settings.elaina_open_conversations === undefined, 'settings.json 不含对话（已拆出去）');
 
-        const memFile = names.find((n) => /^memory\/[A-Za-z0-9_-]+\.json$/.test(n));
+        const memFile = names.find((n) => /^data\/memory\/[A-Za-z0-9_-]+\.json$/.test(n));
         const mem = JSON.parse(get(memFile));
         c.ok(typeof mem.value !== 'undefined', 'memory/<类目>.json 是 {value} 形态（与后端同构）');
 
-        const cidx = JSON.parse(get('characters/index.json'));
+        const cidx = JSON.parse(get('data/characters/index.json'));
         c.ok(cidx.currentCardId === 'card_a', 'index 记录当前卡片');
         c.ok(cidx.order.join(',') === 'card_a,card_b', 'index 记录卡片顺序');
     }
@@ -944,16 +938,16 @@ async function caseChatBackup(c) {
     // ============================================================ 4. 读 Web 版的 zip
     console.log('\n=== 4. 能读 Web 版（后端）导出的 zip ===');
     {
-        // 用后端的 createZip 造一份"Web 版格式"的备份（带 deflate 的大条目）
+        // 用后端的 createZip 造一份"Web 版 v3 格式"的备份（数据在 data/ 下，带 deflate 的大条目）
         const webZip = createZip([
-            { name: 'manifest.json', data: JSON.stringify({ format: 'elainachat-backup', version: 2, source: 'web' }) },
-            { name: 'settings.json', data: JSON.stringify({ elaina_open_settings: JSON.stringify({ model: 'from-web' }) }) },
-            { name: 'characters/index.json', data: JSON.stringify({ version: 1, currentCardId: 'web_card', order: ['web_card'] }) },
-            { name: 'characters/web_card.json', data: JSON.stringify({ id: 'web_card', name: '来自Web的卡' }) },
-            { name: 'conversations/index.json', data: JSON.stringify({ version: 1, order: ['web_conv'] }) },
+            { name: 'manifest.json', data: JSON.stringify({ format: 'elainachat-backup', version: 3, source: 'web' }) },
+            { name: 'data/settings.json', data: JSON.stringify({ elaina_open_settings: JSON.stringify({ model: 'from-web' }) }) },
+            { name: 'data/characters/index.json', data: JSON.stringify({ version: 1, currentCardId: 'web_card', order: ['web_card'] }) },
+            { name: 'data/characters/web_card.json', data: JSON.stringify({ id: 'web_card', name: '来自Web的卡' }) },
+            { name: 'data/conversations/index.json', data: JSON.stringify({ version: 1, order: ['web_conv'] }) },
             // 故意做大一点，逼后端用 deflate（method=8），验证 APK 侧能解压
-            { name: 'conversations/web_conv.json', data: JSON.stringify({ id: 'web_conv', title: '来自Web的对话', messages: Array.from({ length: 50 }, (_, i) => ({ role: 'user', text: '消息' + i })) }) },
-            { name: 'memory.json', data: JSON.stringify({ version: 1, value: JSON.stringify({ diary: [{ date: '2026-09-23', content: 'web记忆' }] }) }) },
+            { name: 'data/conversations/web_conv.json', data: JSON.stringify({ id: 'web_conv', title: '来自Web的对话', messages: Array.from({ length: 50 }, (_, i) => ({ role: 'user', text: '消息' + i })) }) },
+            { name: 'data/memory.json', data: JSON.stringify({ version: 1, value: JSON.stringify({ diary: [{ date: '2026-09-23', content: 'web记忆' }] }) }) },
         ]);
 
         const { sandbox, store } = makeSandbox();
@@ -970,6 +964,27 @@ async function caseChatBackup(c) {
         c.ok(JSON.parse(store.get('elaina_open_memory_core') || '{}').diary.length === 1, '读到 Web 版的记忆');
         // 当前生效的卡也要补齐（Web 版导出里没有 elaina_open_character_card）
         c.ok(Boolean(store.get('elaina_open_character_card')), '自动补出"当前生效的卡"');
+    }
+
+    // ============================================================ 4b. 读 v2 旧布局（名字在根上）
+    console.log('\n=== 4b. 兼容 v2 旧布局（settings.json 等在 zip 根上）===');
+    {
+        const oldZip = createZip([
+            { name: 'manifest.json', data: JSON.stringify({ format: 'elainachat-backup', version: 2, source: 'web' }) },
+            { name: 'settings.json', data: JSON.stringify({ elaina_open_settings: JSON.stringify({ model: 'v2-root' }) }) },
+            { name: 'characters/index.json', data: JSON.stringify({ version: 1, currentCardId: 'c2', order: ['c2'] }) },
+            { name: 'characters/c2.json', data: JSON.stringify({ id: 'c2', name: '根布局的卡' }) },
+            { name: 'conversations/index.json', data: JSON.stringify({ version: 1, order: ['v2conv'] }) },
+            { name: 'conversations/v2conv.json', data: JSON.stringify({ id: 'v2conv', messages: [] }) },
+            { name: 'memory/diary.json', data: JSON.stringify({ version: 1, value: [{ date: '2026-01-01', content: '根布局记忆' }] }) },
+        ]);
+        const { sandbox, store } = makeSandbox();
+        const res = await sandbox.ChatBackup.applyBackup(new File([oldZip], 'v2.zip', { type: 'application/zip' }));
+        c.ok(res.source === 'zip', '识别为 zip');
+        c.ok(JSON.parse(store.get('elaina_open_settings') || '{}').model === 'v2-root', '读到根上的 settings.json');
+        c.ok(JSON.parse(store.get('elaina_open_character_cards') || '[]')[0].id === 'c2', '读到根上的 characters/');
+        c.ok(JSON.parse(store.get('elaina_open_conversations') || '[]')[0].id === 'v2conv', '读到根上的 conversations/');
+        c.ok(JSON.parse(store.get('elaina_open_memory_core') || '{}').diary.length === 1, '读到根上的 memory/<类目>.json');
     }
 
     // ============================================================ 5. v1 旧备份
@@ -1108,3 +1123,4 @@ await runChecks({
 });
 
 void wait; void freePort;
+

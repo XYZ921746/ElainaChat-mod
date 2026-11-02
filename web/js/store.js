@@ -1,11 +1,8 @@
 // 统一数据存储层：data/ 是唯一权威存储，localStorage 不保存业务数据。
-//
 // 读永远同步命中内存缓存：初始化（主题、设置、会话）是同步的，改成异步会让
 // 首屏闪默认色、且要串行 await 一大片调用点。写走防抖后落 data/。
-//
 // 两个后端：Web 走 /api/store；APK 走 Capacitor Filesystem 的应用私有目录
 // （那就是 APK 的 data/）。
-//
 // 对外 API 刻意与 localStorage 形似（getItem/setItem/removeItem），替换调用点
 // 时是机械改动。
 (function () {
@@ -20,7 +17,7 @@
         'elaina_open_conversations',     // 聊天记录
         'elaina_open_categories',        // 分类
         'elaina_open_favorites',         // 收藏
-        'elaina_open_liked_quotes',      // 喜欢的台词
+        'elaina_open_liked_quotes',      // 历史键：点赞已下线，保留只为旧数据仍能备份/同步
         'elaina_open_character_card',    // 当前生效的角色卡（旧格式，保留兼容）
         'elaina_open_character_cards',   // 角色卡列表
         'elaina_open_current_card',      // 当前选中的角色卡 id
@@ -89,7 +86,8 @@
     var pending = Object.create(null);   // 待推送的补丁
     var flushTimer = null;
     var backend = null;
-    var bootstrapped = false;
+    var backendKind = '';   // 'web' | 'native'；bootstrap 时确定，供平台判断用（不能比较对象身份）
+    var bootPromise = null;   // 并发调用共享同一个启动 Promise（见 bootstrap）
 
     // 本客户端的随机标识：用于让服务端在广播时**跳过发起方自己**。
     // 每个标签页一份（模块级变量），关掉标签页就没了，不需要持久化。
@@ -107,12 +105,33 @@
     }
 
     // ── 后端接口 ────────────────────────────────────────────────────────
-    //
     // loadAll() → Promise<{key: stringValue}>    启动时读全量
     // save(patch) → Promise<void>                写增量（值 null 表示删除）
-    //
     // Web 后端的 loadAll 是**同步填充**的（内部用同步 XHR），因为
     // Web 版必须在脚本求值阶段就能读到主题；APK 后端是真异步。
+
+    /**
+     * 服务端明确拒绝（写盘失败 / 单键超限）必须让界面知道 ——
+     * 静默吞掉的话，用户会以为"已经保存"，重启后才发现数据没了。
+     */
+    function reportSaveFailed(res) {
+        return res.json().catch(function () { return {}; }).then(function (info) {
+            try {
+                window.dispatchEvent(new CustomEvent('elaina:store-save-failed', {
+                    detail: { code: (info && info.code) || '', message: (info && info.message) || ('HTTP ' + res.status) },
+                }));
+            } catch (e) { /* 事件派发失败不影响后续写入 */ }
+            console.warn('[Store] 保存被服务端拒绝：' + ((info && info.message) || res.status));
+        });
+    }
+
+    /** 把启动时读到的数据填进内存缓存（只收字符串值，与旧行为一致）。 */
+    function mergeLoadedData(data) {
+        if (!data) return;
+        for (var k in data) {
+            if (typeof data[k] === 'string') cache[k] = data[k];
+        }
+    }
 
     function createWebBackend() {
         return {
@@ -158,6 +177,9 @@
                     headers: headers,
                     body: body,
                     keepalive: keepaliveOk,
+                }).then(function (res) {
+                    if (res.ok) return;
+                    return reportSaveFailed(res);
                 }).catch(function () { /* 服务端没开就只留内存，下次写入再试 */ });
             },
         };
@@ -240,6 +262,27 @@
         if (isDataKey(key)) queue(key, null);
     }
 
+    /** 把远端补丁合进缓存，并只对真正变化的键通知业务层。 */
+    function applyRemotePatch(patch) {
+        var keys = Object.keys(patch);
+        var changed = [];
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var v = patch[k];
+            if (v === null) {
+                if (Object.prototype.hasOwnProperty.call(cache, k)) { delete cache[k]; changed.push(k); }
+            } else if (cache[k] !== v) {
+                cache[k] = v;
+                changed.push(k);
+            }
+        }
+        // 值没变就不惊动界面（避免自己刚改完又被自己触发的广播重渲染）
+        if (changed.length) {
+            console.log('[Store] 收到其它设备的改动：' + changed.length + ' 项');
+            notifyLocal(changed, patch);
+        }
+    }
+
     /**
      * 订阅**其它设备**的改动（多设备实时同步）。
      *
@@ -255,7 +298,7 @@
     function subscribeRemote(onChange) {
         if (typeof onChange === 'function') changeListeners.add(onChange);
         // APK / 无 EventSource 环境：什么都不做
-        if (backend === createNativeBackend() || typeof window.EventSource !== 'function') {
+        if (backendKind === 'native' || typeof window.EventSource !== 'function') {
             return function () { changeListeners.delete(onChange); };
         }
         if (eventSource) return function () { changeListeners.delete(onChange); };
@@ -270,23 +313,7 @@
                 // sendBeacon 那条路无法带 clientId，所以自己的改动也可能被推回来。
                 if (msg.from && msg.from === clientId) return;
 
-                var keys = Object.keys(msg.data);
-                var changed = [];
-                for (var i = 0; i < keys.length; i++) {
-                    var k = keys[i];
-                    var v = msg.data[k];
-                    if (v === null) {
-                        if (Object.prototype.hasOwnProperty.call(cache, k)) { delete cache[k]; changed.push(k); }
-                    } else if (cache[k] !== v) {
-                        cache[k] = v;
-                        changed.push(k);
-                    }
-                }
-                // 值没变就不惊动界面（避免自己刚改完又被自己触发的广播重渲染）
-                if (changed.length) {
-                    console.log('[Store] 收到其它设备的改动：' + changed.length + ' 项');
-                    notifyLocal(changed, msg.data);
-                }
+                applyRemotePatch(msg.data);
             };
             eventSource.onerror = function () {
                 // EventSource 会自己重连，这里只记一行 —— 服务端重启期间刷屏没意义。
@@ -320,31 +347,23 @@
      *   这个代价换来的是"删了就是删了"这个不需要任何心智模型的保证。
      */
     function bootstrap() {
-        if (bootstrapped) return Promise.resolve();
-        bootstrapped = true;
+        // 并发调用（init.js 与插件加载器都会调）必须等**同一个**启动 Promise。
+        // 只置一个布尔值会让第二个调用立刻 resolve，插件在数据还没读回来时就启动。
+        if (bootPromise) return bootPromise;
 
         var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        backendKind = isNative ? 'native' : 'web';
         backend = isNative ? createNativeBackend() : createWebBackend();
 
         // Web：同步填缓存（零闪烁）
         if (backend.loadAllSync) {
-            var data = backend.loadAllSync();
-            if (data) {
-                for (var k in data) {
-                    if (typeof data[k] === 'string') cache[k] = data[k];
-                }
-            }
-            return Promise.resolve();
+            mergeLoadedData(backend.loadAllSync());
+            bootPromise = Promise.resolve();
+        } else {
+            // APK：异步读文件
+            bootPromise = backend.loadAll().then(mergeLoadedData).catch(function () { /* 读不到就按空数据启动 */ });
         }
-
-        // APK：异步读文件
-        return backend.loadAll().then(function (data) {
-            if (data) {
-                for (var k in data) {
-                    if (typeof data[k] === 'string') cache[k] = data[k];
-                }
-            }
-        }).catch(function () { /* 读不到就按空数据启动 */ });
+        return bootPromise;
     }
 
     /** 当前缓存快照（调试 / 迁移用） */

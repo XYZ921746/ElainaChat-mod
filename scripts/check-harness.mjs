@@ -1,14 +1,11 @@
 // 检查脚本共用运行时 —— 断言计数、端口分配、等待。
-//
 // 为什么需要它：47 个 check-*.mjs 里有 `wait` 抄了 12 遍（字节全同）、
 // `freePort` 14 遍（其中 11 份全同，另 3 份是变体）、`pass/fail/ok` + 结尾汇总
 // 抄了 25 遍。这些是纯样板，与"检查什么"无关；散在 47 个文件里时，
 // 改一次汇总格式要动 25 处，漏一处就出现两种输出风格。
-//
 // 合并后的每个模块文件（check-chat.mjs 等）用 runModule() 跑一组用例：
 // 每个用例在自己的函数作用域里，断言经 ctx.ok 记账 —— 这样十几段代码
 // 放进同一文件时，各自的 `ROOT`/`html`/`src` 局部变量不会互相踩。
-//
 // 用法（见 check-chat.mjs）：
 //   import { runModule, ok, wait, freePort } from './check-harness.mjs';
 //   runModule({ title: '...', usage: 'node scripts/check-chat.mjs', cases: [

@@ -81,6 +81,27 @@
         });
     }
 
+    /**
+     * 摘掉一条操作（连同它的执行实现与说明书）。
+     *
+     * 只有**运行时注册的**操作需要它 —— 目前是 MCP 工具：它们的清单取决于用户
+     *   装了哪些服务器，停用一台之后必须能把那一批摘掉。不摘的话它们会一直留在
+     *   模型的能力清单里，调一次失败一次。
+     *
+     * 为什么不给静态声明的操作提供这个：内置能力是代码的一部分，运行时删掉它
+     *   只会让"能力清单与实现不一致" —— 那正是本注册表要防的事。
+     *
+     * @returns {boolean} 是否真的删掉了（删不存在的名字不报错，便于按批清理）
+     */
+    function undefine(name) {
+        const key = String(name || '').trim();
+        if (!key) return false;
+        execs.delete(key);
+        // manual 挂在 op 条目自己身上（见 setManual），条目被删掉时它随之消失 ——
+        //   所以这里不需要另清一次。写成 manuals.delete(...) 会引用一个不存在的 Map。
+        return ops.delete(key);
+    }
+
     /** 挂执行实现。实现必须在 agent.js 里（本文件不碰副作用）。 */
     function setExec(name, fn) {
         if (!ops.has(name)) throw new Error('setExec 的操作还没注册：' + name);
@@ -200,7 +221,7 @@
     }
 
     window.ElainaOps = {
-        define, registerKnowledge, setExec, setManual, manualFor,
+        define, registerKnowledge, undefine, setExec, setManual, manualFor,
         get, resolve, list, availableOps, toolsForAccess, indexLines, opsForIntent, invoke,
     };
 })();

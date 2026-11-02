@@ -1,20 +1,15 @@
 // 安全回归检查：写入黑名单 / 内网地址判定 / 防嵌套头 / 登录防爆破 / 密码强度 / 导出下载方式。
-//
 // 合并自三个脚本（check-security-hardening / check-auth-guard / check-export-download）。
 // 它们守的是同一个威胁面的三个侧面 —— 谁能往哪儿写、谁能连哪儿、谁能进得来，
 // 以及"把数据交给用户"这条出口不被中途劫走。拆成三个文件时，每个都要各自
 // 重算一遍 ROOT、各自抄一遍 ok/汇总样板、各自起一遍真实服务；合成一个文件后
 // 共用同一份断言记账与端口分配，跑一次就是完整的一轮安全回归。
-//
 // 每段用例在自己的函数作用域里跑，同名局部变量（ROOT / WEB / MODS / html / src）
 // 不会互相踩，失败信息形如「写入黑名单 :: 拦截 "x.html"」。
-//
 // 本模块里的用例会 spawn 起 web/serve.mjs；每个用例自己拿端口、自己在 finally 里
 // 杀进程并清理临时目录与探针文件（检查脚本自己造的中间状态必须自己收拾干净）。
-//
 // 用法：node scripts/check-security.mjs            跑全部
 //       node scripts/check-security.mjs 黑名单     只跑名字含该子串的用例
-//
 // 注意：断言里出现 "预期失败" 是允许的（本机既有的环境性失败），
 // 但不允许为了让检查变绿而改产品代码 —— 也不允许删断言。
 
@@ -27,13 +22,12 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { readFrontend } from './frontend-sources.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
+import { extractFunction } from './check-source.mjs';
 
 const SERVE = path.join(ROOT, 'web', 'serve.mjs');
 
-// ────────────────────────────────────────────────────────────
 // 1. 写入黑名单：扩展名判定必须看"最终落盘名" + 中转的内网地址判定 + 防嵌套头
 //    （合并自 check-security-hardening）
-//
 // agentWrite 的 BLOCKED_EXT 曾经直接用 `path.extname(target)` 判定。Windows 上有
 // 三种写法让 extname 看到的**不是**最终落盘名，黑名单被整体绕过（实测可复现）：
 //   x.html::$DATA  → NTFS 交换数据流，落盘就是 x.html，静态服务照样当 HTML 执行
@@ -41,14 +35,11 @@ const SERVE = path.join(ROOT, 'web', 'serve.mjs');
 //   x.html␠       → 尾随空格同理
 // 这是**存储型 XSS**：AI（或任何能调 /api/agent/write 的人）可以把脚本写进 web/，
 // 再诱导用户打开同源页面。nosniff / X-Frame-Options 都拦不住 —— 它是同源的。
-//
 // /api/relay 的内网判定曾经按字符串前缀比较，漏掉 IPv4-mapped IPv6：
 //   `::ffff:127.0.0.1` 连的就是 127.0.0.1，但既不 startsWith('127.') 也不是 '::1'，
 //   isPrivateIPv4 又因 split('.') 长度不对而返回 false → SSRF 防护失效。
-//
 // 两者都是"看代码觉得没问题、只有真跑才暴露"的类型，所以这里既做函数级矩阵，
 // 也起真实服务做端到端验证。
-// ────────────────────────────────────────────────────────────
 
 async function caseSecurityHardening(c) {
     const src = readFileSync(SERVE, 'utf8');
@@ -84,18 +75,8 @@ async function caseSecurityHardening(c) {
         return '';
     }
 
-    /** 按花括号配对切出一个具名函数（serve.mjs 不是模块，只能这样取） */
-    function extractFn(source, name) {
-        const start = source.indexOf('function ' + name + '(');
-        if (start < 0) return null;
-        let i = source.indexOf('{', source.indexOf('(', start));
-        let depth = 0;
-        for (; i < source.length; i++) {
-            if (source[i] === '{') depth++;
-            else if (source[i] === '}') { depth--; if (depth === 0) return source.slice(start, i + 1); }
-        }
-        return null;
-    }
+    /** 按花括号配对切出一个具名函数（serve.mjs 不是模块，只能这样取）；找不到返回 null */
+    const extractFn = (source, name) => extractFunction(source, name, { required: false }) || null;
 
     // 临时目录在整个用例结束时统一清掉（服务起不来时也要清）
     let child = null;
@@ -295,7 +276,6 @@ async function caseSecurityHardening(c) {
         }
 
         // ============================================================ 4. 端到端：SSRF 的调用点
-        //
         // 为什么单独起一个服务、并从**局域网地址**发请求：
         // 上面第 2 节只验证了 isInternalAddress 这个函数本身对不对。但函数对、调用点没接上
         // （或者调用点还留着旧的朴素比较），防护照样是失效的 —— 这条就是专门堵这个缺口：
@@ -321,31 +301,42 @@ async function caseSecurityHardening(c) {
 
                     let up = false;
                     for (let i = 0; i < 75; i++) {
-                        try { const r = await fetch(`http://${LAN}:${port}/api/server-info`); if (r.status) { up = true; break; } }
+                        try { const r = await fetch(`http://127.0.0.1:${port}/api/server-info`); if (r.status) { up = true; break; } }
                         catch { await c.wait(200); }
                     }
-                    c.ok(up, '服务已就绪（经局域网地址 ' + LAN + ' 访问）', up ? '' : out.slice(-400));
+                    c.ok(up, '服务已就绪（本机回环）', up ? '' : out.slice(-400));
 
                     if (up) {
-                        // 非本机访问必须登录。
-                        //
-                        // ★ 密码的抓取要**容忍文案改版**（2026-09 两次踩到）：
-                        //   日志格式已改为英文事实行：`[auth] LAN access password (initial, …): xxx`。
-                        //   每次日志改版这里都要跟 —— 抓不到 → pwd 空 → 登录 401
-                        //   → 后面所有 SSRF 断言连锁失败（假故障，不是安全问题）。
-                        //   按历史格式从新到旧依次回落。
-                        const pwd = (out.match(/access password[^:\n]*:\s*(\S+)/i) || [])[1]
-                            || (out.match(/访问密码[^：:\n]{0,20}[:：]\s*(\S+)/) || [])[1]
-                            || (out.match(/要输这个密码\s*\n\s*(\S+)/) || [])[1]
-                            || '';
-                        c.ok(Boolean(pwd), '能从启动日志里抓到访问密码（后续登录要用）',
-                            pwd ? '' : '日志格式可能又变了，检查 check-security.mjs 的抓取正则');
+                        // 规则：没有设置访问密码时，局域网接口直接关闭 —— 非回环连接会被
+                        // 直接销毁（客户端拿不到任何 HTTP 响应），而不是回一句"没有密码"。
+                        let lanClosed = false;
+                        try { await fetch(`http://${LAN}:${port}/api/server-info`); }
+                        catch { lanClosed = true; }
+                        c.ok(lanClosed, '未设置访问密码时局域网接口直接关闭（非回环连接被拒）');
+
+                        const TEST_PWD = 'CheckSec1234';
+                        const setPwd = await fetch(`http://127.0.0.1:${port}/api/auth/change-password`, {
+                            method: 'POST', headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify({ next: TEST_PWD }),
+                        });
+                        c.ok(setPwd.status === 200, '本机设置访问密码成功（局域网才开始可用）', 'HTTP ' + setPwd.status);
+                        // 改密码会清空所有会话（其它设备必须用新密码重登），但当前这台设备刚设完密码，
+                        //   必须直接拿到新会话 —— 否则它会被踢回登录页，用户还得把刚设的密码再输一遍。
+                        const setPwdCookies = setPwd.headers.getSetCookie?.() || [];
+                        c.ok(setPwdCookies.some((x) => /^elaina_session=/.test(x)),
+                            '改密码后当前设备直接拿到新会话（不必重复输密码）', setPwdCookies.join(' | '));
+
                         const login = await fetch(`http://${LAN}:${port}/api/auth/login`, {
                             method: 'POST', headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ password: pwd }),
+                            body: JSON.stringify({ password: TEST_PWD }),
                         });
                         const cookie = (login.headers.getSetCookie?.() || []).map((x) => x.split(';')[0]).join('; ');
                         c.ok(login.status === 200 && Boolean(cookie), '以局域网身份登录成功（后续才能调中转）', 'HTTP ' + login.status);
+
+                        // 已经登录的会话再打开 /login 不该重复要密码：服务端直接 302 回首页。
+                        const loginAgain = await fetch(`http://${LAN}:${port}/login`, { headers: { cookie }, redirect: 'manual' });
+                        c.ok(loginAgain.status === 302 && loginAgain.headers.get('location') === '/',
+                            '已登录时 /login 直接跳首页（不再让用户重复输密码）', 'HTTP ' + loginAgain.status);
 
                         const relay = async (url) => {
                             const r = await fetch(`http://${LAN}:${port}/api/relay`, {
@@ -401,11 +392,9 @@ async function caseSecurityHardening(c) {
                             c.ok(!leaked, '★ 内网服务的内容没有经中转泄漏出来（SSRF 实质被挡住）');
 
                             // ★ 越界申请的边界：从"局域网一律拒绝"变成"**未登录**一律拒绝"。
-                            //
                             //   背景（本轮的刻意改动）：局域网设备登录后可获得与本机同等的
                             //   电脑操作权限（文件 + 命令）。所以原来那条"局域网传 allowOutside
                             //   必须 403"已经不成立了 —— 那条断言测的是旧的 isLocal 边界。
-                            //
                             //   但真正要守的那条线**没有变松，只是换了位置**：
                             //   allowOutside 不能成为一个"凭一个布尔字段就绕过认证"的后门。
                             //   所以现在必须断言：**不带有效会话 cookie** 时，
@@ -426,7 +415,6 @@ async function caseSecurityHardening(c) {
                             const outsideTarget = path.join(path.dirname(ROOT), 'elaina-lan-escape-probe.txt');
 
                             // ★ 先清掉上一轮可能留下的探针。
-                            //
                             //   为什么要这一步（真实踩过）：旧版本没有清理，而"局域网被放开"之后
                             //   同一段测试里的已登录请求会**真的写成功**，那个文件留到下一次运行，
                             //   就会撞上新加的覆盖闸门（目标已存在 → 403），表现为
@@ -492,17 +480,13 @@ async function caseSecurityHardening(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 2. 登录防爆破 + 密码强度（合并自 check-auth-guard）
-//
 // 本轮把「电脑操作权限」放开给了已登录的局域网设备（文件读写 + 执行命令）。
 // 这等于承认：**密码就是唯一那道门**。门本身的强度（密码规则）与
 // 撞门的代价（锁定策略）都要有回归保护 —— 否则某次"顺手简化"就能让
 // 整台电脑重新变成几秒钟可破。
-//
 // 时钟是注入的，所以"连续失败 12 次后的锁定是 1 小时"这种断言能在毫秒内跑完，
 // 不需要真的等。
-// ────────────────────────────────────────────────────────────
 
 async function caseAuthGuard(c) {
     const {
@@ -513,7 +497,6 @@ async function caseAuthGuard(c) {
     console.log('--- 1. 密码强度规则（至少 8 位 + 数字 + 大小写） ---');
     {
         // ---- 必须通过 ----
-        //
         // 注意：这里刻意不用 `passWord99` / `admin123a` 这类"弱口令+尾数"的写法 ——
         // 它们会被规则②正确拦下（那正是字典攻击的第一梯队）。测试夹具不能拿
         // 弱密码当"合格"样本，否则等于把规则往松的方向逼。
@@ -697,27 +680,20 @@ async function caseAuthGuard(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 3. 数据导出的下载方式（合并自 check-export-download）
-//
 // 为什么需要：这是个**环境相关、静默失败**的坑，很容易被改回去。
-//
 //   迅雷 / FDM 这类下载器会往 Chrome 里装**机器级扩展**
 //   （HKLM\SOFTWARE\...\Google\Chrome\Extensions，实测 path 指向
 //   %LOCALAPPDATA%\ChromeExtensionCache\xl_ext_chrome.crx）。
 //   机器级 = 任何 Chrome 实例都躲不掉，连自动化测试用的临时 profile 也会加载。
-//
 //   这个扩展只要看到响应带 `Content-Disposition: attachment`，就把 URL 抢走交给
 //   自己的下载引擎 —— 浏览器里拿到的是被改写的空响应（实测 HTTP 204 + 0 字节），
 //   用户既拿不到文件、也不知道为什么，还会被弹一个下载器窗口。
-//
 //   正确做法（本检查守护的两条）：
 //     1. 后端**不发** Content-Disposition: attachment，文件名走自定义头
 //     2. 前端 fetch 成 blob，用 <a download> 保存 —— blob: 是内存地址，抢不走
 //   另外前端必须**检测空响应**，否则会静默存下一个 0 字节的坏文件。
-//
 // 这个检查只读源码与响应头，**不触发任何真实下载**（不会弹出外部下载器）。
-// ────────────────────────────────────────────────────────────
 
 async function caseExportDownload(c) {
     // ============================================================ 1. 源码检查
@@ -725,18 +701,8 @@ async function caseExportDownload(c) {
     // 前端拆分后 exportDataBackup 在 web/js/app-*.js 里，必须读整个前端
     const html = readFrontend();
 
-    /** 取出 exportDataBackup 函数体（靠大括号配对） */
-    function extractFn(source, name) {
-        const start = source.indexOf('function ' + name + '(');
-        if (start < 0) return null;
-        let i = source.indexOf('{', source.indexOf('(', start));
-        let depth = 0;
-        for (; i < source.length; i++) {
-            if (source[i] === '{') depth++;
-            else if (source[i] === '}') { depth--; if (depth === 0) return source.slice(start, i + 1); }
-        }
-        return null;
-    }
+    /** 取出 exportDataBackup 函数体（靠大括号配对）；找不到返回 null */
+    const extractFn = (source, name) => extractFunction(source, name, { required: false }) || null;
 
     const exportFn = extractFn(html, 'exportDataBackup');
     c.ok(exportFn !== null, '找到 exportDataBackup 函数');
@@ -754,6 +720,12 @@ async function caseExportDownload(c) {
     const sandbox = await mkdtemp(path.join(tmpdir(), 'elaina-export-'));
     const dataDir = path.join(sandbox, 'data');
     await mkdir(dataDir, { recursive: true });
+    // 导出会把插件与技能也打进 zip；这里同样用临时目录隔离，
+    // 否则这段检查会读用户真实的 mods/（体积大、内容随本机安装变化）。
+    const modsDir = path.join(sandbox, 'mods');
+    const skillsDir = path.join(sandbox, 'skills');
+    await mkdir(modsDir, { recursive: true });
+    await mkdir(skillsDir, { recursive: true });
     await writeFile(path.join(dataDir, 'store.json'), JSON.stringify({
         elaina_open_settings: JSON.stringify({ model: 'x' }),
     }), 'utf8');
@@ -763,7 +735,10 @@ async function caseExportDownload(c) {
     const PORT = await c.freePort();
     const server = spawn(process.execPath, ['web/serve.mjs'], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, LOG_DIR: path.join(sandbox, 'logs'), LOG_TO_FILE: '0', LOG_CHAT: '0' },
+        env: {
+            ...process.env, PORT: String(PORT), DATA_DIR: dataDir, LOG_DIR: path.join(sandbox, 'logs'),
+            MODS_DIR: modsDir, SKILLS_DIR: skillsDir, LOG_TO_FILE: '0', LOG_CHAT: '0',
+        },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     let bootLog = '';
@@ -824,3 +799,4 @@ await runChecks({
     usage: 'node scripts/check-security.mjs [用例名子串]',
     cases,
 });
+

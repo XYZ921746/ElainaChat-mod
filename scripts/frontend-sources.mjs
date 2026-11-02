@@ -1,18 +1,14 @@
 // 前端源码读取器 —— 拆分之后，检查脚本仍然能"看到全部前端代码"。
-//
 // 为什么需要它：
 //   前端逻辑曾整体住在 web/index.html 里，检查脚本用
 //   `readFileSync('web/index.html')` + 正则去断言（"有没有这个函数""这段逻辑对不对"）。
 //   主脚本拆到 web/js/*.js、插件拆到 mods/* 之后，那些脚本读到的就只剩 HTML 骨架 ——
 //   断言会全部失败，而且**失败原因是"读错文件"，不是"功能坏了"**，那种红最难排查。
-//
 //   所以这里提供 readFrontend()：把所有前端源码按**加载顺序**拼成一份文本，
 //   检查脚本改用它就等于"仍然在看整个前端"。
-//
 // 顺序必须与 index.html 里 <script> 的实际加载顺序一致 —— 有些脚本会断言
 // "A 定义在 B 之前"（比如 chat-providers.js 必须在主脚本之前加载），
 // 拼接顺序错了会让这类断言产生假结果。
-//
 // 用法：
 //   import { readFrontend, listFrontendFiles } from './frontend-sources.mjs';
 //   const html = readFrontend();
@@ -40,14 +36,17 @@ export const MODS = path.join(ROOT, 'mods');
 function indexHtmlScriptOrder() {
     let text = '';
     try { text = readFileSync(path.join(WEB, 'index.html'), 'utf8'); } catch { return []; }
-    return [...text.matchAll(/<script src="\/js\/([^"]+)"><\/script>/g)].map((m) => m[1]);
+    // 允许标签上带 defer / async 等属性：顺序由出现次序决定，与属性无关
+    return [...text.matchAll(/<script[^>]*src="\/js\/([^"]+)"[^>]*><\/script>/g)].map((m) => m[1]);
 }
 
 /**
  * 按加载顺序列出前端源码文件。
  *
  * 顺序规则（与 index.html 保持一致）：
- *   1. index.html 本身（含内联 <style>，供样式断言用）
+ *   1. index.html 本身（DOM 骨架与内联脚本）
+ *   1b. web/css/base.css（基础样式层 —— 样式断言要看的规则都在这里，
+ *       只读 index.html 会拿到空串，断言照样"通过"）
  *   2. web/*.js 顶层脚本
  *   3. web/js/*.js —— 照抄 index.html 里 <script src> 的真实顺序；
  *      未在 index.html 里出现的追加到末尾（字典序）
@@ -74,8 +73,13 @@ export function listFrontendFiles() {
         for (const n of names) out.push(path.join(dir, n));
     };
 
-    // 1) HTML 骨架（含内联样式与内联脚本）
+    // 1) HTML 骨架（含内联脚本）
     pushIfFile(path.join(WEB, 'index.html'));
+
+    // 1b) 基础样式层。样式断言（"某条规则必须存在"）看的就是它：
+    //     样式不在 index.html 里之后，漏收这个文件会让那些断言在空串上匹配 ——
+    //     通过，但什么都没测。
+    pushIfFile(path.join(WEB, 'css', 'base.css'));
 
     // 2) web/ 顶层的独立脚本（如 live2d-video.js）
     pushDir(WEB, (n) => n.endsWith('.js'));
@@ -98,7 +102,6 @@ export function listFrontendFiles() {
 
     // 4) 插件目录：每个插件一个子目录，内部的 js/css 都要收进来
     //    （检查脚本会断言"插件是否真的被注册""样式有没有带进去"）
-    //
     // 目录名与位置**必须**和加载器一致。这里错了不会报错，而是**静默少读**：
     //   readFrontend() 里一个 mod 源码都没有，于是所有"断言 mod 行为"的检查
     //   其实是在空字符串上做匹配。这类假检查比没有检查更糟 ——
@@ -114,7 +117,6 @@ export function listFrontendFiles() {
             pushDir(dir, (n) => n.endsWith('.js'));
             pushDir(dir, (n) => n.endsWith('.css'));
             // ★ 插件自带的 HTML 片段也要收（2026-10 补）。
-            //
             //   为什么：插件可以把界面结构放在自己的 .html 里，由插槽在渲染时取回来插入
             //   （Live2D 插件的 panel.html 就是这么做的）。而 check-dom-refs 靠
             //   readFrontend() 收集"哪些 id 真实存在" —— 不收这些 HTML 的话，
@@ -151,6 +153,20 @@ export function readFrontend() {
             return `/* ==== 文件: ${rel} ==== */\n${text}`;
         })
         .join('\n');
+}
+
+/**
+ * 样式断言用：「HTML 骨架 + 基础样式层」拼成的一份文本。
+ *
+ * 为什么不是只读 index.html：样式规则住在 web/css/base.css，只读骨架时
+ * `c.ok(/某条 CSS/.test(html))` 会在空串上匹配 —— 通过，但什么都没测。
+ * 需要同时看 DOM 结构（id / 标签）与样式规则的地方用这个。
+ */
+export function readHtmlAndStyles() {
+    const read = (rel) => {
+        try { return readFileSync(path.join(WEB, rel), 'utf8'); } catch { return ''; }
+    };
+    return read('index.html') + '\n' + read('css/base.css');
 }
 
 /** 只读某个具体前端文件（相对 web/ 的路径），找不到返回空串 */

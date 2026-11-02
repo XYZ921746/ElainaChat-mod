@@ -1,0 +1,1563 @@
+/* ============================================================================
+ * 移动端界面层（窄屏专用）
+ *
+ * 窄屏与宽屏是两套信息架构、两套密度：底栏三格、回忆四页合并、设置走「我的」
+ * 下钻、顶栏只留插件按钮与「更多」。这些都集中写在同一个文件里，好让人一眼
+ * 看清"窄屏到底长什么样、动了哪些既有元素"。
+ *
+ * 三条边界：
+ *   · 规则全部关在 @media (max-width: 980px) 下 —— 宽屏一条都不生效；
+ *   · 只重排宿主自己的控件，业务逻辑仍由既有函数负责（脚本只点击既有按钮）；
+ *   · 插件插槽容器（#headerModSlot / #composerModSlot / #sidebarModSlot）
+ *     与 settings.tabs / settings.modal / chat.message.actions 一个都不动。
+ * ========================================================================== */
+
+#mobileNav,
+#mobileMoreBtn,
+#mobileAnnounceBtn,
+#mobileBackBtn,
+#mobileHomeAvatar,
+#mobileHomeActions,
+#mobileHomeGreeting,
+#mobileMine,
+.mobile-hub-seg,
+.mobile-conv-list,
+.mobile-quote-card,
+#mobileShellSheet,
+#mobileSettingsTitle,
+#mobileHubTitle,
+#mmConvSelBar { display: none; }
+
+/* 记忆 / 日记的「选择对话」按钮：宽屏由左侧对话列表承担筛选，按钮只属于窄屏。 */
+html.rd .conv-filter-btn { display: none; }
+
+@media (max-width: 980px) {
+
+    /* ---------- 0 · 窄屏密度令牌 ---------- */
+
+    /* 外壳原本是一个 z-index 层；它会把「＋」弹层的固定定位关在里面，
+       导致弹层永远压不过 body 上的底栏。窄屏撤掉这层，各元素按同一套 z 比较。 */
+    html.rd #appShell { z-index: auto !important; }
+
+    html.rd {
+        --ms-radius: 16px;
+        --ms-radius-sm: 11px;
+        --ms-pad: 16px;
+        --ms-bar: 56px;
+        --ms-nav: calc(58px + env(safe-area-inset-bottom));
+    }
+
+    /* ---------- 1 · 顶栏统一成一条平栏 ---------- */
+    /* 宽屏那套「浮起来、圆角、留白」的头部在窄屏既占高度又与页面头重复，
+       窄屏统一成贴边的一条：左标题、右插件按钮与「更多」。 */
+
+    html.rd #chatHeader {
+        margin: 0 !important;
+        border: 0 !important;
+        border-bottom: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        padding: 10px 14px !important;
+        min-height: var(--ms-bar);
+        background: var(--rd-surface) !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    /* 顶栏不画分割线（聊天 / 回忆共用这条顶栏）。redesign 里的
+       `html.rd #mainContent > header` 带 !important 且比 `html.rd #chatHeader` 多一个元素，
+       权重更高 —— 这里用两个 id 才压得住。 */
+    html.rd #mainContent > #chatHeader { border-bottom: 0 !important; }
+
+    /* 副标题（角色 · 模型）在窄屏保留：会话页需要它，和原型一致。 */
+
+    /* 宿主自己的顶栏按钮收进「更多」。插件按钮容器 #headerModSlot 不在列表里：
+       插件通过插槽注册的按钮继续留在顶栏，插件代码不需要任何改动。 */
+    html.rd #headerMemoryBtn,
+    html.rd #headerAnnounceBtn,
+    html.rd #headerInstallBtn,
+    html.rd #headerThemeBtn,
+    html.rd #rdModelPill,
+    html.rd #headerSettingsBtn { display: none !important; }
+
+    /* 旧的五格底栏由 #mobileNav 取代：窄屏同一时刻只保留一套导航。 */
+    html.rd .rd-bottom-nav { display: none !important; }
+
+    html.rd #mobileMoreBtn {
+        display: grid;
+        flex: none;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        place-items: center;
+        border: 1px solid var(--rd-border);
+        border-radius: var(--ms-radius-sm);
+        background: var(--rd-surface-2);
+        color: var(--rd-text-2);
+    }
+
+    html.rd #mobileMoreBtn svg { width: 18px; height: 18px; }
+
+    /* 公告铃铛：宿主自己那颗在窄屏收进「更多」，公告要留在显眼处。 */
+    html.rd #mobileAnnounceBtn {
+        display: grid;
+        position: relative;
+        flex: none;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        place-items: center;
+        border: 1px solid var(--rd-border);
+        border-radius: var(--ms-radius-sm);
+        background: var(--rd-surface-2);
+        color: var(--rd-text-2);
+        touch-action: manipulation;
+    }
+
+    html.rd #mobileAnnounceBtn svg { width: 18px; height: 18px; }
+
+    /* 进会话时汉堡让位给「返回列表」：窄屏的列表在首页，而不是常驻侧栏。 */
+    html.rd #mobileBackBtn.is-visible {
+        display: grid;
+        flex: none;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        place-items: center;
+        border: 1px solid var(--rd-border);
+        border-radius: var(--ms-radius-sm);
+        background: var(--rd-surface-2);
+        color: var(--rd-text-2);
+        touch-action: manipulation;
+    }
+
+    html.rd #mobileBackBtn svg { width: 18px; height: 18px; }
+    html.rd #chatHeader.is-conv #showSidebar { display: none !important; }
+
+    /* 首页顶栏（对齐原型）：头像 + 问候 + 搜索 / 新建；插件与「更多」留给会话页。 */
+    html.rd #mobileHomeAvatar {
+        place-items: center;
+        flex: none;
+        width: 38px;
+        height: 38px;
+        border: 1px solid var(--rd-accent-border);
+        border-radius: 50%;
+        background: linear-gradient(145deg, var(--rd-accent-soft), transparent);
+        color: var(--rd-accent);
+        font-family: "Noto Serif SC", "Songti SC", Georgia, serif;
+        font-size: 15px;
+        font-weight: 700;
+        touch-action: manipulation;
+    }
+
+    /* 上传过头像时，两处"用户头像"用同一张图（桌面端已经把它下发成 --rd-user-avatar）：
+       首页顶栏那颗与「我的」资料卡那颗。图没设时仍退回首字，所以这里是并列关系不是替换。 */
+    html.rd.rd-has-user-avatar #mobileHomeAvatar,
+    html.rd.rd-has-user-avatar #mobileMine .mm-avatar {
+        background-image: var(--rd-user-avatar) !important;
+        background-size: cover !important;
+        background-position: center !important;
+        background-repeat: no-repeat !important;
+        color: transparent !important;
+        /* 形状只认「正圆」：光靠 border-radius 会被主题/原生按钮的圆角或描边带偏，
+           clip-path 兜一层底，任何继承来的圆角都压不出多边形。 */
+        border: 0 !important;
+        border-radius: 50% !important;
+        overflow: hidden !important;
+        clip-path: circle(50% at 50% 50%);
+    }
+
+    html.rd #mobileHomeActions { display: none; flex: none; align-items: center; gap: 4px; }
+
+    html.rd .mh-act {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border: 1px solid var(--rd-border);
+        border-radius: var(--ms-radius-sm);
+        background: var(--rd-surface-2);
+        color: var(--rd-text-2);
+        touch-action: manipulation;
+    }
+
+    html.rd .mh-act svg { width: 18px; height: 18px; }
+    html.rd #mobileHomeGreeting { display: none; }
+    html.rd .mh-hello { font-size: 16px; font-weight: 700; color: var(--rd-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    html.rd .mh-sub { margin-top: 2px; font-size: 11px; color: var(--rd-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    html.rd #chatHeader.is-home #showSidebar { display: none !important; }
+    html.rd #chatHeader.is-home #mobileHomeAvatar { display: grid; }
+    html.rd #chatHeader.is-home #mobileHomeActions { display: flex; }
+    html.rd #chatHeader.is-home #mobileHomeGreeting { display: block; }
+    html.rd #chatHeader.is-home #currentConversationTitle,
+    html.rd #chatHeader.is-home #rdHeaderSub { display: none !important; }
+    html.rd #chatHeader.is-home #headerModSlot,
+    html.rd #chatHeader.is-home #mobileMoreBtn { display: none !important; }
+
+    /* 回忆页（日记 / 记忆 / 语笺 / 成就）：顶栏只留「回忆 + 副标题」，
+       汉堡与「更多」都收走 —— 分类由下面的分段条承担，返回靠底栏。 */
+    html.rd #chatHeader.is-pages #showSidebar,
+    html.rd #chatHeader.is-pages #mobileMoreBtn { display: none !important; }
+    html.rd #chatHeader.is-pages #currentConversationTitle,
+    html.rd #chatHeader.is-pages #rdHeaderSub { display: none !important; }
+    html.rd #chatHeader.is-pages #mobileHubTitle { display: block; }
+
+    html.rd .mht-title { font-size: 20px; font-weight: 700; line-height: 1.2; color: var(--rd-text); }
+    html.rd .mht-sub { margin-top: 2px; font-size: 11px; color: var(--rd-text-3); }
+
+    /* ---------- 2b · 首页：问候 + 输入 + 最近对话 ---------- */
+
+    html.rd #initialState {
+        justify-content: flex-start !important;
+        overflow-y: auto;
+        padding: 22px 14px calc(24px + var(--ms-nav)) !important;
+    }
+
+    /* 原型的首页只有「金句 + 输入 + 最近对话」三件事：那句大标题与副标题
+       占掉两行高度却不提供信息，窄屏不再重复。 */
+    html.rd #initialState > #greetingText,
+    html.rd #initialState > .greeting-subtitle,
+    html.rd #initialState > #statusText { display: none !important; }
+    html.rd #initialState::before { content: none !important; display: none !important; }
+
+    html.rd #initialState .initial-composer { margin-top: 14px !important; max-width: none !important; width: 100% !important; }
+
+    .mobile-conv-list { display: block; width: 100%; margin-top: 22px; }
+    .mobile-conv-list.hidden { display: none; }
+
+    /* 今日金句卡：金句胶囊在重设计层被隐藏（省顶栏空间），窄屏以卡片放回来。 */
+    .mobile-quote-card {
+        display: block;
+        width: 100%;
+        margin-top: 0;
+        padding: 16px 18px 14px;
+        border: 1px solid var(--rd-accent-border);
+        border-radius: var(--ms-radius);
+        background: linear-gradient(150deg, var(--rd-accent-soft), transparent 72%), var(--rd-surface);
+        text-align: left;
+    }
+
+    .mobile-quote-card.hidden { display: none; }
+
+    .mqc-eyebrow { margin-bottom: 9px; font-size: 10px; font-weight: 700; letter-spacing: .16em; color: var(--rd-accent); }
+    .mqc-text {
+        margin: 0;
+        font-family: "Noto Serif SC", "Songti SC", Georgia, serif;
+        font-size: 16px;
+        line-height: 1.6;
+        color: var(--rd-text);
+    }
+
+    .mqc-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; }
+    .mqc-source { font-size: 11.5px; color: var(--rd-text-3); }
+    .mqc-actions { flex: none; display: inline-flex; gap: 6px; }
+
+    .mqc-act {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        padding: 0;
+        border: 1px solid var(--rd-border);
+        border-radius: 999px;
+        background: var(--rd-surface-2);
+        color: var(--rd-text-3);
+        touch-action: manipulation;
+    }
+
+    .mqc-act svg { width: 16px; height: 16px; }
+    .mqc-act.is-on { color: var(--rd-accent); border-color: var(--rd-accent-border); background: var(--rd-accent-soft); }
+    .mqc-act.is-on svg { fill: currentColor; }
+
+    /* 首页列表 = 完整对话列表（含文件夹）：分组头与抽屉那套同构，
+       拖拽落点因此两处共用一份逻辑（见 conversations.js 的 convDropTargetAt）。 */
+    /* 每个分组自成布局上下文：拖动时那条落点线只重排它所在的一组，不牵动整份列表。 */
+    .mmc-section { margin-top: 16px; contain: layout style; }
+    .mmc-section:first-child { margin-top: 0; }
+
+    .mmc-folder {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin: 0 2px 6px;
+        padding: 4px 2px;
+        border-radius: 8px;
+        font-size: 11.5px;
+        letter-spacing: .04em;
+        color: var(--rd-text-3);
+    }
+
+    .mmc-folder-chev {
+        flex: none;
+        display: grid;
+        place-items: center;
+        color: var(--rd-text-3);
+        transition: transform .18s ease;
+    }
+
+    .mmc-folder-chev svg { width: 15px; height: 15px; }
+    /* 收起 = 外层裁剪框收高度 + 内层内容上移（见 animateConvSection）。
+       这里刻意不写 margin / opacity：那两条会在动画开始的瞬间改变布局或透明度，
+       看起来就是"图标先跳一下、内容半路忽然没了"。 */
+    .mmc-rows { overflow: hidden; transition: height .28s cubic-bezier(.4, 0, .2, 1); }
+    .mmc-rows-inner { transition: transform .28s cubic-bezier(.4, 0, .2, 1); }
+    .mmc-section.is-collapsed .mmc-folder-chev { transform: rotate(-90deg); }
+
+    .mmc-folder-ic { flex: none; display: grid; place-items: center; }
+    .mmc-folder-ic svg { width: 13px; height: 13px; }
+    .mmc-folder b { flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mmc-folder-n { flex: none; font-size: 10.5px; color: var(--rd-text-3); }
+
+    .mmc-search {
+        width: 100%;
+        margin: 0 0 10px;
+        padding: 9px 12px;
+        border: 1px solid var(--rd-border);
+        border-radius: 12px;
+        background: var(--rd-surface-2);
+        color: var(--rd-text);
+        font-family: inherit;
+        font-size: 13px;
+        outline: none;
+    }
+
+    .mmc-search.hidden { display: none; }
+    .mmc-search::placeholder { color: var(--rd-text-3); }
+
+    .mmc-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        padding: 11px 8px;
+        border: 0;
+        border-radius: 14px;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        font-family: inherit;
+        touch-action: manipulation;
+    }
+
+    .mmc-item:active { background: var(--rd-hover); }
+
+    .mmc-avatar {
+        flex: none;
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(145deg, var(--rd-accent), var(--rd-accent-strong));
+        color: var(--rd-accent-contrast);
+        font-size: 17px;
+        font-weight: 700;
+    }
+
+    .mmc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+
+    /* 标题与时间同一行：时间贴右，两行文本的左边缘因此对得齐。 */
+    .mmc-top { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    .mmc-title { min-width: 0; font-size: 14.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mmc-prev { font-size: 12px; color: var(--rd-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .mmc-time { flex: none; margin-left: auto; font-size: 10.5px; color: var(--rd-text-3); }
+
+    /* ---------- 首页多选（长按进入） ---------- */
+    /* 勾选圈压在头像上：未选 60% 透明度、选中点亮到实色。
+       两态只差透明度与底色，几何完全不变 —— 切换时行不会重排、也不会跳一下。 */
+    .mmc-avatar-wrap { position: relative; flex: none; display: block; line-height: 0; }
+
+    .mmc-pick {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        border-radius: 14px;
+        /* 白底 + 固定深色勾：头像底色三色轮换（还有深色主题），
+           跟着主题走的勾号会在浅底上糊掉；这个圆盘自己永远是浅色，勾号也就永远是深的。 */
+        background: #fff;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
+        color: #3d3418;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .16s ease, background-color .16s ease, color .16s ease;
+    }
+
+    /* 勾号两态都画出来：未选只是整体压到 60%，选中才换成实色底。
+       画不画勾号决定"看不看得出这行能选"，透明度决定"选没选中"。 */
+    .mmc-pick svg {
+        width: 22px;
+        height: 22px;
+        transition: transform .14s ease;
+    }
+
+    .mobile-conv-list.is-selecting .mmc-pick { opacity: .6; }
+    .mobile-conv-list.is-selecting .mmc-item.is-selected .mmc-pick {
+        opacity: 1;
+        background: var(--rd-accent);
+        box-shadow: none;
+        color: var(--rd-accent-contrast);
+    }
+    .mobile-conv-list.is-selecting .mmc-item.is-selected .mmc-pick svg { transform: scale(1.06); }
+    .mobile-conv-list.is-selecting .mmc-item.is-selected { background: var(--rd-accent-soft); }
+
+    /* 多选条：贴在底栏上方。只放能一次处理一批的两个动作（分类 / 删除），
+       收藏 / 置顶 / 重命名这类单条操作仍归抽屉那份长按菜单。 */
+    #mmConvSelBar.is-open {
+        display: flex;
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        bottom: calc(var(--ms-nav, 58px) + 10px);
+        /* 与底栏同层（100002）：高于页面内容、低于 #customModal（100003）——
+           「取消多选」的确认框才能连它的按钮一起盖住，免得用户在确认框后面又点到分类 / 删除。 */
+        z-index: 100002;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 10px;
+        border: 1px solid var(--rd-border);
+        border-radius: 16px;
+        background: var(--rd-surface);
+        box-shadow: var(--rd-shadow-2);
+    }
+
+    .mm-selbar-x {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--rd-text-3);
+        touch-action: manipulation;
+    }
+
+    .mm-selbar-x svg { width: 16px; height: 16px; }
+    .mm-selbar-x:active { background: var(--rd-hover); }
+
+    .mm-selbar-n {
+        flex: 1;
+        min-width: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--rd-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .mm-selbar-act {
+        flex: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        height: 36px;
+        padding: 0 14px;
+        border: 1px solid var(--rd-border);
+        border-radius: 12px;
+        background: var(--rd-surface-2);
+        color: var(--rd-text);
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        touch-action: manipulation;
+    }
+
+    .mm-selbar-act svg { width: 15px; height: 15px; }
+    .mm-selbar-act:active { background: var(--rd-hover); }
+    .mm-selbar-act.is-danger { color: var(--rd-danger); }
+
+    /* 多选条是固定层，会盖住列表末尾：给首页补一段等高的留白，最后一行仍能点。 */
+    html.rd #initialState.is-conv-selecting {
+        padding-bottom: calc(24px + var(--ms-nav) + 72px) !important;
+    }
+
+
+
+    html.rd .ma-dot {
+        position: absolute;
+        top: 5px;
+        right: 5px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #ef5b73;
+        box-shadow: 0 0 0 2px var(--rd-surface-2);
+    }
+
+    /* 会话长按菜单：宿主给的是 z-index 900，窄屏底栏是 100002 ——
+       不抬起来，菜单就长在底栏下面，「删除对话」点不到。
+       底色也必须走主题变量：基础层那张纸白在深色下是白底白字。 */
+    html.rd .conversation-context-menu {
+        z-index: 100060 !important;
+        width: 188px;
+        border: 1px solid var(--rd-border) !important;
+        background: var(--rd-surface) !important;
+        color: var(--rd-text) !important;
+        box-shadow: var(--rd-shadow-2) !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    html.rd .conversation-context-menu button {
+        min-height: 44px;
+        font-size: 14px;
+        color: inherit;
+    }
+
+    html.rd .conversation-context-menu button:active { background: var(--rd-hover) !important; }
+    html.rd .conversation-context-menu button.danger { color: var(--rd-danger) !important; }
+
+    /* 草稿态：首页那条输入框"飞"到底部位置时用的替身（见 mobile-shell.js 的 flyComposerToBottom）。
+       真框已经随首页一起隐藏，这里只留一个视觉连续体，动画结束即移除。 */
+    .mm-composer-ghost {
+        position: fixed;
+        z-index: 100070;
+        pointer-events: none;
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        border: 1px solid var(--rd-border);
+        border-radius: 18px;
+        background: var(--rd-surface);
+        box-shadow: var(--rd-shadow-1);
+        color: var(--rd-text-3);
+        font-size: 13.5px;
+        overflow: hidden;
+    }
+
+    .mm-composer-ghost-inner {
+        flex: 1;
+        min-width: 0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* 公告面板：窄屏从"右上角小卡片"改成贴边整幅下拉，长列表也能滚。 */
+    html.rd #announcePanel {
+        position: fixed !important;
+        left: 12px !important;
+        right: 12px !important;
+        top: calc(var(--ms-bar) + 8px) !important;
+        width: auto !important;
+        max-height: calc(100vh - var(--ms-bar) - var(--ms-nav) - 24px) !important;
+        z-index: 100050 !important;
+    }
+
+    /* 插件按钮多了就横向滚动：宿主标题不被挤出屏幕，插件也不用改。 */
+    html.rd #headerModSlot {
+        display: flex !important;
+        align-items: center;
+        gap: 4px;
+        flex: none;
+        max-width: 34vw;
+        overflow-x: auto;
+        scrollbar-width: none;
+    }
+
+    html.rd #headerModSlot::-webkit-scrollbar { display: none; }
+
+    /* ---------- 2 · 底部导航 ---------- */
+
+    #mobileNav {
+        display: flex;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 100002;
+        height: var(--ms-nav);
+        padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
+        box-sizing: border-box;
+        border-top: 1px solid var(--rd-border);
+        /* 底栏不用毛玻璃：它是固定层，模糊会在每次页面切换/滚动时重绘，
+           中低端机上正是"点一下有点顿"的来源之一。实色更跟手。 */
+        background: var(--rd-surface);
+        transition: opacity .16s ease;
+    }
+
+    #mobileNav button {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2px;
+        border: 0;
+        border-radius: var(--ms-radius-sm);
+        background: transparent;
+        color: var(--rd-text-3);
+        font-family: inherit;
+        font-size: 9.5px;
+        touch-action: manipulation;
+    }
+
+    #mobileNav button svg { width: 20px; height: 20px; }
+    #mobileNav button.active { color: var(--rd-accent); background: var(--rd-accent-soft); }
+    /* 按下立刻变色：不等切页完成，手感上"点了就有反应"。 */
+    #mobileNav button:active { color: var(--rd-accent); background: var(--rd-accent-soft); }
+
+    /* 设置是整页覆盖层：它开着时底栏让位，避免"底栏还压着设置页"。 */
+    #mobileNav.mobile-nav-hidden { opacity: 0; pointer-events: none; }
+
+    /* ---------- 3 · 次级页统一页头（语笺 / 日记 / 记忆 / 成就） ---------- */
+
+    html.rd .page-secondary-header {
+        align-items: center !important;
+        gap: 10px !important;
+        padding: 12px 14px 10px !important;
+        border-bottom: 1px solid var(--rd-border) !important;
+    }
+
+    html.rd .page-secondary-title {
+        font-size: 20px !important;
+        line-height: 1.2 !important;
+    }
+
+    html.rd .page-secondary-subtitle { font-size: 11.5px !important; margin-top: 3px !important; }
+    html.rd .rd-page-eyebrow { font-size: 9.5px !important; letter-spacing: .16em !important; }
+
+    html.rd .page-secondary-back {
+        flex: none;
+        width: 36px;
+        height: 36px;
+        padding: 0 !important;
+        border: 1px solid var(--rd-border) !important;
+        border-radius: var(--ms-radius-sm) !important;
+        background: var(--rd-surface-2) !important;
+        color: var(--rd-text-2) !important;
+    }
+
+    html.rd .page-secondary-back span { display: none !important; }
+    html.rd .page-secondary-back svg { width: 17px; height: 17px; }
+
+    /* 「回忆」的分段条：一个胶囊装着四格，选中那一格的下面垫一个滑动的圆。
+       圆的直径取胶囊的内高、位置夹在内边之内 —— 选到首 / 末格时它就贴着胶囊那一侧的圆边。 */
+    .mobile-hub-seg {
+        position: relative;
+        display: flex;
+        flex: none;
+        gap: 2px;
+        margin: 10px 14px;
+        padding: 4px !important;
+        border: 1px solid var(--rd-border);
+        border-radius: 999px;
+        background: var(--rd-surface-2);
+    }
+
+    .mm-seg-thumb {
+        position: absolute;
+        top: 4px;
+        left: 0;
+        width: 0;
+        height: 0;
+        border-radius: 999px;
+        background: var(--rd-accent);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 0;
+        will-change: transform;
+        transition: transform .42s cubic-bezier(.22, .7, .25, 1), width .2s ease, height .2s ease, opacity .2s ease;
+    }
+
+    .mobile-hub-seg button {
+        position: relative;
+        z-index: 1;
+        flex: 1;
+        min-width: 0;
+        padding: 7px 4px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--rd-text-3);
+        font-family: inherit;
+        font-size: 12.5px;
+        font-weight: 600;
+        touch-action: manipulation;
+        transition: color .2s ease;
+    }
+
+    .mobile-hub-seg button.active { color: var(--rd-accent-contrast); }
+    .mobile-hub-seg button:active { color: var(--rd-accent); }
+
+    /* ---------- 4 · 一套卡片语言（语笺 / 日记 / 记忆 / 成就） ---------- */
+
+    html.rd .note-card,
+    html.rd .diary-card,
+    html.rd .memory-section,
+    html.rd .ach-body .ach-item,
+    html.rd .rd-display-card {
+        border-radius: var(--ms-radius) !important;
+        border: 1px solid var(--rd-border) !important;
+        background: var(--rd-surface) !important;
+        box-shadow: var(--rd-shadow-1) !important;
+    }
+
+    html.rd .note-card { padding: 14px !important; }
+    html.rd .diary-card { padding: 13px 14px !important; }
+    html.rd .memory-section { padding: 4px 4px 2px !important; overflow: hidden; }
+
+    html.rd .note-card-text,
+    html.rd .diary-card-text,
+    html.rd .memory-item-text { font-size: 12.5px !important; line-height: 1.65 !important; }
+
+    html.rd .memory-section-head { padding: 11px 12px 8px !important; }
+    html.rd .memory-section-title { font-size: 13px !important; font-weight: 600 !important; }
+    html.rd .memory-item { padding: 10px 12px !important; border-top: 1px solid var(--rd-border) !important; }
+
+    /* 空状态在窄屏是一句提示，不是一张海报：图标缩小、正文回到界面字号。 */
+    html.rd .diary-empty { padding: 40px 22px !important; }
+    html.rd .diary-empty > div:first-child { margin-bottom: 10px !important; font-size: 26px !important; opacity: .7; }
+    html.rd #notesEmpty { padding: 56px 20px !important; }
+    html.rd #notesEmpty > div { margin-bottom: 10px !important; font-size: 26px !important; opacity: .7; }
+    html.rd #notesEmpty p {
+        font-family: inherit !important;
+        font-size: 13px !important;
+        line-height: 1.75 !important;
+        color: var(--rd-text-3) !important;
+    }
+
+    html.rd #memoryEmpty p,
+    html.rd #diaryEmpty p,
+    html.rd .diary-empty p {
+        font-family: inherit !important;
+        font-size: 13px !important;
+        line-height: 1.75 !important;
+        color: var(--rd-text-3) !important;
+    }
+
+    html.rd #notesGrid,
+    html.rd .diary-grid { gap: 12px !important; padding: 14px 14px 26px !important; }
+
+    html.rd #notesPage .notes-toolbar,
+    html.rd .diary-toolbar,
+    html.rd .memory-toolbar { padding: 12px 14px 8px !important; }
+
+    /* 窄屏原本把「消息收藏 / 金句收藏」两栏藏了（只留消息栏），金句收藏因此在手机上
+       够不到。这里放回来，并装进同一个胶囊：选中哪栏，滑块就贴到胶囊那一侧。 */
+    html.rd #notesPage .notes-toolbar { flex-wrap: wrap !important; gap: 10px !important; }
+    html.rd #notesPage .notes-tabs {
+        display: flex !important;
+        position: relative;
+        flex: 0 0 auto;
+        gap: 2px;
+        padding: 3px;
+        border: 1px solid var(--rd-border);
+        border-radius: 999px;
+        background: var(--rd-surface-2);
+    }
+    html.rd #notesPage .notes-tabs .mm-seg-thumb { top: 3px; }
+    html.rd #notesPage .notes-tab {
+        position: relative;
+        z-index: 1;
+        padding: 6px 14px !important;
+        border: 0 !important;
+        border-radius: 999px !important;
+        background: transparent !important;
+        color: var(--rd-text-3) !important;
+        font-size: 12.5px !important;
+        font-weight: 600 !important;
+        touch-action: manipulation;
+        transition: color .2s ease;
+    }
+    html.rd #notesPage .notes-tab.tab-active {
+        background: transparent !important;
+        border-color: transparent !important;
+        color: var(--rd-accent-contrast) !important;
+    }
+    html.rd #notesPage .notes-tab:hover { background: transparent !important; }
+
+    /* 顶栏留给「返回 + 类名」：设置是从「我的」下钻进来的一页，左上角没有返回键的话，
+       退出就只能靠系统返回手势或底栏 —— 前者在桌面浏览器与部分 WebView 里不可靠，
+       后者不是每个人都会想到。按钮的几何在下面「设置：整页下钻」那一段统一给。 */
+    html.rd #settingsTopBar { min-height: 48px; padding: 0 16px !important; }
+    /* 底栏留在设置页上，最后一行设置别被它盖住 */
+    html.rd #settingsPanel #settingsContent { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
+
+    /* ---------- 4.5 · 记忆 / 日记：页内「选择对话」 ---------- */
+    html.rd #diaryPage .diary-toolbar { display: flex !important; }
+
+    html.rd .conv-filter-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 64%;
+        min-height: 32px;
+        padding: 0 12px;
+        border: 1px solid var(--rd-border);
+        border-radius: 999px;
+        background: var(--rd-surface-2);
+        color: var(--rd-text-2);
+        font-family: inherit;
+        font-size: 12.5px;
+        font-weight: 600;
+        white-space: nowrap;
+        touch-action: manipulation;
+    }
+
+    html.rd .conv-filter-btn svg { width: 15px; height: 15px; flex: none; }
+
+    html.rd .conv-filter-btn .conv-filter-label {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    html.rd .conv-filter-btn.is-filtered {
+        border-color: var(--rd-accent-border);
+        background: var(--rd-accent-soft);
+        color: var(--rd-accent);
+    }
+
+    html.rd #diaryPage .diary-toolbar .diary-count,
+    html.rd #memoryPage .memory-toolbar .diary-count {
+        margin-left: auto;
+        font-size: 11.5px;
+        color: var(--rd-text-3);
+        white-space: nowrap;
+    }
+
+    /* 筛选弹层复用「分类」那张，层级要压过底栏（100004）与「更多」弹层（100003）。 */
+    html.rd #conversationMoveOverlay { z-index: 100006 !important; }
+
+    html.rd .conv-filter-empty {
+        padding: 18px 4px;
+        text-align: center;
+        color: var(--rd-text-3);
+        font-size: 12.5px;
+    }
+
+    /* ---------- 5 · 设置：整页下钻（「我的」已经是分类清单） ---------- */
+    /* 窄屏不再给 7 个分栏做一条横向图标栏：分类由「我的」负责，设置只显示
+       当前这一类，顶部换成「返回 + 类名」。 */
+
+    /* 窄屏设置是整页下钻：不再给外壳顶栏留那 58px（留着会露出「我的」那条栏）。
+       安全区内边距保持 pages-luxe 的写法，不改。 */
+    html.rd #settingsOverlay,
+    html.rd #marketOverlay {
+        inset: 0 !important;
+        align-items: stretch !important;
+        justify-content: stretch !important;
+    }
+
+    /* 三个「看内容」的整页不再各写一遍页头：外壳顶栏已经写了标题，
+       分类交给回忆分段条，页内那条「英文眉题 + 大标题 + 返回」就是重复。 */
+    html.rd #notesPage > .page-secondary-header,
+    html.rd #diaryPage > .page-secondary-header,
+    html.rd #memoryPage > .page-secondary-header { display: none !important; }
+
+    /* 成就沿用同一套：外壳顶栏 + 回忆分段条 + 列表，不再是独立的一座浮窗。 */
+    html.rd #achievementsOverlay { padding: 0 !important; }
+
+    html.rd #achievementsOverlay .modal-panel {
+        width: 100% !important;
+        max-width: none !important;
+        max-height: none !important;
+        height: 100% !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        background: var(--rd-bg) !important;
+    }
+
+    html.rd #achievementsOverlay .page-secondary-header { display: none !important; }
+
+    html.rd #achievementsOverlay #achList {
+        padding: 14px 14px calc(20px + env(safe-area-inset-bottom)) !important;
+    }
+
+    html.rd #settingsPanel {
+        position: absolute;
+        inset: 0;
+        width: 100% !important;
+        max-width: none !important;
+        height: 100% !important;
+        max-height: none !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        background: var(--rd-bg) !important;
+    }
+
+    html.rd #settingsTabNav { display: none !important; }
+
+    html.rd #settingsTopBar {
+        min-height: var(--ms-bar);
+        padding: 8px 14px !important;
+        border-bottom: 1px solid var(--rd-border) !important;
+        background: var(--rd-surface) !important;
+    }
+
+    html.rd #mobileSettingsTitle {
+        display: block;
+        flex: 1;
+        min-width: 0;
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--rd-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    /* 设置二级页的视觉交还给宿主自己的样式（卡片 + 圆角输入框）。
+       这里只保留三件与"手机专有行为"有关的：让开底栏的内边距、滚到的那段闪一下、
+       换分栏时面板从右侧滑入。 */
+    html.rd #settingsPanel #settingsContent {
+        padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+
+    @keyframes mm-target-flash {
+        0% { background: var(--rd-accent-soft); }
+        100% { background: transparent; }
+    }
+
+    html.rd #settingsPanel #settingsContent section.mm-target-flash {
+        animation: mm-target-flash 1.4s ease both;
+        border-radius: 14px !important;
+    }
+
+    html.rd #settingsPanel #settingsContent section { scroll-margin-top: 56px; }
+
+    html.rd #settingsPanel #settingsContent .settings-tab-panel.mm-slide-in-right {
+        animation: mm-slide-in-right .32s cubic-bezier(.22, .7, .25, 1) both;
+    }
+
+    /* 返回键在左、类名在右：设置是"下钻进来"的一页，与其他二级页同一个方位。
+       几何与会话页的 #mobileBackBtn 一致（34×34、描边方块、18px 箭头），
+       点击行为仍由既有 #closeSettings 的绑定负责 —— 关闭设置就是回到「我的」。 */
+    html.rd #settingsPanel #settingsTopBar > #closeSettings {
+        position: static !important;
+        top: auto !important;
+        right: auto !important;
+        left: auto !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        flex: 0 0 auto;
+        width: 34px !important;
+        height: 34px !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 1px solid var(--rd-border) !important;
+        border-radius: var(--ms-radius-sm) !important;
+        background: var(--rd-surface-2) !important;
+        color: var(--rd-text-2) !important;
+        transform: none !important;
+    }
+
+    html.rd #settingsPanel #settingsTopBar > #closeSettings:hover {
+        border-color: var(--rd-accent-border) !important;
+        background: var(--rd-hover) !important;
+        color: var(--rd-text) !important;
+    }
+
+    html.rd #settingsPanel #settingsTopBar > #closeSettings svg {
+        width: 18px;
+        height: 18px;
+        color: inherit !important;
+    }
+
+    /* 主题卡在手机上单列，预览压成一条：四张卡一眼能扫完，不用滚两屏。 */
+    html.rd #themePickerBox { gap: 10px !important; }
+    html.rd .theme-tpl-card { padding: 8px !important; }
+    html.rd .theme-tpl-preview { height: 66px !important; }
+    html.rd .theme-tpl-name { margin-top: 6px !important; font-size: 12.5px !important; }
+    html.rd .theme-tpl-desc { font-size: 10.5px !important; }
+
+    /* 抽屉（「全部」对话）在窄屏是触屏，hover 不存在：那排星星/置顶/删除
+       一直亮着会盖住标题，操作仍走长按菜单。 */
+    html.rd .conversation-item .conversation-inline-actions { display: none !important; }
+
+    /* 设置页的排版/配色交还宿主自己的样式（卡片 + 圆角输入框）；窄屏只补一条
+       "让开底栏"的底部内边距，见上面 #settingsPanel #settingsContent 那条。
+       分栏的显示/隐藏由 base.css 的 .settings-tab-panel 规则负责，这里不再重复。 */
+
+    /* ---------- 6 · 弹层：⋯ 与 ＋ 共用同一套底部弹层观感 ---------- */
+
+    html.rd .composer-more-menu {
+        position: fixed !important;
+        left: 0 !important;
+        right: 0 !important;
+        top: auto !important;
+        bottom: 0 !important;
+        width: auto !important;
+        max-width: none !important;
+        border-radius: 22px 22px 0 0 !important;
+        padding-bottom: calc(14px + env(safe-area-inset-bottom));
+        max-height: 72vh;
+        overflow-y: auto;
+        z-index: 100004;
+        transform-origin: center bottom;
+        transform: translateY(0);
+        box-shadow: var(--rd-shadow-2);
+    }
+
+    html.rd .composer-more-menu.hidden { transform: translateY(105%); }
+
+    html.rd .composer-menu-label {
+        padding: 14px 16px 6px !important;
+        font-size: 10.5px !important;
+        font-weight: 700 !important;
+        letter-spacing: .12em !important;
+        color: var(--rd-text-3) !important;
+        text-transform: uppercase;
+    }
+
+    /* ---------- 7 · 底部弹层（宿主「更多」） ---------- */
+
+    #mobileShellSheet {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 100003;
+        pointer-events: none;
+    }
+
+    #mobileShellSheet.open { pointer-events: auto; }
+
+    #mobileShellSheet .mss-backdrop {
+        position: absolute;
+        inset: 0;
+        background: var(--rd-overlay);
+        opacity: 0;
+        transition: opacity .22s;
+    }
+
+    #mobileShellSheet.open .mss-backdrop { opacity: 1; }
+
+    #mobileShellSheet .mss-panel {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        padding: 8px 0 calc(14px + env(safe-area-inset-bottom));
+        border-radius: 22px 22px 0 0;
+        background: var(--rd-surface);
+        box-shadow: var(--rd-shadow-2);
+        transform: translateY(102%);
+        transition: transform .3s cubic-bezier(.22, .75, .25, 1);
+    }
+
+    #mobileShellSheet.open .mss-panel { transform: translateY(0); }
+
+    #mobileShellSheet .mss-handle {
+        width: 40px;
+        height: 4px;
+        margin: 4px auto 6px;
+        border-radius: 99px;
+        background: var(--rd-border-strong);
+    }
+
+    #mobileShellSheet .mss-head {
+        display: flex;
+        align-items: center;
+        padding: 6px 18px 8px;
+        color: var(--rd-text);
+        font-size: 14px;
+        font-weight: 700;
+    }
+
+    #mobileShellSheet .mss-head span { flex: 1; }
+
+    #mobileShellSheet .mss-close {
+        width: 30px;
+        height: 30px;
+        border: 0;
+        border-radius: 9px;
+        background: var(--rd-hover);
+        color: var(--rd-text-3);
+        font-family: inherit;
+        font-size: 15px;
+    }
+
+    #mobileShellSheet .mss-body { padding: 2px 12px 4px; }
+
+    #mobileShellSheet .mss-row {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        width: 100%;
+        padding: 12px 10px;
+        border: 0;
+        border-radius: 14px;
+        background: transparent;
+        color: var(--rd-text);
+        text-align: left;
+        font-family: inherit;
+        touch-action: manipulation;
+    }
+
+    #mobileShellSheet .mss-row:active { background: var(--rd-hover); }
+
+    #mobileShellSheet .mss-ic {
+        flex: none;
+        width: 40px;
+        height: 40px;
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        background: var(--rd-accent-soft);
+        color: var(--rd-accent);
+    }
+
+    #mobileShellSheet .mss-ic svg { width: 20px; height: 20px; }
+
+    #mobileShellSheet .mss-copy { flex: 1; min-width: 0; }
+    #mobileShellSheet .mss-copy b { display: block; font-size: 13.5px; font-weight: 600; }
+    #mobileShellSheet .mss-copy span {
+        display: block;
+        margin-top: 2px;
+        font-size: 11px;
+        color: var(--rd-text-3);
+    }
+
+    /* ---------- 8 · 输入栏与消息（对齐原型：整条输入栏 + 独立输入框） ---------- */
+
+    /* 进会话后底栏收起（沉浸），主区不再给它留 58px。 */
+    body.mm-in-conv #mainContent { padding-bottom: 0 !important; }
+
+    html.rd #inputBar {
+        padding: 10px 12px calc(12px + env(safe-area-inset-bottom)) !important;
+        background: var(--rd-surface) !important;
+        border-top: 1px solid var(--rd-border) !important;
+    }
+
+    html.rd .conversation-composer,
+    html.rd .initial-composer-shell {
+        gap: 8px !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: none !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+    }
+
+    /* 原型里「＋」是一颗描边圆角方块，输入框自己带边框，麦克风是纯图标。 */
+    html.rd #inputBar .composer-more-btn {
+        width: 38px !important;
+        height: 38px !important;
+        padding: 0 !important;
+        border: 1px solid var(--rd-border) !important;
+        border-radius: 12px !important;
+        background: var(--rd-surface-2) !important;
+        color: var(--rd-text-2) !important;
+        box-shadow: none !important;
+    }
+
+    html.rd #inputBar #textInput,
+    html.rd #initialState #initialTextInput {
+        border: 1px solid var(--rd-border) !important;
+        border-radius: 14px !important;
+        background: var(--rd-bg) !important;
+        padding: 11px 14px !important;
+        font-size: 13.5px !important;
+        outline: none !important;
+    }
+
+    /* 首页那条输入框在窄屏只是一个"入口"：点一下就进对话，
+       所以这里的「＋」和麦克风都不会被用到 —— 前者里的「整理当前记忆 / 当前会话设定」
+       都要求已经有一段会话，后者在还没决定聊什么之前也没有语境。只留输入框本身；
+       会话页的输入栏不受影响（那里三件都留着）。 */
+    html.rd #initialState .composer-tools,
+    html.rd #initialState .composer-image-preview,
+    html.rd #initialState .mic-btn,
+    html.rd #initialState #initialSendBtn { display: none !important; }
+
+    /* 触屏上点一下就把输入框（以及它所在那条栏）围上一圈金色光环，既不是"在输入中"
+       的有用信息、又非常抢眼；窄屏只留光标 —— 边框与阴影都保持未聚焦时的样子。 */
+    html.rd .initial-composer-shell:focus-within,
+    html.rd .conversation-composer:focus-within {
+        border-color: var(--rd-border) !important;
+        box-shadow: none !important;
+    }
+
+    html.rd #inputBar #textInput:focus,
+    html.rd #inputBar #textInput:focus-visible,
+    html.rd #initialState #initialTextInput:focus,
+    html.rd #initialState #initialTextInput:focus-visible {
+        outline: none !important;
+        border-color: var(--rd-border) !important;
+        box-shadow: none !important;
+    }
+
+    html.rd #conversationHistory { padding: 16px 0 6px !important; }
+
+    /* 原型：AI 消息是「圆头像 + 气泡」，气泡里不写名字与秒级时间；
+       朗读 / 收藏那排挂在气泡下方，而不是压在气泡标题行里。 */
+    html.rd .message-item { padding: 0 !important; }
+    html.rd .message-item-ai {
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        padding: 0 14px 22px !important;
+    }
+    html.rd .message-item-user {
+        display: flex;
+        justify-content: flex-end;
+        padding: 0 14px 24px !important;
+    }
+    html.rd .message-item > .flex { flex: 1; min-width: 0; margin-bottom: 0 !important; }
+    html.rd .message-item-user > .flex { flex: 0 1 auto; max-width: 86%; }
+    html.rd .message-item > .flex > .flex-1 { min-width: 0; }
+
+    /* AI 头像在桌面 rd 里是绝对定位、悬在 46px 左留白上；窄屏消息行 padding 归零、
+       行本身是 flex —— 伪元素必须改回**文档流里的第一个 flex 子项**才占得到位。
+       ≤620px 还有条旧规则把伪元素 display:none（旧设计靠 mobile-shell 的装饰节点
+       出头像，装饰节点已删），这里用 !important 顶回来，否则"进对话没有头像"。
+       尺寸贴原型 30px。 */
+    html.rd #conversationHistory .message-item-ai::before {
+        position: static;
+        display: grid !important;
+        flex: none;
+        flex-basis: 30px;
+        width: 30px;
+        height: 30px;
+        margin-top: 2px;
+    }
+
+    html.rd .bubble-ai,
+    html.rd .bubble-user {
+        position: relative;
+        padding: 10px 14px !important;
+        box-shadow: 0 2px 8px rgba(60, 45, 20, .05) !important;
+    }
+
+    /* 原型的气泡带一个"指向说话人"的 5px 圆角，其余 16px。 */
+    html.rd .bubble-ai { border-radius: 5px 16px 16px 16px !important; }
+    html.rd .bubble-user { border-radius: 16px 5px 16px 16px !important; }
+
+    /* 会话页顶栏补回角色 · 模型那行（原型里名字下面写着"灰之魔女 · DeepSeek"）。 */
+    html.rd #chatHeader.is-conv #rdHeaderSub {
+        display: block !important;
+        margin-top: 2px;
+        font-size: 10.5px;
+        color: var(--rd-text-3);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    html.rd .bubble-ai > .flex.items-center.gap-2,
+    html.rd .bubble-user > .flex.items-center.gap-2 {
+        position: absolute;
+        left: 1px;
+        right: 1px;
+        bottom: -27px;
+        margin: 0 !important;
+        gap: 12px !important;
+        justify-content: flex-start;
+    }
+
+    html.rd .bubble-user > .flex.items-center.gap-2 { justify-content: flex-end; }
+
+    /* 名字与时间在气泡里是重复信息（顶栏已经写了是谁），让位给正文。 */
+    html.rd .bubble-ai > .flex.items-center.gap-2 > .ai-speaker-name,
+    html.rd .bubble-ai > .flex.items-center.gap-2 > .text-xs.text-indigo-300,
+    html.rd .bubble-user > .flex.items-center.gap-2 > span:first-child,
+    html.rd .bubble-user > .flex.items-center.gap-2 > span:nth-child(2) { display: none !important; }
+
+    html.rd .bubble-ai .message-action-btn,
+    html.rd .bubble-user .message-action-btn {
+        padding: 0 !important;
+        background: transparent !important;
+        color: var(--rd-text-3) !important;
+        font-size: 11.5px !important;
+        font-weight: 500 !important;
+    }
+
+    html.rd .bubble-ai .message-action-btn svg,
+    html.rd .bubble-user .message-action-btn svg { width: 14px; height: 14px; }
+    html.rd .bubble-ai .message-action-btn.ml-auto { margin-left: 0 !important; }
+
+    /* 语音条与气泡同宽内缩，别把圆角撑出直角。 */
+    html.rd .ai-voice-card { margin-top: 10px; }
+
+    /* 输入栏：麦克风是图标、发送是主色圆钮（原型里发送键只在有字时出现）。 */
+    html.rd .mic-btn,
+    html.rd .composer-more-btn {
+        width: 38px !important;
+        height: 38px !important;
+        flex: none;
+        border: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+        color: var(--rd-text-2) !important;
+    }
+
+    html.rd .conversation-send-btn,
+    html.rd #initialSendBtn {
+        width: 38px !important;
+        height: 38px !important;
+        flex: none;
+        justify-content: center;
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 14px !important;
+        background: var(--rd-accent) !important;
+        color: var(--rd-accent-contrast) !important;
+    }
+
+    html.rd .conversation-send-btn svg,
+    html.rd #initialSendBtn svg { width: 18px; height: 18px; }
+}
+
+/* ---------- 9 · 「我的」整页 ---------- */
+
+#mobileMine { display: none; }
+
+@media (max-width: 980px) {
+    #mobileMine {
+        position: fixed;
+        inset: 0;
+        z-index: 100000;
+        display: none;
+        flex-direction: column;
+        background: var(--rd-bg);
+        color: var(--rd-text);
+        padding-bottom: var(--ms-nav);
+    }
+
+    #mobileMine.open { display: flex; }
+
+    #mobileMine .mm-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        /* 页头没了，顶部安全区改由滚动区自己撑出来 */
+        padding: calc(14px + env(safe-area-inset-top, 0px)) 14px calc(20px + env(safe-area-inset-bottom));
+    }
+
+    #mobileMine .mm-profile {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: 100%;
+        padding: 16px;
+        border: 1px solid var(--rd-accent-border);
+        border-radius: var(--ms-radius);
+        background: linear-gradient(150deg, var(--rd-accent-soft), transparent 72%), var(--rd-surface);
+        color: inherit;
+        text-align: left;
+        font-family: inherit;
+    }
+
+    #mobileMine .mm-avatar {
+        flex: none;
+        width: 54px;
+        height: 54px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(145deg, var(--rd-accent), var(--rd-accent-strong));
+        color: var(--rd-accent-contrast);
+        font-size: 22px;
+        font-weight: 700;
+    }
+
+    #mobileMine #mmProfileName { display: block; font-size: 19px; font-weight: 700; }
+    #mobileMine #mmProfileHint { margin-top: 3px; font-size: 11.5px; color: var(--rd-text-3); }
+
+    /* 资料卡下方那排数字来自真实状态（对话 / 记忆 / 成就），一眼看出用了多久。 */
+    #mobileMine .mm-profile .mm-copy .mm-stats { display: flex; gap: 16px; margin-top: 9px; font-size: 11px; color: var(--rd-text-3); }
+    #mobileMine .mm-profile .mm-copy .mm-stats > span { display: inline-flex !important; align-items: baseline; gap: 3px; margin: 0; }
+    #mobileMine .mm-stats b { font-size: 13.5px; font-weight: 700; color: var(--rd-text); }
+
+    #mobileMine .mm-group {
+        margin-top: 14px;
+        border: 1px solid var(--rd-border);
+        border-radius: var(--ms-radius);
+        background: var(--rd-surface);
+        overflow: hidden;
+    }
+
+    #mobileMine .mm-group-title {
+        padding: 12px 16px 6px;
+        font-size: 10.5px;
+        font-weight: 700;
+        letter-spacing: .12em;
+        color: var(--rd-text-3);
+        text-transform: uppercase;
+    }
+
+    #mobileMine .mm-row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        padding: 13px 16px;
+        border: 0;
+        /* 行与行之间不画线：靠留白和图标区分就够了，一排细线反而更乱 */
+        border-top: 0;
+        background: transparent;
+        color: inherit;
+        text-align: left;
+        font-family: inherit;
+        touch-action: manipulation;
+    }
+
+    #mobileMine .mm-group > .mm-row:first-of-type { border-top: 0; }
+    #mobileMine .mm-row:active { background: var(--rd-hover); }
+
+    /* 公告提示条：比普通行更显眼（主题色描边 + 浅底），有未读时带红点。 */
+    #mobileMine .mm-notice {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+        margin-top: 14px;
+        padding: 14px 16px;
+        border: 1px solid var(--rd-accent-border);
+        border-radius: var(--ms-radius);
+        background: linear-gradient(140deg, var(--rd-accent-soft), transparent 75%), var(--rd-surface);
+        color: inherit;
+        text-align: left;
+        font-family: inherit;
+        touch-action: manipulation;
+    }
+
+    #mobileMine .mm-notice:active { filter: brightness(1.03); }
+    #mobileMine .mm-notice-ic {
+        flex: none;
+        width: 36px;
+        height: 36px;
+        display: grid;
+        place-items: center;
+        border-radius: 12px;
+        background: var(--rd-accent);
+        color: var(--rd-accent-contrast);
+    }
+    #mobileMine .mm-notice-ic svg { width: 19px; height: 19px; }
+
+    /* Tailwind 的 .hidden 可能被同权重的 .mm-badge 压掉，这里显式盖回去。 */
+    #mobileMine .mm-badge.hidden { display: none; }
+
+    #mobileMine .mm-badge {
+        flex: none;
+        min-width: 20px;
+        height: 20px;
+        padding: 0 6px;
+        border-radius: 10px;
+        background: #ef5b73;
+        color: #fff;
+        font-size: 10.5px;
+        font-weight: 700;
+        display: grid;
+        place-items: center;
+    }
+    /* 原型里的清单是纯文字 + 箭头：图标方块会把每行压成"图标 + 小字"，
+       标题反而看不出来；这里只保留文字层级。 */
+    #mobileMine .mm-ic { display: none; }
+    #mobileMine .mm-ic svg { width: 19px; height: 19px; }
+    #mobileMine .mm-copy { flex: 1; min-width: 0; }
+    #mobileMine .mm-copy b { display: block; font-size: 13.5px; font-weight: 600; }
+    #mobileMine .mm-copy span { display: block; margin-top: 2px; font-size: 11px; color: var(--rd-text-3); }
+    #mobileMine .mm-chev { flex: none; display: grid; place-items: center; color: var(--rd-text-3); }
+    #mobileMine .mm-chev svg { width: 16px; height: 16px; }
+
+    #mobileMine .mm-seg {
+        position: relative;
+        flex: none;
+        display: inline-flex;
+        gap: 2px;
+        padding: 2px;
+        border-radius: 999px;
+        background: var(--rd-hover);
+    }
+
+    #mobileMine .mm-seg .mm-seg-thumb {
+        background: var(--rd-surface);
+        top: 2px;
+        transition: transform .28s cubic-bezier(.22, .7, .25, 1), width .18s ease, height .18s ease, opacity .2s ease;
+    }
+
+    #mobileMine .mm-seg button {
+        position: relative;
+        z-index: 1;
+        border: 0;
+        border-radius: 999px;
+        padding: 5px 10px;
+        background: transparent;
+        color: var(--rd-text-3);
+        font-family: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        transition: color .2s ease;
+    }
+
+    #mobileMine .mm-seg button.active { color: var(--rd-accent); }
+    #mobileMine .mm-version { padding: 12px 0 4px; text-align: center; font-size: 10.5px; color: var(--rd-text-3); }
+
+    /* ---------- 浮层动效：菜单落下来 / 面板弹一下 / 整页淡入 ----------
+       直接 display 切换的浮层是"凭空出现"，眼睛跟不上它从哪儿来；统一给一小段位移 + 淡入。 */
+    @keyframes mm-dialog-in {
+        from { opacity: 0; transform: translateY(12px) scale(.97); }
+        to { opacity: 1; transform: none; }
+    }
+    @keyframes mm-page-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+
+    .modal-overlay .modal-panel,
+    .conversation-move-panel {
+        animation: mm-dialog-in .2s cubic-bezier(.16, 1, .3, 1) both;
+    }
+
+    /* 成就那片是"整页浮层"（手机上铺满全屏），不做弹窗式的缩放 + 位移，
+       而且它自己带 animate-modal-pop —— 两套一起播就成了"闪一下"。 */
+    html.rd #achievementsOverlay .modal-panel,
+    html.rd #achievementsOverlay .modal-panel.animate-modal-pop {
+        animation: none !important;
+    }
+    /* 不要给整片浮层做透明度动画：面板还在半透明时，底下的日记 / 记忆会透上来，
+       两层内容叠在一起看着就是"花屏"。入场交给面板里的内容滑动（slideChildren）。 */
+
+    /* 注意：这三页**不要**整体淡入 —— 淡入会让内容先消失一帧再亮起来，
+       肉眼就是"闪一下"。切页的运动全交给下面那几段滑动。 */
+
+    /* 分段条切页：内容从切换方向那一侧滑进来（只加在页面的非 fixed 子元素上，见 animateHubSwitch） */
+    @keyframes mm-slide-in-right {
+        from { opacity: .88; transform: translateX(28px); }
+        to { opacity: 1; transform: none; }
+    }
+    @keyframes mm-slide-in-left {
+        from { opacity: .88; transform: translateX(-28px); }
+        to { opacity: 1; transform: none; }
+    }
+    .mm-slide-in-right { animation: mm-slide-in-right .34s cubic-bezier(.22, .7, .25, 1) both; }
+    .mm-slide-in-left { animation: mm-slide-in-left .34s cubic-bezier(.22, .7, .25, 1) both; }
+
+    /* 触屏上常亮的滚动条很扎眼：平时透明，滚动中（.is-scrolling）才给颜色。
+       两条都要写 —— 新版 Chrome 认标准属性 scrollbar-color（redesign.css 在 html.rd 上设过它），
+       老 WebView 只认 ::-webkit-scrollbar；只改其中一条，另一条仍会把滑块画出来。 */
+    html.rd, html.rd * { scrollbar-color: transparent transparent; }
+    html.rd .is-scrolling { scrollbar-color: var(--rd-scroll) transparent; }
+    html.rd ::-webkit-scrollbar { width: 4px; height: 4px; }
+    html.rd ::-webkit-scrollbar-thumb { background: transparent !important; }
+    html.rd .is-scrolling::-webkit-scrollbar-thumb { background: var(--rd-scroll) !important; }
+
+    @media (prefers-reduced-motion: reduce) {
+        .modal-overlay .modal-panel,
+        .conversation-move-panel,
+        html.rd #notesPage:not(.hidden),
+        html.rd #diaryPage:not(.hidden),
+        html.rd #memoryPage:not(.hidden) { animation: none !important; }
+        .mm-slide-in-right,
+        .mm-slide-in-left { animation: none !important; }
+        .mm-seg-thumb,
+        .conversation-context-menu,
+        #mobileShellSheet .mss-panel { transition-duration: .01ms !important; }
+    }
+}

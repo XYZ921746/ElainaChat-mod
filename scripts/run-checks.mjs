@@ -1,23 +1,19 @@
 // 检查模块的**并行**运行器。
-//
 // 为什么需要它：`npm run check` 原先是一条 `a && b && c …` 的串行链。各模块
 //   之间其实互不相干（端口向内核要、数据写临时目录），串行只是历史写法 ——
 //   代价是总耗时等于所有模块之和，而真正慢的只有少数几个（起服务、开浏览器）。
 //   串行的另一个毛病是**没有耗时信息**：跑很久时说不清是"某个模块卡住了"
 //   还是"模块本来就多"。
-//
 // 这里做的事只有三件：
 //   ① 并行跑，并发数可调（默认 4）；
 //   ② 每个模块单独计时，末尾给一张按耗时排序的表；
 //   ③ 输出按模块分组打印（并行交错会读不懂），失败模块整段打出来。
-//
 // 用法：
 //   node scripts/run-checks.mjs                 全部，默认并发
 //   node scripts/run-checks.mjs --jobs 8        指定并发
 //   node scripts/run-checks.mjs --only mod      只跑名字含 mod 的模块
 //   node scripts/run-checks.mjs --serial        退回串行（排查互相干扰时用）
 //   node scripts/run-checks.mjs --bail          第一个失败就停（不启动后续模块）
-//
 // 清单**只在这个文件里**维护：`package.json` 的 check 脚本调它，不再各写一份
 // （两份清单必然漂移，而"某个检查被悄悄漏跑"是查不出来的）。
 
@@ -48,7 +44,12 @@ const MODULES = [
     { name: 'check-ui' },
     { name: 'check-pwa' },
     { name: 'check-system' },
+    // 版本检测（GitHub Releases）：版本比较 / 资产归类 / 失败分类 / 接线。
+    { name: 'check-update' },
     { name: 'check-exe' },
+    // 浏览器能力（CDP）：协议帧、网址白名单、动作派发、安全接线、真浏览器端到端。
+    //   没装 Chrome/Edge 的机器上，需要真浏览器的用例按环境性跳过（不判红）。
+    { name: 'check-browser' },
 ];
 
 function parseArgs(argv) {

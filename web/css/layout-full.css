@@ -25,10 +25,13 @@ html.rd #mainContent {
     min-height: 0 !important;
 }
 
-html.rd #mainContent > header .quote-chip {
-    display: none !important;
+/* 顶栏金句胶囊：宽屏保留（窄屏由 redesign.css 的 ≤1000px 规则收起，
+   窄屏改用首页的金句卡）。
+   窄桌面（≤1199px）顶栏被标题 / 模型胶囊 / 图标挤满，胶囊只剩几十像素宽
+   （实测 1024 下 32px、1200 下 208px），留着只是一道截断的残影，直接收起。 */
+@media (max-width: 1199px) {
+    html.rd #mainContent > header .quote-chip { display: none !important; }
 }
-
 html.rd #sidebar {
     height: 100% !important;
 }
@@ -266,17 +269,27 @@ html.rd #headerInstallBtn {
     html.rd .rd-header-sub { display: none !important; }
 }
 
-/* ---------- 竖栏顺序：对话 / 语笺 / 日记 / 成就 ----------
+/* ---------- 竖栏顺序：对话 / 语笺 / 日记 / 成就 / 记忆，设置与头像在分隔线之下 ----------
    插件市场不占竖栏入口：它在「设置 → 插件 → 插件市场」里，
-   竖栏只放日常切换的高频页面。 */
+   竖栏只放日常切换的高频页面；记忆属内容页，跟成就同组。 */
 
 html.rd .sidebar-rail-logo { order: 0; }
 html.rd #railChatBtn { order: 1; }
 html.rd #railNotesBtn { order: 2; }
 html.rd #railDiaryBtn { order: 3; }
 html.rd #railCategoriesBtn { order: 4; }
+html.rd #railMemoryBtn { order: 5; }
 html.rd .sidebar-rail-spacer { order: 6; }
 html.rd #railSettingsBtn { order: 7; }
+
+/* 设置入口按端分工：宽屏在竖栏（#railSettingsBtn），窄屏在顶栏（#headerSettingsBtn）。
+   同一时刻只显示一个 —— 否则一台设备上会出现两个「设置」，用户得先猜哪个才是。 */
+@media (min-width: 981px) {
+    html.rd #headerSettingsBtn { display: none !important; }
+}
+@media (max-width: 980px) {
+    html.rd #railSettingsBtn { display: none !important; }
+}
 html.rd .rd-rail-avatar {
     order: 8;
     appearance: none;
@@ -313,3 +326,94 @@ html.rd .rd-rail-avatar img {
     html.rd .conversation-item .conv-time { display: none; }
     html.rd .conversation-item .conversation-inline-actions { width: auto; }
 }
+
+/* ---------- 宽屏：对话面板可收起，主区拿整幅宽度 ----------
+   收起时只留竖栏（76px），把 316px 的对话列表让出来 —— 记忆 / 成就 / 设置这些
+   "看内容"的页面和对话页都不再被它压窄。窄屏是抽屉，本来就不占布局，规则全关在宽屏。 */
+@media (min-width: 981px) {
+    html.rd #sidebar {
+        transition: width .26s cubic-bezier(.22, .7, .25, 1),
+                    flex-basis .26s cubic-bezier(.22, .7, .25, 1);
+    }
+
+    html.rd.rd-sidebar-collapsed #sidebar {
+        width: var(--rd-rail-w) !important;
+        flex: 0 0 var(--rd-rail-w) !important;
+    }
+
+    html.rd.rd-sidebar-collapsed #sidebar > div:not(.sidebar-rail) {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+    }
+
+    /* 三张整页浮层的左边界跟着竖栏走（平时让出整个侧栏宽度）。 */
+    html.rd.rd-sidebar-collapsed #settingsOverlay,
+    html.rd.rd-sidebar-collapsed #achievementsOverlay,
+    html.rd.rd-sidebar-collapsed #marketOverlay {
+        left: var(--rd-rail-w) !important;
+    }
+
+    /* 顶栏的展开 / 收起按钮：窄屏那颗是抽屉开关，宽屏这颗是对话面板开关。 */
+    html.rd #showSidebar {
+        display: inline-flex !important;
+        align-items: center;
+        justify-content: center;
+        flex: 0 0 34px;
+        width: 34px;
+        height: 34px;
+        padding: 0 !important;
+        border: 1px solid var(--rd-border) !important;
+        border-radius: 10px !important;
+        background: var(--rd-surface-2) !important;
+        color: var(--rd-text-2) !important;
+        touch-action: manipulation;
+    }
+
+    html.rd #showSidebar:hover {
+        background: var(--rd-hover) !important;
+        color: var(--rd-text) !important;
+    }
+
+    html.rd #showSidebar svg { width: 18px; height: 18px; }
+}
+
+/* ---------- 语笺：两栏胶囊用和窄屏同一颗滑块 ----------
+   滑块由 wireNotesSeg() 插进 .notes-tabs，尺寸与目标位由 syncCapsuleThumb() 量好后
+   写内联样式。宽屏也要把「选中态」交给它：.tab-active 只保留文字色，不再自己铺
+   底色与阴影，否则实色药丸和滑块会叠成两层。 */
+@media (min-width: 981px) {
+    html.rd #notesPage .notes-tabs {
+        position: relative;
+    }
+
+    html.rd #notesPage .notes-tabs .mm-seg-thumb {
+        position: absolute;
+        top: 3px;
+        left: 0;
+        border-radius: 999px;
+        background: var(--rd-accent);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 0;
+        will-change: transform;
+        transition: transform .42s cubic-bezier(.22, .7, .25, 1),
+                    width .2s ease, height .2s ease, opacity .2s ease;
+    }
+
+    html.rd #notesPage .notes-tab {
+        position: relative;
+        z-index: 1;
+        background: transparent !important;
+        color: var(--rd-text-3) !important;
+        box-shadow: none !important;
+    }
+
+    html.rd #notesPage .notes-tab.tab-active {
+        background: transparent !important;
+        color: var(--rd-accent-contrast) !important;
+        box-shadow: none !important;
+    }
+}
+
+

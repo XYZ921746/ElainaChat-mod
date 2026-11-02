@@ -1,29 +1,24 @@
 // 数据与存储的回归检查：data/ 唯一权威 + 分类布局 + 导入导出 + zip 解压 + 多设备同步。
-//
 // 合并自六个脚本：
 //   check-data-api（数据导入导出 API，端到端）、check-data-authority（data/ 是唯一存储）、
 //   check-data-single-source（data/ 唯一权威 + Web/APK 共用业务代码）、
 //   check-store-layout（data/ 分类存储 + zip 备份）、
 //   check-multi-device-sync（多设备实时同步）、check-zip-merge（zip 解压单一来源）。
-//
 // 为什么合并：这六段测的是同一个对象 —— 用户数据存到哪里、怎么落盘、怎么备份与恢复。
 // 它们的失败方式也是同一种：**悄无声息地丢数据**（导出少几个文件、导入静默丢弃、
 // 删了 data/ 又从浏览器搬回来、两台设备各存一份）。拆成六个文件时，每段都要各自
 // 重算一遍 ROOT、各自抄一遍 ok/汇总样板，而且同一份"旧版单文件 → 分类布局"的
 // 前置数据要造六遍；任何一次存储层改动都得记得把这六个都跑一遍。
 // 合成一个模块后，一处改动一次跑完，失败信息带用例名，能直接定位到哪一段退化。
-//
 // 每个用例在自己的函数作用域里跑（各自的 ROOT / ok / 临时目录 / 子进程局部化），
 // 并且**自己清理自己起的进程与临时目录**（try/finally）—— 合并后一个进程里跑六段，
 // 漏一个清理就会泄漏端口、进程或临时文件，进而把后面的用例带红。
-//
 // 失败信息形如「导出 zip :: 不发 attachment（避免被下载器扩展拦截）」。
-//
 // 用法：node scripts/check-data.mjs          跑全部
 //       node scripts/check-data.mjs 迁移      只跑名字含该子串的用例
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, mkdir, writeFile, readFile, readdir } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, readdir, stat } from 'node:fs/promises';
 import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -72,14 +67,11 @@ async function killServer(st) {
     await Promise.race([exited, wait(3000)]);
 }
 
-// ────────────────────────────────────────────────────────────
 // 1. 数据导入导出 API（端到端，zip 备份）
-//
 // 为什么需要：导出/导入是"用户数据最后一道保险"。它出错的表现很隐蔽 ——
 // 导出的包少几个文件、导入时静默丢数据，用户往往在换机器时才发现，那时已经晚了。
 // 这段起一个**真实服务**（用独立 data 目录，不碰用户数据），走真实 HTTP，
 // 断言 zip 内容完整、导入能还原、旧版备份仍兼容、边界情况有明确报错。
-// ────────────────────────────────────────────────────────────
 
 async function caseDataApi(c) {
     const ok = (cond, label, detail) => c.ok(cond, label, detail);
@@ -87,7 +79,18 @@ async function caseDataApi(c) {
     const sandbox = await mkdtemp(path.join(tmpdir(), 'elaina-dataapi-'));
     const dataDir = path.join(sandbox, 'data');
     const logDir = path.join(sandbox, 'logs');
+    const modsDir = path.join(sandbox, 'mods');
+    const skillsDir = path.join(sandbox, 'skills');
     await mkdir(dataDir, { recursive: true });
+    // 备份要含插件与技能，检查必须把它们也隔离到临时目录：
+    // 否则会读用户真实的 mods/（体积大、内容随本机安装变化）。
+    await mkdir(path.join(modsDir, 'demo-mod-1.0.0'), { recursive: true });
+    await writeFile(path.join(modsDir, 'demo-mod-1.0.0', 'manifest.json'), JSON.stringify({
+        id: 'demo-mod', name: '备份检查插件', version: '1.0.0', entry: 'index.js',
+    }), 'utf8');
+    await writeFile(path.join(modsDir, 'demo-mod-1.0.0', 'index.js'), 'window.__demoModLoaded = true;', 'utf8');
+    await mkdir(path.join(skillsDir, 'demo-skill'), { recursive: true });
+    await writeFile(path.join(skillsDir, 'demo-skill', 'SKILL.md'), '---\nname: 备份检查技能\n---\n', 'utf8');
 
     const PORT = await freePort();
     let server = null;
@@ -111,7 +114,10 @@ async function caseDataApi(c) {
             value: JSON.stringify([{ id: 'conv1', title: '测试对话', messages: [{ role: 'user', text: '你好' }] }]),
         }), 'utf8');
 
-        server = startServer({ port: PORT, dataDir, logDir, extraEnv: { LOG_CHAT: '0' } });
+        server = startServer({
+            port: PORT, dataDir, logDir,
+            extraEnv: { LOG_CHAT: '0', MODS_DIR: modsDir, SKILLS_DIR: skillsDir },
+        });
         const bootLog = () => server.out;
 
         const base = `http://127.0.0.1:${PORT}`;
@@ -166,6 +172,8 @@ async function caseDataApi(c) {
             ok(j.counts.characters === 2, '统计人设卡数 = 2', 'got ' + j.counts.characters);
             ok(j.counts.conversations === 1, '统计聊天记录数 = 1', 'got ' + j.counts.conversations);
             ok(j.counts.memoryEntries === 1, '统计记忆条数 = 1', 'got ' + j.counts.memoryEntries);
+            ok(j.counts.mods === 1, '统计已安装插件数 = 1', 'got ' + j.counts.mods);
+            ok(j.counts.skills === 1, '统计本地技能数 = 1', 'got ' + j.counts.skills);
             ok(typeof j.dir === 'string' && j.dir.length > 0, '返回数据目录');
             ok(/conversations\//.test(JSON.stringify(j.layout)), 'layout 说明聊天记录是一对话一文件');
         }
@@ -188,25 +196,38 @@ async function caseDataApi(c) {
             zipBuf = Buffer.from(await r.arrayBuffer());
             ok(zipBuf.readUInt32LE(0) === 0x04034b50, '是合法 zip（PK 头）');
 
-            const files = readZip(zipBuf);
+            // allowScripts：导出包里含插件入口 .js，默认黑名单会把它们藏起来，
+            // 这里要看的是"备份实际装了什么"，不是"数据分支能读什么"。
+            const files = readZip(zipBuf, { allowScripts: true });
             const names = files.map((f) => f.name);
             const get = (n) => files.find((f) => f.name === n);
 
             const manifest = JSON.parse(get('manifest.json').data.toString('utf8'));
             ok(manifest.format === 'elainachat-backup', '格式标识正确');
-            ok(manifest.version === 2, '版本号为 2（zip）', 'got ' + manifest.version);
+            ok(manifest.version === 3, '版本号为 3（zip + data/ 目录）', 'got ' + manifest.version);
             ok(typeof manifest.exportedAt === 'string', '含导出时间');
-            ok(names.includes('settings.json'), 'zip 含 settings.json');
-            ok(names.includes('characters/index.json'), 'zip 含 characters/index.json');
-            ok(names.filter((n) => /^characters\/.+\.json$/.test(n) && !n.endsWith('index.json')).length === 2, 'zip 含 2 张卡（一卡一文件）');
-            ok(names.includes('conversations/index.json'), 'zip 含 conversations/index.json');
-            ok(names.filter((n) => /^conversations\/.+\.json$/.test(n) && !n.endsWith('index.json')).length === 1, 'zip 含 1 个对话（一对话一文件）');
-            ok(names.some((n) => /^memory\/[A-Za-z0-9_-]+\.json$/.test(n)), 'zip 含 memory/<类目>.json');
+            // 顶层三件：data/（聊天数据）、mods/（插件）、skills/（技能）—— 解压后与项目根一一对应。
+            const topDirs = [...new Set(names.map((n) => (n.includes('/') ? n.split('/')[0] : '(根文件)')))];
+            ok(topDirs.every((d) => d === 'data' || d === 'mods' || d === 'skills' || d === '(根文件)'),
+                '★ 顶层只有 data / mods / skills（外加 manifest.json）', topDirs.join(','));
+            ok(names.filter((n) => !n.includes('/')).join(',') === 'manifest.json', '根上只有 manifest.json', names.filter((n) => !n.includes('/')).join(','));
+            ok(names.includes('data/settings.json'), 'zip 含 data/settings.json');
+            ok(names.includes('mods/demo-mod-1.0.0/index.js'), 'zip 含插件的入口脚本');
+            ok(names.includes('mods/demo-mod-1.0.0/manifest.json'), 'zip 含插件 manifest');
+            ok(!names.includes('mods/index.json'), 'zip 不含扫描生成的 mods/index.json');
+            ok(names.includes('skills/demo-skill/SKILL.md'), 'zip 含本地技能');
+            ok(manifest.counts.mods === 1, 'manifest 统计插件数', JSON.stringify(manifest.counts));
+            ok(manifest.counts.skills === 1, 'manifest 统计技能数', JSON.stringify(manifest.counts));
+            ok(names.includes('data/characters/index.json'), 'zip 含 data/characters/index.json');
+            ok(names.filter((n) => /^data\/characters\/.+\.json$/.test(n) && !n.endsWith('index.json')).length === 2, 'zip 含 2 张卡（一卡一文件）');
+            ok(names.includes('data/conversations/index.json'), 'zip 含 data/conversations/index.json');
+            ok(names.filter((n) => /^data\/conversations\/.+\.json$/.test(n) && !n.endsWith('index.json')).length === 1, 'zip 含 1 个对话（一对话一文件）');
+            ok(names.some((n) => /^data\/memory\/[A-Za-z0-9_-]+\.json$/.test(n)), 'zip 含 data/memory/<类目>.json');
 
-            const settings = JSON.parse(get('settings.json').data.toString('utf8'));
+            const settings = JSON.parse(get('data/settings.json').data.toString('utf8'));
             ok(settings.elaina_open_settings !== undefined, 'settings.json 含设置');
             ok(settings.elainachat_open_api_secrets !== undefined, 'settings.json 含 API Key');
-            const memFile = names.find((n) => /^memory\/[A-Za-z0-9_-]+\.json$/.test(n));
+            const memFile = names.find((n) => /^data\/memory\/[A-Za-z0-9_-]+\.json$/.test(n));
             ok(typeof JSON.parse(get(memFile).data.toString('utf8')).value !== 'undefined', 'memory/<类目>.json 是 {value} 形态');
         }
 
@@ -227,10 +248,10 @@ async function caseDataApi(c) {
 
             const r2 = await fetch(base + '/api/data/export');
             const files = readZip(Buffer.from(await r2.arrayBuffer()));
-            const settings = JSON.parse(files.find((f) => f.name === 'settings.json').data.toString('utf8'));
+            const settings = JSON.parse(files.find((f) => f.name === 'data/settings.json').data.toString('utf8'));
             ok(JSON.parse(settings.elaina_open_favorites || '[]').length === 1, '新写入的收藏进了备份');
             ok(JSON.parse(settings.elaina_open_settings).model === 'changed', '修改后的设置进了备份');
-            const cardNames = files.map((f) => f.name).filter((n) => /^characters\/.+\.json$/.test(n) && !n.endsWith('index.json'));
+            const cardNames = files.map((f) => f.name).filter((n) => /^data\/characters\/.+\.json$/.test(n) && !n.endsWith('index.json'));
             ok(cardNames.length === 2, '分类数据未被单键写入覆盖', 'got ' + cardNames.length);
         }
 
@@ -267,21 +288,29 @@ async function caseDataApi(c) {
         // ============================================================ 6. 导入 zip（merge）
         console.log('\n=== 6. 导入 zip（merge 模式）===');
         {
-            // 改一份 zip：加一张新卡、改设置，重新打包
-            const files = readZip(zipBuf);
+            // 改一份 zip：加一张新卡、改设置，重新打包。
+            // allowScripts 必须开：插件入口是 .js，默认解压黑名单会把它丢掉，
+            // 那样这段测的就不是"导入插件"而是"导入一个缺入口的残包"。
+            const files = readZip(zipBuf, { allowScripts: true });
             const entries = files.map((f) => ({ name: f.name, data: f.data }));
             const setEntry = (name, data) => {
                 const buf = Buffer.from(typeof data === 'string' ? data : JSON.stringify(data, null, 2), 'utf8');
                 const i = entries.findIndex((e) => e.name === name);
                 if (i >= 0) entries[i].data = buf; else entries.push({ name, data: buf });
             };
-            const charsIdx = JSON.parse(files.find((f) => f.name === 'characters/index.json').data.toString('utf8'));
+            const charsIdx = JSON.parse(files.find((f) => f.name === 'data/characters/index.json').data.toString('utf8'));
             charsIdx.order.push('card_z');
-            setEntry('characters/index.json', charsIdx);
-            setEntry('characters/card_z.json', { id: 'card_z', name: '备份里的新卡' });
-            const settings = JSON.parse(files.find((f) => f.name === 'settings.json').data.toString('utf8'));
+            setEntry('data/characters/index.json', charsIdx);
+            setEntry('data/characters/card_z.json', { id: 'card_z', name: '备份里的新卡' });
+            const settings = JSON.parse(files.find((f) => f.name === 'data/settings.json').data.toString('utf8'));
             settings.elaina_open_settings = JSON.stringify({ model: 'from-backup' });
-            setEntry('settings.json', settings);
+            setEntry('data/settings.json', settings);
+            // 备份里新增一个本机没有的插件与技能，验证导入真的把目录写回。
+            setEntry('mods/from-backup-1.0.0/manifest.json',
+                { id: 'from-backup', name: '备份里的插件', version: '1.0.0', entry: 'index.js' });
+            setEntry('mods/from-backup-1.0.0/index.js', 'window.__fromBackup = true;');
+            setEntry('mods/from-backup-1.0.0/bad.exe', 'not allowed');
+            setEntry('skills/from-backup/SKILL.md', '---\nname: 备份里的技能\n---\n');
             const modZip = createZip(entries);
 
             const r = await fetch(base + '/api/data/import?mode=merge', {
@@ -299,6 +328,15 @@ async function caseDataApi(c) {
             ok(JSON.parse(s.elaina_open_character_cards).length === 3, '导入后卡片变 3 张', 'got ' + JSON.parse(s.elaina_open_character_cards).length);
             ok(JSON.parse(s.elaina_open_favorites || '[]').length === 1, 'merge 不清掉备份里没有的键');
             ok(existsSync(path.join(dataDir, 'main', 'characters', 'card_z.json')), '导入的新卡落成独立文件');
+
+            ok(existsSync(path.join(modsDir, 'from-backup-1.0.0', 'index.js')), '★ 导入写回了插件入口脚本（zip 里是 .js，恢复时放行）');
+            ok(existsSync(path.join(modsDir, 'from-backup-1.0.0', 'manifest.json')), '导入写回了插件 manifest');
+            ok(!existsSync(path.join(modsDir, 'from-backup-1.0.0', 'bad.exe')), '导入没有落盘被拦下的可执行文件');
+            ok(existsSync(path.join(skillsDir, 'from-backup', 'SKILL.md')), '导入写回了技能');
+            ok(j.packages && j.packages.mods >= 1 && j.packages.skills >= 1, '导入结果报告恢复了插件与技能', JSON.stringify(j.packages));
+            const modIndex = JSON.parse(await readFile(path.join(modsDir, 'index.json'), 'utf8'));
+            ok(Array.isArray(modIndex.plugins) && modIndex.plugins.some((p) => p.id === 'from-backup'),
+                '导入后重扫插件清单（前端能立刻看到新插件）', JSON.stringify(modIndex.plugins.map((p) => p.id)));
         }
 
         // ============================================================ 7. 导入边界
@@ -310,11 +348,13 @@ async function caseDataApi(c) {
 
             ok((await post(JSON.stringify({ data: {} }))).status === 400, '空数据被拒绝（400）');
             ok((await post(JSON.stringify({ data: { k: 123 } }))).status === 400, '非字符串值被拒绝（400）');
+            // 这三条只验证"坏输入不改动已有数据"—— 已有数据来自第 6 步的导入。
             ok((await post(Buffer.from('既不是 zip 也不是 json 的一堆字节', 'utf8'))).status === 400, '非法内容被拒绝（400）');
 
             const s = (await (await fetch(base + '/api/store')).json()).data;
             ok(JSON.parse(s.elaina_open_character_cards || '[]').length === 3, '导入失败不影响已有数据');
         }
+
 
         // ============================================================ 8. v1 旧 JSON 备份兼容
         console.log('\n=== 8. 兼容 v1 单 JSON 旧备份 ===');
@@ -348,6 +388,32 @@ async function caseDataApi(c) {
             const files = await readdir(path.join(dataDir, 'main', 'characters'));
             ok(!files.includes('card_x.json.tmp'), '没有遗留的 .tmp 临时文件');
             ok(!existsSync(path.join(dataDir, 'conversations.json')), '没有遗留的旧单文件 conversations.json');
+            const modEntries = await readdir(modsDir);
+            ok(!modEntries.some((n) => n.startsWith('.restoring-')), '没有遗留的插件恢复临时目录', JSON.stringify(modEntries));
+        }
+
+        // ============================================================ 10. 旧布局（名字摊在 zip 根上）
+        // 放在最后：它会合并进另一份数据，放前面会把第 6/9 步依赖的 3 张卡改掉。
+        console.log('\n=== 10. 兼容 v2 旧布局（settings.json 等在根上）===');
+        {
+            const legacyZip = createZip([
+                { name: 'manifest.json', data: JSON.stringify({ format: 'elainachat-backup', version: 2 }) },
+                { name: 'settings.json', data: JSON.stringify({ elaina_open_settings: JSON.stringify({ model: 'legacy-layout' }) }) },
+                { name: 'characters/index.json', data: JSON.stringify({ version: 1, currentCardId: 'old_card', order: ['old_card'] }) },
+                { name: 'characters/old_card.json', data: JSON.stringify({ id: 'old_card', name: '旧布局的卡' }) },
+                { name: 'conversations/index.json', data: JSON.stringify({ version: 1, order: ['old_conv'] }) },
+                { name: 'conversations/old_conv.json', data: JSON.stringify({ id: 'old_conv', title: '旧布局的对话', messages: [] }) },
+                { name: 'memory/diary.json', data: JSON.stringify({ version: 1, value: [{ date: '2026-01-01', content: '旧布局的记忆' }] }) },
+            ]);
+            const r = await fetch(base + '/api/data/import?mode=merge', {
+                method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: legacyZip,
+            });
+            const j = await r.json();
+            ok(r.status === 200 && j.ok, 'v2 旧布局仍能导入', JSON.stringify(j));
+            const s = (await (await fetch(base + '/api/store')).json()).data;
+            ok(JSON.parse(s.elaina_open_settings).model === 'legacy-layout', '读到根上的 settings.json');
+            ok(JSON.parse(s.elaina_open_conversations || '[]').some((c) => c.id === 'old_conv'), '读到根上的 conversations/');
+            ok(JSON.parse(s.elaina_open_memory_core || '{}').diary.length >= 1, '读到根上的 memory/<类目>.json');
         }
     } finally {
         await killServer(server);
@@ -356,12 +422,9 @@ async function caseDataApi(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 2. data/ 是唯一存储
-//
 // 两条核心事实：① 写入后 data/ 里有数据 ② 删掉 data/ 后数据真的为空。
 // 第 ② 条是用户实测报的那个 bug（"删掉 data 分区后重新打开还是有数据"）。
-// ────────────────────────────────────────────────────────────
 
 async function caseDataAuthority(c) {
     const ok = (cond, label, extra) => c.ok(cond, label, extra);
@@ -546,7 +609,6 @@ async function caseDataAuthority(c) {
         console.log('\n页面错误:', errs.length ? errs.slice(0, 3).join(' | ') : '(无)');
 
         // ── ④ 删了就该真的空：localStorage 里的旧数据**不许**被搬回来 ──
-        //
         // 曾经有一版"把老版本 localStorage 的数据自动迁进 data/"（为了保住老用户数据），
         // 但它制造了用户实测的那个困惑：
         //     关服务 → 删 data/ → 重启 → data/ 又被填满了
@@ -606,11 +668,8 @@ async function caseDataAuthority(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 3. data/ 是唯一存储权威，且 Web / APK **共用同一套业务代码**
-//
 // ── 这个检查防的两类退化 ────────────────────────────────────────────────
-//
 // ① **业务数据又写回 localStorage**
 //    起因是实测 bug："删除 data 分区后重新打开还是有数据" ——
 //    因为 localStorage 当时才是真身，data-sync.js 还会把本机数据反向推回 data/。
@@ -618,13 +677,11 @@ async function caseDataAuthority(c) {
 //    又直接写 localStorage，那个 bug 会以同样的方式复活。
 //    所以这里**静态扫描**：除 store.js 自身与明确的例外外，
 //    web/js 下不许出现 localStorage 的读写。
-//
 // ② **业务代码里长出平台分支**
 //    用户明确要求："尽量让安卓和 web 代码同步，不然出问题了还要搞两套代码。"
 //    允许的平台差异**只有持久化后端那一层**（store.js 内部）。
 //    业务文件里若出现 Capacitor / isNativePlatform 判断，就说明有人开始分叉了，
 //    这个检查会在 CI 阶段拦住 —— 而不是等用户在两台设备上各报一次 bug。
-// ────────────────────────────────────────────────────────────
 
 async function caseSingleSource(c) {
     const ok = (cond, label, extra) => c.ok(cond, label, extra);
@@ -666,9 +723,7 @@ async function caseSingleSource(c) {
         return '';
     }
 
-    // ============================================================
     // 1. 业务代码不许直接读写 localStorage
-    // ============================================================
     console.log('=== 1. localStorage 只允许出现在存储层 ===');
     {
         // 例外清单：每条都要有理由，不能随便加
@@ -696,14 +751,11 @@ async function caseSingleSource(c) {
         }
     }
 
-    // ============================================================
     // 2. 平台分支只允许在存储层
-    // ============================================================
     console.log('\n=== 2. 平台差异只在存储层（Web/APK 共用一套业务代码）===');
     {
         const PLATFORM_RE = /isNativePlatform|Capacitor\.Plugins|Capacitor\.getPlatform/;
         // 例外清单 = **功能差异**，不是数据分叉。每条都要有理由。
-        //
         // 判断标准：这个分支是在"同一件事在两端做法不同"，还是在"某一端根本没有这个功能"？
         //   · 数据存储 → 两端都要存同样的东西 → 必须共用（所以 store.js 是唯一允许的）
         //   · 原生插件 → APK 有原生能力、Web 没有 → 天然只能是分支，且不产生两套业务逻辑
@@ -726,16 +778,18 @@ async function caseSingleSource(c) {
             branched.join(', '));
 
         // 数据存储相关的分支必须只有 store.js 一处（用于**用户数据**）。
-        //
         // ★ 为什么要排除 core.js：它写的是 **Live2D 模型文件**，不是用户数据。
         //   APK 里模型必须落在应用目录（Web 端由服务端提供，两端本来就不是一回事），
         //   而且模型是"可重新获取的资源" —— 删掉只是要重新下载，不像聊天记录会永久丢失。
         //   判断标准：**丢了会不会心疼**。会心疼的（聊天/设置/记忆）必须只有 data/ 一处。
         const NON_DATA_WRITERS = {
             'core.js': 'Live2D 模型文件（可重新获取的资源，不是用户数据）',
+            'core-native.js': '原生 Live2D 模型文件（从 core.js 拆出的同一类资源）',
+            'core-native-mod.js': '原生插件安装/删除（mods 目录，不是用户数据）',
             // Directory.Documents：读写**用户自己选的备份文件**（导出/导入）。
             // 那是"跟用户交换文件"，不是"应用自己的存储"，且只在用户主动操作时发生。
             'settings.js': '备份文件的导入导出（读写用户在文档目录里选的文件）',
+            'backup.js': '备份文件的导入导出（从 settings.js 拆出的同一类文件交换）',
             // CACHE 目录的日志导出文件（log-viewer 的「导出」按钮）：写进缓存后
             //   交由系统分享面板发出。与 settings.js 同一性质 —— 跟用户交换文件，
             //   只在用户主动点导出时发生；缓存目录系统可随时回收，不承载任何应用状态。
@@ -753,9 +807,7 @@ async function caseSingleSource(c) {
             '★ 没有业务文件自己往磁盘写用户数据（统一由 store.js 落 data/）', dataBranch.join(', '));
     }
 
-    // ============================================================
     // 3. data-sync.js 必须保持为空壳（防止旧的双向同步复活）
-    // ============================================================
     console.log('\n=== 3. 旧的双向同步不得复活 ===');
     {
         const ds = src['data-sync.js'] || '';
@@ -767,9 +819,7 @@ async function caseSingleSource(c) {
         ok(/store\.js|Store/.test(ds), 'data-sync.js 保留说明指向 store.js');
     }
 
-    // ============================================================
     // 4. 前端与服务端的键清单必须一致
-    // ============================================================
     console.log('\n=== 4. 键清单一致（避免"某类数据没被保存"）===');
     {
         // store.js 的 DATA_KEYS 是前端权威清单
@@ -798,9 +848,7 @@ async function caseSingleSource(c) {
         }
     }
 
-    // ============================================================
     // 5. 启动时必须先 bootstrap 再读数据
-    // ============================================================
     console.log('\n=== 5. 启动顺序：先 bootstrap 再读 ===');
     {
         const init = src['init.js'] || '';
@@ -830,13 +878,11 @@ async function caseSingleSource(c) {
             '★ bootstrap 后重刷主题（APK 异步读完后不会停在默认主题）');
     }
 
-    // ============================================================
     // 6. index.html 正确引入且顺序正确
-    // ============================================================
     console.log('\n=== 6. index.html 引入顺序 ===');
     {
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        ok(/<script src="\/js\/store\.js"><\/script>/.test(html), 'index.html 引入了 store.js');
+        ok(/<script[^>]*src="\/js\/store\.js"[^>]*><\/script>/.test(html), 'index.html 引入了 store.js');
         const storeAt = html.indexOf('/js/store.js');
         // store.js 必须在所有业务脚本之前
         for (const f of ['/js/core.js', '/js/data.js', '/js/theme.js', '/js/mods.js']) {
@@ -844,13 +890,11 @@ async function caseSingleSource(c) {
             ok(at < 0 || at > storeAt, `store.js 排在 ${f} 之前`);
         }
         // data-sync.js 仍被引用（空壳也要在，否则老 APK 的旧文件不会被覆盖）
-        ok(/<script src="\/js\/data-sync\.js"><\/script>/.test(html),
+        ok(/<script[^>]*src="\/js\/data-sync\.js"[^>]*><\/script>/.test(html),
             'data-sync.js 仍被引入（空壳覆盖老 APK 的旧实现）');
     }
 
-    // ============================================================
     // 7. APK 后端：同一个 Store、同一套业务 API
-    // ============================================================
     console.log('\n=== 7. APK 原生后端（用假 Capacitor 验证）===');
     {
         // 假 Capacitor Filesystem：用内存 Map 当"应用私有目录里的 store.json"
@@ -930,9 +974,7 @@ async function caseSingleSource(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 4. data/ 分类存储（人设卡与聊天记录都是一条一文件）+ zip 备份
-//
 // 为什么需要：存储层一旦出错就是**用户数据丢失**（聊天记录 / 人设卡 / 记忆）。
 // 这段用临时目录跑真实的读写，覆盖：
 //   · 分类落盘（人设卡一卡一文件、聊天记录一对话一文件、记忆独立文件）
@@ -940,7 +982,6 @@ async function caseSingleSource(c) {
 //   · 从旧的单文件 store.json / 旧的单文件 conversations.json 自动迁移（幂等）
 //   · zip 备份导出 → 导入往返一致（含 v1 单 JSON 旧备份的兼容）
 //   · 坏数据不导致崩溃、不覆盖好数据
-// ────────────────────────────────────────────────────────────
 
 async function caseStoreLayout(c) {
     const ok = (cond, label, detail) => c.ok(cond, label, detail);
@@ -1161,6 +1202,70 @@ async function caseStoreLayout(c) {
             }
         }
 
+        // ================================================================ 6c. 写盘幂等（内容没变不重写）
+        // 一次消息保存会重放整份聊天记录：若每个会话文件都重写一遍，写盘量是 O(会话数)。
+        // 这里断言"内容没变的文件不被重写"，防止优化被后续改动无声回退。
+        console.log('\n=== 6c. 内容没变的文件不重写 ===');
+        {
+            const tmpIdem = await mkdtemp(path.join(tmpdir(), 'elaina-idem-'));
+            try {
+                const store = createStore({ dataDir: tmpIdem });
+                const s = await store.loadStore();
+                s[KEY_CONV] = JSON.stringify([
+                    { id: 'idem_a', title: '甲', messages: [{ role: 'user', text: '1' }] },
+                    { id: 'idem_b', title: '乙', messages: [] },
+                ]);
+                await store.saveStore();
+                const fa = path.join(tmpIdem, 'conversations', 'idem_a.json');
+                const fb = path.join(tmpIdem, 'conversations', 'idem_b.json');
+                const beforeA = (await stat(fa)).mtimeMs;
+                const beforeB = (await stat(fb)).mtimeMs;
+
+                await new Promise((r) => setTimeout(r, 30));   // 拉开 mtime 粒度
+                const convs = JSON.parse(s[KEY_CONV]);
+                convs[0].messages.push({ role: 'assistant', text: '2' });
+                s[KEY_CONV] = JSON.stringify(convs);
+                await store.saveStore();
+
+                ok((await stat(fa)).mtimeMs > beforeA, '内容变了的会话文件被重写');
+                ok((await stat(fb)).mtimeMs === beforeB, '★ 内容没变的会话文件不重写');
+                const readBack = JSON.parse(await readFile(fa, 'utf8'));
+                ok(readBack.messages.length === 2, '重写后的内容完整');
+            } finally {
+                await rm(tmpIdem, { recursive: true, force: true }).catch(() => {});
+            }
+        }
+
+        // ================================================================ 6d. 写盘失败必须上抛
+        // 队列内部吞错是为了"一次失败不影响后续保存"，但调用方必须知道这次没写成 ——
+        // 否则 /api/store 会回 ok，用户以为已保存，重启才发现消息没了。
+        console.log('\n=== 6d. 写盘失败抛给调用方 ===');
+        {
+            const tmpFail = await mkdtemp(path.join(tmpdir(), 'elaina-fail-'));
+            try {
+                const store = createStore({ dataDir: tmpFail, log: () => {} });
+                const s = await store.loadStore();
+                s[KEY_SETTINGS] = JSON.stringify({ model: 'x' });
+                await store.saveStore();
+                // 把 main/ 换成同名**文件**：之后 mkdir/写入必然失败
+                await rm(path.join(tmpFail, 'main'), { recursive: true, force: true });
+                await writeFile(path.join(tmpFail, 'main'), 'not a dir', 'utf8');
+                s[KEY_SETTINGS] = JSON.stringify({ model: 'y' });
+                let threw = false;
+                try { await store.saveStore(); } catch { threw = true; }
+                ok(threw, '★ 写盘失败时 saveStore 抛出（调用方据此回 500）');
+
+                // 失败之后队列仍可用：恢复目录后能继续保存
+                await rm(path.join(tmpFail, 'main'), { force: true });
+                await mkdir(path.join(tmpFail, 'main'), { recursive: true });
+                await store.saveStore();
+                const misc = JSON.parse(await readFile(path.join(tmpFail, 'main', 'store.json'), 'utf8'));
+                ok(misc[KEY_SETTINGS] === JSON.stringify({ model: 'y' }), '失败后的下一次保存仍正常');
+            } finally {
+                await rm(tmpFail, { recursive: true, force: true }).catch(() => {});
+            }
+        }
+
         // ================================================================ 7. zip 导出
         console.log('\n=== 7. zip 备份导出 ===');
         let zipBuf = null;
@@ -1173,23 +1278,23 @@ async function caseStoreLayout(c) {
             const files = readZip(zipBuf);
             const names = files.map((f) => f.name);
             ok(names.includes('manifest.json'), 'zip 里有 manifest.json');
-            ok(names.includes('settings.json'), 'zip 里有 settings.json');
-            ok(names.includes('characters/index.json'), 'zip 里有 characters/index.json');
-            ok(names.some((n) => /^characters\/old_\d\.json$/.test(n)), 'zip 里有一卡一文件');
-            ok(names.includes('conversations/index.json'), 'zip 里有 conversations/index.json');
-            ok(names.some((n) => n === 'conversations/oldconv.json'), 'zip 里有一对话一文件');
-            ok(names.some((n) => /^memory\/[A-Za-z0-9_-]+\.json$/.test(n)), 'zip 里有 memory/<类目>.json');
+            ok(names.includes('data/settings.json'), 'zip 里有 data/settings.json');
+            ok(names.includes('data/characters/index.json'), 'zip 里有 data/characters/index.json');
+            ok(names.some((n) => /^data\/characters\/old_\d\.json$/.test(n)), 'zip 里有一卡一文件');
+            ok(names.includes('data/conversations/index.json'), 'zip 里有 data/conversations/index.json');
+            ok(names.some((n) => n === 'data/conversations/oldconv.json'), 'zip 里有一对话一文件');
+            ok(names.some((n) => /^data\/memory\/[A-Za-z0-9_-]+\.json$/.test(n)), 'zip 里有 data/memory/<类目>.json');
 
             const manifest = JSON.parse(files.find((f) => f.name === 'manifest.json').data.toString('utf8'));
             ok(manifest.format === 'elainachat-backup', 'manifest 格式标识正确');
-            ok(manifest.version === 2, 'manifest 版本为 2（zip）', 'got ' + manifest.version);
+            ok(manifest.version === 3, 'manifest 版本为 3（zip + data/）', 'got ' + manifest.version);
             ok(typeof manifest.exportedAt === 'string', 'manifest 含导出时间');
             ok(manifest.counts.characters === 2, 'manifest 统计人设卡数', JSON.stringify(manifest.counts));
 
             // 单卡内容要能在 zip 里直接读到。
             // 注意：第 6 步（幂等检查）把 old_1 的名字改成了"改过的名字"，
             // 所以这里断言的是改后的值 —— 顺带证明导出读的是**当前**数据而不是旧快照。
-            const cardFile = files.find((f) => f.name === 'characters/old_1.json');
+            const cardFile = files.find((f) => f.name === 'data/characters/old_1.json');
             const card = JSON.parse(cardFile.data.toString('utf8'));
             ok(card.name === '改过的名字', 'zip 里单卡内容是最新的', 'got ' + card.name);
         }
@@ -1222,6 +1327,50 @@ async function caseStoreLayout(c) {
                 ok(s3['custom_key'] !== undefined, 'merge 模式保留本机独有键');
             } finally {
                 await rm(tmp3, { recursive: true, force: true }).catch(() => {});
+            }
+        }
+
+        // ================================================================ 8.5 replace 导入清空备份里没有的旧数据
+        //   P0 回归：replace 曾只删内存里的键，磁盘上 conversations/characters/memory
+        //   的旧文件还在，下一次 loadStore 又拼回来 —— 用户选“替换”以为清空了，实际没清。
+        console.log('\n=== 8.5 replace 导入清空旧数据 ===');
+        {
+            const tmp6 = await mkdtemp(path.join(tmpdir(), 'elaina-replace-'));
+            try {
+                const store = createStore({ dataDir: tmp6 });
+                const s = await store.loadStore();
+                s[KEY_CARDS] = JSON.stringify([{ id: 'old_card', name: '旧卡' }]);
+                s[KEY_CONV] = JSON.stringify([{ id: 'old_conv', title: '旧对话', messages: [] }]);
+                s[KEY_MEM] = JSON.stringify({ diary: [{ content: '旧日记' }] });
+                s[KEY_SETTINGS] = JSON.stringify({
+                    model: 'old',
+                    mimoTtsCloneSample: 'data:audio/wav;base64,' + Buffer.from('abc').toString('base64'),
+                });
+                await store.saveStore();
+
+                const backup = Buffer.from(JSON.stringify({
+                    data: { [KEY_SETTINGS]: JSON.stringify({ model: 'new' }) },
+                }), 'utf8');
+                const res = await store.importBackup(backup, 'replace');
+                ok(res.ok, 'replace 导入成功', JSON.stringify(res));
+
+                const after = await createStore({ dataDir: tmp6 }).loadStore();
+                ok(after[KEY_CONV] === undefined, '★ replace 清空备份里没有的聊天记录');
+                ok(after[KEY_MEM] === undefined, '★ replace 清空备份里没有的记忆');
+                ok(after[KEY_CARDS] === undefined, '★ replace 清空备份里没有的人设卡');
+                ok(JSON.parse(after[KEY_SETTINGS] || '{}').model === 'new', 'replace 用备份里的设置');
+
+                const cidx = JSON.parse(await readFile(path.join(tmp6, 'main', 'characters', 'index.json'), 'utf8'));
+                const vidx = JSON.parse(await readFile(path.join(tmp6, 'conversations', 'index.json'), 'utf8'));
+                ok(cidx.order.length === 0 && vidx.order.length === 0, 'replace 后分类 index 为空');
+                const memDir = path.join(tmp6, 'main', 'memory');
+                const memFiles = existsSync(memDir) ? (await readdir(memDir)).filter((n) => n.endsWith('.json')) : [];
+                ok(memFiles.length === 0, 'replace 后记忆目录没有残留文件', memFiles.join(','));
+                const vsDir = path.join(tmp6, 'main', 'voice-samples');
+                const vsFiles = existsSync(vsDir) ? await readdir(vsDir) : [];
+                ok(vsFiles.length === 0, 'replace 后无主的参考音频被清理', vsFiles.join(','));
+            } finally {
+                await rm(tmp6, { recursive: true, force: true }).catch(() => {});
             }
         }
 
@@ -1274,12 +1423,9 @@ async function caseStoreLayout(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 5. 多设备实时同步
-//
 // 两个独立浏览器上下文（模拟两台设备）连同一个服务，
 // A 设备改动 → B 设备应当**在几秒内自动看到**，不需要刷新。
-// ────────────────────────────────────────────────────────────
 
 async function caseMultiDeviceSync(c) {
     const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-sync-'));
@@ -1404,22 +1550,17 @@ async function caseMultiDeviceSync(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 6. zip 解压实现是**单一来源**
-//
 // 背景：合并前有两份几乎相同的实现 ——
 //   · web/serve.mjs 的 unzip（111 行）：体积上限 + 危险类型拦截 + GBK + zip64 回退
 //   · server/zip.mjs 的 readZip（100 行）：体积上限 + GBK + zip64 回退
 // 两者逐段重复。**两份实现意味着安全修复要改两处，漏一处就是个洞** ——
 // 比如危险类型拦截只加在了 unzip 上，readZip 那条路（数据导入）就没有。
-//
 // 现已合并到 server/zip.mjs，serve.mjs 只留一个薄包装（保持 {files, blocked} 语义）。
-//
 // 这段盯住：
 //   ① 实现只有一份（serve.mjs 不该再有完整的 unzip）
 //   ② 三条真实路径都还能正常解压：模型上传 / 数据导入 / mod 安装
 //   ③ 危险类型拦截在**所有**路径上都生效（这是合并的主要收益）
-// ────────────────────────────────────────────────────────────
 
 async function caseZipMerge(c) {
     const zipSrc = readFileSync(path.join(ROOT, 'server', 'zip.mjs'), 'utf8');
@@ -1553,3 +1694,4 @@ await runChecks({
     usage: 'node scripts/check-data.mjs [用例名子串]',
     cases,
 });
+

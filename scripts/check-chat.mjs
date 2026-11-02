@@ -1,6 +1,5 @@
 // 对话与模型的回归检查：请求格式适配器、Anthropic 请求形状、模型列表、
 // 思考参数的网关兼容、system 消息合并、授权三档 + 停止按钮。
-//
 // 合并自六个脚本（check-chat-providers / check-anthropic-request /
 // check-model-list / check-thinking-compat / check-chat-message-shape /
 // check-chat-stop-and-edge-tts）。它们测的是同一条「用户点发送 → 请求出去 →
@@ -8,11 +7,9 @@
 // index.html 的真实函数体上跑假网络出口，拆成六个文件时各自重抄一遍
 // 「抠函数 / 加载 chat-providers.js / 造假依赖」的样板和一份 pass/fail 汇总，
 // 而且同名顶层变量（ROOT / html / extractFn）在同一个模块里会互相踩。
-//
 // 每段用例在自己的函数作用域里跑，共用文件顶层的 extractFnFrom / extractClassFrom /
 // extractNumberConstFrom，断言经 c.ok 记账，失败信息形如
 // 「对话 API 格式适配器 :: openai: 端点是 /chat/completions」。
-//
 // 用法：node scripts/check-chat.mjs            跑全部
 //       node scripts/check-chat.mjs 模型列表   只跑名字含该子串的用例
 
@@ -21,57 +18,14 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { readFrontend } from './frontend-sources.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
+import { extractFunction as extractFnFrom, extractClass as extractClassFrom, extractVariable, extractTopLevelFunctions, makeVmSandbox, runClassicScripts } from './check-source.mjs';
 
 const PROVIDERS_FILE = path.join(ROOT, 'web', 'js', 'chat-providers.js');
 
-// ────────────────────────────────────────────────────────────
 // 共用工具：从真实源码里抠函数 / 类 / 数字常量。
-//
 // 为什么抠而不是复制：断言的是"被测代码自己算出来的东西"，
 // 抄一份到测试里就等于自己测自己，实现改了测试也照样绿。
-// ────────────────────────────────────────────────────────────
-
-/**
- * 按函数名抠出完整函数声明（花括号配对）；`async` 前缀必须一起带上，
- * 否则里面的 await 会语法错误。
- *
- * 先跳过参数表：`opts = {}` 这类默认值里就有大括号，直接找第一个 `{`
- * 会把它当成函数体开头 —— 抠出来是半截函数，报错还是莫名其妙的语法错误。
- */
-function extractFnFrom(html, name) {
-    let start = html.indexOf('function ' + name + '(');
-    if (start < 0) throw new Error('在 web/index.html 里找不到函数: ' + name + '（重命名了？请同步更新本检查）');
-    const asyncMatch = html.slice(Math.max(0, start - 12), start).match(/async\s+$/);
-    if (asyncMatch) start -= asyncMatch[0].length;
-    let i = html.indexOf('(', start);
-    let paren = 0;
-    for (; i < html.length; i++) {
-        if (html[i] === '(') paren++;
-        else if (html[i] === ')') { paren--; if (paren === 0) { i++; break; } }
-    }
-    let depth = 0;
-    i = html.indexOf('{', i);
-    for (; i < html.length; i++) {
-        const c = html[i];
-        if (c === '{') depth++;
-        else if (c === '}') { depth--; if (depth === 0) { i++; break; } }
-    }
-    return html.slice(start, i);
-}
-
-/** 抠一个 class 声明（大括号配平） */
-function extractClassFrom(html, name) {
-    const start = html.indexOf('class ' + name + ' ');
-    if (start < 0) throw new Error('在 web/index.html 里找不到类: ' + name + '（重命名了？请同步更新本检查）');
-    let depth = 0;
-    let i = html.indexOf('{', start);
-    for (; i < html.length; i++) {
-        const c = html[i];
-        if (c === '{') depth++;
-        else if (c === '}') { depth--; if (depth === 0) { i++; break; } }
-    }
-    return html.slice(start, i);
-}
+// extractFnFrom / extractClassFrom 统一来自 check-source.mjs（跳过字符串与注释的花括号配对）。
 
 /** 抠一个数字常量（形如 `const NAME = 4096;`） */
 function extractNumberConstFrom(html, name) {
@@ -80,21 +34,17 @@ function extractNumberConstFrom(html, name) {
     return Number(m[1].replace(/_/g, ''));
 }
 
-// ────────────────────────────────────────────────────────────
 // 1. 对话 API 格式适配器（web/js/chat-providers.js）
-//
 // 为什么需要：这三个函数是**对话功能的全部出口** —— 搬错一处，AI 就完全无法回复。
 // 而且它用「依赖注入」的方式从 index.html 取依赖（window.ChatDeps），
 // **漏挂一个依赖的表现是运行到那一步才报 "xxx is not a function"**，
 // 静态看源码看不出来。所以这个检查专门盯住"依赖有没有挂全"。
-//
 // 覆盖：
 //   1. 从 chat-providers.js 源码里扫出所有 deps() 解构出的名字，逐个断言在 ChatDeps 里
 //   2. 三种格式都有实现（分发表完整），且未知格式有兜底
 //   3. 三个函数签名一致（(messages, opts, settings)）
 //   4. 用**假依赖**真的跑一遍三个函数，断言请求体/端点的形状正确
 //   5. index.html 确实引用了本文件、且挂了 ChatDeps
-// ────────────────────────────────────────────────────────────
 
 async function caseProviders(c) {
     const src = readFileSync(PROVIDERS_FILE, 'utf8');
@@ -172,17 +122,18 @@ async function caseProviders(c) {
     // ============================================================ 4. 真跑一遍（假依赖）
     console.log('\n=== 4. 用假依赖实跑三个格式 ===');
 
-    // 真实的「思考参数构造器」：从 index.html 抠出来，供假依赖使用。
-    // 为什么要抠真的而不是写个假的：本检查要断言"关思考时请求体里到底有没有 disabled"，
-    // 那是被测代码算出来的东西，用假实现就等于自己测自己。
-    const extractFnForThinking = (name) => extractFnFrom(html, name);
-    const buildThinkingParamsReal = new Function('isDeepSeekOfficial', `
-        const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
-        ${extractFnForThinking('mapThinkingEffort')}
-        ${extractFnForThinking('detectThinkingVendor')}
-        ${extractFnForThinking('buildThinkingParams')}
-        return buildThinkingParams;
-    `)((url) => /api\.deepseek\.com/i.test(url));
+    // 真实的「思考参数构造器」：装 core.js 的**整个顶层函数环境** + THINKING_EFFORTS，
+    //   不再只抠三个函数。以后 buildThinkingParams 拆 helper，这里也不用改。
+    const coreThinkSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const thinkSandbox = makeVmSandbox({ URL });
+    vm.runInContext(
+        extractVariable(coreThinkSrc, 'THINKING_EFFORTS') + '\n' + extractTopLevelFunctions(coreThinkSrc),
+        thinkSandbox,
+        { filename: 'core.js#thinking-env' },
+    );
+    const buildThinkingParamsReal = thinkSandbox.buildThinkingParams;
 
     /** 造一份可控的假依赖，记录每次请求 */
     function makeFakeDeps() {
@@ -411,9 +362,7 @@ async function caseProviders(c) {
     c.ok(/window\.ChatProviders\.forFormat\(/.test(html), 'callChatAPI 用了 forFormat 分发');
 }
 
-// ────────────────────────────────────────────────────────────
 // 2. 对话请求的形状（Anthropic 格式为主，外加跨格式的 max_tokens 下限）
-//
 // 背景（真实故障一）：用户切到 Anthropic 格式后必然 400 ——
 //   400 "max_tokens must be greater than 1024 for manual Claude thinking"
 // 原因不在我们这侧的参数，而在**中转站会按模型名后缀替我们决定要不要开 thinking**：
@@ -421,19 +370,15 @@ async function caseProviders(c) {
 // 而 manual thinking 要求 `1024 <= budget_tokens < max_tokens`，于是 max_tokens <= 1024 的请求被拒。
 // 我们当时发的是 900（ROLEPLAY_OUTPUT_TOKEN_LIMITS.text），所以必然失败；
 // 「测试对话连接」按钮发的是 8，同样失败。
-//
 // 背景（真实故障二的隐患）：这条约束**跨协议**。new-api 的 `ApplyReasoning()` 里，
 // OpenAI → Claude 的转换（crossProtocol）一定走 `RenderClaude`，
 // 所以用 OpenAI 兼容格式调一个 `…-thinking` 的模型名会踩同一个坑。
 // 因此下限判据被提到 `callChatAPI`，三种格式共用 —— 本检查直接驱动 `callChatAPI` 验证这一点。
-//
 // 做法：把 index.html 里的真实函数体抠出来，只把网络出口（postJsonFromDevice）换成假的，
 // 检查**真正会发出去的 body**。不联网、不复制逻辑。
-//
 // 2026-09 更新：三种协议的实现已拆到 `web/js/chat-providers.js`（表驱动分发）。
 // 本检查相应改成**直接加载那个真模块**，而不是继续从 HTML 里正则抠 ——
 // 抠函数那种做法本来就脆（改个格式就断），拆出去后正好改成"测线上真正跑的那份"。
-// ────────────────────────────────────────────────────────────
 
 async function caseAnthropicRequest(c) {
     const html = readFrontend();
@@ -441,96 +386,81 @@ async function caseAnthropicRequest(c) {
     const extractClass = (name) => extractClassFrom(html, name);
     const extractNumberConst = (name) => extractNumberConstFrom(html, name);
 
-    const ctx = new Function('window', `
+    // 整脚本装载 core.js 的函数环境 + 需要的常量，再把“只有网络出口是假的”桩装进同一个 VM。
+    // 不再用 new Function('window', ...) 拼几十行函数体 —— 这样 core.js 再拆 helper 也不用改检查。
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const fakeWindow = {};
+    const chatSandbox = makeVmSandbox({ window: fakeWindow, URL, TextEncoder, TextDecoder });
+    vm.runInContext(
+        ['DEEPSEEK_DIRECT_BASE_URL', 'ANTHROPIC_MIN_MAX_TOKENS', 'CHAT_TIMEOUT_DEFAULT_MS',
+            'CHAT_TIMEOUT_THINKING_MS', 'THINKING_EFFORTS', 'CHAT_API_FORMATS']
+            .map((n) => extractVariable(coreSrc, n)).join('\n')
+        + '\n' + extractTopLevelFunctions(coreSrc),
+        chatSandbox,
+        { filename: 'core.js#chat-env' },
+    );
+    vm.runInContext(String.raw`
         const calls = [];
         const normalizeCalls = [];
         let nextPayload = { content: [{ type: 'text', text: '好的' }] };
         function setPayload(p) { nextPayload = p; }
-        // 唯一的假实现：网络出口。其余全部来自 index.html 的真实代码。
-        // 按端点回不同形状的成功响应 —— 三种格式的成功响应结构不一样，混用会让解析器抛 EMPTY_MODEL_OUTPUT。
-        async function postJsonFromDevice(url, body, headers) {
+        // 唯一的假实现：网络出口。其余全部来自 core.js 的真实代码。
+        globalThis.postJsonFromDevice = async function (url, body, headers) {
             calls.push({ url, body, headers });
-            if (/\\/chat\\/completions$/.test(url)) {
-                // 只有用例显式 setPayload 了一个带 choices 的响应时才用它（默认仍是那条固定成功响应）。
-                // 这样"要看响应侧（工具调用）"的新用例不必再动别的出口，老用例也不受影响。
+            if (url.endsWith('/chat/completions')) {
                 if (nextPayload && nextPayload.choices) return { ok: true, payload: nextPayload };
                 return { ok: true, payload: { choices: [{ message: { content: '好的' } }] } };
             }
-            if (/\\/responses$/.test(url)) {
-                // 与 chat/completions 同一规矩：用例显式 setPayload 了带 output 的响应才用它
-                // （要看响应侧 function_call 时必须走这条），默认仍是那条固定成功响应。
+            if (url.endsWith('/responses')) {
                 if (nextPayload && nextPayload.output) return { ok: true, payload: nextPayload };
                 return { ok: true, payload: { output_text: '好的' } };
             }
             return { ok: true, payload: nextPayload };
-        }
-        async function throwProviderResponseError() { throw new Error('不该走到这里'); }
-        const state = { settings: {} };
-        ${extractFn('stripThinkTags')}
-        ${extractFn('extractTextContent')}
-        ${extractFn('normalizeChatReply').replace('function normalizeChatReply(', 'function realNormalizeChatReply(')}
+        };
+        globalThis.throwProviderResponseError = async function () { throw new Error('不该走到这里'); };
+        globalThis.state = { settings: {} };
+        const realNormalizeChatReply = globalThis.normalizeChatReply;
         // 包一层记录入参：真实的 normalizeChatReply 只返回正文，看不到 reasoning 有没有被认出来。
-        // 参数要**原样转发**（包括第三个 toolCalls）—— 少转发一个，就等于在测试里
-        // 把"只调工具、一字不说"那条合法回复又变回空回复抛错。
-        function normalizeChatReply(content, reasoningContent = '', toolCalls = []) {
+        // 参数要原样转发（包括第三个 toolCalls）。
+        globalThis.normalizeChatReply = function (content, reasoningContent = '', toolCalls = []) {
             normalizeCalls.push({ content, reasoningContent });
             return realNormalizeChatReply(content, reasoningContent, toolCalls);
-        }
-        // anthropicContentBlocks / convertOpenAIToAnthropicMessages / convertOpenAIToResponsesInput
-        // 已随三个协议实现一起迁到 web/js/chat-providers.js（本文件下面会直接加载那个真模块），
-        // 所以这里不再从 index.html 抠。
-        const ANTHROPIC_MIN_MAX_TOKENS = ${extractNumberConst('ANTHROPIC_MIN_MAX_TOKENS')};
-        // ★ callChatAPI 现在按 thinking 开关选请求超时预算（见它的 timeoutMs 说明）。
-        //   本检查只验证"发出去的请求体形状"，超时值本身无关紧要 —— 但这两个常量
-        //   **必须在作用域里**，否则抠出来的 callChatAPI 一执行就 ReferenceError。
-        //   （踩过：漏了它们会让整套 npm run check 在这一项直接中断退出，而不是报一条 FAIL。）
-        const CHAT_TIMEOUT_DEFAULT_MS = ${extractNumberConst('CHAT_TIMEOUT_DEFAULT_MS')};
-        const CHAT_TIMEOUT_THINKING_MS = ${extractNumberConst('CHAT_TIMEOUT_THINKING_MS')};
-        ${extractFn('thinkingSuffixTokenFloor')}
-        ${extractFn('resolveOutputTokenLimit')}
-        ${extractFn('getChatBaseUrl')}
-        ${extractFn('isDeepSeekOfficial')}
-        // 思考开关/强度 → 各协议请求字段。这是真实实现，不是假的：
-        // 本检查要断言"关思考时到底发了什么"，那必须是被测代码自己算出来的。
-        ${extractFn('mapThinkingEffort')}
-        ${extractFn('detectThinkingVendor')}
-        ${extractFn('buildThinkingParams')}
-        const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
-        // CHAT_API_FORMATS 只是格式白名单表，这里按真实定义给一份骨架（**新增格式时要同步**）
-        const CHAT_API_FORMATS = Object.freeze({ 'openai-compatible': {}, 'openai-responses': {}, anthropic: {} });
-        ${extractFn('getChatApiFormat')}
-        ${extractFn('mergeLeadingSystemMessages')}
-        ${extractFn('callChatAPI')}
-        ${extractClass('ClientApiError')}
-        // 本检查只关心"提示怎么展示"，不验证错误归一化 —— 直接透传即可
-        function toClientApiError(error) { return error; }
-        ${extractFn('getClientErrorPresentation')}
-        return {
-            callChatAPI, calls, setPayload, normalizeCalls, getClientErrorPresentation, ClientApiError,
-            getChatBaseUrl, isDeepSeekOfficial, normalizeChatReply, postJsonFromDevice,
-            throwProviderResponseError, extractTextContent, stripThinkTags, resolveOutputTokenLimit,
-            ANTHROPIC_MIN_MAX_TOKENS, buildThinkingParams,
+        };
+        // 本检查只关心“提示怎么展示”，不验证错误归一化 —— 直接透传即可。
+        globalThis.toClientApiError = function (error) { return error; };
+        globalThis.ClientApiError = (${extractClassFrom(coreSrc, 'ClientApiError')});
+        globalThis.__ctx = {
+            callChatAPI: globalThis.callChatAPI,
+            calls, setPayload, normalizeCalls,
+            getClientErrorPresentation: globalThis.getClientErrorPresentation,
+            ClientApiError: globalThis.ClientApiError,
+            getChatBaseUrl: globalThis.getChatBaseUrl,
+            isDeepSeekOfficial: globalThis.isDeepSeekOfficial,
+            normalizeChatReply: globalThis.normalizeChatReply,
+            postJsonFromDevice: globalThis.postJsonFromDevice,
+            throwProviderResponseError: globalThis.throwProviderResponseError,
+            extractTextContent: globalThis.extractTextContent,
+            stripThinkTags: globalThis.stripThinkTags,
+            resolveOutputTokenLimit: globalThis.resolveOutputTokenLimit,
+            ANTHROPIC_MIN_MAX_TOKENS, buildThinkingParams: globalThis.buildThinkingParams,
             last: () => calls[calls.length - 1],
             lastNormalize: () => normalizeCalls[normalizeCalls.length - 1],
         };
-    `);
+    `, chatSandbox, { filename: 'core.js#chat-fakes' });
+    const raw = chatSandbox.__ctx;
 
     // ===== 让真实模块跑起来：三种协议的实现已拆到 web/js/chat-providers.js =====
-    //
     // 原来是把这个文件里的三个实现 + 两个转换器也一起抠出来执行。现在它们搬走了，
     // 继续抠会抠不到 —— 而**这正是拆分想要的结果**：不再"从 HTML 里正则抠函数"，
     // 而是直接加载真模块，测的就是线上真正跑的那份代码。
-    //
     // 做法：
     //   ① 先建一个空的 fakeWindow 对象
     //   ② 用 new Function('window', ...) 跑 index.html 里抠出来的真实代码，拿到真实依赖
     //   ③ 把依赖挂进 fakeWindow.ChatDeps
     //   ④ 在 vm 里执行 chat-providers.js（它从 window.ChatDeps 取依赖）
     //   ⑤ 把 ChatProviders 挂回 fakeWindow，让 callChatAPI 里的 window.ChatProviders 能用
-    const fakeWindow = {};
-    const raw = ctx(fakeWindow);
-
-    const providersSrc = readFileSync(PROVIDERS_FILE, 'utf8');
     fakeWindow.ChatDeps = {
         ClientApiError: raw.ClientApiError,
         getChatBaseUrl: raw.getChatBaseUrl,
@@ -538,8 +468,8 @@ async function caseAnthropicRequest(c) {
         normalizeChatReply: raw.normalizeChatReply,
         postJsonFromDevice: raw.postJsonFromDevice,
         // providers 现在走 requestChatJson 而不是直接 postJsonFromDevice。
-        // 本检查只验证"发出去的请求体形状"，不验证流式 —— 所以这里让 requestChatJson
-        // 直接转发到那个假的 postJsonFromDevice，保持"只有网络出口是假的"这个性质。
+        // 本检查只验证“发出去的请求体形状”，不验证流式 —— 所以这里让 requestChatJson
+        // 直接转发到那个假的 postJsonFromDevice，保持“只有网络出口是假的”这个性质。
         requestChatJson: async (endpoint, body, headers, opts) =>
             await raw.postJsonFromDevice(endpoint, body, headers, opts?.timeoutMs, opts?.signal),
         buildThinkingParams: raw.buildThinkingParams,
@@ -549,12 +479,9 @@ async function caseAnthropicRequest(c) {
         resolveOutputTokenLimit: raw.resolveOutputTokenLimit,
         ANTHROPIC_MIN_MAX_TOKENS: raw.ANTHROPIC_MIN_MAX_TOKENS,
     };
-    {
-        const sandbox = vm.createContext({
-            window: fakeWindow, console, Error, Object, Array, Number, String, Math, RegExp, JSON,
-        });
-        vm.runInContext(providersSrc, sandbox, { filename: 'file:///' + PROVIDERS_FILE });
-    }
+    // chat-providers.js 也跑在同一个 VM 里：它从 window.ChatDeps 取依赖，
+    // callChatAPI 再从 window.ChatProviders 取三个实现。
+    runClassicScripts([PROVIDERS_FILE], chatSandbox);
     if (!fakeWindow.ChatProviders) {
         throw new Error('chat-providers.js 没能挂上 window.ChatProviders —— 本检查无法继续');
     }
@@ -748,7 +675,6 @@ async function caseAnthropicRequest(c) {
     check('  且 max_tokens 不被抬（模型名没有 -thinking 后缀）', ds.body.max_tokens, 900);
 
     // ---------- 二之二、思考开关与强度（本次适配的核心） ----------
-    //
     // 背景：DeepSeek 现在的接口**默认开启思考**（官方《思考模式》文档：thinking mode
     // is enabled by default, effort 默认 high）。这意味着"关掉开关"必须**显式**发
     // disabled —— 不发字段不等于关，用户会白等几十秒、白花思考 token，
@@ -896,27 +822,21 @@ async function caseAnthropicRequest(c) {
     void calls;
 }
 
-// ────────────────────────────────────────────────────────────
 // 3. 获取模型列表（`GET <base>/models`）
-//
 // 背景（真实问题）：界面上一直写着「Anthropic 格式下获取模型不可用」，理由是
 // "它的模型列表接口与 OpenAI 不同"。**这是错的** ——
 // Anthropic 有 Models API：`GET /v1/models`，返回 `{ data: [{ id, display_name, … }] }`，
 // 和 OpenAI 的 `{ data: [{ id }] }` **同构**，解析逻辑本来就能共用。
-//
 // 真正的故障只有一个：**地址拼错了**。
 //   Anthropic 的 Base URL 惯例上不带版本段（默认 `https://api.anthropic.com`），
 //   而它的 Models API 在 `/v1/models` —— 代码直接拼 `/models`，于是 404，
 //   再被上层翻译成"该服务不支持 /models"。
-//
 // 所以本检查的核心不是"能不能解析"，而是**地址拼接规则**，以及一条容易被未来重构破坏的不变量：
 //   `模型列表地址 == 对话地址把 /messages 换成 /models`
 // （一旦不一致，就会出现"对话能通、获取模型 404"这种最费解的现象）。
-//
 // 做法：抠出 index.html 里的真实函数体，只把网络出口换成假的。
 // 2026-09 更新：三种协议的实现已拆到 web/js/chat-providers.js（开发文档 8.33），
 // 本检查相应改成**直接加载那个真模块**来测 callAnthropicChat。
-// ────────────────────────────────────────────────────────────
 
 async function caseModelList(c) {
     const html = readFrontend();
@@ -924,82 +844,81 @@ async function caseModelList(c) {
     const extractClass = (name) => extractClassFrom(html, name);
     const extractNumberConst = (name) => extractNumberConstFrom(html, name);
 
-    const rawCtxFactory = new Function('window', `
+    // 整脚本装载 core.js 的函数环境 + 需要的常量，再把“假网络出口 / 假 DOM”桩装进同一个 VM。
+    // 不再用 new Function('window', ...) 拼几十行函数体。
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'models.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+    const fakeWindow = {};
+    const modelSandbox = makeVmSandbox({ window: fakeWindow, URL, TextEncoder, TextDecoder });
+    vm.runInContext(
+        ['ANTHROPIC_MIN_MAX_TOKENS', 'THINKING_EFFORTS'].map((n) => extractVariable(coreSrc, n)).join('\n')
+        + '\n' + extractTopLevelFunctions(coreSrc)
+        + '\n' + extractTopLevelFunctions(initSrc),
+        modelSandbox,
+        { filename: 'core.js#models-env' },
+    );
+    vm.runInContext(String.raw`
         // 两个假实现：GET 出口（获取模型）与 POST 出口（对话，用来对拍地址）
         const getCalls = [];
         let queued = [];
         function setGetResults(list) { queued = list.slice(); }
-        /** 清空已发出的请求记录 —— 断言"这次一共打了几次"前必须先清，否则是累计值 */
+        /** 清空已发出的请求记录 —— 断言“这次一共打了几次”前必须先清，否则是累计值 */
         function resetGetCalls() { getCalls.length = 0; }
-        async function getJsonFromDevice(url, headers, timeoutMs) {
+        globalThis.getJsonFromDevice = async function (url, headers, timeoutMs) {
             getCalls.push({ url, headers, timeoutMs });
             if (!queued.length) return { ok: true, status: 200, payload: { data: [] } };
             const next = queued.shift();
-            if (next instanceof Error) throw next;
+            // 跨 VM realm 的 Error 不满足 instanceof（测试在宿主 realm 造 Error），
+            //   用 toString 判据，行为与原来的 instanceof 一致。
+            if (next && Object.prototype.toString.call(next) === '[object Error]') throw next;
             return next;
-        }
+        };
         const postCalls = [];
-        async function postJsonFromDevice(url, body, headers) {
+        globalThis.postJsonFromDevice = async function (url, body, headers) {
             postCalls.push({ url, body, headers });
             return { ok: true, payload: { content: [{ type: 'text', text: '好的' }] } };
-        }
-        async function throwProviderResponseError() { throw new Error('不该走到这里'); }
-        function toClientApiError(error) { return error; }
-        const state = { settings: {} };
+        };
+        globalThis.throwProviderResponseError = async function () { throw new Error('不该走到这里'); };
+        globalThis.toClientApiError = function (error) { return error; };
+        globalThis.state = { settings: {} };
         // 假 DOM / 假弹窗：populateModelSelect 用到 document.createElement 和 showCustomAlert
         const alertMessages = [];
-        function showCustomAlert(msg) { alertMessages.push(String(msg)); }
-        // ★ 2026-10 组合框：populateModelSelect 现在会调 input.__modelComboRefresh()
-        //   刷新浮层列表。假 input 上没有这个方法 —— 真实代码里那行有 typeof 判断，
-        //   所以不崩；这里保持"没有该方法"的状态，正好顺带覆盖那条兜底分支。
-        const document = {
+        globalThis.showCustomAlert = function (msg) { alertMessages.push(String(msg)); };
+        // 组合框会调 input.__modelComboRefresh()；假 input 上没有这个方法，
+        // 真实代码里有 typeof 判断 —— 这里保持“没有该方法”，顺带覆盖兜底分支。
+        globalThis.document = {
             createElement() { return { value: '', textContent: '' }; },
         };
-        ${extractFn('stripThinkTags')}
-        ${extractFn('extractTextContent')}
-        ${extractFn('normalizeChatReply')}
-        ${extractFn('mapThinkingEffort')}
-        ${extractFn('detectThinkingVendor')}
-        ${extractFn('buildThinkingParams')}
-        const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
-        // anthropicContentBlocks / convertOpenAIToAnthropicMessages / callAnthropicChat
-        // 已迁到 web/js/chat-providers.js（见开发文档 8.33）—— 不再从 index.html 抠，
-        // 改为在下面直接加载那个真模块（测的就是线上跑的那份）。
-        const ANTHROPIC_MIN_MAX_TOKENS = ${extractNumberConst('ANTHROPIC_MIN_MAX_TOKENS')};
-        ${extractFn('thinkingSuffixTokenFloor')}
-        ${extractFn('resolveOutputTokenLimit')}
-        ${extractFn('getChatBaseUrl')}
-        // detectThinkingVendor 会用它判断"是不是 DeepSeek 官方地址"，
-        // 所以本检查的上下文里必须有真身（不抠出来会 ReferenceError）
-        ${extractFn('isDeepSeekOfficial')}
-        ${extractClass('ClientApiError')}
-        ${extractFn('modelsEndpointFor')}
-        ${extractFn('parseModelList')}
-        ${extractFn('fetchModelList')}
-        ${extractFn('populateModelSelect')}
-        function lastGet() { return getCalls[getCalls.length - 1]; }
-        function lastPost() { return postCalls[postCalls.length - 1]; }
-        return {
-            modelsEndpointFor, parseModelList, fetchModelList, populateModelSelect,
-            ClientApiError,
-            // 下面这些是 chat-providers.js 需要的依赖（它已拆成独立模块，见开发文档 8.33）。
-            // 注意只导出**本环境里真实存在**的：
-            //   · postJsonFromDevice / throwProviderResponseError 是本文件里的假实现
-            //   · isDeepSeekOfficial 本检查用不到（callAnthropicChat 不依赖它），
-            //     本环境也没定义 —— 所以不导出，否则会 ReferenceError。
-            getChatBaseUrl, normalizeChatReply, postJsonFromDevice,
-            buildThinkingParams,
-            throwProviderResponseError, extractTextContent, stripThinkTags,
-            resolveOutputTokenLimit, ANTHROPIC_MIN_MAX_TOKENS,
-            setGetResults, resetGetCalls, getCalls, postCalls, lastGet, lastPost,
+        globalThis.ClientApiError = (${extractClassFrom(coreSrc, 'ClientApiError')});
+        globalThis.__ctx = {
+            modelsEndpointFor: globalThis.modelsEndpointFor,
+            parseModelList: globalThis.parseModelList,
+            fetchModelList: globalThis.fetchModelList,
+            populateModelSelect: globalThis.populateModelSelect,
+            ClientApiError: globalThis.ClientApiError,
+            getChatBaseUrl: globalThis.getChatBaseUrl,
+            normalizeChatReply: globalThis.normalizeChatReply,
+            postJsonFromDevice: globalThis.postJsonFromDevice,
+            buildThinkingParams: globalThis.buildThinkingParams,
+            throwProviderResponseError: globalThis.throwProviderResponseError,
+            extractTextContent: globalThis.extractTextContent,
+            stripThinkTags: globalThis.stripThinkTags,
+            resolveOutputTokenLimit: globalThis.resolveOutputTokenLimit,
+            ANTHROPIC_MIN_MAX_TOKENS,
+            setGetResults, resetGetCalls, getCalls, postCalls,
+            lastGet: () => getCalls[getCalls.length - 1],
+            lastPost: () => postCalls[postCalls.length - 1],
             alertMessages,
         };
-    `);
+    `, modelSandbox, { filename: 'core.js#models-fakes' });
+    const ctx = modelSandbox.__ctx;
 
     // ===== 加载真实的 chat-providers.js（三种协议的实现都在那边）=====
     // 原来是把 callAnthropicChat 从 index.html 里抠出来执行；它搬走后改为直接加载真模块。
-    const fakeWindow = {};
-    const ctx = rawCtxFactory(fakeWindow);
     fakeWindow.ChatDeps = {
         ClientApiError: ctx.ClientApiError,
         getChatBaseUrl: ctx.getChatBaseUrl,
@@ -1009,7 +928,6 @@ async function caseModelList(c) {
         // 模型列表与地址拼接，不验证流式，所以让它转发到同一个假出口。
         requestChatJson: async (endpoint, body, headers, opts) =>
             await ctx.postJsonFromDevice(endpoint, body, headers, opts?.timeoutMs, opts?.signal),
-        // 思考参数：真实实现（从 index.html 抠）。假的话就等于自己测自己。
         buildThinkingParams: ctx.buildThinkingParams,
         throwProviderResponseError: ctx.throwProviderResponseError,
         extractTextContent: ctx.extractTextContent,
@@ -1017,13 +935,7 @@ async function caseModelList(c) {
         resolveOutputTokenLimit: ctx.resolveOutputTokenLimit,
         ANTHROPIC_MIN_MAX_TOKENS: ctx.ANTHROPIC_MIN_MAX_TOKENS,
     };
-    {
-        const providersSrc = readFileSync(PROVIDERS_FILE, 'utf8');
-        const sandbox = vm.createContext({
-            window: fakeWindow, console, Error, Object, Array, Number, String, Math, RegExp, JSON,
-        });
-        vm.runInContext(providersSrc, sandbox, { filename: 'file:///' + PROVIDERS_FILE });
-    }
+    runClassicScripts([PROVIDERS_FILE], modelSandbox);
     if (!fakeWindow.ChatProviders) {
         throw new Error('chat-providers.js 没能挂上 window.ChatProviders');
     }
@@ -1220,7 +1132,6 @@ async function caseModelList(c) {
     check('  200 不该被当成"认证问题"去重试', getCalls.length, 1);
 
     // ---------- 五之二、200 却拿回 HTML 首页（地址少版本段的典型症状）----------
-    //
     // 真实故障：Base URL 填 `https://newapi.gay`（少 /v1）时，`/models` 打到了站点首页，
     // 返回 200 + text/html。旧代码解析不出 data，报"可能该服务不支持 /models" ——
     // 把人引向完全错误的方向（实测 /v1/models 才是真接口，只是缺 Key 才 401）。
@@ -1246,14 +1157,11 @@ async function caseModelList(c) {
     has('  原文开头被带出来（便于判断到底拿到了什么）', badJson, 'not json at all');
 
     // ---------- 六、拉到列表之后要真的填进模型名输入框 ----------
-    //
     // 真实故障：Anthropic 下「获取模型」能成功拉到列表，但**模型名输入框没被填上**，
     // 于是下拉框出现了、真正发出去的却还是切格式时自动填的预设名（如
     // `claude-sonnet-4-20250514`）—— 那个名字往往不在真实列表里，一对话就 404。
-    //
     // 根因：populateModelSelect 只填了 <select>，从没给 <input> 赋值；
     // 而 readProviderSettingsForm 读的是 **input** 的值。两者脱节，功能等于没生效。
-    //
     // 为什么以前没被发现：本检查只覆盖了 fetchModelList / parseModelList（"能不能拉到"），
     // 没有覆盖"拉到之后有没有回填"。
     console.log('\n— 拉到列表后回填输入框 —');
@@ -1372,52 +1280,33 @@ async function caseModelList(c) {
     void postCalls;
 }
 
-// ────────────────────────────────────────────────────────────
 // 4. 思考参数的严格网关兼容（2026-09，实测 AMD Radeon 端点 400）
-//
 // ── 背景 ────────────────────────────────────────────────────────────────
-//
 // 用户实测：AMD 的 OpenAI 兼容端点对 `thinking` 字段回 400 ——
 //   "thinking" is not supported … Use "reasoning_effort"
 // 而同时发 thinking + reasoning_effort 还会被某些网关拒
 // （Roo-Code #11001：volcengine "Invalid combination"）。
 // GitHub 调研结论：没有哪个思考字段全网通用，成熟做法是
 // **先发 → 400 且报错点名参数 → 按点名剥参数重试**（hermes-agent #34786）。
-//
 // ── 这里的兼容契约 ──────────────────────────────────────────────────────
-//
 //   · 认 thinking 的网关（DeepSeek 官方/中转）→ 第一次就成功，行为不变
 //   · 不认的网关（AMD/OpenAI 官方）→ 第一次 400，自动剥掉被点名的参数重发，
 //     用户无感；报错点名 reasoning_effort 时只剥它
 //   · 其它 400（图片太大等）→ 不剥参数、照常抛错（剥了也解决不了）
-//
 // 测试方式：按对话适配器检查的依赖注入套路，用假 fetch 真跑
 // callOpenAICompatibleChat，捕获每次请求体做断言。
-// ────────────────────────────────────────────────────────────
 
 async function caseThinkingCompat(c) {
     const src = readFileSync(PROVIDERS_FILE, 'utf8');
 
-    // 从 chat-providers.js 里截出 rejectedRequestParam（按大括号配对）单测
-    function grabFn(source, name) {
-        const i = source.indexOf('function ' + name);
-        if (i < 0) throw new Error('not found: ' + name);
-        let depth = 0, started = false, end = i;
-        for (let k = i; k < source.length; k++) {
-            if (source[k] === '{') { depth++; started = true; }
-            else if (source[k] === '}') { depth--; if (started && depth === 0) { end = k; break; } }
-        }
-        return source.slice(i, end + 1);
-    }
-    const rejectedRequestParam = new Function(
-        grabFn(src, 'rejectedRequestParam') + '\nreturn rejectedRequestParam;'
-    )();
-    // 工具调用的统一形状（toToolCall）与 Anthropic 侧那个映射也一起抠出来单测：
-    // 它们决定"模型给的东西能不能被执行"，逐片解析/字符串与对象的差别最容易写错。
-    const { toToolCall, anthropicToolCalls } = new Function(
-        grabFn(src, 'toToolCall') + '\n' + grabFn(src, 'anthropicToolCalls')
-        + '\nreturn { toToolCall, anthropicToolCalls };'
-    )();
+    // 整脚本装载 chat-providers.js，用它导出的公开函数单测（不再抠函数体）：
+    //   ChatProviders 里的 rejectedRequestParam / toToolCall / anthropicToolCalls
+    //   都是正式导出，测的就是线上那份。
+    const cpSandbox = makeVmSandbox({ ChatDeps: null });
+    runClassicScripts([PROVIDERS_FILE], cpSandbox);
+    const ChatProviders = cpSandbox.ChatProviders;
+    const rejectedRequestParam = ChatProviders.rejectedRequestParam;
+    const { toToolCall, anthropicToolCalls } = ChatProviders;
 
     // ---------- 单测 rejectedRequestParam ----------
     console.log('=== 1. rejectedRequestParam：从 400 里认出被拒参数 ===');
@@ -1463,19 +1352,11 @@ async function caseThinkingCompat(c) {
 
     // ---------- 集成：真跑 callOpenAICompatibleChat ----------
     console.log('\n=== 2. 集成：假网关真跑，看降级重试 ===');
-    // chat-providers.js 是普通 <script>，靠 window.ChatDeps 取依赖 ——
-    // 在 eval 之前就建好 window，场景之间只换 window.ChatDeps 的内容。
-    //
+    // chat-providers.js 是普通 <script>，靠 window.ChatDeps 取依赖。
+    // 上面的 cpSandbox 就是它的 window：场景之间只换 cpSandbox.ChatDeps。
     // ⚠️ 用**局部** window 而不是 globalThis.window：每个用例跑在同一进程里，
     //    往全局挂 window 会与其它用例互相覆盖。
-    const win = { ChatDeps: null };
-    // 最小化的 deps() 套路：与对话适配器检查相同
-    // 注意：把同一个 window 对象传进去（deps() 调用时读 window.ChatDeps），
-    // 场景里改 window.ChatDeps 才能生效。
-    const ChatProviders = new Function(
-        'window',
-        src + '\nreturn window.ChatProviders;'
-    )(win);
+    const win = cpSandbox;
 
     // requestChatJson 的最小假实现：记录请求体，按脚本决定返回
     // responses: [{ match(body, n), reply: {ok, status, payload} }]
@@ -1503,22 +1384,17 @@ async function caseThinkingCompat(c) {
         };
     }
 
-    // 从 core.js 截真实现（别在测试里重写一遍逻辑 —— 测的不是真代码就没意义）
-    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-    function grabCore(name) {
-        const i = coreSrc.indexOf('function ' + name);
-        let depth = 0, started = false, end = i;
-        for (let k = i; k < coreSrc.length; k++) {
-            if (coreSrc[k] === '{') { depth++; started = true; }
-            else if (coreSrc[k] === '}') { depth--; if (started && depth === 0) { end = k; break; } }
-        }
-        return coreSrc.slice(i, end + 1);
-    }
-    const realBuildThinkingParams = new Function(
-        'isDeepSeekOfficial', 'mapThinkingEffort',
-        grabCore('detectThinkingVendor') + '\n' + grabCore('buildThinkingParams') +
-        '\nreturn buildThinkingParams;'
-    )((u) => /deepseek\.com/.test(u || ''), (l) => l);
+    // 从 core.js 装整个顶层函数环境（别在测试里重写一遍逻辑 —— 测的不是真代码就没意义）
+    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const coreThinkSandbox = makeVmSandbox({ URL });
+    vm.runInContext(
+        extractVariable(coreSrc, 'THINKING_EFFORTS') + '\n' + extractTopLevelFunctions(coreSrc),
+        coreThinkSandbox,
+        { filename: 'core.js#thinking-env' },
+    );
+    const realBuildThinkingParams = coreThinkSandbox.buildThinkingParams;
 
     const settings = {
         apiKey: 'test-key',
@@ -1528,7 +1404,6 @@ async function caseThinkingCompat(c) {
     const opts = { thinking: false, thinkingEffort: 'medium', maxTokens: 100 };
 
     // 场景 A：AMD 式网关 —— 带 thinking 字段就 400，剥掉就 200。
-    //
     // ★ 模型名故意用 deepseek-v4-pro：让 vendor 判定走"模型名兜底"变成
     //   deepseek（真实场景 —— 用户在 AMD 网关上跑 DeepSeek 模型，或中转站
     //   包着 DeepSeek）。这才能测到**降级路径**：第一次带 thinking 被 400，
@@ -1631,30 +1506,25 @@ async function caseThinkingCompat(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 5. 发给服务商之前，开头连续的 system 消息必须被合并成一条
-//
 // 背景（真实故障）：某些自建/中转网关**只接受一条 system 消息**。实测
 // `developer.amd.com.cn` 的 `self-dploy` 后端：
 //   [system, user]          → 200
 //   [system, system, user]  → 400 "System message must be at the beginning."
 // 报错文案有误导性 —— 它说的其实是"system 消息只能有一条，不能有第二条"。
-//
 // 而本应用的 layered-v2 提示词结构一次会发 4~10 条 system（核心协议 / 世界观 / 角色卡 /
 // Live2D 标签 / 会话设定 / 记忆规则 / 图片一致性 / 配音格式 / 回合锚点 / 模型可用表现 /
 // 水印 / Agent 权限），在这类网关上一个字都发不出去。
-//
 // 做法：把 index.html 里的真实函数体抠出来跑，不复制逻辑、不联网。
-// ────────────────────────────────────────────────────────────
 
 async function caseMessageShape(c) {
-    const html = readFrontend();
-
-    const { mergeLeadingSystemMessages } = new Function(`
-        ${extractFnFrom(html, 'extractTextContent')}
-        ${extractFnFrom(html, 'mergeLeadingSystemMessages')}
-        return { mergeLeadingSystemMessages };
-    `)();
+    // 装 core.js 的整个顶层函数环境（extractTextContent 等 helper 自动在场），
+    //   不再只抠 mergeLeadingSystemMessages 一个函数。
+    const coreMsgSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+    const msgSandbox = makeVmSandbox({});
+    vm.runInContext(extractTopLevelFunctions(coreMsgSrc), msgSandbox, { filename: 'core.js#messages-env' });
+    const mergeLeadingSystemMessages = msgSandbox.mergeLeadingSystemMessages;
 
     // 断言适配器：原脚本的 check(label, actual, expected) 双参风格，语义照抄
     function check(label, actual, expected) {
@@ -1709,24 +1579,19 @@ async function caseMessageShape(c) {
     check('真实分层结构：每段内容都还在', layered.every((m) => m.role !== 'system' || layeredMerged[0].content.includes(m.content)), true);
 }
 
-// ────────────────────────────────────────────────────────────
 // 6. 授权策略三档 + 聊天停止按钮
-//
 // 两项用户反馈：
 //   1. 手机操作授权「每次运行只确认一次」并设为默认
 //   2. 聊天发送按钮二态（AI 回复中变红色停止）+ 请求可中断
-//
 // 注：原先的 Edge TTS 一节已随 Edge TTS provider 一起删除 —— 它断言的
 // `speakTextEdge` / `#settingEdgeTtsVoice` / `/api/tts/edge` 都已不存在。
 // 现在 TTS 默认走 MiMo（见前端 DOM 引用检查与前端源码）。
-// ────────────────────────────────────────────────────────────
 
 async function caseStopAndAuth(c) {
     const html = readFrontend();
     const providers = readFileSync(PROVIDERS_FILE, 'utf8');
 
     // ============================================================ 1. 授权策略
-    //
     // ★★ 2026-10 权限模型重构：这一节原来验证的是**旧的四档手机策略**
     //   （once / run / always / off 的 UI、默认值与豁免语义）。那套已整体删除，
     //   改成一个三档设置 agentAccess（strict / auto / full）同时管电脑与手机。
@@ -1778,8 +1643,9 @@ async function caseStopAndAuth(c) {
         c.ok(/replyAbort = new AbortController\(\)/.test(html), '每轮回复创建 AbortController');
         c.ok(/signal: replyAbort\.signal/.test(html), 'signal 传给 callAI');
         c.ok(/signal: options\.signal/.test(html), 'callAI 透传给 callChatAPI');
-        c.ok(/async function postJsonFromDevice\(url, body, headers = \{\}, timeoutMs = 120000, signal = null\)/.test(html),
-            'postJsonFromDevice 收 signal');
+        c.ok(/async function postJsonFromDevice\(url, body, headers = \{\}, \{/.test(html)
+            && /signal\?\.aborted/.test(html),
+            'postJsonFromDevice 收 options（timeoutMs / signal）');
         c.ok(/Promise\.race\(\[run, abortPromise\]\)/.test(html), 'abort 用 race 立即砍掉等待');
         // 图标二态（DSH 式：同一位置一个图标槽，箭头↔暂停）
         c.ok(/composer-state-icon/.test(html), '有统一的图标槽（不是两个图标叠着切 hidden）');
@@ -1822,3 +1688,4 @@ await runChecks({
 });
 
 void wait; void freePort;
+

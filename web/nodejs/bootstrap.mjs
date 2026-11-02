@@ -69,7 +69,6 @@ const dataDirectory = readArgument('data-dir', '');
 const requestedPort = Number.parseInt(readArgument('port', '0'), 10) || 0;
 
 // ── 进程级兜底：未捕获异常绝不能终止 Node ──────────────────────────────
-//
 // Node 跑在 App 自己的进程里（见文件头 ③）：一次未捕获异常默认会结束整个
 // Node 运行时 —— 等于**整个 App 跟着死**，而不只是"服务端没了"。所以把两类
 // 致命事件都降级成一行日志、继续运行：HTTP 层不死，前端那条原生兜底链路
@@ -113,7 +112,6 @@ function sendJson(response, statusCode, payload) {
 }
 
 // ── 日志系统（与电脑端 serve.mjs 同构的手机版）──────────────────────────
-//
 // 手机版的处境：WebView 里没有控制台可看，日志不落盘就等于没发生。这一段把
 // 电脑端 serve.mjs 的日志链路搬到 bootstrap：内存环形缓冲（/api/logs/tail 的
 // 数据源，软件内日志查看器直接可用）+ 主日志/追踪日志双文件落盘（adb pull
@@ -121,7 +119,6 @@ function sendJson(response, statusCode, payload) {
 // 桌面专属的部分不复刻：loc 行号提取（stack 抓帧）、IP 归属（手机端全部来自
 // 同一个 WebView，Origin 门之外没有可区分的来源）、控制台级别过滤（logcat
 // 全量，级别过滤只会把信息挡在 logcat 之外）。
-//
 // 落盘策略与常量照抄 serve.mjs（O-4 已核实可原样沿用）：每次启动一组
 // <启动时刻>.log / .trace.log；单文件超 LOG_MAX_BYTES 拆 _2/_3；只保留最近
 // LOG_KEEP 次启动。同步写（appendFileSync）—— 天然串行、不会交错断行，
@@ -334,13 +331,11 @@ function traceLine(text) {
 }
 
 // ── mod 服务端半边装载（与电脑端 serve.mjs 同构）────────────────────────
-//
 // manifest.server 声明的服务端半边在电脑端由 serve.mjs 装载；手机端缺这条
 // 装载路径时，唯一带 server 半边的 live2d-models 只能被前端硬编码复刻，宿主
 // 认识了具体插件，违背「宿主不认识任何具体插件」的定位。这里装载的就是
 // server/mod-server.mjs **本尊**（能力声明 need()/超时/回滚全套生效），
 // 任何声明了 server 半边的插件在手机上都能跑。
-//
 // 目录布局（2.4）：Capacitor Directory.Data = filesDir，原生插件装在
 // filesDir/mods/<manifest.id>/，而本进程的数据目录是 filesDir/elaina-data ——
 // 所以 path.resolve(dataDirectory, '..', 'mods') 就是插件根，零迁移可见；

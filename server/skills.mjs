@@ -1,30 +1,22 @@
 // 技能（skill）的服务端支持：扫描 / 安装 / 卸载 / 读取 SKILL.md。
-//
 // ── 技能**不是**插件（这是本模块存在的全部理由）────────────────────────────
-//
 // 两者容易被混为一谈，但定位完全不同：
 //   · **插件（mods/）** 扩展的是**应用本身**：界面插槽、宿主接口、静态资源。
 //     它是**代码**（同源执行的第三方 JS），可装可卸，风险面很大。
 //   · **技能（SKILL.md）** 是**给 AI 的指令与知识**：一段带 YAML frontmatter
 //     （name / description）的 markdown。它是**纯文本**，不注册进应用、不参与运行。
-//
 // 所以技能**绝不能**混进插件清单（`/mods/index.json`）—— 那会让"装了哪些插件"
 // 里冒出本不该在那儿的项，而且两者的卸载方式根本不同（见下）。
 // 本模块与 server/mods.mjs 是**平行的两套**，各扫各的目录、各有各的清单接口。
-//
 // ── 两个来源 ────────────────────────────────────────────────────────────
-//
 //   ① **本地技能**：`skills/<id>/SKILL.md` —— 直接住在技能根目录。
 //   ② **插件随附技能**：插件在自己的 manifest.json 里声明 `"skills": ["skills/<name>"]`，
 //      实际文件就**住在那个插件目录内**（`mods/<插件>/skills/<name>/SKILL.md`）。
-//
 //      为什么让随附技能住在插件目录里（而不是安装时拷进 skills/）：
 //        这样"卸载插件"就等于"删掉它的技能" —— **不需要任何额外清理逻辑**，
 //        删目录那一刀就把两者一起带走了。反过来（拷进 skills/）会留下孤儿技能：
 //        插件删了、技能还在 skills/ 里列着，用户完全不知道它从哪来、该怎么删。
-//
 // ── 安装的安全规则（与 mods.mjs 完全一致）────────────────────────────────
-//
 // 上传安装技能同样是"解压第三方 zip"，风险面与装插件一样：
 //   · **路径穿越**：zip 里写 `../../web/serve.mjs` 能覆盖宿主代码 ——
 //     复用 isUnsafeEntryName + 解析后的绝对路径必须仍在技能目录内（双保险）。
@@ -59,7 +51,7 @@ const SKILL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
  *   · 首尾空白与尾随点（Windows 会静默吃掉，导致名字与预期不符）
  */
 const SKILL_DIR_RE = /^[^\\/:*?"<>|\u0000-\u001f]{1,128}$/;
-function isSafeSkillDirName(name) {
+export function isSafeSkillDirName(name) {
     const n = String(name || '');
     if (!n || n === '.' || n === '..') return false;
     if (n.startsWith('.')) return false;              // 隐藏目录 / . ..
@@ -87,7 +79,7 @@ function isSafeSkillRel(rel) {
 }
 
 /** 技能目录里允许落盘的本机可执行类型（拦掉，避免用户误双击）—— 与 mods.mjs 同一份清单 */
-const SKILL_BLOCKED_EXT = new Set([
+export const SKILL_BLOCKED_EXT = new Set([
     '.exe', '.dll', '.com', '.scr', '.msi', '.bat', '.cmd',
     '.ps1', '.psm1', '.vbs', '.wsf', '.jar', '.sh', '.app', '.deb', '.rpm',
 ]);
@@ -164,84 +156,100 @@ export function createSkillManager({ skillsDir, modsDir, unzip, isUnsafeEntryNam
      *
      * @returns {Promise<{skills: Array<{id, name, description, owner, source, dir}>}>}
      */
-    async function scan() {
+    async function scanLocalSkills() {
         const skills = [];
+    // ── ① 本地技能：skills/ 的直接子目录，且含 SKILL.md ──
+    await mkdir(skillsDir, { recursive: true }).catch(() => {});
+    const entries = await readdir(skillsDir, { withFileTypes: true }).catch(() => []);
+    for (const e of entries) {
+        if (!e.isDirectory()) continue;
+        // 目录名用宽松校验（允许中文/空格）—— 见 isSafeSkillDirName 的说明
+        if (!isSafeSkillDirName(e.name)) {
+            log(`跳过技能目录 ${e.name}：名字含不安全字符或非法形式`);
+            continue;
+        }
+        const dir = path.join(skillsDir, e.name);
+        const md = path.join(dir, 'SKILL.md');
+        const info = await stat(md).catch(() => null);
+        // 没有 SKILL.md 的目录**不是**技能：skills/ 里可能有 users 随手建的杂物
+        //   （图片、笔记），不该被当成技能列出来。
+        if (!info || !info.isFile()) continue;
+        const fm = parseFrontmatter(await readSkillMd(dir));
+        skills.push({
+            id: e.name,
+            name: fm.name || e.name,          // 缺 name → 回落目录名
+            description: fm.description || '', // 缺 description → 空串
+            // kind 永远是 'knowledge'：技能是**给 AI 的资料**，不是可执行能力。
+            //   写进清单里是为了让消费方（前端注册表）能**当场断言**这条边界，
+            //   而不是靠"这条接口只会扫文本文件"的隐含前提 —— 扫描结果里出现
+            //   任何别的 kind 都说明有人把技能当插件在装了（见本文件顶部说明）。
+            kind: 'knowledge',
+            owner: null,
+            source: 'local',
+            dir,
+        });
+    }
 
-        // ── ① 本地技能：skills/ 的直接子目录，且含 SKILL.md ──
-        await mkdir(skillsDir, { recursive: true }).catch(() => {});
-        const entries = await readdir(skillsDir, { withFileTypes: true }).catch(() => []);
-        for (const e of entries) {
-            if (!e.isDirectory()) continue;
-            // 目录名用宽松校验（允许中文/空格）—— 见 isSafeSkillDirName 的说明
-            if (!isSafeSkillDirName(e.name)) {
-                log(`跳过技能目录 ${e.name}：名字含不安全字符或非法形式`);
+        return skills;
+    }
+
+    async function scanModSkills() {
+        const skills = [];
+    // ── ② 插件随附技能：读每个插件 manifest 的 skills 声明 ──
+    const plugEntries = await readdir(modsDir, { withFileTypes: true }).catch(() => []);
+    for (const pe of plugEntries) {
+        if (!pe.isDirectory()) continue;
+        if (!isSafeSkillDirName(pe.name)) continue;   // index.json 等文件也会被过滤掉（非目录）
+        const pluginDir = path.join(modsDir, pe.name);
+        let m = null;
+        try { m = JSON.parse(await readFile(path.join(pluginDir, 'manifest.json'), 'utf8')); }
+        catch { m = null; }
+        if (!m || typeof m !== 'object') continue;
+        const rels = Array.isArray(m.skills) ? m.skills : [];
+        if (!rels.length) continue;
+        // owner：manifest.id 优先（它是插件身份），缺失/非法时回落到目录名 —— 与 mods.mjs 一致
+        const owner = (typeof m.id === 'string' && m.id.trim()) ? m.id.trim() : pe.name;
+        for (const rel of rels) {
+            if (typeof rel !== 'string') continue;
+            if (!isSafeSkillRel(rel)) {
+                log(`插件 ${owner} 声明的技能路径不安全，已跳过：${rel}`);
                 continue;
             }
-            const dir = path.join(skillsDir, e.name);
-            const md = path.join(dir, 'SKILL.md');
-            const info = await stat(md).catch(() => null);
-            // 没有 SKILL.md 的目录**不是**技能：skills/ 里可能有 users 随手建的杂物
-            //   （图片、笔记），不该被当成技能列出来。
-            if (!info || !info.isFile()) continue;
+            const relNorm = rel.replace(/\\/g, '/').replace(/^\/+/, '');
+            const dir = path.join(pluginDir, relNorm);
+            const info = await stat(path.join(dir, 'SKILL.md')).catch(() => null);
+            if (!info || !info.isFile()) {
+                log(`插件 ${owner} 声明的技能缺少 SKILL.md：${relNorm}`);
+                continue;
+            }
             const fm = parseFrontmatter(await readSkillMd(dir));
             skills.push({
-                id: e.name,
-                name: fm.name || e.name,          // 缺 name → 回落目录名
-                description: fm.description || '', // 缺 description → 空串
-                // kind 永远是 'knowledge'：技能是**给 AI 的资料**，不是可执行能力。
-                //   写进清单里是为了让消费方（前端注册表）能**当场断言**这条边界，
-                //   而不是靠"这条接口只会扫文本文件"的隐含前提 —— 扫描结果里出现
-                //   任何别的 kind 都说明有人把技能当插件在装了（见本文件顶部说明）。
-                kind: 'knowledge',
-                owner: null,
-                source: 'local',
+                id: owner + '/' + relNorm,        // 带 owner 前缀，避免与本地技能 id 撞车
+                name: fm.name || relNorm.split('/').pop(),
+                description: fm.description || '',
+                kind: 'knowledge',                // 见上面那条：技能永远是"资料"，不是能力
+                owner,
+                source: 'mod',
                 dir,
             });
         }
-
-        // ── ② 插件随附技能：读每个插件 manifest 的 skills 声明 ──
-        const plugEntries = await readdir(modsDir, { withFileTypes: true }).catch(() => []);
-        for (const pe of plugEntries) {
-            if (!pe.isDirectory()) continue;
-            if (!isSafeSkillDirName(pe.name)) continue;   // index.json 等文件也会被过滤掉（非目录）
-            const pluginDir = path.join(modsDir, pe.name);
-            let m = null;
-            try { m = JSON.parse(await readFile(path.join(pluginDir, 'manifest.json'), 'utf8')); }
-            catch { m = null; }
-            if (!m || typeof m !== 'object') continue;
-            const rels = Array.isArray(m.skills) ? m.skills : [];
-            if (!rels.length) continue;
-            // owner：manifest.id 优先（它是插件身份），缺失/非法时回落到目录名 —— 与 mods.mjs 一致
-            const owner = (typeof m.id === 'string' && m.id.trim()) ? m.id.trim() : pe.name;
-            for (const rel of rels) {
-                if (typeof rel !== 'string') continue;
-                if (!isSafeSkillRel(rel)) {
-                    log(`插件 ${owner} 声明的技能路径不安全，已跳过：${rel}`);
-                    continue;
-                }
-                const relNorm = rel.replace(/\\/g, '/').replace(/^\/+/, '');
-                const dir = path.join(pluginDir, relNorm);
-                const info = await stat(path.join(dir, 'SKILL.md')).catch(() => null);
-                if (!info || !info.isFile()) {
-                    log(`插件 ${owner} 声明的技能缺少 SKILL.md：${relNorm}`);
-                    continue;
-                }
-                const fm = parseFrontmatter(await readSkillMd(dir));
-                skills.push({
-                    id: owner + '/' + relNorm,        // 带 owner 前缀，避免与本地技能 id 撞车
-                    name: fm.name || relNorm.split('/').pop(),
-                    description: fm.description || '',
-                    kind: 'knowledge',                // 见上面那条：技能永远是"资料"，不是能力
-                    owner,
-                    source: 'mod',
-                    dir,
-                });
-            }
-        }
-
-        return { skills };
     }
 
+        return skills;
+    }
+
+    /**
+     * 扫描两个来源，返回技能清单。
+     *
+     * 为什么每次请求都重新扫（不缓存）：与插件同理 —— 用户可能直接在
+     * `skills/` 里拷了个目录进去，缓存会让"我刚放的技能没出现"变成长期困惑。
+     * 扫描本身很轻（一次 readdir + 读几个 SKILL.md / manifest）。
+     */
+    async function scan() {
+        const local = await scanLocalSkills();
+        const fromMods = await scanModSkills();
+        return { skills: local.concat(fromMods) };
+    }
     /**
      * 从**内存里的 zip** 安装本地技能（供「应用内上传」用）。
      *

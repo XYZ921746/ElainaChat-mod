@@ -1,27 +1,21 @@
 // 插件（mod）系统的回归检查：扫描 / 安装解压 / 清单生成 / 安全防护 /
 // 身份与依赖解析 / 宿主能力（插槽） / 端到端。
-//
 // 合并自六个脚本（check-mods / check-mod-id / check-mod-identity /
 // check-mod-deps / check-mod-host-api / check-mod-e2e）。它们测的是同一个
 // 插件系统的不同侧面，而且是逐层叠起来的：
-//
 //   · 服务端：scanAndSync 解压、清单、卸载、路径穿越防护（check-mods / -id / -e2e）
 //   · 身份：id 归一化与「注册名 ↔ 目录」映射（check-mod-id / -identity）
 //   · 依赖：前置插件未启用时必须拒绝加载，且日志要人能看懂（check-mod-deps）
 //   · 宿主能力：插槽注册与停用回收，起真服务 + 真浏览器（check-mod-host-api）
-//
 // 为什么合并：六个文件各自重算 ROOT、各自抄一遍 ok/汇总样板、各自实现
 // freePort/wait，还有一个共用的 mkMgr（三个文件各写一份、字节全同）。
 // 改一次插件契约要打开六个文件找断言；合并后一处改完。
-//
 // 为什么每个用例都自建临时目录与端口：这些用例里有四个会起真实服务
 // （少数还会起浏览器），写死的 MODS_DIR / 端口会让它们互相踩；而
 // check-mod-host-api 里那类检查还会往仓库的 mods/ 里写临时插件 ——
 // 少了自清就会留痕。所以每个用例都在 try/finally 里收自己的进程与目录。
-//
 // 用法：node scripts/check-mod.mjs            跑全部
 //       node scripts/check-mod.mjs 插槽       只跑名字含该子串的用例
-//
 // 本机环境性失败（缺 mods/galgame、mods/scene-backgrounds、工作区 skills/ 等实物）
 // 属于已知基线：不是代码坏了，逐条比对 PASS/FAIL 条数即可。
 
@@ -33,18 +27,18 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { launchTestBrowser } from './test-browser.mjs';
 import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
 import { createModManager } from '../server/mods.mjs';
+import { createModServer } from '../server/mod-server.mjs';
 import { createSkillManager } from '../server/skills.mjs';
 import { readZip, createZip, effectiveExt } from '../server/zip.mjs';
+import { extractFunction as extractFn } from './check-source.mjs';
 
 const MODS = path.join(ROOT, 'mods');
 
-// ────────────────────────────────────────────────────────────
 // 共用辅助
-// ────────────────────────────────────────────────────────────
 
 /**
  * 按 **manifest.id** 找插件的真实目录名（只给 check-mods 的服务端源码段用）。
@@ -178,45 +172,21 @@ const stripComments = (src) => String(src)
  * 两处用它：端到端用例从 web/js/core.js 里抠安卓侧的原生实现，
  * 依赖用例里抠插件加载器的诊断输出。
  */
-function extractFn(src, name) {
-    let start = src.indexOf('function ' + name + '(');
-    if (start < 0) throw new Error('找不到 ' + name);
-    const asyncMatch = src.slice(Math.max(0, start - 12), start).match(/async\s+$/);
-    if (asyncMatch) start -= asyncMatch[0].length;
-    let i = src.indexOf('(', start), paren = 0;
-    for (; i < src.length; i++) {
-        if (src[i] === '(') paren++;
-        else if (src[i] === ')') { paren--; if (paren === 0) { i++; break; } }
-    }
-    let depth = 0;
-    i = src.indexOf('{', i);
-    for (; i < src.length; i++) {
-        if (src[i] === '{') depth++;
-        else if (src[i] === '}') { depth--; if (depth === 0) { i++; break; } }
-    }
-    return src.slice(start, i);
-}
 
-// ────────────────────────────────────────────────────────────
+
 // 1. 插件系统：服务端扫描 / 自动解压 / 清单生成 / 安全防护
-//
-// 为什么必须常驻：mod 系统是**同源执行第三方 JS** 的入口，和我们修过的
-// `.html::$DATA` 存储型 XSS 属同一类风险面。而且它有几个很容易回归的点：
-//
+// 为什么必须常驻：mod 系统是**同源执行第三方 JS** 的入口，且有几个很容易回归的点：
 //   · 路径穿越：zip 里写 `../../web/serve.mjs` 就能覆盖宿主代码
-//   · 卸载不彻底：只删目录不删 zip，scanAndSync 会立刻把它装回来
-//     （这个 bug 是端到端测试抓到的：断言"目录已删除"时发现它又回来了）
-//   · allowScripts 开关：mod 的本质是 JS，但 unzip 的默认黑名单会拦掉 .js
-//     （那是为 Live2D 模型设计的）。忘了传 allowScripts 会得到
-//     "只装了 manifest.json、插件跑不起来"的怪现象
-// ────────────────────────────────────────────────────────────
-
+//   · 卸载不彻底：只删目录不删 zip，scanAndSync 会立刻把它装回来（端到端测试抓到的）
+//   · allowScripts 开关：unzip 默认黑名单会拦 .js（那是为 Live2D 模型设计的），忘了传就是
+//     "只装了 manifest.json、插件跑不起来"
 async function caseModsCore(c) {
     // ---- 1.1 关键实现存在且语义正确 ----
     {
         const mods = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
         const serve = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-        const loader = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
+        const loader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-load.js'), 'utf8')
+            + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
         // 解压实现已合并到 server/zip.mjs（原先 serve.mjs 里另有一份几乎相同的 unzip）。
         // 所以 BLOCKED_EXT / effectiveExt / allowScripts 这些要看**实现那份**，
         // 不能再断言它们在 serve.mjs 里 —— 那是合并前的布局。
@@ -254,7 +224,8 @@ async function caseModsCore(c) {
             'register(ctx) 经 withTimeout 包裹');
 
         // 前端 host API 能力组（AGENTS.md D18 / 表 A22）
-        const modsJs = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+        const modsJs = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
         c.ok(/HOST_API_GROUPS\s*=\s*\{/.test(modsJs), 'mods.js 有 HOST_API_GROUPS 能力组表');
         for (const g of ['core', 'theme', 'achievements', 'dragSort', 'openFolder']) {
             c.ok(new RegExp('HOST_API_GROUPS|' + g + ':').test(modsJs), '能力组表含 ' + g);
@@ -274,7 +245,6 @@ async function caseModsCore(c) {
             '★ 卸载时连安装包一起删（否则 scanAndSync 会把它装回来）');
 
         // ★★ 卸载必须按**真实目录**删，不能拿 id 直接拼路径。
-        //
         //   清单里的 id 来自 manifest（`galgame`），目录名是安装时的包名
         //   （`galgame-1.0.0`）—— 两者可以不一致（表 A9）。用 id 拼出的
         //   `mods/galgame` 不存在，而 `rm(..., {force:true})` 对不存在的路径
@@ -317,12 +287,13 @@ async function caseModsCore(c) {
         c.ok(/setPromptHint|promptHints/.test(loader), '提供 system 提示词注入入口（Galgame 场景切换要用）');
 
         // ---- 插件市场：依赖必须自动补齐 ----
-        //
         //   市场卡片只**提示**"缺依赖"是不够的：用户既不知道该装哪个，
         //   也看不出 `elaina-avatar` 这类资源包与 `galgame` 有什么关系。
         //   结果是主体插件装完直接拒绝加载（"前置插件不可用"），
         //   看起来像插件坏了 —— 而这一步本可以自动完成。
-        const market = readFileSync(path.join(WEB, 'js', 'mod-market.js'), 'utf8');
+        const market = readFileSync(path.join(WEB, 'js', 'market-utils.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'download.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mod-market.js'), 'utf8');
         c.ok(/function resolveInstallOrder/.test(market),
             '★ 有 resolveInstallOrder（把依赖摊平成安装顺序）');
         // 递归解析依赖的依赖，否则"依赖的依赖"仍会缺
@@ -349,7 +320,6 @@ async function caseModsCore(c) {
         c.ok(/lastIndex\.plugins/.test(installBody),
             '★ 依赖解析读整份索引（前置扩展照样会被一起装）');
         // ---- 插件市场：纯底座类前置默认不收进列表 ----
-        //
         //   立绘、场景图、引擎包装进来在插件页不提供独立界面，市场里单列它们
         //   等于请用户手装一个自己不认识的包（立绘 10 MB、背景 7 MB）。
         //   判定必须看依赖关系而不是 id：作者将来发别的底座包时规则依然成立。
@@ -370,7 +340,6 @@ async function caseModsCore(c) {
             '★ 市场的前置区默认收起（点标题展开，收起只是折叠）');
 
         // ---- 插件市场：大包必须分片并发下载 ----
-        //
         //   实测（2026-10-21，本机）：GitHub Pages 对**单条 TCP 流**限速到 ~0.1 MB/s ——
         //   10 MB 的立绘包单连接 115 s，32 并发 3.6 s，速率几乎随并发数线性增长。
         //   浏览器自带下载器默认多连接，所以"官网下得快、应用里慢成蜗牛"不是源的问题，
@@ -415,13 +384,15 @@ async function caseModsCore(c) {
 
         // 宿主接线
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        c.ok(/<script src="\/js\/mods\.js"><\/script>/.test(html), 'index.html 引入了 mods.js');
+        c.ok(/<script[^>]*src="\/js\/mods\.js"[^>]*><\/script>/.test(html), 'index.html 引入了 mods.js');
         const iMods = html.indexOf('/js/mods.js');
         const iInit = html.indexOf('/js/init.js');
         c.ok(iMods > 0 && iInit > 0 && iMods < iInit, '★ mods.js 排在 init.js 之前（初始化要读清单）');
 
         // ---- 宿主消费 mod 提示词（Galgame 场景指令送达模型的必经路径）----
-        const data = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
+        const data = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
         c.ok(/ElainaMods/.test(data) && /collectPromptHints/.test(data),
             '★ 宿主在构造提示词时消费 mod 注入的 system 片段');
 
@@ -439,8 +410,11 @@ async function caseModsCore(c) {
         // ---- 应用内删除按钮 ----
         // 服务端早有 DELETE /api/plugins/:id，但界面一直没暴露 —— 用户装了插件
         // 就没法在应用里卸掉（只能去删目录，而删目录又会被 zip 装回来）。
-        const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-        const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
+        const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+        const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-host-core.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods-api.js'), 'utf8')
+    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
         c.ok(/mod-del-btn/.test(settingsSrc), '★ 设置里渲染「删除」按钮');
         c.ok(/method: 'DELETE'/.test(settingsSrc), '★ 删除走 DELETE /api/plugins/:id');
         c.ok(/showCustomConfirm[\s\S]{0,400}删除插件/.test(settingsSrc), '★ 删除前二次确认（防误删）');
@@ -459,7 +433,8 @@ async function caseModsCore(c) {
         //   都会重扫（openSettings → refreshModsList），不需要单独的刷新按钮。
         c.ok(!/id="modsRefreshBtn"/.test(html), '★ 没有「⟳ 重新扫描」按钮');
         c.ok(!/modsFab/.test(html), '★ 没有右下角悬浮刷新钮');
-        const settingsForCard = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+        const settingsForCard = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         c.ok(!/mod-refresh-one/.test(settingsForCard), '★ 卡片上没有单独的 ⟳');
         c.ok(/id="modsAddGroupBtn"/.test(html), '★ 有「添加分栏」按钮（插件分组）');
         // 「浏览目录」必须带 id（init.js 按 id 绑一次）。用 class 选择器 + 挂在
@@ -469,16 +444,20 @@ async function caseModsCore(c) {
         // 结果必须画在**独立、可换行**的面板里：塞进不换行的 #modsHint 时，
         //   长路径会被挤出可视区，看起来和"点了没反应"一模一样。
         c.ok(/id="modsBrowseResult"/.test(html), '★ 「浏览目录」有独立结果面板（长路径不会被挤没）');
-        c.ok(/mod-group-toggle/.test(html), '★ 分栏折叠三角（disclosure triangle）');
-        const settings = readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
+        // 折叠三角的样式在基础样式层（web/css/base.css），不在 HTML 骨架里
+        c.ok(/mod-group-toggle/.test(readHtmlAndStyles()), '★ 分栏折叠三角（disclosure triangle）');
+        const settings = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
         c.ok(/async function refreshModsList/.test(settings), '有 refreshModsList');
         // 绑定必须只在 init.js 一处，且不在 refreshModsList（会被重建冲掉 / 重复绑定）
-        c.ok(/getElementById\('modsBrowseBtn'\)\?\.addEventListener/.test(readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8')),
+        c.ok(/getElementById\('modsBrowseBtn'\)\?\.addEventListener/.test(readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8')),
             '★ 「浏览目录」在 init.js 绑一次（不随列表重建丢失）');
         c.ok(!/modsBrowseBtn[\s\S]{0,400}addEventListener/.test(settings),
             '★ settings.js 里不再重复绑定「浏览目录」');
         // 「浏览目录」要**真的去打开**文件夹（不只是列名字），失败才用列表兜底
-        const initSrc2 = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+        const initSrc2 = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
         c.ok(/modsBrowseBtn[\s\S]{0,2000}fetch\('\/api\/plugins\/open-folder'/.test(initSrc2),
             '★ 「浏览目录」先真去打开 mods/，再列内容兜底');
         c.ok(/\/api\/plugins/.test(settings), '列表数据来自服务端 /api/plugins');
@@ -556,6 +535,11 @@ async function caseModsCore(c) {
             '★ 前置区卡片不画拖拽把手（固定分区，不参与用户分栏）');
         c.ok(/modsPrereqOpen/.test(settings) && /modsPrereqBody/.test(settings),
             '★ 插件页前置区默认收起（标题可展开，拨开关重渲染后保持展开态）');
+        // 前置卡片挂在 #modsList **之外**（网格外的固定分区，见 refreshModsList 里"摘掉旧的再插"）。
+        //   事件只绑 #modsList 时，前置卡片上的 README / 设置 / 文件夹 / 删除按钮与开关
+        //   全都没有监听器 —— 用户实测："前置插件的 readme 和设置文件夹都点不动"。
+        c.ok(/getElementById\('modsPrereqBody'\)[\s\S]{0,200}bindModToggle\(root, hint\)[\s\S]{0,120}bindModCardButtons\(root, hint\)/.test(settings),
+            '★ 前置区卡片的按钮与开关也绑事件（它们不在 #modsList 里，只绑 box 会点了没反应）');
         c.ok(/after: Array\.isArray\(e\.manifest\.after\)/.test(modsLoader),
             '★ list() 带出 after（APK/手工目录也判得出前置）');
         c.ok(/elaina_mods_groups/.test(settings), '★ 分栏清单有持久化（与 store.js 的 DATA_KEYS 对应）');
@@ -635,17 +619,13 @@ async function caseModsCore(c) {
     }
 
     // ---- 1.3 端到端：扫描 / 解压 / 安全 / 卸载 ----
-    //
     // ★ 这一段的安装/卸载**全部在临时目录里做**，不碰仓库的 mods/。
-    //
     //   为什么必须隔离：用户自己的服务常常正跑着（占 4173），而它每次被请求
     //   /api/plugins 都会重新扫描插件目录 —— 于是会**抢走**测试刚放进去的 zip，
     //   表现为"这个检查时好时坏"（实测踩到：单独跑通过、与其它检查并发跑就失败）。
     //   用 MODS_DIR 环境变量（见 serve.mjs）把它指到临时目录，测试就完全隔离了。
-    //
     //   注意：上面 1.1（源码约定）与 1.2（插件本体）读的仍是**真实**的 mods/ ——
     //   那些是静态断言，不写文件，不存在争用。
-    //
     //   ⚠️ 这里**不要**往仓库的 MODS 写任何东西：写一次就会在仓库里留下
     //   demo-mod/ evil-mod/，而且要等到下次运行才被清掉（这个坑踩过两次）。
     const TEST_MODS = mkdtempSync(path.join(tmpdir(), 'elaina-mod-mods-'));
@@ -718,12 +698,24 @@ async function caseModsCore(c) {
         if (up) {
             // ★ 首个 /api/plugins 请求带**短重试**：服务"端口已开"到"插件清单生成完"
             //   之间有个小窗口，全套并发跑时首个请求可能撞上（实测偶发，单独跑从不出现）。
+            // 退出条件必须同时等到两件事：清单里**有** demo-mod，且它真的**装了样式**。
+            //   只等 id 出现的话，扫描把 manifest（含 styles）读进来与写入 index.json 之间
+            //   还有一段窗口 —— 并发跑时读到的 demo-mod 可能缺字段（实测偶发：
+            //   "manifest.json 被正确读取"与"styles 字段生效"同时红，单独跑从不出现）。
+            // 退出条件还必须包含 installResults：zip 安装结果与清单是**同一次扫描**产出的，
+            //   但只等 demo-mod 时可能在"装了但结果还没进响应"的那一刻停下 —— 后面那段
+            //   针对 evil-mod 的重试就白等了（实测并发下偶发：`恶意 zip 有安装结果回报` 红）。
             let res = null, body = null;
-            for (let i = 0; i < 10; i++) {
+            for (let i = 0; i < 20; i++) {
                 res = await fetch(`http://127.0.0.1:${PORT}/api/plugins`);
                 body = await res.json().catch(() => null);
-                if (res.status === 200 && body && body.ok
-                    && (body.plugins || []).some((p) => p.id === 'demo-mod')) break;
+                const demoNow = ((body && body.plugins) || []).find((p) => p.id === 'demo-mod');
+                const results = (body && body.installResults) || [];
+                const evilNow = results.find((r) => r && r.zip === 'evil-mod.zip' && typeof r.ok === 'boolean');
+                if (res.status === 200 && body && body.ok && demoNow
+                    && demoNow.name === '演示插件'
+                    && Array.isArray(demoNow.styles) && demoNow.styles.includes('style.css')
+                    && evilNow) break;
                 await wait(300);
             }
             c.ok(res.status === 200 && body && body.ok, 'GET /api/plugins 成功', 'HTTP ' + res.status);
@@ -750,24 +742,31 @@ async function caseModsCore(c) {
             c.ok(demo && Array.isArray(demo.styles) && demo.styles.includes('style.css'), 'styles 字段生效');
 
             // ★★ 恶意 zip 的结果要**单独重试获取**（2026-10 补）。
-            //
             //   实测踩到一次偶发失败：`files=undefined`、`恶意 zip 有安装结果回报` 也红。
             //   原因与上面首个 /api/plugins 那条注释说的是同一件事 ——
             //   "端口已开"到"插件清单（含 installResults）生成完"之间有个小窗口。
             //   上面那个重试循环的**退出条件**只等 `demo-mod` 出现在 plugins 里，
             //   而 installResults 是另算的；并发跑全套检查时服务端更忙，
             //   于是"plugins 有了、installResults 还没齐"就会漏读到 evil-mod 的结果。
-            //
             //   修法：单独为安装结果再等一会儿（同样带短重试）。
             //   为什么值得修而不是"重跑一次就好"：偶发红会训练人忽略失败，
             //   而这条断言恰恰是**路径穿越防护**的回归 —— 最不该被忽略的一类。
-            let evil = (body.installResults || []).find((r) => r.zip === 'evil-mod.zip');
+            // 判据是 "ok 字段存在" 而不是只判对象存在：对象可能是前面某次扫描的**残缺快照**
+            //   （并发跑时实测：对象在、但 ok/files 是 undefined）。
+            // 判据是 "ok 字段存在" 而不是只判对象存在（对象可能是残缺快照）。
+            // ★ 安装结果有**时间窗**（见 server/mods.mjs 的 installReport）：装成功后 zip 被删，
+            //   窗口一过就再也查不到 —— 并发跑时首个 /api/plugins 可能已把 evil-mod.zip 装完，
+            //   再刷新时 window 过期，结果永远等不到（实测 1/6 概率）。
+            //   所以这里"尽力等"，真正的安全结论交给下面的**磁盘事实**断言。
+            const evilDone = (r) => r && typeof r.ok === 'boolean';
+            const findEvil = (b) => ((b && b.installResults) || []).find((r) => r.zip === 'evil-mod.zip' && evilDone(r));
+            let evil = findEvil(body);
             if (!evil) {
-                for (let i = 0; i < 10 && !evil; i++) {
+                for (let i = 0; i < 20 && !evil; i++) {
                     await wait(300);
                     const again = await fetch(`http://127.0.0.1:${PORT}/api/plugins`)
                         .then((r) => r.json()).catch(() => null);
-                    evil = ((again && again.installResults) || []).find((r) => r.zip === 'evil-mod.zip');
+                    evil = findEvil(again);
                 }
             }
             c.ok(Boolean(evil), '恶意 zip 有安装结果回报');
@@ -794,8 +793,20 @@ async function caseModsCore(c) {
             c.ok(stillSame(path.join(ROOT, 'web', 'serve.mjs')), '★ serve.mjs 未被路径穿越覆盖');
             c.ok(stillSame(path.join(ROOT, 'web', 'index.html')), '★ index.html 未被路径穿越覆盖');
             c.ok(!existsSync(path.join(TEST_MODS, 'evil-mod', 'bad.exe')), '★ .exe 被拦下（不落盘）');
-            c.ok(evil && evil.ok && evil.files === 2, '恶意 zip 只装进 2 个合法文件（穿越/可执行被拦）',
-                evil ? 'files=' + evil.files : '');
+            // 只在有安装结果时断言条数：结果还没回报时这一条该红的是上面那句「有安装结果回报」，
+            //   不该让同一次偶发失败在两条断言上各记一笔（诊断时容易误以为有两处问题）。
+            if (evil && typeof evil.files === 'number') {
+                c.ok(evil.ok && evil.files === 2, '恶意 zip 只装进 2 个合法文件（穿越/可执行被拦）',
+                    'files=' + evil.files);
+            }
+            // ★ 与安装结果时间窗**无关**的磁盘事实：这几条才是路径穿越防护的可靠回归。
+            {
+                const evilDir = path.join(TEST_MODS, 'evil-mod');
+                const inside = existsSync(evilDir) ? readdirSync(evilDir) : [];
+                c.ok(!inside.includes('bad.exe'), '★ .exe 未落盘（以磁盘为准）', inside.join(','));
+                const okFiles = inside.filter((n) => /^(manifest\.json|index\.js)$/.test(n));
+                c.ok(okFiles.length === 2, '★ 恶意 zip 只落盘 2 个合法文件（以磁盘为准）', inside.join(','));
+            }
             c.ok(existsSync(path.join(TEST_MODS, 'evil-mod', 'index.js')), '★ mod 的 index.js 允许落盘（mod 本质就是代码）');
 
             // 清单
@@ -833,18 +844,15 @@ async function caseModsCore(c) {
             c.ok((await fetch(`http://127.0.0.1:${PORT}/js/mods.js`)).status === 200, 'mod 加载器脚本可被加载');
 
             // ==================== ★★ /mods/* 显式路由（2026-10 搬迁后新增）====================
-            //
             // 插件目录从 `web/mods/` 搬到**项目根** `mods/` 之后，`/mods/*` 不再由
             // 静态处理器"顺手"发出（web/ 是静态根，够不到上一级）—— 必须有一条显式路由。
             // 这一段钉住那条路由的**三件要紧事**，缺任何一件都会让插件"装了等于没装"：
-            //
             //   ① **真实 MIME**：插件会 fetch 自己的 panel.html（走插槽插进设置页），
             //      还有 .mjs / .css。一律 octet-stream 的话，配合 nosniff，
             //      浏览器会拒绝解析 HTML、拒绝执行脚本 —— 插件界面空白。
             //   ② **路径穿越防护**：/mods/../data/store.json 必须够不到
             //      （data/ 就在 mods/ 的隔壁，里面是 API Key 明文）。
             //   ③ 目录不给列表。
-            //
             // ⚠️ 这里**必须只挑测试临时目录里真实存在的文件**：本段把 MODS_DIR
             //    指向 TEST_MODS（为了不碰用户的真实插件目录），那里只有它自己造的
             //    elaina-avatar。所以不能用 galgame/index.js、live2d/panel.html 之类的
@@ -891,29 +899,13 @@ async function caseModsCore(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
-// 2. 插件 id 归一化 + 依赖可解析性 —— 钉住「资源包装了等于没装」这个真 bug。
-//
-// ── 这个 bug 长什么样（2026-09 实测踩到）────────────────────────────────
-//
-//   pack-assets 的产物名带版本号（`elaina-avatar-1.0.0.zip`），而旧逻辑
-//   直接拿 zip 文件名当插件 id → 装进 `mods/elaina-avatar-1.0.0/`。后果两条并发：
-//     ① 插件内部写死的资源 URL（`/mods/elaina-avatar/img/…`）404
-//        → 桌宠 / Galgame 显示不出人物；
-//     ② galgame/pet 声明 `after: ["elaina-avatar"]` 匹配不上实际 id
-//        → 依赖解析失效，加载顺序失去保证（ElainaAvatar 可能还没定义）。
-//
-//   为什么以前的测试没抓到：check-mods 测的是"目录已存在"的场景，
-//   而**打包 → 安装**这条链是两个模块各自的假设拼起来的 ——
-//   pack-assets 认为"文件名带版本号没问题"，mods.mjs 认为"文件名就是 id"，
-//   各自都对，合起来就错。这个用例专门覆盖那条接缝。
-//
-// 覆盖：① 带版本号的产物名装完 id 与目录都对；② after 依赖能匹配；
-//       ③ 修复前已装坏的目录仍能被识别（用户不用重装）；④ 不误伤正常名字。
-//
+// 2. 插件 id 归一化 + 依赖可解析性 —— 钉住「资源包装了等于没装」。
+// 成因：pack-assets 的产物名带版本号（`elaina-avatar-1.0.0.zip`），旧的安装逻辑直接拿 zip 文件名当
+//   id → 装进 `mods/elaina-avatar-1.0.0/`。后果：插件里写死的资源 URL 404；`after: ["elaina-avatar"]`
+//   匹配不上实际 id，加载顺序失去保证。
+// 旧测试没抓到的原因：打包与安装是两个模块各自的假设，各自都对、合起来就错 —— 本用例覆盖那条接缝。
 // 本用例自己用 createZip 造包，**不依赖 dist/**（那是构建产物、且被 gitignore），
 // 否则 CI 里没跑过 pack-assets 就会失败。
-// ────────────────────────────────────────────────────────────
 
 /** 造一个插件 zip：根目录直接放文件（与 pack-assets 的 mod 格式一致） */
 function makeModZip(entries) {
@@ -1056,7 +1048,6 @@ async function caseModId(c) {
         }
 
         // ---- 2.7 装载只认"完整的一段"：安装期的临时目录不能被当成已装插件 ----
-        //
         //   为什么必须有这一条：解压是**逐个文件**落盘的，而清单每次请求都重扫目录。
         //   若直接往 mods/<id>/ 里写，"目录已在、index.js 还没写完"的那一刻就会被
         //   扫进清单 —— 前端按清单去取 /mods/<id>/index.js 拿到 404，插件当场被判
@@ -1090,7 +1081,6 @@ async function caseModId(c) {
         }
 
         // ---- 2.8 默认关闭只认显式 true ----
-        //
         //   为什么必须钉住：`defaultEnabled` 的判据曾写成 `!== false`，作者漏写这一行
         //   就等于**默认打开** —— 装完即生效，用户连"要不要它"都没被问过，
         //   而 README 一直宣称"默认关闭，装完要手动开"。改判据时三处（server 扫描 /
@@ -1119,7 +1109,8 @@ async function caseModId(c) {
 
             // 三处实现同语义：任何一处回到 `!== false` 都会让两端口径分叉
             const modsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-            const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+            const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
             const serverSrc = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
             for (const [name, src] of [['web/js/mods.js', modsSrc], ['web/js/core.js', coreSrc], ['server/mods.mjs', serverSrc]]) {
                 c.ok(!/defaultEnabled\s*!==\s*false/.test(src),
@@ -1133,31 +1124,13 @@ async function caseModId(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 3. 插件身份与路径解析：目录改名后依然能识别、初始化、取到资源。
-//
-// ── 这个检查防的是什么（2026-09 用户实测踩到）────────────────────────────
-//
-// 用户把 web/mods/elaina-avatar/ 改名成 web/mods/1111/ 之后，桌宠与 Galgame
-// 都不工作了。根因是**插件身份有三个来源**，旧实现把它们当成同一个：
-//
-//   ① 目录名          —— 磁盘位置（用户随时会改）
-//   ② manifest.id     —— 服务端清单里的身份
-//   ③ register(name)  —— 插件脚本里声明的注册名（依赖方 after 引用的就是它）
-//
-// 旧实现 `pendingRegistrations.get(manifest.id)`：目录改名 + manifest 没写 id
-// 时 manifest.id 会等于目录名（`pet-renamed`），而脚本注册的是 `pet`
-// → **永远查不到 factory → 插件显示"已加载"却从不初始化**（界面毫无反应）。
-//
-// 现在：注册名是权威身份；插件系统维护「注册名 ↔ 目录」映射并按它查找；
-// 路径一律由系统算（host.assetUrl / host.require），插件不自己拼。
-//
-// ── 为什么不用真 DOM ────────────────────────────────────────────────────
-// 忠实模拟 DOM 需要实现 innerHTML 解析、querySelector 等一大堆东西，
-// 桩一薄就会把"插件加载失败"误报成产品缺陷（本检查的第一版就是这样）。
-// 所以这里**只测身份与路径解析**这一层：那是出问题的地方，也是纯逻辑。
-// ────────────────────────────────────────────────────────────
-
+// 插件身份有**三个来源**，旧实现把它们当成同一个：目录名（用户随时会改）/ manifest.id（服务端清单）/
+//   register(name)（依赖方 after 引用的就是它）。目录改名 + manifest 没写 id 时 manifest.id 等于目录名，
+//   而脚本注册的是原名 → 永远查不到 factory → 插件显示"已加载"却从不初始化。
+// 现在：注册名是权威身份，系统维护「注册名 ↔ 目录」映射，路径一律由系统算（host.assetUrl / host.require）。
+// 为什么不用真 DOM：忠实模拟需要 innerHTML 解析、querySelector 等一大堆，桩一薄就会把插件加载失败误报成
+//   产品缺陷。这里只测身份与路径解析这一层 —— 那是出问题的地方，也是纯逻辑。
 /** 造一个插件目录 */
 function putMod(root, dirName, manifest, script) {
     const d = path.join(root, dirName);
@@ -1192,6 +1165,25 @@ function makeModsSandbox(modsJs) {
     sandbox.window = sandbox;
     sandbox.globalThis = sandbox;
     const ctx = vm.createContext(sandbox);
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8'), ctx, { filename: 'mods-paths.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-graph.js'), 'utf8'), ctx, { filename: 'mods-graph.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-drag-sort.js'), 'utf8'), ctx, { filename: 'mods-drag-sort.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8'), ctx, { filename: 'mods-storage.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8'), ctx, { filename: 'mods-host-core.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8'), ctx, { filename: 'mods-loader.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-contributions.js'), 'utf8'), ctx, { filename: 'mods-contributions.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-services.js'), 'utf8'), ctx, { filename: 'mods-services.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8'), ctx, { filename: 'mods-slots.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8'), ctx, { filename: 'mods-summary.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8'), ctx, { filename: 'mods-deps.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8'), ctx, { filename: 'mods-capabilities.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8'), ctx, { filename: 'mods-load.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-enable.js'), 'utf8'), ctx, { filename: 'mods-enable.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8'), ctx, { filename: 'mods-load-one.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8'), ctx, { filename: 'mods-faults.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8'), ctx, { filename: 'mods-host.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8'), ctx, { filename: 'mods-forget.js' });
+    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8'), ctx, { filename: 'mods-api.js' });
     vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
     return sandbox;
 }
@@ -1300,17 +1292,13 @@ async function caseModIdentity(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 3b. 插件隔离与统一接口
-//
 // 插件是用户自行安装的第三方代码，质量与意图都不可控。这一层要钉住两件事：
 //   ① **边界**：插件的异常只能停在自己身上 —— 工厂抛错、插槽渲染抛错、
 //      事件回调抛错、清单里写外链脚本，都不能拖垮宿主与其它插件；
 //   ② **统一**：同一件事只有一个入口（插件设置、资源路径、错误出口），
 //      不再靠 window 上的私有全局名在宿主文件之间传递。
-//
 // 全部用临时目录里的自造插件，不读写本机 mods/ 实物。
-// ────────────────────────────────────────────────────────────
 
 /** 在临时目录写一个自造插件，返回可直接喂给 loadModsInSandbox 的清单条目 */
 function writeIsolationMod(root, id, indexJs, extra = {}) {
@@ -1327,7 +1315,20 @@ function writeIsolationMod(root, id, indexJs, extra = {}) {
 }
 
 async function caseModIsolation(c) {
-    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+    const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-contributions.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-services.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
 
     // ---- i0. 源码约定：路径校验 / 超时 / 生命周期 / 统一错误出口 ----
     {
@@ -1360,7 +1361,8 @@ async function caseModIsolation(c) {
     // ---- i1. 统一接口：插件设置入口不再靠 window 私有全局名 ----
     {
         const slotsSrc = readFileSync(path.join(WEB, 'js', 'host-slots.js'), 'utf8');
-        const settingsSrc = readFileSync(path.join(WEB, 'js', 'settings.js'), 'utf8');
+        const settingsSrc = readFileSync(path.join(WEB, 'js', 'plugins.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'settings.js'), 'utf8');
         const slotsCode = stripComments(slotsSrc);
         const settingsCode = stripComments(settingsSrc);
         c.ok(/registerSettingsOpener\(key, \{ open, close \}\)/.test(slotsSrc),
@@ -1483,29 +1485,22 @@ async function caseModIsolation(c) {
 }
 //
 // ── 这个检查防的是什么（2026-09 用户实测报的）────────────────────────────
-//
 // 用户贴出的真实日志：
-//
 //     [Mod] 加载完成：elaina-avatar=disabled galgame=ready pet=ready
 //     [Mod] 未就绪的插件：elaina-avatar=disabled
-//
 // 两个问题同时暴露：
-//
 //   ① **功能 bug**：`elaina-avatar`（公共立绘依赖）被禁用了，而依赖它的
 //      galgame / pet 却照样 `ready` —— 它们拿不到立绘，系统却认为一切正常。
 //      旧 findMissingDeps 只判断"清单里有没有这个 id"，**没看启用状态**。
 //      "装了但没启用"和"装了且启用"在它眼里是一样的。
-//
 //   ② **可读性 bug**：`elaina-avatar=disabled galgame=ready` 是机器视角的
 //      键值对。把这份日志丢给一个不了解本项目的 AI（或用户本人），
 //      既不知道 `disabled` 是好是坏，也看不出"前置没启用、依赖方却起来了"
 //      这个关键矛盾 —— 而那正是要排查的东西。
-//
 // ── 为什么用假 DOM ──────────────────────────────────────────────────────
 // 这里测的是**依赖判定与日志文案**（纯逻辑），不是 DOM 渲染。
 // 沙箱里 readyState 设为 'loading'，避免 mods.js 的 boot() 自动跑一次
 // 造成日志重复（第一版没注意，日志打了两遍）。
-// ────────────────────────────────────────────────────────────
 
 const WEB = path.join(ROOT, 'web');
 /**
@@ -1535,6 +1530,26 @@ const resolveUrlToDisk = (url) => {
  */
 async function loadModsInSandbox(store, opts = {}) {
     const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+    const MODS_LOADER_JS = readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8');
+    const MODS_SERVICES_JS = readFileSync(path.join(WEB, 'js', 'mods-services.js'), 'utf8');
+    const MODS_CONTRIBUTIONS_JS = readFileSync(path.join(WEB, 'js', 'mods-contributions.js'), 'utf8');
+    const MODS_SLOTS_JS = readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8');
+    const MODS_SUMMARY_JS = readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8');
+    const MODS_DEPS_JS = readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8');
+    const MODS_CAPABILITIES_JS = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8');
+    const MODS_LOAD_JS = readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8');
+    const MODS_ENABLE_JS = readFileSync(path.join(WEB, 'js', 'mods-enable.js'), 'utf8');
+    const MODS_LOAD_ONE_JS = readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8');
+    const MODS_FAULTS_JS = readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8');
+    const MODS_HOST_JS = readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8');
+    const MODS_FORGET_JS = readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8');
+    const MODS_API_JS = readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8');
+    const MODS_EXTRAS_JS = readFileSync(path.join(WEB, 'js', 'mods-host-extras.js'), 'utf8');
+    const MODS_STORAGE_JS = readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8');
+    const MODS_HOST_CORE_JS = readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
+    const MODS_DRAG_SORT_JS = readFileSync(path.join(WEB, 'js', 'mods-drag-sort.js'), 'utf8');
+    const MODS_GRAPH_JS = readFileSync(path.join(WEB, 'js', 'mods-graph.js'), 'utf8');
+    const MODS_PATHS_JS = readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8');
     // 诊断格式模块：真实页面里 diagnostics.js 排在 mods.js 之前加载
     // （见 index.html），mods.js 的输出格式依赖它。这里照实模拟，
     // 否则测的是"没有诊断模块时的回落路径"，与线上不一致。
@@ -1584,6 +1599,8 @@ async function loadModsInSandbox(store, opts = {}) {
         getItem: (k) => (m.has(k) ? m.get(k) : null),
         setItem: (k, v) => m.set(k, String(v)),
         removeItem: (k) => m.delete(k),
+        get length() { return m.size; },
+        key: (i) => Array.from(m.keys())[i] ?? null,
     };
     const mkEl = (tag = 'div') => ({
         tag, id: '', className: '', style: {}, dataset: {}, children: [],
@@ -1665,6 +1682,26 @@ async function loadModsInSandbox(store, opts = {}) {
     vm.runInContext(DIAG_JS, ctx, { filename: 'diagnostics.js' });
     // 把测试给定的初值灌进 Store（模拟 data/ 里已有的键）
     for (const [k, v] of m) sandbox.window.Store.setItem(k, v);
+    vm.runInContext(MODS_PATHS_JS, ctx, { filename: 'mods-paths.js' });
+    vm.runInContext(MODS_GRAPH_JS, ctx, { filename: 'mods-graph.js' });
+    vm.runInContext(MODS_DRAG_SORT_JS, ctx, { filename: 'mods-drag-sort.js' });
+    vm.runInContext(MODS_STORAGE_JS, ctx, { filename: 'mods-storage.js' });
+    vm.runInContext(MODS_HOST_CORE_JS, ctx, { filename: 'mods-host-core.js' });
+    vm.runInContext(MODS_EXTRAS_JS, ctx, { filename: 'mods-host-extras.js' });
+    vm.runInContext(MODS_LOADER_JS, ctx, { filename: 'mods-loader.js' });
+    vm.runInContext(MODS_CONTRIBUTIONS_JS, ctx, { filename: 'mods-contributions.js' });
+    vm.runInContext(MODS_SERVICES_JS, ctx, { filename: 'mods-services.js' });
+    vm.runInContext(MODS_SLOTS_JS, ctx, { filename: 'mods-slots.js' });
+    vm.runInContext(MODS_SUMMARY_JS, ctx, { filename: 'mods-summary.js' });
+    vm.runInContext(MODS_DEPS_JS, ctx, { filename: 'mods-deps.js' });
+    vm.runInContext(MODS_CAPABILITIES_JS, ctx, { filename: 'mods-capabilities.js' });
+    vm.runInContext(MODS_LOAD_JS, ctx, { filename: 'mods-load.js' });
+    vm.runInContext(MODS_ENABLE_JS, ctx, { filename: 'mods-enable.js' });
+    vm.runInContext(MODS_LOAD_ONE_JS, ctx, { filename: 'mods-load-one.js' });
+    vm.runInContext(MODS_FAULTS_JS, ctx, { filename: 'mods-faults.js' });
+    vm.runInContext(MODS_HOST_JS, ctx, { filename: 'mods-host.js' });
+    vm.runInContext(MODS_FORGET_JS, ctx, { filename: 'mods-forget.js' });
+    vm.runInContext(MODS_API_JS, ctx, { filename: 'mods-api.js' });
     vm.runInContext(MODS_JS, ctx, { filename: 'mods.js' });
     const Mods = sandbox.window.ElainaMods;
     const results = await Mods.loadAll();
@@ -1695,7 +1732,6 @@ async function caseModDeps(c) {
         return;
     }
     // ---- 4.0 失败隔离：坏插件不影响好插件，且自己会被自动停用 ----
-    //
     // 这段只做**静态 + 结构**断言：真正的运行期验证放在下面的沙箱用例里。
     // 为什么值得单列：这三条是"一个坏插件会不会毁掉整个插件系统"的全部判据，
     // 而且它们都属于"删掉一行代码也照样跑得通"的那种，最容易悄悄回归。
@@ -1732,7 +1768,6 @@ async function caseModDeps(c) {
         // ④ 「重新启用」不能让坏插件蒙混过关 —— 这曾经是个真 bug：
         //    setEnabled(true) 里判断"脚本已注入"就直接 activateContributions(),
         //    再把状态强行改成 ready，于是坏插件点几次就"启动成功"了（功能还是坏的）。
-        //
         // ★ 判据必须**先剥注释**：上面那段说明本身写着旧写法
         //   `fresh.state !== 'error') fresh.state = 'ready'`，不剥的话
         //   正则会把注释命中，断言永远红（"注释污染判据"，本项目踩过多次）。
@@ -1753,7 +1788,6 @@ async function caseModDeps(c) {
     }
 
     // ---- 4.1 已启用的依赖方 + 前置停关 → 加载时自动把前置带上（不再拒绝）----
-    //
     //   前置"装了但没启用"由 pullUpPrerequisites / ensurePrerequisites 接管：
     //   打开依赖方 = 要它完整可用，前置不再要求用户自己去逐个开。
     //   "拉不起来才拒绝"（未安装 / 前置坏）的用例在「前置插件生命周期」里
@@ -1847,15 +1881,11 @@ async function caseModDeps(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 4b. 前置插件生命周期：启动自动拉起 / 拉不起来拒绝启动。
-//
 // ── 为什么单独立一个用例、且不依赖本机插件 ──────────────────────
-//
 // 这里测的是"谁依赖谁、谁坏了"这些**输入形状**决定的行为，用真实插件
 // 造不出全组合（比如"前置装了但工厂抛错"）。所以插件全部写进临时目录、
 // 清单由用例自定义（loadModsInSandbox 的 opts），本机 mods/ 一概不碰。
-// ────────────────────────────────────────────────────────────
 
 /** 往临时目录写一个最小插件，返回可直接进自定义清单的条目 */
 function writeDepMod(root, id, after, broken) {
@@ -2026,7 +2056,8 @@ async function caseModPrereqLifecycle(c) {
                 '★ 依赖方已关 → 现在可以关前置了（顺序：先关用它的，再关被用的）');
 
             // 设置页两个入口（停用/卸载）的接线：查到依赖方 → 弹窗指路「先关谁」
-            const setSrc = stripComments(readFileSync(path.join(WEB, 'js', 'settings.js'), 'utf8'));
+            const setSrc = stripComments(readFileSync(path.join(WEB, 'js', 'plugins.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'settings.js'), 'utf8'));
             const uses = [...setSrc.matchAll(/dependentsOf\(/g)];
             c.ok(uses.length >= 2, '★ 开关与删除两个入口都接了 dependentsOf', String(uses.length));
             let guarded = 0;
@@ -2045,19 +2076,10 @@ async function caseModPrereqLifecycle(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 4c. 脚本加载的**瞬时失败**：必须重试，不能一次失败就写盘停用。
-//
-// ── 为什么单独立一条 ────────────────────────────────────────────────────
-// 用户实测：插件刚装完就报「加载失败 · 已自动停用 · 脚本加载失败：/mods/xxx/index.js」，
-//   而**同一个 URL 几十秒后就能正常加载**（日志里有两条：失败一条、成功一条）。
-//   这不是插件写错，是一次请求抖动（文件刚写完被占用 / 长连接被关 / 失败结果被缓存）。
-//   加载器把它当永久失败 → 写盘停用 + 红色卡片，用户只能自己再把开关打开。
-//
-// 判据分两侧：
-//   · 抖动（前 N 次失败、之后正常）→ 重试后 ready，**不写失败记录**；
-//   · 真坏（每次都失败）→ 重试到上限后 error + 自动停用（重试不能变成"永不失败"）。
-// ────────────────────────────────────────────────────────────
+// 现象：插件刚装完就报「加载失败 · 已自动停用」，而同一个 URL 几十秒后就能正常加载 —— 这不是插件写错，
+//   是一次请求抖动（文件刚写完被占用 / 长连接被关 / 失败结果被缓存）。
+// 判据：抖动（前 N 次失败、之后正常）→ 重试后 ready 且不写失败记录；真坏 → 重试到上限后 error + 自动停用。
 
 async function caseModScriptRetry(c) {
     const tmp = tempDirFactory('elaina-retrycheck-');
@@ -2118,29 +2140,18 @@ async function caseModScriptRetry(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 5. mod 的**宿主能力**——插槽注册、注册项回收（停用/卸载）、服务端半边。
-//
-// ── 为什么这些必须常驻检查 ────────────────────────────────────────────────
-//
-// 这一层是 Live2D 等扩展从宿主搬进 mod 的前提，它有两个"错了也不报错"的特征：
-//
-//   ① **注册了但没挂上**：插槽名写错、挂载点在 DOM 里不存在、点击没人管 ——
-//      表现都是"界面没变化"，而控制台可能一声不响。
-//   ② **停用了但没收回**：插槽入口还在、样式还在生效、system 提示词还在往
-//      模型里灌、事件订阅还在响应。用户以为关掉了，实际没有。
-//      这两种都是本项目反复踩过的类型（"装了等于没装"），所以要用真浏览器、
-//      真服务端把它钉住，而不是只做源码字符串匹配。
-//
-// 三段：
+// 这一层有两个"错了也不报错"的特征，所以要用真浏览器、真服务端钉住，而不是只做源码字符串匹配：
+//   ① **注册了但没挂上**：插槽名写错、挂载点不存在、点击没人管 —— 表现都是"界面没变化"；
+//   ② **停用了但没收回**：插槽入口还在、样式还生效、提示词还在灌、事件还在响应。
+// 三段：源码约定 → 服务端半边 → 浏览器（真挂载 / 真回收 / 重新启用不重跑工厂）。
 //   1. 源码约定（快速失败，先跑）
 //   2. 服务端半边：声明白名单 / 撞名拒绝 / 上传目录按二进制返回 / 需重启上报
 //   3. 浏览器：插槽真的挂上了、停用真的收回、重新启用不重跑工厂
-// ────────────────────────────────────────────────────────────
 
 /** 本次检查用到的临时 mod 前缀 —— 清理与清单过滤都以它为准 */
 const TMP_PREFIX = 'zz-check-';
-const tmpMods = ['zz-check-api', 'zz-check-badapi', 'zz-check-collide', 'zz-check-late', 'zz-check-slots', 'zz-check-tpl'];
+const tmpMods = ['zz-check-api', 'zz-check-badapi', 'zz-check-collide', 'zz-check-late', 'zz-check-slots', 'zz-check-tpl', 'zz-check-prereq'];
 
 /** 写一个只含前端半边的临时 mod */
 function writeFrontMod(id, manifestExtra, indexJs, styleCss) {
@@ -2190,6 +2201,76 @@ function findStarterDir() {
     throw new Error('找不到插件骨架目录：skills/*/assets/mod-starter');
 }
 
+/**
+ * 服务端半边的“启用状态 / 需重启”门禁（纯函数，起临时目录，不依赖真实插件与浏览器）。
+ *
+ * 钉住三个曾经出过问题、而且很容易被后续重构碰回去的点：
+ *   ① 停用的插件**不装载**服务端半边（否则 /api/live2d 之类停用后还活着）；
+ *   ② 总开关关闭时任何插件服务端路由都不装载；
+ *   ③ status() 不把“已装载成功”的插件误报为“需重启”（signature 必须同形状比较）。
+ */
+async function caseModServerGate(c) {
+    const ok = (cond, label, detail) => c.ok(cond, label, detail);
+    const tmp = mkdtempSync(path.join(tmpdir(), 'elaina-modgate-'));
+    const modsDir = path.join(tmp, 'mods');
+    const writeMod = (id, { server = null, defaultEnabled = false } = {}) => {
+        const dir = path.join(modsDir, id);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+            id, name: id, entry: 'index.js', defaultEnabled, ...(server ? { server } : {}),
+        }, null, 2));
+        writeFileSync(path.join(dir, 'index.js'), 'void 0;');
+        if (server) {
+            writeFileSync(path.join(dir, 'server.mjs'),
+                `export function register(ctx) { ctx.route('GET', '/api/${id}/ping', (req, res) => ctx.json(res, 200, { ok: true })); }`);
+        }
+    };
+    try {
+        writeMod('zz-gate-enabled', { server: { entry: 'server.mjs', routes: ['/api/zz-gate-enabled'], capabilities: ['route-register'] } });
+        writeMod('zz-gate-disabled', { server: { entry: 'server.mjs', routes: ['/api/zz-gate-disabled'], capabilities: ['route-register'] } });
+        writeMod('zz-gate-default', { defaultEnabled: true, server: { entry: 'server.mjs', routes: ['/api/zz-gate-default'], capabilities: ['route-register'] } });
+        // 与 scanAndSync/buildPluginList 给出的条目同形：顶层必须带 server / defaultEnabled，
+        //   否则 loadAll 读不到声明，测试会测了个空气。
+        const installed = ['zz-gate-enabled', 'zz-gate-disabled', 'zz-gate-default'].map((id) => ({
+            id, dir: id, ...JSON.parse(readFileSync(path.join(modsDir, id, 'manifest.json'), 'utf8')),
+        }));
+        const hostRoutePrefixes = ['/api/store', '/api/plugins'];
+
+        const ms = createModServer({ modsDir, hostRoutePrefixes, jsonResponse() {}, readJsonBody() {}, log() {} });
+        const isEnabled = (id, entry) => (id === 'zz-gate-enabled' ? true
+            : id === 'zz-gate-disabled' ? false
+                : Boolean(entry && entry.defaultEnabled === true));
+        await ms.loadAll(installed, isEnabled);
+        const byId = Object.fromEntries(ms.status(installed).mods.map((m) => [m.id, m]));
+        ok(byId['zz-gate-enabled'] && byId['zz-gate-enabled'].ok === true,
+            '启用插件装载服务端半边', JSON.stringify(byId['zz-gate-enabled']));
+        ok(byId['zz-gate-default'] && byId['zz-gate-default'].ok === true,
+            '未写开关时 defaultEnabled=true 照常装载', JSON.stringify(byId['zz-gate-default']));
+        ok(byId['zz-gate-disabled'] && byId['zz-gate-disabled'].ok === false && byId['zz-gate-disabled'].enabled === false,
+            '★ 停用的插件不装载服务端半边（停用要真的停用）', JSON.stringify(byId['zz-gate-disabled']));
+        const restart = ms.status(installed).needsRestart || [];
+        ok(restart.length === 0, '★ 已装载成功的插件不被误报“需重启”（signature 同形状比较）', JSON.stringify(restart));
+        const routes = ms._routes().map((r) => r.prefix);
+        ok(routes.includes('/api/zz-gate-enabled/ping') && routes.includes('/api/zz-gate-default/ping')
+            && !routes.includes('/api/zz-gate-disabled/ping'),
+            '★ 启用/默认的接口注册了，停用的没注册', JSON.stringify(routes));
+
+        const ms2 = createModServer({ modsDir, hostRoutePrefixes, jsonResponse() {}, readJsonBody() {}, log() {} });
+        await ms2.loadAll(installed, () => false);
+        ok(ms2._routes().length === 0, '★ 总开关关闭时任何插件服务端路由都不装载', JSON.stringify(ms2._routes()));
+
+        const serveSrc = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
+        ok(/modServer\.loadAll\(r\.installed,\s*isEnabled\)/.test(serveSrc),
+            '★ serve.mjs 把启用状态传给 loadAll（不是只停前端）');
+
+        const modsSrc = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
+        ok(!/async\s+function\s+writeIndexFile\s*\(/.test(modsSrc),
+            'mods.mjs 不再保留自递归的 writeIndexFile 空壳');
+    } finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
 async function caseModHostApi(c) {
     /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
        本地没有这些插件是**正常状态**，跳过而不是判红。 */
@@ -2200,10 +2281,12 @@ async function caseModHostApi(c) {
     // ---- 5.1 插槽与"注册即副作用"：源码约定 ----
     {
         const modsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-        const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
+        const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
         const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
+        const voiceSrc = readFileSync(path.join(ROOT, 'web', 'js', 'composer.js'), 'utf8')
+        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'voice.js'), 'utf8');
         const l2dSrc = readFileSync(path.join(ROOT, 'mods', 'live2d', 'index.js'), 'utf8');
         const fsSrc = readFileSync(path.join(ROOT, 'scripts', 'frontend-sources.mjs'), 'utf8');
         const slotsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'host-slots.js'), 'utf8');
@@ -2313,14 +2396,12 @@ async function caseModHostApi(c) {
         const fe = readFrontend();
         // 判据同样改成"与位置无关"：只要真的收到了某个插件的源码文件即可。
         // （写死 `web/mods/…` 会在下次搬迁时又变成假失败 —— 这次搬迁就是例子。）
-        //
         // ★★ 2026-10 二次修：这条**又一次**因为写死目录名而假失败 ——
         //   上一版虽然嘴上说"与位置无关"，实现里却仍然钉着 `mods/galgame/index.js`，
         //   而磁盘上的真实目录是 `galgame-1.0.0`（打包产物名带版本号，
         //   server/mods.mjs 会把它归一化成 id=galgame、dir=galgame-1.0.0）。
         //   于是这条断言在**任何**用带版本号目录安装的环境里都红，
         //   而它想说的其实只是"readFrontend() 不是空串"。
-        //
         //   这次真的按语义判：**从清单里取一个真实存在的插件目录**，
         //   再确认它的 index.js 出现在 readFrontend() 的结果里。
         //   这样无论目录叫 galgame 还是 galgame-1.0.0、无论将来怎么改名都不会假失败，
@@ -2351,7 +2432,6 @@ async function caseModHostApi(c) {
     let browser = null;
 
     // ---- 临时 mod（必须在服务启动**之前**写好）----
-    //
     // ★ 先清一遍再写：上一次运行如果是**被强杀**的（调试时用 `| Select-Object -First N`
     //   截断输出就会提前掐掉 node，或 Ctrl+C），清理没跑完，残留的临时 mod 会被这次
     //   服务在启动时装载 —— 于是"运行中新装的插件需要重启"这类断言会以**相反**的结果
@@ -2360,11 +2440,9 @@ async function caseModHostApi(c) {
 
     // ★ 把**真正的骨架目录**也装一遍（改 id、打开开关），验证"复制骨架就能用"。
     //   骨架现住在插件开发 skill 里：skills/<技能>/assets/mod-starter/（当前是 skills/插件开发指南/）。
-    //
     //   为什么值得单独验：模板是给人复制的交付物，而"语法合法 + manifest 是 JSON"
     //   不等于"装上去真的有反应" —— 恰恰是模板里的 API 名写错、插槽名写错这类问题
     //   只有真装一次才会暴露。检查脚本替用户先撞一遍。
-    //
     //   找不到骨架时**在用例里**抛：服务与浏览器都还没起，finally 仍然把临时目录收掉。
     const TPL_ID = 'zz-check-tpl';
     const src = findStarterDir();
@@ -2467,6 +2545,21 @@ async function caseModHostApi(c) {
         });
     })();`,
             '.zz-slot-test{color:red}');
+
+        // ---- 前置扩展区的卡片（挂在 #modsList **之外**）----
+        // 它注册一个 settings.modal，让卡片上出现「设置」齿轮；
+        // 再放一个 README，用来点开说明弹窗。hidden:true → 进「前置扩展」区。
+        writeFrontMod('zz-check-prereq', { defaultEnabled: true, hidden: true },
+            `(function () {
+        window.ElainaMods.register('zz-check-prereq', function (host) {
+            host.slot('settings.modal', {
+                id: 'zz-check-prereq', label: '前置自检', title: '前置自检设置',
+                render: function (c) { c.innerHTML = '<div id="zzPrereqSettingsPanel">PREREQ-SETTINGS-OK</div>'; },
+            });
+            return {};
+        });
+    })();`);
+        writeFileSync(path.join(MODS, 'zz-check-prereq', 'README.md'), '# 前置自检\n\nPREREQ-README-OK\n');
 
         child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
             cwd: ROOT,
@@ -2794,6 +2887,69 @@ async function caseModHostApi(c) {
                     && tplOff.msgBtns === 0 && tplOff.styleDisabled === true,
                     '★【模板】停用后五处贡献全部收回（模板自己不留残留）', JSON.stringify(tplOff));
 
+                // ---- ★ 前置扩展区的卡片必须真的能点 ----
+                //   前置卡片挂在 #modsList **之外**（网格外的固定分区），事件只绑 #modsList 时
+                //   卡片上的 README / 设置 / 文件夹 / 开关全都没有监听器 ——
+                //   用户实测："前置插件的 readme 和设置文件夹都点不动"。
+                await page.evaluate(async () => {
+                    openSettings();
+                    switchSettingsTab('tab-mods');
+                    await refreshModsList();
+                    const b = document.getElementById('modsPrereqBody');
+                    if (b && b.classList.contains('hidden')) document.getElementById('modsPrereqToggle').click();
+                });
+                await page.waitForTimeout(500);
+                const preUi = await page.evaluate(async () => {
+                    const card = document.querySelector('.mod-prereq .mod-card[data-mod-id="zz-check-prereq"]');
+                    const out = { card: Boolean(card) };
+                    if (!card) return out;
+                    // README
+                    card.querySelector('.mod-readme-btn').click();
+                    await new Promise((r) => setTimeout(r, 400));
+                    const ov = document.getElementById('modReadmeOverlay');
+                    out.readme = !ov.classList.contains('hidden') && /PREREQ-README-OK/.test(ov.innerText);
+                    ov.classList.add('hidden');
+                    // 设置齿轮（fixture 注册了 settings.modal）
+                    const gear = card.querySelector('.mod-opensettings');
+                    out.gear = Boolean(gear);
+                    if (gear) {
+                        gear.click();
+                        await new Promise((r) => setTimeout(r, 400));
+                        out.settings = Boolean(document.getElementById('zzPrereqSettingsPanel'));
+                        document.querySelectorAll('.modal-overlay').forEach((o) => o.classList.add('hidden'));
+                    }
+                    // 文件夹：拦住请求，避免真的弹出资源管理器
+                    const of = card.querySelector('.mod-openfolder');
+                    out.folderBtn = Boolean(of);
+                    if (of) {
+                        const orig = window.fetch;
+                        window.fetch = function (url) {
+                            if (String(url).includes('/api/plugins/open-folder')) {
+                                return Promise.resolve(new Response(JSON.stringify({ ok: true, path: 'X:/fake' }),
+                                    { status: 200, headers: { 'content-type': 'application/json' } }));
+                            }
+                            return orig.apply(this, arguments);
+                        };
+                        of.click();
+                        await new Promise((r) => setTimeout(r, 400));
+                        out.folderHint = document.getElementById('modsHint').textContent;
+                        window.fetch = orig;
+                    }
+                    // 开关：这个前置没有任何依赖方，可以安全停用
+                    const tg = card.querySelector('.mod-toggle');
+                    tg.checked = false;
+                    tg.dispatchEvent(new Event('change'));
+                    await new Promise((r) => setTimeout(r, 1200));
+                    const st = window.ElainaMods.list().find((m) => m.id === 'zz-check-prereq');
+                    out.toggleWorked = Boolean(st) && st.enabled === false;
+                    return out;
+                });
+                c.ok(preUi.card, '★ 前置区卡片出现在 #modsList 之后（固定分区）', JSON.stringify(preUi));
+                c.ok(preUi.readme === true, '★ 前置区卡片的「README」按钮能打开说明弹窗（事件已挂上）', JSON.stringify(preUi));
+                c.ok(preUi.gear === true && preUi.settings === true, '★ 前置区卡片的「设置」齿轮能打开插件设置窗', JSON.stringify(preUi));
+                c.ok(preUi.folderBtn === true && /已打开/.test(preUi.folderHint || ''), '★ 前置区卡片的「文件夹」按钮有响应', JSON.stringify(preUi));
+                c.ok(preUi.toggleWorked === true, '★ 前置区卡片的开关能拨动（事件已挂上）', JSON.stringify(preUi));
+
                 console.log('  页面错误:', pageErrors.length ? pageErrors.slice(0, 3).join(' | ') : '(无)');
             } finally {
                 await ctxB.close();
@@ -2810,16 +2966,12 @@ async function caseModHostApi(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 6. 端到端：真实服务 + 真实 zip 安装，验证用户报的两个症状都修好了。
-//
 // 两段：
 //   ① 先在临时目录里用真实的 createModManager 走"装带版本号的 zip"这条链
 //   ② 再起真实服务，对真实的 mods/ 断言清单与资源可达
 //      （第一段能隔离，第二段不能：要验的正是"用户真实装的那套插件能不能加载"）
-//
 // 末尾还有第三段：安卓侧的原生实现（页内用 Capacitor Filesystem 实现同一套接口）。
-// ────────────────────────────────────────────────────────────
 
 /**
  * 内存版 Capacitor Filesystem —— 尽量贴近真实语义。
@@ -2881,9 +3033,7 @@ async function caseModE2E(c) {
     let child = null;
 
     try {
-        // ============================================================
         // 6.1 安装链 —— 模拟用户从 Releases 下载带版本号的 zip 丢进 mods/
-        // ============================================================
         const modsDir = newDir();
         const zip = createZip([
             { name: 'manifest.json', data: Buffer.from(JSON.stringify({
@@ -2928,9 +3078,7 @@ async function caseModE2E(c) {
         c.ok(g && g.after.every((d) => ids.has(d)),
             '★ galgame 的 after 能解析（依赖不再失效）', g ? JSON.stringify(g.after) : '');
 
-        // ============================================================
         // 6.2 真实服务 —— 对真实 mods/ 断言清单与资源可达
-        // ============================================================
         const DATA_DIR = newDir();
         const LOG_DIR = newDir();
         const PORT = await freePort();
@@ -2998,21 +3146,19 @@ async function caseModE2E(c) {
             await wait(300);
         }
 
-        // ============================================================
         // 6.3 ★ 安卓侧插件可拆装（2026-10 用户要求："安卓我也要插件可拆装
         //   而不是封装在 apk 安装包里面"）
-        //
         // 电脑版的安装/卸载走服务端（上面两段已覆盖）。安卓版**没有服务端** ——
         // 它由 core.js 的 nativePluginsFetch 在页内用 Capacitor Filesystem
         // 实现同一套接口语义。这一段把那条**原生链路**真的跑一遍：
         //   安装 → 列表 → 删除 → 列表
-        //
         // 为什么值得单独测：两端各有一套实现（server/mods.mjs 与 core.js），
         // 而 APK 上没有服务端可对照 —— 原生这条链断了**不会有任何报错**，
         // 只表现为"点了上传安装没反应"或"删了还在"。
-        // ============================================================
         {
-            const core = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+            const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-native.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
 
             const memFs = makeMemFs();
             const sandbox = {
@@ -3077,14 +3223,11 @@ async function caseModE2E(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 技能（skills）：与插件平行的一套，扫描结果必须永远是"资料"
-//
 // 为什么单列这一段：技能是**给 AI 的文本资料**，插件是**扩展应用的代码** ——
 //   两者混同的后果很具体："装一个 zip"就变成"给自己发执行能力"。
 //   前端注册表（agent-ops.js）只认 `kind`：`knowledge` 永远没有 schema、不能 invoke。
 //   所以这里守的是**数据面**：`skillManager.scan()` 的每一项都必须带 kind:'knowledge'。
-// ────────────────────────────────────────────────────────────
 async function caseSkills(c) {
     const root = mkdtempSync(path.join(tmpdir(), 'elaina-skills-'));
     const skillsDir = path.join(root, 'skills');
@@ -3138,15 +3281,12 @@ async function caseSkills(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 仓库自带的「制作插件」技能：入口必须**短**，细则按需加载
-//
 // 技能是随每轮对话一起进能力索引的（Agent 得先知道"有这么一份资料"）。
 //   若把规范全部写进 SKILL.md，每句闲聊都白付一次上下文。所以这里钉住三件事：
 //   ① 入口存在、frontmatter 完整、kind 仍是 knowledge（边界不变）；
 //   ② 入口**体积有上限**（超过说明细则写回入口里了）；
 //   ③ 入口里给出的章节文件名**都真的存在**（渐进加载不能指向不存在的文件）。
-// ────────────────────────────────────────────────────────────
 async function caseModAuthoringSkill(c) {
     const SKILL_DIR = path.join(ROOT, 'skills', 'mod-authoring-guide');
     const ENTRY = path.join(SKILL_DIR, 'SKILL.md');
@@ -3201,19 +3341,14 @@ async function caseModAuthoringSkill(c) {
     rmSync(emptyMods, { recursive: true, force: true });
 }
 
-// ────────────────────────────────────────────────────────────
 // 入口：按命令行参数过滤用例（便于只跑其中一段）
-// ────────────────────────────────────────────────────────────
 
-// ────────────────────────────────────────────────────────────
 // 手机端 bootstrap 的 mod 服务端半边（与 serve.mjs 同构的那一半）
-//
 // 布局照 sync-web 的产物形态（bootstrap.mjs + server/<共享模块> 复制进临时
 // 目录 —— 仓库里 web/nodejs/ 下没有 server/ 子目录）；数据目录 <tmp>/elaina-data
 // 与插件根 <tmp>/mods 共用一个 <tmp>（bootstrap 只认 --data-dir，插件根是
 // path.resolve(dataDir, '..', 'mods')，放错位置会"装载 0 个插件"而检查假绿）。
 // 夹具插件现场生成（manifest + 十来行 server.mjs），不进项目 mods/ 目录。
-// ────────────────────────────────────────────────────────────
 
 /** 组装并拉起一个临时 bootstrap：返回 { base, out, ping, stop }。ping 等到 modsLoaded 有结论。 */
 async function startBootstrapMods(c, TMP) {
@@ -3295,7 +3430,9 @@ async function startBootstrapMods(c, TMP) {
                 if (res.ok) {
                     const info = await res.json();
                     if (info.modsLoaded === true) return { base, info };
-                    return { base, info: null };   // 字段不存在 = 本版无装载能力，返回让用例报警
+                    // 字段存在但还没置 true = 服务已监听、装载还在跑。必须**继续等**，
+                    //   当成"本版无装载能力"会偶发红灯（失败信息里只有一行 listening 日志，
+                    //   看不出在等什么）。真正的"没有装载能力"由下面的超时返回表达。
                 }
             } catch { /* 继续轮询 */ }
             await wait(150);
@@ -3574,7 +3711,6 @@ async function caseSharedClosure(c) {
         : []);
 
     // Node 18 之后才有的 API 黑名单（nodejs-mobile 是 v18.20.4，F-29）。
-    //
     // ★★ 从 node: 内置模块**解构出不存在的新 API** 也在这里拦：
     //    zlib.crc32 是 Node 20.15+ 才有的，而 zip.mjs 曾从 'node:zlib' 解构它 ——
     //    本地（Node 24）跑得好好的，一进 :node 子进程就
@@ -3672,6 +3808,32 @@ async function caseSharedClosure(c) {
     }
 }
 
+/**
+ * 旧插件 localStorage → host.storage 的一次性迁移。
+ * 只搬已知插件前缀；宿主设置/密钥键绝不能跟着进插件存储。
+ */
+async function caseLegacyStorageMigration(c) {
+    const r = await loadModsInSandbox({
+        'elaina_pet_pos': '12px,34px',
+        'elaina_pet_proactive': '1',
+        'elaina_galgame_bg': 'snow',
+        'galgame.live2d.resize': '{"w":1}',
+        'live2d.scale': '1.2',
+        'elainachat_open_api_secrets': '{"k":"v"}',
+    }, { indexPlugins: [] });
+    r.Mods.migrateLegacyStorage();
+    const raw = r.storeGet('elaina_mod_storage');
+    const all = raw ? JSON.parse(raw) : {};
+    c.ok(all.pet && all.pet.pos === '12px,34px', '★ pet 的旧 localStorage 键迁进 host.storage（短键）');
+    c.ok(all.pet && all.pet.proactive === '1', 'pet 的开关值原样保留');
+    c.ok(all.galgame && all.galgame.bg === 'snow', 'galgame 的旧前缀键迁进 host.storage（短键）');
+    c.ok(all.galgame && all.galgame['galgame.live2d.resize'] === '{"w":1}',
+        'galgame.live2d.* 全键迁移（舞台读的是全键）');
+    c.ok(all.galgame && all.galgame['live2d.scale'] === '1.2', '更早的 live2d.* 键也迁（交给插件自身再迁移）');
+    c.ok(!JSON.stringify(all).includes('open_api_secrets'),
+        '★ 宿主设置/密钥键不会被误搬进插件存储');
+}
+
 const only = process.argv[2];
 const allCases = [
     { name: '插件系统核心（扫描 / 解压 / 清单 / 安全）', fn: caseModsCore },
@@ -3682,6 +3844,8 @@ const allCases = [
     { name: '前置插件生命周期', fn: caseModPrereqLifecycle },
     { name: '脚本加载重试', fn: caseModScriptRetry },
     { name: '插件宿主能力（插槽 / 回收 / 服务端半边）', fn: caseModHostApi },
+    { name: '旧 localStorage 迁移到 host.storage', fn: caseLegacyStorageMigration },
+    { name: '服务端半边启用门禁（停用 / 总开关 / 需重启）', fn: caseModServerGate },
     { name: '技能扫描与清单（kind 永远是 knowledge）', fn: caseSkills },
     { name: '制作插件技能（入口短、细则按需加载）', fn: caseModAuthoringSkill },
     { name: '端到端（真实服务 + 真实 zip）', fn: caseModE2E },

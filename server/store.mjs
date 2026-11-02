@@ -1,15 +1,10 @@
-// ============================================================================
 //  数据存储层：把运行时产生的数据分类落到 data/ 下
-// ============================================================================
-//
 //  为什么要有这一层
-//  ----------------
 //  原来所有跨设备数据都挤在 data/store.json 一个文件里（12 个键、聊天记录占 34%、
 //  人设卡占 55%）。三个问题：
 //    1. 一个文件写坏 = 全部数据一起丢；
 //    2. 人设卡/聊天记录没法单独分享或备份；
 //    3. 用户看不出"哪些文件是我的数据"。
-//
 //  现在按用途分文件，**人设卡与聊天记录都是一条一个文件**；目录分两层：
 //    data/main/  —— 主 data：软件级的所有记录
 //      store.json                设置 / API Key / UI 偏好（小、稳定、几乎不变）
@@ -20,26 +15,21 @@
 //    data/conversations/ —— 对话 data：单个对话的所有记录
 //      index.json                对话顺序 + 分类
 //      <id>.json                 每个对话（可单独分享）
-//
 //  布局迁移：旧版本把 store.json / characters/ / memory/ / voice-samples/
 //  直接放在 data/ 顶层 —— migrateIfNeeded 开头会把它们收进 main/（幂等）。
-//
 //  关键设计：前端一行都不用改
-//  ----------------------------
 //  前端仍然走"键值同步"（localStorage 包装 → POST /api/store）。
 //  这一层负责把整块键值**拆成文件**（写入时）和**拼回键值**（读取时）。
 //  所以拆分类只影响后端，前端、APK、data-sync.js 全都不动 —— 风险最低。
-//
 //  人设卡与聊天记录在前端都是**完整数组**，这一层把它们拆成一条一文件；
 //  读的时候再拼回数组。对前端而言完全透明。
 
 import { mkdir, readFile, writeFile, rename, readdir, rm, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createZip, readZip } from './zip.mjs';
 
-// ---------------------------------------------------------------------------
 //  键 → 归属 的映射表
-// ---------------------------------------------------------------------------
 //  改这里就能调整"哪个键进哪个文件"。未列出的键一律留在 store.json。
 const CHARACTER_KEYS = {
     list: 'elaina_open_character_cards',   // 人设卡数组（会被拆成一卡一文件）
@@ -49,6 +39,17 @@ const CHARACTER_KEYS = {
 
 const CONVERSATION_KEY = 'elaina_open_conversations';   // 对话数组（会被拆成一对话一文件）
 const MEMORY_KEY = 'elaina_open_memory_core';           // 记忆（会被按类目拆成一类一文件）
+
+/**
+ * 归类键：这些键会被拆进 characters/、conversations/、memory/ 的文件里，
+ * 因此写 store.json / settings.json 时必须排除，否则同一份数据在磁盘上存两遍。
+ */
+const CLASSIFIED_KEYS = new Set([
+    ...Object.values(CHARACTER_KEYS),
+    CONVERSATION_KEY,
+    MEMORY_KEY,
+]);
+function isClassifiedKey(key) { return CLASSIFIED_KEYS.has(key); }
 
 /**
  * 记忆的类目 —— 与前端 emptyMemoryCore() 的字段一一对应。
@@ -65,7 +66,6 @@ const MEMORY_DIR = 'memory';
 const MAIN_DIR = 'main';
 
 // 参考音频：整段 base64 不许再住在 store.json 里。
-//
 // MiMo 音色复刻的参考样本是一整段 base64 data URL，若随 elaina_open_settings
 // 整体落盘，用户换一次样本 store.json 就背上几 MB 与"设置"无关的音频字符串
 // （实测 3.67MB，占整个文件 99.8%）。与"人设卡一卡一文件"同一思路：
@@ -85,7 +85,14 @@ const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
 /** 备份格式标识与版本 */
 export const BACKUP_FORMAT = 'elainachat-backup';
-export const BACKUP_VERSION = 2;   // v1 = 单 JSON；v2 = zip（本版）
+export const BACKUP_VERSION = 3;   // v1 = 单 JSON；v2 = zip（数据摊在根上）；v3 = zip + data/ 目录
+/**
+ * 备份 zip 里数据的顶层目录（插件 mods/ 与技能 skills/ 与它平级）。
+ *
+ * 只影响**导出时**的写法；导入同时认 v2 的根名（settings.json / characters/ …），
+ * 老备份照常能导 —— 升级不该让用户手里的备份变成"打不开的文件"。
+ */
+const DATA_PREFIX = 'data/';
 
 export function createStore({ dataDir, log = () => {} }) {
     // main/ = 主 data；conversations/ = 对话 data（与 main/ 平级，见文件头布局图）
@@ -102,14 +109,25 @@ export function createStore({ dataDir, log = () => {} }) {
     // undefined = 还没建立过缓存；-1 = 那时目录不存在（空状态）
     let cacheStamp;
     let writeQueue = Promise.resolve();
+    // 文件路径 → 上次写入内容的 sha1。只用于跳过"内容没变"的重写（见 writeJsonAtomic）。
+    const writtenHashes = new Map();
 
     // ---------------------------------------------------------------- 工具
     /** 原子写：先写 .tmp 再 rename，避免写到一半崩溃留下半截文件 */
     async function writeJsonAtomic(file, obj) {
+        const text = JSON.stringify(obj, null, 2);
+        // 内容没变就别重写：一次消息保存会重放整份聊天记录，逐文件写盘是 O(会话数) 的。
+        //   哈希只在内存里，进程重启后的第一次保存仍会全量落盘（那时不知道磁盘是什么状态）。
+        const hash = createHash('sha1').update(text).digest('hex');
+        if (writtenHashes.get(file) === hash) {
+            const exists = await stat(file).then(() => true, () => false);
+            if (exists) return;
+        }
         await mkdir(path.dirname(file), { recursive: true });
         const tmp = file + '.tmp';
-        await writeFile(tmp, JSON.stringify(obj, null, 2), 'utf8');
+        await writeFile(tmp, text, 'utf8');
         await rename(tmp, file);
+        writtenHashes.set(file, hash);
     }
 
     async function readJson(file) {
@@ -192,11 +210,15 @@ export function createStore({ dataDir, log = () => {} }) {
     async function readCollection(dir, extraKeys = []) {
         const index = await readJson(path.join(dir, 'index.json'));
         if (!index || !Array.isArray(index.order)) return null;
+        const ids = index.order.filter((id) => SAFE_ID.test(id));   // 跳过非法 id，不因一个坏文件全盘失败
         const items = [];
-        for (const id of index.order) {
-            if (!SAFE_ID.test(id)) continue;   // 跳过非法 id，不因一个坏文件全盘失败
-            const item = await readJson(path.join(dir, id + '.json'));
-            if (item && typeof item === 'object') items.push(item);
+        // 分批并发读：一条一文件的布局下，逐个 await 是 O(会话数) 次串行 I/O（冷启动明显变慢）；
+        //   但也不能一次开几百个句柄 —— 每批 32 个，手机端同样安全。
+        for (let i = 0; i < ids.length; i += 32) {
+            const batch = await Promise.all(ids.slice(i, i + 32).map((id) => readJson(path.join(dir, id + '.json'))));
+            for (const item of batch) {
+                if (item && typeof item === 'object') items.push(item);
+            }
         }
         const out = { json: items.length ? JSON.stringify(items) : null, index };
         return out;
@@ -318,6 +340,19 @@ export function createStore({ dataDir, log = () => {} }) {
 
     // ---------------------------------------------------- 参考音频：拆出 store.json
     /**
+     * 取出 obj[SETTINGS_KEY] 里那段设置 JSON 并解析成对象。
+     * 非字符串 / 非法 JSON / 非对象（数组也算非法）一律返回 null —— 调用方原样保留、不碰。
+     */
+    function parseSettingsObject(obj) {
+        const settings = obj && typeof obj === 'object' ? obj[SETTINGS_KEY] : null;
+        if (typeof settings !== 'string') return null;
+        let parsed;
+        try { parsed = JSON.parse(settings); } catch { return null; }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+        return parsed;
+    }
+
+    /**
      * 把设置对象里 VOICE_SAMPLE_SLOTS 列出的音频字段落成独立文件，
      * 设置里替换成 `file:<槽位>` 引用。原地修改传入的 obj。
      *
@@ -328,11 +363,9 @@ export function createStore({ dataDir, log = () => {} }) {
      * 不留幽灵文件占空间。
      */
     async function splitVoiceSamples(obj) {
-        const settings = obj && typeof obj === 'object' ? obj[SETTINGS_KEY] : null;
-        if (typeof settings !== 'string') return;
-        let parsed;
-        try { parsed = JSON.parse(settings); } catch { return; }   // 非法 JSON：原样保留，不碰
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+        // 非法 JSON：原样保留，不碰
+        const parsed = parseSettingsObject(obj);
+        if (!parsed) return;
 
         const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
         await mkdir(sampleDir, { recursive: true });
@@ -380,11 +413,8 @@ export function createStore({ dataDir, log = () => {} }) {
      * 文件丢了/坏了就删掉这个字段 —— 前端会当成"没设置样本"，重新上传即可。
      */
     async function joinVoiceSamples(obj) {
-        const settings = obj && typeof obj === 'object' ? obj[SETTINGS_KEY] : null;
-        if (typeof settings !== 'string') return;
-        let parsed;
-        try { parsed = JSON.parse(settings); } catch { return; }
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+        const parsed = parseSettingsObject(obj);
+        if (!parsed) return;
 
         let changed = false;
         for (const [field, slot] of Object.entries(VOICE_SAMPLE_SLOTS)) {
@@ -443,46 +473,56 @@ export function createStore({ dataDir, log = () => {} }) {
      * 保存：把键值按映射表拆到各自的文件。
      * 只处理 store 里**存在**的键 —— 不因为"这次没提交"就把已有数据清掉。
      */
+    async function writeClassifiedStore(store) {
+        // ① 记忆（按类目拆成一类一文件）
+        if (typeof store[MEMORY_KEY] === 'string') {
+            await writeMemory(store[MEMORY_KEY]);
+        }
+
+        // ② 人设卡
+        if (typeof store[CHARACTER_KEYS.list] === 'string') {
+            await writeCollection(store[CHARACTER_KEYS.list], charsDir, 'card', {
+                currentCardId: typeof store[CHARACTER_KEYS.current] === 'string' ? store[CHARACTER_KEYS.current] : '',
+            });
+        }
+
+        // ③ 聊天记录
+        if (typeof store[CONVERSATION_KEY] === 'string') {
+            await writeCollection(store[CONVERSATION_KEY], convDir, 'conv');
+        }
+    }
+
+    async function writeMiscStore(store) {
+        // 其余键 → store.json（分类键不再重复写进去）
+        const misc = {};
+        for (const [k, v] of Object.entries(store)) {
+            if (isClassifiedKey(k)) continue;
+            misc[k] = v;
+        }
+        // 参考音频先拆出去：misc 里的设置只留 `file:<槽位>` 引用
+        await splitVoiceSamples(misc);
+        await writeJsonAtomic(STORE_FILE, misc);
+    }
+
     async function saveStore() {
-        writeQueue = writeQueue.then(async () => {
+        const run = writeQueue.then(async () => {
             await mkdir(dataDir, { recursive: true });
             const store = cache || {};
-
-            // ① 记忆（按类目拆成一类一文件）
-            if (typeof store[MEMORY_KEY] === 'string') {
-                await writeMemory(store[MEMORY_KEY]);
-            }
-
-            // ② 人设卡
-            if (typeof store[CHARACTER_KEYS.list] === 'string') {
-                await writeCollection(store[CHARACTER_KEYS.list], charsDir, 'card', {
-                    currentCardId: typeof store[CHARACTER_KEYS.current] === 'string' ? store[CHARACTER_KEYS.current] : '',
-                });
-            }
-
-            // ③ 聊天记录
-            if (typeof store[CONVERSATION_KEY] === 'string') {
-                await writeCollection(store[CONVERSATION_KEY], convDir, 'conv');
-            }
-
-            // ④ 其余键 → store.json（分类键不再重复写进去）
-            const misc = {};
-            for (const [k, v] of Object.entries(store)) {
-                if (k === MEMORY_KEY) continue;
-                if (k === CONVERSATION_KEY) continue;
-                if (Object.values(CHARACTER_KEYS).includes(k)) continue;
-                misc[k] = v;
-            }
-            // 参考音频先拆出去：misc 里的设置只留 `file:<槽位>` 引用
-            await splitVoiceSamples(misc);
-            await writeJsonAtomic(STORE_FILE, misc);
+            await writeClassifiedStore(store);
+            await writeMiscStore(store);
             // 应用自己写完盘后，把缓存对应的磁盘状态**更新为刚写出来的样子** ——
             // 否则下一次 loadStore 会因为 mtime 变了而白白重读一遍全部文件。
             cacheStamp = await dataDirStamp();
-        }).catch((err) => {
-            log('error', '[store] 写入失败: ' + (err && err.message ? err.message : err));
         });
-        return writeQueue;
+        // 队列本身必须吞错：一次写盘失败不能让后续保存全部卡死。
+        // 但调用方要拿到真实结果 —— 写失败却回 ok，会让用户以为已经落盘。
+        writeQueue = run.catch(() => { });
+        try {
+            await run;
+        } catch (err) {
+            log('error', '[store] 写入失败: ' + (err && err.message ? err.message : err));
+            throw err;
+        }
     }
 
     // ------------------------------------------------------------ 迁移
@@ -553,8 +593,7 @@ export function createStore({ dataDir, log = () => {} }) {
                     await writeJsonAtomic(STORE_FILE, (() => {
                         const misc = {};
                         for (const [k, v] of Object.entries(legacy)) {
-                            if (k === MEMORY_KEY || k === CONVERSATION_KEY) continue;
-                            if (Object.values(CHARACTER_KEYS).includes(k)) continue;
+                            if (isClassifiedKey(k)) continue;
                             misc[k] = v;
                         }
                         misc[SETTINGS_KEY] = probe[SETTINGS_KEY];
@@ -625,13 +664,11 @@ export function createStore({ dataDir, log = () => {} }) {
         }
 
         // 清掉旧的单文件。
-        //
         // **这一步必须在 `if (moved.length)` 之外**：上次迁移已把对话拆进
         // conversations/（所以这次 alreadySplit 为真、moved 为空），但旧的
         // conversations.json 若没被删掉，它会**永久留在磁盘上** ——
         // 不被读取（loadStore 只认 conversations/）也不被清理，
         // 白占空间还让用户困惑"到底哪个才是我的数据"。
-        //
         // 判据：只要新位置有内容（说明数据已经安全落位），旧文件就是冗余的，可以删。
         // 没内容时**不删** —— 那是唯一的数据来源。
         if (legacySingleConv) {
@@ -654,92 +691,130 @@ export function createStore({ dataDir, log = () => {} }) {
     }
 
     // ------------------------------------------------------------ 导入导出
-    /**
-     * 导出为 **zip**（标准格式，任何解压工具都能打开）。
-     *
-     * 目录结构：
-     *   manifest.json           格式标识 / 版本 / 导出时间 / 统计
-     *   settings.json           设置、API Key、UI 偏好
-     *   characters/index.json   卡片顺序 + 当前选中
-     *   characters/<id>.json    每张人设卡
-     *   conversations/index.json
-     *   conversations/<id>.json 每个对话
-     *   memory/<类目>.json      记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
-     *
-     * 这样用户解压后能直接看到"我的数据长什么样"，也能单独取出某一张卡/某一个对话。
-     */
-    async function exportZip() {
-        const store = await loadStore();
-        const entries = [];
-
-        // manifest：给人和程序看的说明
+    /** manifest.json：给人和程序看的说明与统计。 */
+    function buildExportManifest(store, extraCounts) {
         let cardCount = 0;
         let convCount = 0;
         try { cardCount = JSON.parse(store[CHARACTER_KEYS.list] || '[]').length; } catch { /* 忽略 */ }
         try { convCount = JSON.parse(store[CONVERSATION_KEY] || '[]').length; } catch { /* 忽略 */ }
-
-        entries.push({
+        return {
             name: 'manifest.json',
             data: JSON.stringify({
                 format: BACKUP_FORMAT,
                 version: BACKUP_VERSION,
                 exportedAt: new Date().toISOString(),
-                note: '这是 ElainaChat 的数据备份。导入时请选择本 zip 文件。',
-                counts: { characters: cardCount, conversations: convCount },
+                note: '这是 ElainaChat 的数据备份（含已安装插件与技能）。导入时请选择本 zip 文件。',
+                counts: {
+                    characters: cardCount,
+                    conversations: convCount,
+                    mods: Number(extraCounts.mods) || 0,
+                    skills: Number(extraCounts.skills) || 0,
+                },
             }, null, 2),
-        });
+        };
+    }
 
-        // 设置 / 密钥 / UI 偏好
+    /** settings.json：除归类键（卡/对话/记忆）之外的设置与偏好。 */
+    function buildExportSettings(store) {
         const settings = {};
         for (const [k, v] of Object.entries(store)) {
-            if (k === MEMORY_KEY) continue;
-            if (k === CONVERSATION_KEY) continue;
-            if (Object.values(CHARACTER_KEYS).includes(k)) continue;
+            if (isClassifiedKey(k)) continue;
             settings[k] = v;
         }
-        entries.push({ name: 'settings.json', data: JSON.stringify(settings, null, 2) });
+        return { name: DATA_PREFIX + 'settings.json', data: JSON.stringify(settings, null, 2) };
+    }
 
-        // 人设卡：一卡一文件
+    /** characters/：index + 一卡一文件。 */
+    async function buildExportCharacters() {
+        const out = [];
         const charsIdx = await readJson(charsIndex);
-        if (charsIdx) {
-            entries.push({ name: 'characters/index.json', data: JSON.stringify(charsIdx, null, 2) });
-            for (const id of charsIdx.order || []) {
-                if (!SAFE_ID.test(id)) continue;
-                const card = await readJson(path.join(charsDir, id + '.json'));
-                if (card) entries.push({ name: `characters/${id}.json`, data: JSON.stringify(card, null, 2) });
-            }
+        if (!charsIdx) return out;
+        out.push({ name: DATA_PREFIX + 'characters/index.json', data: JSON.stringify(charsIdx, null, 2) });
+        for (const id of charsIdx.order || []) {
+            if (!SAFE_ID.test(id)) continue;
+            const card = await readJson(path.join(charsDir, id + '.json'));
+            if (card) out.push({ name: `${DATA_PREFIX}characters/${id}.json`, data: JSON.stringify(card, null, 2) });
         }
+        return out;
+    }
 
-        // 聊天记录：一对话一文件
+    /** conversations/：index + 一对话一文件。 */
+    async function buildExportConversations() {
+        const out = [];
         const convIdx = await readJson(convIndex);
-        if (convIdx) {
-            entries.push({ name: 'conversations/index.json', data: JSON.stringify(convIdx, null, 2) });
-            for (const id of convIdx.order || []) {
-                if (!SAFE_ID.test(id)) continue;
-                const conv = await readJson(path.join(convDir, id + '.json'));
-                if (conv) entries.push({ name: `conversations/${id}.json`, data: JSON.stringify(conv, null, 2) });
-            }
+        if (!convIdx) return out;
+        out.push({ name: DATA_PREFIX + 'conversations/index.json', data: JSON.stringify(convIdx, null, 2) });
+        for (const id of convIdx.order || []) {
+            if (!SAFE_ID.test(id)) continue;
+            const conv = await readJson(path.join(convDir, id + '.json'));
+            if (conv) out.push({ name: `${DATA_PREFIX}conversations/${id}.json`, data: JSON.stringify(conv, null, 2) });
         }
+        return out;
+    }
 
-        // 记忆：一类目一文件（备份 zip 的目录自成一格，不必与磁盘一一对应）
+    /** memory/：一类目一文件（备份 zip 的目录自成一格，不必与磁盘一一对应）。 */
+    async function buildExportMemory() {
+        const out = [];
         try {
             const names = (await readdir(memoryDir)).filter((n) => n.endsWith('.json'));
             for (const name of names.sort()) {
                 const rec = await readJson(path.join(memoryDir, name));
-                if (rec) entries.push({ name: `memory/${name}`, data: JSON.stringify(rec, null, 2) });
+                if (rec) out.push({ name: `${DATA_PREFIX}memory/${name}`, data: JSON.stringify(rec, null, 2) });
             }
         } catch { /* 没有记忆目录就跳过 */ }
+        return out;
+    }
 
-        // 参考音频：音频本体 + 元数据（解压后能直接听）
+    /** 参考音频：音频本体（解压后能直接听）。 */
+    async function buildExportVoiceSamples() {
+        const out = [];
         try {
             const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
             for (const name of (await readdir(sampleDir)).sort()) {
                 if (!VOICE_SAMPLE_FILE_RE.test(name)) continue;
                 const raw = await readFile(path.join(sampleDir, name));
-                if (raw && raw.length) entries.push({ name: `${VOICE_SAMPLES_DIR}/${name}`, data: raw });
+                if (raw && raw.length) out.push({ name: `${DATA_PREFIX}${VOICE_SAMPLES_DIR}/${name}`, data: raw });
             }
         } catch { /* 没有参考音频就跳过 */ }
+        return out;
+    }
 
+    /**
+     * 导出为 **zip**（标准格式，任何解压工具都能打开）。
+     *
+     * 目录结构与**项目根**一一对应，解压后一眼就知道每样东西属于哪一类：
+     *   manifest.json           格式标识 / 版本 / 导出时间 / 统计
+     *   data/settings.json      设置、API Key、UI 偏好
+     *   data/characters/index.json   卡片顺序 + 当前选中
+     *   data/characters/<id>.json    每张人设卡
+     *   data/conversations/index.json
+     *   data/conversations/<id>.json 每个对话
+     *   data/memory/<类目>.json      记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
+     *   data/voice-samples/…         音色参考样本
+     *   mods/<目录>/…           已安装插件（原样保留插件自己的目录结构）
+     *   skills/<目录>/…         本地技能（插件随附技能住在 mods/ 里，不重复打包）
+     *
+     * 为什么套一层 data/：没套时 settings.json / characters/ / conversations/ /
+     * memory/ 全挤在 zip 根上，与 mods/、skills/ 混在一起，看目录分不清哪些是
+     * "我的聊天数据"、哪些是"我装的扩展"。套上之后三类各有名字，也能按需只解压一类。
+     * 这样用户解压后能直接看到"我的数据长什么样"，也能单独取出某一张卡/某一个对话。
+     * 插件与技能由调用方收集成 extraEntries 传进来 —— 本层只管 data/ 的键值，
+     * 不该知道安装目录的生命周期（见 server/backup-packages.mjs）。
+     */
+    async function exportZip(extraEntries = [], extraCounts = {}) {
+        const store = await loadStore();
+        const entries = [
+            buildExportManifest(store, extraCounts),
+            buildExportSettings(store),
+            ...(await buildExportCharacters()),
+            ...(await buildExportConversations()),
+            ...(await buildExportMemory()),
+            ...(await buildExportVoiceSamples()),
+        ];
+        for (const entry of extraEntries) {
+            if (!entry || !entry.name || entry.data === undefined || entry.data === null) continue;
+            entries.push({ name: String(entry.name), data: entry.data });
+        }
         return createZip(entries);
     }
 
@@ -750,8 +825,12 @@ export function createStore({ dataDir, log = () => {} }) {
      *   · zip（v2，推荐）—— 按上面的目录结构解析
      *   · 单个 JSON（v1 旧备份）—— 兼容老用户手里的备份文件
      *
-     * @param buf   Buffer（zip 或 JSON 文本）
-     * @param mode  'merge'（默认，按键覆盖）| 'replace'（清空后只留备份内容）
+     * @param buf     Buffer（zip 或 JSON 文本）
+     * @param mode    'merge'（默认，按键覆盖）| 'replace'（清空后只留备份内容）
+     *
+     * 插件 / 技能目录不在这里恢复：本层只认 data/ 的键值。备份 zip 里的
+     * mods/ 与 skills/ 由 serve.mjs 交给 server/backup-packages.mjs 处理 ——
+     * 那一步需要放行插件脚本（入口是 .js），不能把这条放宽带进数据解析。
      */
     async function importBackup(buf, mode = 'merge') {
         const payload = await parseBackup(buf);
@@ -761,11 +840,168 @@ export function createStore({ dataDir, log = () => {} }) {
 
         const store = await loadStore();
         if (mode === 'replace') {
+            // 1) 先清内存里的键
             for (const k of Object.keys(store)) delete store[k];
+            // 2) 备份里没有的分类，磁盘上的旧文件也要清掉 —— 否则下一次 loadStore
+            //    会把 conversations/characters/memory 里残留的旧条目重新拼回来，
+            //    用户以为"替换"清空了、实际还在（等于替换模式没生效）。
+            //    写一个空集合即可：writeCollection / writeMemory 会顺带删除不再属于
+            //    该集合的旧文件。
+            if (typeof incoming[MEMORY_KEY] !== 'string') await writeMemory('{}');
+            if (typeof incoming[CHARACTER_KEYS.list] !== 'string') {
+                await writeCollection('[]', charsDir, 'card', { currentCardId: '' });
+            }
+            if (typeof incoming[CONVERSATION_KEY] !== 'string') {
+                await writeCollection('[]', convDir, 'conv');
+            }
+            // 3) 设置里没有参考音频 → 清掉旧音频文件（否则它们在 voice-samples/
+            //    里成为无主文件；splitVoiceSamples 只在有 settings 时才会清理）。
+            if (typeof incoming[SETTINGS_KEY] !== 'string') {
+                const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
+                try {
+                    for (const name of await readdir(sampleDir)) {
+                        await rm(path.join(sampleDir, name), { force: true });
+                    }
+                } catch { /* 目录不存在 */ }
+            }
         }
         Object.assign(store, incoming);
         await saveStore();
         return { ok: true, keys: keys.length, source: payload.source, message: `已导入 ${keys.length} 项数据（${mode === 'replace' ? '替换' : '合并'}模式）` };
+    }
+
+    /**
+     * 这份备份里有没有数据部分（settings / 人设卡 / 对话 / 记忆）。
+     *
+     * 只解析、不落盘：导入前用它判断"要不要报没有可导入的数据"。
+     * 判断放在写盘**之前**，坏包就不会先把已有数据清掉再报失败。
+     */
+    async function hasImportableData(buf) {
+        const payload = await parseBackup(buf);
+        return Object.keys(payload.data || {}).length > 0;
+    }
+
+    /** 把 Buffer 解析成 { source, data:{键:字符串} }；zip 与旧 JSON 都支持 */
+    /**
+     * 从 zip 条目里还原出 { 键: 字符串 }。
+     * 兼容两种布局：新版在 data/ 下，旧版（v2）直接摊在 zip 根上。
+     */
+    function extractZipData(files) {
+        const byName = new Map(files.map((f) => [f.name, f.data]));
+        const data = {};
+
+        // 同一个条目可能有两种写法：先找 data/<名字>，没有再看根名 —— 用户手里的 v2 备份照常能导。
+        const readText = (name) => {
+            const b = byName.get(name) || byName.get(DATA_PREFIX + name);
+            return b ? b.toString('utf8') : null;
+        };
+
+        // 设置
+        const settingsText = readText('settings.json');
+        if (settingsText) {
+            try {
+                const obj = JSON.parse(settingsText);
+                if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+                    for (const [k, v] of Object.entries(obj)) {
+                        if (typeof v === 'string') data[k] = v;
+                    }
+                }
+            } catch { /* 单个文件坏了不该让整包失败 */ }
+        }
+
+        // 人设卡：按 index.order 拼回数组（保持顺序）
+        const charsIdxText = readText('characters/index.json');
+        if (charsIdxText) {
+            try {
+                const idx = JSON.parse(charsIdxText);
+                const cards = [];
+                for (const id of (idx && idx.order) || []) {
+                    if (!SAFE_ID.test(id)) continue;
+                    const t = readText(`characters/${id}.json`);
+                    if (!t) continue;
+                    try { cards.push(JSON.parse(t)); } catch { /* 跳过坏卡 */ }
+                }
+                if (cards.length) {
+                    data[CHARACTER_KEYS.list] = JSON.stringify(cards);
+                    if (typeof idx.currentCardId === 'string') data[CHARACTER_KEYS.current] = idx.currentCardId;
+                }
+            } catch { /* 忽略 */ }
+        }
+
+        // 聊天记录
+        const convIdxText = readText('conversations/index.json');
+        if (convIdxText) {
+            try {
+                const idx = JSON.parse(convIdxText);
+                const convs = [];
+                for (const id of (idx && idx.order) || []) {
+                    if (!SAFE_ID.test(id)) continue;
+                    const t = readText(`conversations/${id}.json`);
+                    if (!t) continue;
+                    try { convs.push(JSON.parse(t)); } catch { /* 跳过坏项 */ }
+                }
+                if (convs.length) data[CONVERSATION_KEY] = JSON.stringify(convs);
+            } catch { /* 忽略 */ }
+        }
+
+        // 记忆：一类目一文件 → 拼回一个对象。
+        // 同时兼容三种写法：
+        //   · data/memory/<类目>.json （当前格式）
+        //   · memory/<类目>.json      （v2 的根布局）
+        //   · memory.json {value:…}   （v2 中期的单文件形态）
+        const memObj = {};
+        for (const f of files) {
+            const m = /^(?:data\/)?memory\/([A-Za-z0-9_-]+)\.json$/.exec(f.name);
+            if (!m) continue;
+            const category = m[1];
+            try {
+                const rec = JSON.parse(f.data.toString('utf8'));
+                if (rec && rec.value !== undefined) memObj[category] = rec.value;
+            } catch { /* 跳过坏文件 */ }
+        }
+        if (Object.keys(memObj).length) {
+            data[MEMORY_KEY] = JSON.stringify(memObj);
+        } else {
+            const legacyMem = readText('memory.json');
+            if (legacyMem) {
+                try {
+                    const rec = JSON.parse(legacyMem);
+                    if (rec && typeof rec.value === 'string') data[MEMORY_KEY] = rec.value;
+                } catch { /* 忽略 */ }
+            }
+        }
+
+        return data;
+    }
+
+    /**
+     * 备份里的参考音频落回 data 的 voice-samples/ —— 设置里对应的 `file:<槽位>`
+     * 引用才能成立。单个文件失败不挡整包导入。
+     */
+    async function restoreVoiceSamplesFromZip(files) {
+        const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
+        for (const f of files) {
+            const base = f.name.replace(/\\/g, '/');
+            const rest = base.startsWith(DATA_PREFIX + VOICE_SAMPLES_DIR + '/')
+                ? base.slice(DATA_PREFIX.length + VOICE_SAMPLES_DIR.length + 1)
+                : (base.startsWith(VOICE_SAMPLES_DIR + '/') ? base.slice(VOICE_SAMPLES_DIR.length + 1) : '');
+            if (!rest || !VOICE_SAMPLE_FILE_RE.test(rest)) continue;
+            try {
+                await writeFileAtomicBin(path.join(sampleDir, rest), f.data);
+            } catch { /* 单个文件失败不挡整包导入 */ }
+        }
+    }
+
+    /** 单 JSON 形式的备份（早期导出就是这个形状，仍需能导入）。 */
+    function parseLegacyJsonBackup(buf) {
+        let parsed;
+        try {
+            parsed = JSON.parse(buf.toString('utf8'));
+        } catch {
+            throw new Error('这个文件既不是 zip 也不是有效的 JSON 备份');
+        }
+        const raw = parsed && typeof parsed === 'object' && parsed.data ? parsed.data : parsed;
+        return { source: 'json', data: normalize(raw), files: null };
     }
 
     /** 把 Buffer 解析成 { source, data:{键:字符串} }；zip 与旧 JSON 都支持 */
@@ -775,111 +1011,12 @@ export function createStore({ dataDir, log = () => {} }) {
         // zip：以 PK\x03\x04 开头
         if (buf.length >= 4 && buf.readUInt32LE(0) === 0x04034b50) {
             const files = readZip(buf, { maxTotal: 256 * 1024 * 1024, maxEntry: 64 * 1024 * 1024 });
-            const byName = new Map(files.map((f) => [f.name, f.data]));
-            const data = {};
-
-            const readText = (name) => {
-                const b = byName.get(name);
-                return b ? b.toString('utf8') : null;
-            };
-
-            // 设置
-            const settingsText = readText('settings.json');
-            if (settingsText) {
-                try {
-                    const obj = JSON.parse(settingsText);
-                    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
-                        for (const [k, v] of Object.entries(obj)) {
-                            if (typeof v === 'string') data[k] = v;
-                        }
-                    }
-                } catch { /* 单个文件坏了不该让整包失败 */ }
-            }
-
-            // 人设卡：按 index.order 拼回数组（保持顺序）
-            const charsIdxText = readText('characters/index.json');
-            if (charsIdxText) {
-                try {
-                    const idx = JSON.parse(charsIdxText);
-                    const cards = [];
-                    for (const id of (idx && idx.order) || []) {
-                        if (!SAFE_ID.test(id)) continue;
-                        const t = readText(`characters/${id}.json`);
-                        if (!t) continue;
-                        try { cards.push(JSON.parse(t)); } catch { /* 跳过坏卡 */ }
-                    }
-                    if (cards.length) {
-                        data[CHARACTER_KEYS.list] = JSON.stringify(cards);
-                        if (typeof idx.currentCardId === 'string') data[CHARACTER_KEYS.current] = idx.currentCardId;
-                    }
-                } catch { /* 忽略 */ }
-            }
-
-            // 聊天记录
-            const convIdxText = readText('conversations/index.json');
-            if (convIdxText) {
-                try {
-                    const idx = JSON.parse(convIdxText);
-                    const convs = [];
-                    for (const id of (idx && idx.order) || []) {
-                        if (!SAFE_ID.test(id)) continue;
-                        const t = readText(`conversations/${id}.json`);
-                        if (!t) continue;
-                        try { convs.push(JSON.parse(t)); } catch { /* 跳过坏项 */ }
-                    }
-                    if (convs.length) data[CONVERSATION_KEY] = JSON.stringify(convs);
-                } catch { /* 忽略 */ }
-            }
-
-            // 记忆：一类目一文件 → 拼回一个对象。
-            // 同时兼容两种旧形态：
-            //   · memory/<类目>.json      （当前格式）
-            //   · memory.json {value:…}   （v2 中期的单文件形态）
-            const memObj = {};
-            for (const f of files) {
-                if (!/^memory\/[A-Za-z0-9_-]+\.json$/.test(f.name)) continue;
-                const category = f.name.slice('memory/'.length, -'.json'.length);
-                try {
-                    const rec = JSON.parse(f.data.toString('utf8'));
-                    if (rec && rec.value !== undefined) memObj[category] = rec.value;
-                } catch { /* 跳过坏文件 */ }
-            }
-            if (Object.keys(memObj).length) {
-                data[MEMORY_KEY] = JSON.stringify(memObj);
-            } else {
-                const legacyMem = readText('memory.json');
-                if (legacyMem) {
-                    try {
-                        const rec = JSON.parse(legacyMem);
-                        if (rec && typeof rec.value === 'string') data[MEMORY_KEY] = rec.value;
-                    } catch { /* 忽略 */ }
-                }
-            }
-
-            // 参考音频：备份里的音频文件落回 voice-samples/，
-            // 设置里对应的 `file:<槽位>` 引用才能成立。
-            const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
-            for (const f of files) {
-                const base = f.name.replace(/\\/g, '/');
-                if (!base.startsWith(VOICE_SAMPLES_DIR + '/')) continue;
-                if (!VOICE_SAMPLE_FILE_RE.test(base.slice(VOICE_SAMPLES_DIR.length + 1))) continue;
-                try {
-                    await writeFileAtomicBin(path.join(sampleDir, base.slice(VOICE_SAMPLES_DIR.length + 1)), f.data);
-                } catch { /* 单个文件失败不挡整包导入 */ }
-            }
-
-            return { source: 'zip', data };
+            const data = extractZipData(files);
+            await restoreVoiceSamplesFromZip(files);
+            return { source: 'zip', data, files };
         }
 
-        // 单 JSON 形式的备份（不是 zip）：早期导出就是这个形状，仍需能导入。
-        let parsed;
-        try {
-            parsed = JSON.parse(buf.toString('utf8'));
-        } catch {
-            throw new Error('这个文件既不是 zip 也不是有效的 JSON 备份');
-        }
-        const raw = parsed && typeof parsed === 'object' && parsed.data ? parsed.data : parsed;
-        return { source: 'json', data: normalize(raw) };
+        return parseLegacyJsonBackup(buf);
     }
 
     /**
@@ -893,8 +1030,9 @@ export function createStore({ dataDir, log = () => {} }) {
 
     return {
         loadStore, saveStore, migrateIfNeeded,
-        exportZip, importBackup,
+        exportZip, importBackup, hasImportableData,
         invalidate,
         CHARACTER_KEYS, CONVERSATION_KEY, MEMORY_KEY, MEMORY_CATEGORIES,
     };
 }
+

@@ -1,14 +1,11 @@
 // 界面与表现相关回归检查：主题 / 日记 / 生日 / Live2D 资源 / 场景背景 / 内置模型列表。
-//
 // 合并自八个脚本（check-theme / check-diary / check-birthday / check-live2d-assets /
 // check-live2d-native-list / check-native-response / check-bundled-models /
 // check-scene-backgrounds）。它们测的都是"用户眼睛能看到的那一层"——
 // 主题配色、日记浏览、生日彩蛋、模型列表与资源 URL —— 共用同一份 readFrontend()
 // 与同一批 mods/ 实物，拆成八个文件时各自抄一遍 ok/汇总/端口工具。
-//
 // 每段用例在自己的函数作用域里跑，同名局部变量（ROOT / WEB / html / src）不会互相踩，
 // 失败信息形如「日记浏览 :: ★ 点侧栏能筛出该对话」。
-//
 // 用法：node scripts/check-ui.mjs          跑全部
 //       node scripts/check-ui.mjs 主题     只跑名字含该子串的用例
 
@@ -18,42 +15,15 @@ import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { launchTestBrowser } from './test-browser.mjs';
 import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
+import { extractFunction as extractFnFrom, stripComments as stripCommentsOf } from './check-source.mjs';
 
 const WEB = path.join(ROOT, 'web');
 const MODS = path.join(ROOT, 'mods');
 
-/** 按函数名抠出完整函数声明（带 async 前缀；先跳过参数表再找函数体） */
-function extractFnFrom(source, name, label) {
-    let start = source.indexOf('function ' + name + '(');
-    if (start < 0) throw new Error(`在 ${label || '源码'} 里找不到函数: ${name}（重命名了？请同步更新本检查）`);
-    const asyncMatch = source.slice(Math.max(0, start - 12), start).match(/async\s+$/);
-    if (asyncMatch) start -= asyncMatch[0].length;
-    // **先跳过参数表**：`opts = {}` 这类默认值里就有大括号，直接找第一个 `{` 会抠出半截函数
-    // （症状是 new Function 报一个和本函数毫无关系的 SyntaxError）。
-    let i = source.indexOf('(', start);
-    let paren = 0;
-    for (; i < source.length; i++) {
-        if (source[i] === '(') paren++;
-        else if (source[i] === ')') { paren--; if (paren === 0) { i++; break; } }
-    }
-    let depth = 0;
-    i = source.indexOf('{', i);
-    for (; i < source.length; i++) {
-        const c = source[i];
-        if (c === '{') depth++;
-        else if (c === '}') { depth--; if (depth === 0) { i++; break; } }
-    }
-    return source.slice(start, i);
-}
-
-/** 去掉注释后的源码 —— 断言"不许再出现 X"时，解释 X 的注释不该算违规 */
-const stripCommentsOf = (src) => String(src)
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/<!--[\s\S]*?-->/g, '')
-    .replace(/^[ \t]*\/\/.*$/gm, '');
+// 源码抽取与去注释统一来自 check-source.mjs（跳过字符串/注释的花括号配对）。
 
 /** 按 manifest.id 找插件真实目录（用户可能改过目录名） */
 function modDirById(id) {
@@ -70,17 +40,13 @@ function modDirById(id) {
     return existsSync(path.join(MODS, id, 'index.js')) ? id : null;
 }
 
-// ────────────────────────────────────────────────────────────
 // Live2D 表情/动作的「解析 + 资源 URL 拼接」
-//
 // 模型并不都把 *.exp3.json / *.motion3.json 放在 exp/ 子目录里 —— Cubism 只规定
 // 文件格式，放哪由模型作者决定。仓库内置的 deepseek 把 44 个表情直接堆在模型根目录、
 // 8 个动作放在 motions/，早期把 'exp/' 写死在 URL 上的实现因此让表情/动作全部 404，
 // 表现出来就是"打包进去的模型没有表情"。
-//
 // 做法：用字符串切片把 mods/live2d/index.js 里的真实函数体抠出来，在 Node 里喂真实
 // 清单跑一遍。不复制逻辑（复制的话测的就不是真代码了），也不依赖浏览器。
-// ────────────────────────────────────────────────────────────
 
 async function caseLive2dAssets(c) {
     /* 插件不随仓库分发（仓库只推软件本体，插件走应用内上传安装）—— 本地没有 mods/live2d
@@ -166,32 +132,37 @@ async function caseLive2dAssets(c) {
     check('无动作模型：清单已知且为空 -> 放弃', E.resolveMotionFile('idle'), '');
 }
 
-// ────────────────────────────────────────────────────────────
 // 模型列表的「服务端实现」与「Capacitor 原生实现」必须给出同样的结果
-//
 // APK 里没有 Node 服务端，模型列表由 index.html 里的 nativeLive2dFetch() 用
 // Capacitor Filesystem 自己实现；Web 版走 live2d-models 插件的 listModels()。
 // 这是**同一套语义的两份代码**（都要递归扫描、都优先取根目录的 model3.json /
 // vtube.json、都要把 exps/motions 表达成相对模型根目录的路径），非常容易各改各的、
 // 悄悄跑偏 —— 而原生那份只有在真机上才能验证。
-//
 // 做法：把两边的真实函数体抠出来，喂**同一个真实模型目录**，原生那份的
 // Capacitor Filesystem 用 Node fs 做一个等价桩，最后深比对两边输出。
-// ────────────────────────────────────────────────────────────
 
 async function caseLive2dNativeList(c) {
-    if (!existsSync(path.join(MODS, 'live2d-models', 'server.mjs'))) {
+    // 目录名可能带版本号（live2d-models-1.0.0），按 manifest.id 解析 —— 写死目录名会让
+    // 这个用例在“插件装了但目录带版本”的环境里静默跳过（本仓库正是这种情况）。
+    const modDir = modDirById('live2d-models');
+    if (!modDir || !existsSync(path.join(MODS, modDir, 'server.mjs'))) {
         console.log('  --   跳过：本地没有 live2d-models 插件（插件不随仓库分发，这是正常状态）');
         return;
     }
-    // 模型已搬进资源 mod：mods/live2d-models/models/
-    const MODELS_ROOT = path.join(MODS, 'live2d-models', 'models');
+    // 模型已搬进资源 mod：mods/<dir>/models/。
+    // 插件包本身可能不带模型（模型由用户在界面里单独安装），那种环境按“没有夹具”跳过，
+    // 不判红 —— 否则干净安装的仓库会永远红在这一项。
+    const MODELS_ROOT = path.join(MODS, modDir, 'models');
+    if (!existsSync(MODELS_ROOT)) {
+        console.log('  --   跳过：live2d-models 插件没有 models/ 目录（模型需单独安装，这是正常状态）');
+        return;
+    }
 
     // ==================== 服务端实现 ====================
     // 这两个函数住在 `export function register(ctx)` 里面（闭包内的函数声明），
     // extractFn 照样能按大括号配对抠出来。唯一的新依赖是 `ctx.json`：搬家前它们
     // 直接操作 res.writeHead/end，搬家后用宿主注入的 ctx.json。这里注入等价桩。
-    const serveSrc = readFileSync(path.join(MODS, 'live2d-models', 'server.mjs'), 'utf8');
+    const serveSrc = readFileSync(path.join(MODS, modDir, 'server.mjs'), 'utf8');
     const ctxStub = {
         json(res, status, obj) {
             res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -290,17 +261,13 @@ async function caseLive2dNativeList(c) {
     if (missing.length) console.log('  缺失:', missing);
 }
 
-// ────────────────────────────────────────────────────────────
 // APK 里「内置模型识别不到」的**真正根因**
-//
 // 视频通话里的列表走 refreshModelList() → fetch(...).json()
 // 设置面板里的列表走 refreshLive2DSettingList() → readJsonSafe(res) → **await res.text()**
-//
 // 而 nativeLive2dFetch 返回的假 Response 只有 json()，没有 text()。
 // 于是设置里那条路：res.text is not a function → 被 catch 吞掉 → 列表静默为空。
 // **同一个接口两条调用路径，只有一条炸** —— 这就是为什么一开始只改了
 // refreshModelList 却"没解决问题"。
-// ────────────────────────────────────────────────────────────
 
 async function caseNativeResponse(c) {
     const html = readFrontend();
@@ -325,7 +292,6 @@ async function caseNativeResponse(c) {
     }
 
     // ============================================================ 2. 行为层：走设置面板的真实路径
-    //
     // 清单**可能不存在** —— `npm run sync:web:lite`（纯净版 APK）不打包模型，
     // 改走扩展包分发。判据：lite 模式下 www/live2d/models 整个目录都不存在。
     const MANIFEST = path.join(ROOT, '..', 'android-app', 'www', 'live2d', 'models', 'manifest.json');
@@ -437,15 +403,12 @@ async function caseNativeResponse(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 场景背景资源包（scene-backgrounds）
-//
 // 这个包有一个**静默失效**的典型风险：背景图放在 img/bg/ 里，而清单
 // （index.js 的 BGS 数组）是另一处维护的。两者不一致时**不会报错**：
 //   · 目录里有图、清单漏登记 → 那张图在界面上**选不到**（用户以为图丢了）
 //   · 清单登记了、目录里没图 → 界面上那张图是**裂图/空白**
 // 而这两个现象都不像"清单写错了"，排查方向天然会跑偏。
-// ────────────────────────────────────────────────────────────
 
 async function caseSceneBackgrounds(c) {
     // ============================================================ 1. 清单 ↔ 文件
@@ -573,19 +536,52 @@ async function caseSceneBackgrounds(c) {
     }
 }
 
-// ────────────────────────────────────────────────────────────
 // 多主题系统（源码层）
-//
 // 浏览器端的行为验证在 android-app/test/theme.test.mjs（那里有 playwright）。
 // 这里只做静态检查 —— 根目录脚本不依赖浏览器，这是本项目的既有约定。
-//
 // 盯住的几个点（都是踩过的）：
 //   · 默认主题必须"不设属性"，否则覆盖层会对默认外观生效（破坏"原样不动"）
 //   · 覆盖规则权重必须够 —— 项目里已有一层用 ID 选择器覆盖 indigo 类的规则，
 //     类级选择器压不住它
 //   · 底色在 #mainContent 而不是 body
 //   · themes.css 必须排在所有样式之后
-// ────────────────────────────────────────────────────────────
+
+/**
+ * 取 `marker { ... }` 的花括号内容（配对扫描）。
+ *
+ * 为什么不能 `indexOf('}')`：注释里也有 `}`，会提前截断 —— 实测截断后只看到
+ *   前几个变量，报出一批假失败。放在模块级是因为主题断言里有好几处都要用它。
+ */
+/**
+ * 同 cssBlockAfter，但把**所有**同名块拼起来。
+ *
+ * 为什么需要：v2 把默认外观拆成多个 `html.rd { }` 块（尺寸一块、配色一块），
+ *   只取第一个会漏掉全部配色令牌，断言就会误报"默认外观什么都没定义"。
+ */
+function cssBlocksAfter(text, marker) {
+    let out = '';
+    let from = 0;
+    for (;;) {
+        const at = String(text).indexOf(marker, from);
+        if (at < 0) break;
+        out += cssBlockAfter(text.slice(at), marker) + '\n';
+        from = at + marker.length;
+    }
+    return out;
+}
+
+function cssBlockAfter(text, marker) {
+    const start = String(text || '').indexOf(marker);
+    if (start < 0) return '';
+    const open = String(text).indexOf('{', start);
+    if (open < 0) return '';
+    let depth = 0;
+    for (let i = open; i < text.length; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}') { depth--; if (depth === 0) return text.slice(open + 1, i); }
+    }
+    return '';
+}
 
 async function caseTheme(c) {
     const read = (p) => readFileSync(p, 'utf8');
@@ -600,41 +596,50 @@ async function caseTheme(c) {
         c.ok(existsSync(themesCss), 'web/css/themes.css 存在');
 
         const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
-        c.ok(/<script src="\/js\/theme\.js"><\/script>/.test(html), 'index.html 引入 theme.js');
+        c.ok(/<script[^>]*src="\/js\/theme\.js"[^>]*><\/script>/.test(html), 'index.html 引入 theme.js');
         c.ok(/<link rel="stylesheet" href="\/css\/themes\.css">/.test(html), 'index.html 引入 themes.css');
+        c.ok(/<link rel="stylesheet" href="\/css\/base\.css">/.test(html), 'index.html 引入 base.css');
+        c.ok(!/<style[\s>]/.test(html), '★ index.html 不再有内联 <style>（样式统一住 web/css/）');
 
-        // ★ themes.css 必须排在所有内联 <style> 之后（同权重靠后加载胜出）
+        // ★ 基础层必须排在主题覆盖层之前（同权重靠后加载胜出）：
+        //   反过来主题的同权重规则会被基础层压掉，改主题不生效。
+        const baseLinkIdx = html.indexOf('/css/base.css');
         const cssLinkIdx = html.indexOf('/css/themes.css');
-        const lastStyleEnd = html.lastIndexOf('</style>');
-        c.ok(cssLinkIdx > lastStyleEnd, '★ themes.css 排在所有内联 <style> 之后',
-            'link@' + cssLinkIdx + ' lastStyleEnd@' + lastStyleEnd);
+        c.ok(baseLinkIdx > 0 && cssLinkIdx > baseLinkIdx, '★ themes.css 排在 base.css 之后',
+            'base@' + baseLinkIdx + ' themes@' + cssLinkIdx);
 
         // 设置界面容器
         c.ok(/id="themePickerBox"/.test(html), '设置里有 #themePickerBox');
         c.ok(/id="headerThemeBtn"/.test(html), '深色模式控件已移到顶栏（#headerThemeBtn）');
     }
 
-    console.log('\n=== 2. 默认主题不改变外观（关键语义）===');
+    console.log('\n=== 2. 默认主题与内置模板（v2 令牌体系）===');
     {
         const js = readFileSync(path.join(WEB, 'js', 'theme.js'), 'utf8');
-        // 默认主题必须走"移除属性"这条路径
+        // 默认主题必须走"移除属性"这条路径：不设 data-theme-template 时
+        //   一条覆盖规则都不生效，页面就是 :root / html.rd 里的那套配色。
         c.ok(/removeAttribute\('data-theme-template'\)/.test(js),
             '★ 默认主题走 removeAttribute（不设属性 → 覆盖规则一条都不生效）');
-        c.ok(/tpl === 'elaina'/.test(js), '默认主题 elaina 被显式识别（不设 data-theme-template）');
-        // 内置模板（4 预设 + 自定义）
+        // v2 重构后默认模板 id 是 majo（暗夜魔女书房）；旧 id elaina 仍必须被当作默认处理，
+        //   否则存量用户存着的 'elaina' 会被判成"未知模板"而落到兜底分支之外。
+        c.ok(/'majo'/.test(js), '默认模板 id 为 majo（v2 视觉体系）');
+        c.ok(/['"]elaina['"]/.test(js), '旧默认 id elaina 仍被识别（存量设置回落默认）');
+
+        // 内置模板（4 套预设）
         // ★ 只从 TEMPLATES 数组里取：别处出现同样形状的 { id, name } 条目时，
         //   全局扫会把它们混进模板清单（数出比实际多）。
         const tplBlock = (js.match(/const TEMPLATES = \[[\s\S]*?\n\s*\];/) || [''])[0];
         c.ok(tplBlock.length > 0, '能取到 TEMPLATES 数组');
         const ids = [...tplBlock.matchAll(/\{\s*id:\s*'(\w+)',\s*name:/g)].map((m) => m[1]);
-        // 「星屑之日」由插件 mods/birthday 在启用时用 `host.theme()` 注册，
-        // 不属于内置模板；这里只数**内置**的那几套。
-        c.ok(ids.length === 5, '定义了 5 套内置模板（4 预设 + 自定义），实得 ' + ids.length, ids.join(','));
-        for (const id of ['elaina', 'mist', 'amber', 'plum', 'custom']) {
+        // 「自定义」与插件注册的模板（如 mods/birthday 用 host.theme() 注册的「星屑之日」）
+        //   都不属于**内置**清单，这里只钉内置的那几套。
+        c.ok(ids.length === 4, '定义了 4 套内置模板，实得 ' + ids.length, ids.join(','));
+        for (const id of ['majo', 'olive', 'mist', 'glass']) {
             c.ok(ids.includes(id), '含模板 ' + id);
         }
-        // 旧模板 id 不再存在：存量用户存着它们时会回落到默认主题。
-        for (const id of ['ios', 'claude', 'sakura']) {
+        // 已下线的模板 id 不再存在：存量用户存着它们时会回落到默认主题。
+        //   amber / plum 是上一代浅色主题；ios / claude / sakura 是更早的一代。
+        for (const id of ['amber', 'plum', 'ios', 'claude', 'sakura']) {
             c.ok(!ids.includes(id), '旧模板 id 已移除：' + id);
         }
         // 深色只有一套中性色：基调用一个属性切换多套，等于"设置里选了没生效"
@@ -646,65 +651,63 @@ async function caseTheme(c) {
     console.log('\n=== 3. 覆盖权重（踩过的坑）===');
     {
         const css = readFileSync(path.join(WEB, 'css', 'themes.css'), 'utf8');
+        // ★ v2 把配色从 --pixso-* 换成了 --rd-* 令牌（见「3b. v2 令牌体系」）：
+        //   下面这一组是针对**旧变量体系**的断言，已随重构下线，保留注释只作背景。
+        const LEGACY_PIXSO_ASSERTS = false;
 
-        // ★★ 最关键的一条：必须覆盖 --pixso-* 变量
-        //
-        // 第一版只覆盖了 --color-* 与 text-indigo-*，结果切主题只有聊天区变色 ——
-        // 侧栏/外框/按钮/强调色全不动，视觉上"割裂"。根因是这套界面的真实配色
-        // 来自另一组 --pixso-* 变量（橄榄绿/深棕方案），被引用 224 次。
-        const pixsoCount = (css.match(/--pixso-/g) || []).length;
-        c.ok(pixsoCount >= 40, '★ 覆盖 --pixso-* 变量（配色割裂的根因，实得 ' + pixsoCount + ' 处）');
-        for (const v of ['--pixso-canvas', '--pixso-brown', '--pixso-green', '--pixso-orange',
-            '--pixso-cream', '--pixso-line', '--pixso-panel-soft']) {
-            c.ok(css.includes(v + ':'), '★ 覆盖 ' + v);
+        // ★★ 覆盖主色令牌 —— v2 的"配色割裂会重现"检查点。
+        // 历史教训不变：只覆盖 --color-* / text-indigo-* 时，切主题只有聊天区变色，
+        //   侧栏/外框/按钮/强调色全不动。v2 把配色收拢到 --rd-* 令牌（appearance 由
+        //   html.rd 承接），所以这里改为钉住这套令牌本身：块在、关键成员齐、跨主题能覆盖。
+        const rdCount = (css.match(/--rd-[a-z0-9-]+:/g) || []).length;
+        c.ok(rdCount >= 40, '★ 定义了 --rd-* 令牌（v2 配色的唯一来源，实得 ' + rdCount + ' 处）');
+        // 默认外观拆在几个 html.rd 块里（尺寸 / 配色各一块），必须合并后判，
+        //   否则第一块只有 --rd-rail-w，会误报"一个配色令牌都没有"。
+        const rootBlock = cssBlocksAfter(css, 'html.rd {');
+        for (const v of ['--rd-bg', '--rd-surface', '--rd-panel', '--rd-text',
+            '--rd-accent', '--rd-accent-strong', '--rd-border']) {
+            c.ok(rootBlock.includes(v + ':'), '★ 默认外观定义了 ' + v);
         }
+        c.ok(cssBlockAfter(css, 'html.rd[data-theme="dark"] {').length > 0,
+            '★ 深色块存在（html.rd[data-theme="dark"]）');
 
-        // ★★★ 三套浅色主题的关键色必须与设计稿一致
-        //
-        // 这些值是成体系定下来的：画布带色相、卡片留暖白、正文接近深墨，
-        // 主色与强调色一冷一暖。逐个钉住，防止以后"顺手调一下"把关系破坏掉。
+        // ★★★ 内置模板的关键色必须与设计稿一致
+        // 这些值是成体系定下来的（画布带色相、卡片留暖白、正文接近深墨），
+        // 逐个钉住，防止以后"顺手调一下"把关系破坏掉。
         const themeColors = [
-            ['#9fb0c7', '雾蓝 · 画布'],
-            ['#627ea8', '雾蓝 · 主色'],
-            ['#f7f8f9', '雾蓝 · 卡片底'],
-            ['#2f3a48', '雾蓝 · 正文'],
-            ['#c2a084', '琥珀 · 画布'],
-            ['#a4713c', '琥珀 · 主色'],
-            ['#faf5ed', '琥珀 · 卡片底'],
-            ['#3d2b1f', '琥珀 · 正文'],
-            ['#b2a0c2', '暮紫 · 画布'],
-            ['#86699f', '暮紫 · 主色'],
-            ['#faf6fb', '暮紫 · 卡片底'],
-            ['#362a41', '暮紫 · 正文'],
+            ['#4d8fb4', '雾蓝日系 · 主色'],
+            ['#eef5fa', '雾蓝日系 · 画布'],
+            ['#f8f5f2', '暖米绿 · 画布'],
+            ['#738746', '暖米绿 · 主色'],
+            ['#465fd0', '石墨玻璃 · 主色'],
+            ['#eef1f7', '石墨玻璃 · 画布'],
+            ['#f4eee1', '暗夜魔女书房 · 画布'],
+            ['#8a6a1f', '暗夜魔女书房 · 主色'],
         ];
         for (const [hex, label] of themeColors) {
             c.ok(css.includes(hex), '★ 主题配色：' + label + ' = ' + hex);
         }
 
-        // ★ 深色唯一一套中性色的关键值
+        // ★ 深色唯一一套中性色的关键值（深蓝炭底 + 暖白字）
         const darkNeutralColors = [
-            ['#12100d', '画布'],
-            ['#191612', '外壳'],
-            ['#211d18', '面板'],
-            ['#242019', '卡片底'],
-            ['#f1ece3', '正文'],
+            ['#0b0e15', '画布'],
+            ['#121722', '外壳'],
+            ['#f0e8d8', '正文'],
         ];
         for (const [hex, label] of darkNeutralColors) {
             c.ok(css.includes(hex), '★ 深色中性色：' + label + ' = ' + hex);
         }
-        // 已移除的两套基调不该留下残影
+        // 已移除的基调选择器不该留下残影
         c.ok(!/data-dark-base/.test(css), 'themes.css 不再有 data-dark-base 选择器');
 
-        // ★ 深色不再有写死的冷蓝：气泡藏青渐变、文字高亮蓝都不该回来
+        // ★ 深色不再写死冷色高亮
         c.ok(!/#0a84ff/i.test(css), '★ 深色不再写死 iOS 蓝 #0a84ff');
         c.ok(!/#5ca8ff/i.test(css), '★ 深色文字高亮不再写死 #5ca8ff');
         c.ok(!/rgba\(\s*30\s*,\s*46\s*,\s*80/.test(css), '★ 深色 AI 气泡不再写死藏青渐变');
 
-        // ★ 侧栏竖栏不能复用文字色变量
-        //   宿主里 #sidebar::before 用的是 var(--pixso-brown)（文字色），
-        //   深色下它变浅 → 竖栏变浅灰白，非常刺眼。必须单独指定。
-        c.ok(/html\[data-theme="dark"\]\s+#sidebar::before/.test(css),
-            '★ 深色下单独指定 #sidebar::before 背景（不能复用文字色变量）');
+        // ★ 侧栏竖栏改用独立的 --rd-rail-* 令牌（不复用文字色变量，否则深色下竖栏发白）
+        c.ok(/--rd-rail-bg:/.test(css) && /--rd-rail-bg-2:/.test(css),
+            '★ 侧栏竖栏有独立的 --rd-rail-bg / --rd-rail-bg-2 令牌');
 
         // ★ 深色三态（浅色/深色/跟随系统）
         const themeJs = readFileSync(path.join(WEB, 'js', 'theme.js'), 'utf8');
@@ -713,7 +716,8 @@ async function caseTheme(c) {
         c.ok(/addEventListener\('change'/.test(themeJs), '★ 监听系统主题变化（跟随系统要实时响应）');
         c.ok(/applyDarkMode/.test(themeJs), '落 DOM 的逻辑统一在一个入口（用户改 / 系统变都走它）');
 
-        const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
+        // 这段同时断言 DOM（顶栏控件）与样式（移动端块的底色）—— 样式在 base.css
+        const html = readHtmlAndStyles();
         // ★ 2026-10：深色模式从「外观」里的三态下拉**搬到顶栏的三段连体开关**
         //   （跟随设备 / 浅色 / 深色，用户按截图设计），「跟随系统」改名为「跟随设备」。
         c.ok(/id="headerThemeBtn"/.test(html), '★ 外观模式开关已移到顶栏（#headerThemeBtn）');
@@ -722,122 +726,75 @@ async function caseTheme(c) {
         c.ok(/\.is-active/.test(html), '★ 选中段有 .is-active（填充圆底）');
         c.ok(!/id="themeDarkMode"/.test(html), '★ 原「外观 → 深色模式」下拉已删除');
 
-        // ★ 必须用 html[data-theme-template] body/ID 形式提升权重
-        c.ok(/html\[data-theme-template\]\s+body\s+\.text-indigo-950/.test(css),
-            '★ 用 html[attr] body .类 的形式（类级选择器压不住项目里已有的 ID 级规则）');
-        // ★ 侧边栏与弹窗面板那几条 ID 级规则要单独压
-        c.ok(/html\[data-theme-template\]\s+#sidebar\s+\.text-indigo-950/.test(css),
-            '★ 单独覆盖 #sidebar 下的 indigo 类');
-        c.ok(/html\[data-theme-template\]\s+\.modal-panel\s+\.text-indigo-950/.test(css),
-            '★ 单独覆盖 .modal-panel 下的 indigo 类');
+        // ★ 主题规则的权重必须压得住既有规则（v2 的承载体是 html.rd 上的令牌，
+        //   不再靠逐类覆盖 Tailwind 工具类 —— 用令牌的好处是"改一处、全站生效"）。
+        c.ok(/html\.rd\[data-theme="dark"\]/.test(css) && /html\.rd\[data-theme-template="olive"\]/.test(css),
+            '★ 主题与深色都以 html.rd[attr] 提权（与项目里既有的 ID 级规则同层或更高）');
+        // 令牌体系成立的前提：不再逐个压 Tailwind 的 indigo 工具类（压了说明有人又在打权重战）
+        c.ok(!/text-indigo-/.test(css), '★ 不再逐类覆盖 text-indigo-*（配色由令牌统一改）');
+        // 侧栏/弹窗的配色来自令牌，而不是在主题层点名组件
+        c.ok(/--rd-rail-bg:/.test(css) && /--rd-panel:/.test(css),
+            '★ 侧栏与弹窗面板配色来自令牌（--rd-rail-bg / --rd-panel）');
 
-        // ★ 底色在 #mainContent 而不是 body
-        c.ok(/html\[data-theme-template\]\s+#mainContent/.test(css),
-            '★ 覆盖 #mainContent 的渐变（实测 body.backgroundImage 是 none）');
-
-        // 深色同样要提权
-        c.ok(/html\[data-theme="dark"\]\s+body\s+\.text-indigo-950/.test(css),
-            '★ 深色模式的规则同样提权');
-
-        // !important 仍需用于**类级**覆盖（Tailwind 运行时注入，同权重下它后加载胜出）。
-        // 但注意：重写后主要靠覆盖 --pixso-* 变量生效，类级覆盖只是补充，
-        // 所以这个数字**不该设得太高** —— 设高了会逼着以后往变量能解决的地方硬加 !important。
+        // v2 不靠 !important 打架（整份 themes.css 里一处都没有）：主题是否生效只看令牌有没有定义，
+        //   所以这里钉住"不新增 !important" —— 新增往往意味着有人又去逐类覆盖工具类了。
         const importantCount = (css.match(/!important/g) || []).length;
-        c.ok(importantCount >= 20, '★ 类级覆盖使用了 !important（实得 ' + importantCount + ' 处）');
+        c.ok(importantCount === 0, '★ themes.css 不靠 !important 覆盖（令牌体系下应为 0 处，实得 ' + importantCount + '）');
 
-        // 深色与模板正交
-        c.ok(/html\[data-theme="dark"\]/.test(css), '有 html[data-theme="dark"] 规则');
-        c.ok(/html\[data-theme-template="mist"\]/.test(css) && /html\[data-theme-template="plum"\]/.test(css),
-            '三套浅色模板都有变量定义');
+        // 深色与模板正交（majo 是默认，不设属性、没有独立块）
+        c.ok(/html\.rd\[data-theme="dark"\]/.test(css), '有 html.rd[data-theme="dark"] 规则');
+        for (const tpl of ['olive', 'mist', 'glass']) {
+            c.ok(css.includes('html.rd[data-theme-template="' + tpl + '"]'), '★ 模板 ' + tpl + ' 有变量定义');
+        }
 
-        // ========================================================================
         // ★★ 主题变量完整性 + 硬编码白色防护（2026-10 用户报"深色下顶栏还是白的"）
-        //
         // 这一组断言防的是**同一类 bug**：某处用了 `var(--pixso-xxx)`，但那个变量
         // 在深色块 / 主题块里**没被覆盖**，于是它永远停在 :root 的浅色值上。
-        //
         // 实测踩到两次：
         //   ① `--pixso-surface` 只在 :root 定义（#ffffff），深色块漏了它 ——
         //      而 `#appShell` 用的正是它 → 深色下**整个应用外壳纯白**（手机全屏，等于整页白底）。
         //   ② `#mainContent > header` 直接写死 `background: #fff` —— 深色下顶栏一块白方块。
-        //
         // 这类 bug 的特点是**只在某个主题/模式下才看得见**，光读代码很难发现。
-        // ========================================================================
 
         // ① 深色块必须覆盖所有"面"级变量（漏一个就有一块浅色残留）
-        //   ★ 提取块内容不能用 `indexOf('}')` —— 注释里也有 `}`，会提前截断
-        //     （实测：截断后只看到前几个变量，报出 4 个假失败）。
-        //     改用"花括号配对"扫描，与 check-dom-refs 里 extractBalancedObject 同理。
-        function cssBlockAfter(text, marker) {
-            const start = text.indexOf(marker);
-            if (start < 0) return '';
-            const open = text.indexOf('{', start);
-            if (open < 0) return '';
-            let depth = 0;
-            for (let i = open; i < text.length; i++) {
-                if (text[i] === '{') depth++;
-                else if (text[i] === '}') { depth--; if (depth === 0) return text.slice(open + 1, i); }
-            }
-            return '';
-        }
-        const darkBlock = cssBlockAfter(css, 'html[data-theme="dark"] {');
-        for (const v of ['--pixso-canvas', '--pixso-cream', '--pixso-surface', '--pixso-panel', '--pixso-panel-soft', '--pixso-line']) {
+        const darkBlock = cssBlockAfter(css, 'html.rd[data-theme="dark"] {');
+        for (const v of ['--rd-bg', '--rd-surface', '--rd-surface-2', '--rd-surface-3',
+            '--rd-panel', '--rd-border', '--rd-text', '--rd-text-2', '--rd-text-3']) {
             c.ok(darkBlock.includes(v + ':'), '★ 深色块覆盖了 ' + v);
         }
-        // ★ 深色中性色只有这一块：所有"面"与文字色阶都必须在这里给齐
-        for (const v of ['--tpl-rail-1', '--tpl-rail-2', '--tpl-text-1', '--tpl-text-6', '--tpl-primary-deeper', '--lg-bg']) {
+        // 强调色与侧栏也必须在深色块里单独给（不能只靠浅色值派生）
+        for (const v of ['--rd-accent', '--rd-accent-strong', '--rd-rail-bg']) {
             c.ok(darkBlock.includes(v + ':'), '★ 深色块覆盖了 ' + v);
         }
 
         // ② 每套主题模板块也要覆盖"面"级变量（否则切主题后外壳仍是上个主题的白）
-        //   ★ 2026-10：`stardust` 已随生日插件移出宿主（见第 2 段的说明），
-        //     所以这里只查还留在 themes.css 里的这几套。
-        for (const tpl of ['mist', 'amber', 'plum']) {
-            const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
+        // majo（暗夜魔女书房）是默认外观，不设 data-theme-template —— 所以它**没有**独立块，
+        //   由上面的 html.rd 块承担；这里钉住"别给它再加一个块"（加了反而说明默认路径变了）。
+        c.ok(!css.includes('html.rd[data-theme-template="majo"]'),
+            '★ majo 是默认外观（不写独立模板块，靠 html.rd 承接）');
+        for (const tpl of ['olive', 'mist', 'glass']) {
+            const block = cssBlockAfter(css, `html.rd[data-theme-template="${tpl}"] {`);
             c.ok(block.length > 0, `存在主题块 ${tpl}`);
-            c.ok(block.includes('--pixso-surface:'), `★ 主题 ${tpl} 定义了 --pixso-surface（漏了会导致外壳不跟随主题）`);
+            for (const v of ['--rd-bg', '--rd-surface', '--rd-accent', '--rd-warn']) {
+                c.ok(block.includes(v + ':'), `★ 主题 ${tpl} 定义了 ${v}`);
+            }
         }
 
-        // ②b ★★ 警示色变量必须在**每一处**都定义，包括 :root（2026-10 实测踩到）
-        //
-        //   踩坑经过：TTS 设置里加了一段警示文案（用 `style="color:#b45309"`，
-        //   该写法由 #settingsPanel 的规则映射到 `var(--pixso-warn)`）。
-        //   浏览器实测发现它在**默认主题**下是深棕 #4c3123、而且**深色下也不变色** ——
-        //   因为 `--pixso-warn` 只在三套浅色模板块与深色块里定义了，
-        //   **:root（也就是默认的 elaina 外观）漏了它**。
-        //   取不到值时 `var()` 落回继承色，"警示"语义直接丢掉（看起来跟普通说明一样）。
-        //
-        //   ★ 为什么这类漏定义特别难发现：它**只在默认主题下**出错，
-        //     而开发者多半在切过主题的状态下调试；且不报错、不白屏，只是颜色不对。
-        //   所以这里对 warn 全家族做"每个生效来源都要有"的断言。
+        // ②b 警示色必须每个生效来源都有（默认外观 + 每套模板 + 深色）
+        //   取不到值时 var() 落回继承色，"警示"语义直接丢掉（看起来跟普通说明一样）。
+        // v2 的警示色是 --rd-warn（--pixso-warn 只留了兼容别名，见 themes.css 顶部）
+        for (const v of ['--rd-warn', '--rd-warn-strong', '--rd-warn-bg', '--rd-warn-border']) {
+            c.ok(css.includes(v + ':'), `★ 定义了 ${v}（警示色与品牌主色分开）`);
+        }
+        c.ok(/--pixso-warn:\s*var\(--rd-warn\)/.test(css), '★ --pixso-warn 仍映射到 --rd-warn（旧插件兼容）');
+        for (const tpl of ['olive', 'mist', 'glass']) {
+            const block = cssBlockAfter(css, `html.rd[data-theme-template="${tpl}"] {`);
+            c.ok(block.includes('--rd-warn:'), `★ 主题 ${tpl} 定义了 --rd-warn`);
+        }
+        c.ok(darkBlock.includes('--rd-warn:'), '★ 深色块覆盖了 --rd-warn（深色下要提亮）');
         {
-            // ★ 注意 index.html 里有**两个** `:root` 块（L62 的视口/安全区变量，
-            //   L1514 的配色变量）。cssBlockAfter 只找**第一个**，于是第一版断言
-            //   在第一个块里找 --pixso-warn，报出 4 条假失败 —— 而变量其实好好地
-            //   写在第二个块里（浏览器实测颜色已正确）。
-            //   所以这里把所有 :root 块**合并**起来判断，别依赖"哪个在前"。
-            let rootAll = '';
-            {
-                let from = 0;
-                for (;;) {
-                    const idx = html.indexOf(':root {', from);
-                    if (idx < 0) break;
-                    const block = cssBlockAfter(html.slice(idx), ':root {');
-                    rootAll += block + '\n';
-                    from = idx + 6;
-                }
-            }
-            c.ok(rootAll.length > 0, '找得到 :root 块（默认外观的变量来源）');
-            for (const v of ['--pixso-warn', '--pixso-warn-soft', '--pixso-warn-bg', '--pixso-warn-line']) {
-                c.ok(rootAll.includes(v + ':'),
-                    `★★ :root 定义了 ${v}（漏了 → 默认主题下警示文案落回继承色、深色也不提亮）`);
-            }
-            // 每个模板块 + 深色块也都要有（与面级变量同样的要求）
-            for (const tpl of ['mist', 'amber', 'plum']) {
-                const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
-                c.ok(block.includes('--pixso-warn:'), `★ 主题 ${tpl} 定义了 --pixso-warn`);
-            }
-            c.ok(darkBlock.includes('--pixso-warn:'), '★ 深色块覆盖了 --pixso-warn（深色下要提亮）');
+            const darkWarn = (darkBlock.match(/--rd-warn:\s*([^;]+);/) || [])[1] || '';
+            c.ok(darkWarn.trim() !== '#b45309', '★ 深色的 --rd-warn 已提亮', 'darkWarn=' + darkWarn.trim());
         }
 
         // ③ 移动端块里不能有"写死的白色面"。
@@ -859,16 +816,10 @@ async function caseTheme(c) {
             '★ 移动端块里没有写死的白色背景面（深色下会变白块，用户实测报过）',
             badWhiteBg.slice(0, 4).join('  |  '));
 
-        // ④ ★★ 设置页里的"内联浅色底"必须被主题规则接管（2026-10 第三次踩同一类 bug）
-        //
-        //    这次是 Agent 权限那块：9 处说明面板用**内联 style** 写死了浅色底
-        //    （rgba(249,249,255,.8) / rgba(255,247,237,.75)）与深色文字（#b45309）。
-        //    浅色主题下正常，深色下就糊了 —— 因为文字那一半会被
-        //    `html[data-theme="dark"] .text-indigo-700` 改成**浅色**，
-        //    而底是写死的浅色 → 浅底浅字。实测六个隐私开关的标签几乎看不见。
-        //
-        //    修法是加一段属性选择器规则把它们换成主题变量。这里断言**那段规则还在**，
-        //    并且**新增的同类面板会自动被它覆盖**（属性选择器而非逐个 class）。
+        // ④ ★★ 设置页里的"内联浅色底"必须被主题规则接管
+        //    这类面板（Agent 权限 / 隐私开关）用内联 style 写死了浅色底 + 深色字。
+        //    深色下文字那一半会被主题改成浅色，底却还是写死的浅色 → 浅底浅字，几乎看不见。
+        //    修法是用属性选择器统一接管，而不是逐个 class 改 —— 新增同类面板自动覆盖。
         const inlineLightRules = [
             { re: /#settingsPanel \[style\*="rgba\(249,249,255"/, label: '信息类浅色面板' },
             { re: /#settingsPanel \[style\*="rgba\(255,247,237"/, label: '警示类浅色面板' },
@@ -877,32 +828,14 @@ async function caseTheme(c) {
         for (const r of inlineLightRules) {
             c.ok(r.re.test(html), `★ 设置页的内联浅色底被主题规则接管（${r.label}）`);
         }
-        // 警示色必须是**专用变量**而不是品牌主色：
-        // --pixso-orange 在 iOS 主题下是蓝色，拿它当警示色会让警告变成品牌色。
-        c.ok(/--pixso-warn:/.test(css), '★ 定义了 --pixso-warn（警示色与品牌主色分开）');
-        c.ok(/--pixso-warn-bg:/.test(css) && /--pixso-warn-line:/.test(css),
-            '★ 警示色有配套的底与描边变量');
-        // 每套内置主题 + 深色块都要有警示色，否则某套主题下会退回 :root 的浅色值
-        for (const tpl of ['mist', 'amber', 'plum']) {
-            const block = cssBlockAfter(css, `html[data-theme-template="${tpl}"] {`);
-            c.ok(block.includes('--pixso-warn:'), `★ 主题 ${tpl} 定义了 --pixso-warn`);
-        }
-        c.ok(darkBlock.includes('--pixso-warn:'), '★ 深色块定义了 --pixso-warn（深色下要提亮）');
-        // 深色的警示色不能还是那个浅色主题的橙 —— 在深底上对比度只有 3.7:1
-        const darkWarn = (darkBlock.match(/--pixso-warn:\s*([^;]+);/) || [])[1] || '';
-        c.ok(darkWarn.trim() !== '#b45309',
-            '★ 深色的 --pixso-warn 已提亮（不能沿用浅色主题的 #b45309）', 'darkWarn=' + darkWarn.trim());
 
         // ⑤ ★★ 切深色必须同时设 CSS `color-scheme`（2026-10 用户报"下拉列表还是白的"）
-        //
         //    症状：设置 → 对话，点开「模型名」下面那个下拉，弹出来的候选列表是
         //    **白底黑字**，与深色界面割裂。
-        //
         //    为什么只改 CSS 治不了：那个下拉弹层是**浏览器原生绘制**的
         //    （Chromium 的 select popup 不在 DOM 里，任何 CSS 选择器都碰不到它）。
         //    决定它按哪套配色画的只有 `color-scheme`。实测深色下它算出来是 `normal`
         //    （从没被设过）→ 浏览器按浅色画 → 白底。
-        //
         //    `color-scheme` 还一并决定滚动条、复选框、日期选择器的配色，
         //    所以必须在**主题层**统一设，而不是给每个下拉打补丁。
         c.ok(/colorScheme\s*=/.test(themeJs),
@@ -914,37 +847,24 @@ async function caseTheme(c) {
         c.ok(!/style\.colorScheme\s*=\s*''/.test(themeJs) && !/removeProperty\(\s*['"]color-scheme/.test(themeJs),
             '★ 浅色时显式写 light（不能删掉，否则跟随系统时会漏回深色）');
 
-        // ⑥ ★★★ `color-scheme` 不够！必须**显式给 option 设背景色**（2026-10 二次踩坑）
-        //
-        //    第一次我只加了 `color-scheme: dark`，就以为修好了 —— **没有**。
-        //    真实弹层截图证明：背景仍是纯白，未选中项是浅灰字，几乎读不出来。
-        //    （我当时的"验证"是错的：用 size="6" 把 select 展开成内联列表截图，
-        //      那渲染的是普通列表、不是原生弹层 —— **测的不是用户看到的东西**。）
-        //
-        //    真正的根因：CSS 只给 `select` 设了 `color`（深色主题下是浅色），
-        //    而 `<option>` **继承 color 却不继承 background** —— 背景由浏览器
-        //    按默认值给（白）。于是"浅字 + 白底"。
-        //    `color-scheme` 在部分 Chromium 版本/平台上仍不改变 option 的背景，
-        //    所以必须显式设。
-        c.ok(/select option/.test(css),
-            '★★ 显式给 <option> 设样式（color-scheme 管不到 option 的背景）');
+        // ⑥ ★★★ color-scheme 不够，option 必须显式给背景色（真实弹层截图证明过白底浅字）
+        c.ok(/select option/.test(css), '★★ 显式给 <option> 设样式（color-scheme 管不到 option 的背景）');
         {
-            const optRule = css.match(/html\[data-theme="dark"\][^{]*select option[^{]*\{([^}]*)\}/);
+            const optRule = css.match(/html\.rd\[data-theme="dark"\][^{]*select option[^{]*\{([^}]*)\}/);
             c.ok(!!optRule, '★ 深色下有 select option 规则');
             if (optRule) {
-                c.ok(/background-color\s*:/.test(optRule[1]),
-                    '★★ 深色的 option 设了 background-color（只设 color 会白底浅字）');
+                c.ok(/background-color\s*:/.test(optRule[1]), '★★ 深色的 option 设了 background-color');
                 c.ok(/color\s*:/.test(optRule[1]), '深色的 option 也设了 color');
             }
-            // 浅色主题同样要显式给一份：跟随系统深色时浏览器可能把 option 画成深底
-            c.ok(/html:not\(\[data-theme="dark"\]\)[^{]*select option/.test(css),
+            c.ok(/html\.rd:not\(\[data-theme="dark"\]\)[^{]*select option/.test(css),
                 '★ 浅色主题也显式给了 option 配色（防"跟随系统"下浏览器画深底）');
         }
     }
 
     console.log('\n=== 3.5 主题设置独立成「外观」分栏 ===');
     {
-        const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
+        // DOM 与 :root 令牌一起看（令牌在 base.css）
+        const html = readHtmlAndStyles();
         // 上游顶部导航里就有「外观」一项；埋在「高级」里要翻两层才找到
         c.ok(/data-settings-tab="tab-appearance">外观</.test(html), '★ 有独立的「外观」Tab');
         c.ok(/id="tab-appearance"/.test(html), '有 #tab-appearance 面板');
@@ -957,7 +877,6 @@ async function caseTheme(c) {
         c.ok(/id="headerThemeBtn"/.test(html), '深色切换在顶栏（#headerThemeBtn，与「整理记忆」同排）');
 
         // ★★★ 2026-10 默认主题的**名字与色点必须与应用实际配色一致**
-        //
         // 这条防的是一次真实的不一致：`elaina`（默认主题）在 theme.js 里叫
         // 「粉紫（默认）」、色点是 ['#ec4899','#8b5cf6','#fdf2f8']，
         // 但应用实际渲染的是 index.html `:root` 那套 —— **暖米色 + 棕 + 橄榄绿**
@@ -965,13 +884,12 @@ async function caseTheme(c) {
         // 名字/色点是"还是粉紫配色"时定的，后来 :root 换成橄榄绿**没跟着改**，
         // 于是主题选择器显示"粉紫"、点进去是绿的 —— 用户报的
         // "设置页面与对话主题对不上"就是这个。
-        //
         // 判据：默认主题的三个色点必须**等于 :root 里的真实值**。
         // 这样改 :root 而忘了改 theme.js 时会立刻红。
         {
             const themeJs = readFileSync(path.join(WEB, 'js', 'theme.js'), 'utf8');
-            const tplLine = (themeJs.match(/\{ id: 'elaina',[^}]*\}/) || [''])[0];
-            c.ok(/name: '暖米绿/.test(tplLine),
+            const tplLine = (themeJs.match(/\{ id: 'majo',[^}]*\}/) || [''])[0];
+            c.ok(/name: '暗夜魔女书房/.test(tplLine),
                 '★ 默认主题的名字反映实际配色（不能还叫"粉紫"）', tplLine.slice(0, 60));
             // 从 index.html 的 :root 取真实值来比对
             const rootBlock = (html.match(/:root\s*\{[\s\S]*?--pixso-shadow[^;]*;/) || [''])[0];
@@ -987,46 +905,41 @@ async function caseTheme(c) {
                     `★ 默认主题色点包含 :root 的真实 --pixso-${label}（${v}）`);
             }
             // 反向：不该再出现那套粉紫色点
-            c.ok(!/id: 'elaina'[^}]*#ec4899/.test(themeJs),
+            c.ok(!/id: 'majo'[^}]*#ec4899/.test(themeJs),
                 '★ 默认主题不再挂着粉紫色点 #ec4899');
         }
 
         // ★★★ 2026-10 默认主题下不该有**写死的粉紫**（用户："设置页面主题还是粉色的"）
-        //
-        // 这类残留查起来很费劲，因为它们是**分散**的写死颜色：
-        //   · body 的粉紫渐变 `#FFF0F5→#FFE4E1→#E6E6FA`（设置遮罩 82% 不透明 → 透出来）
-        //   · 一堆 `rgba(236,72,153,…)` 聚焦描边 / 边框 / 阴影
-        //   · `text-pink-500` 这类 Tailwind 类（**弹窗之外**的地方没被既有规则覆盖）
-        //   · `--color-primary`（#ec4899）被当强调色直接引用
-        //
-        // 判据：把这些"粉紫特征值"整体列出来，**除了注释以外**不许出现。
-        // ★ 为什么排除注释：代码里刻意写了注释解释"原来是写死的粉"，
-        //   那些注释会被正则命中（这是第三次踩"注释污染判据"，见 8.60/8.62）。
+        // 判据：整份基础样式层里，除「兜底调色板」那一段外不许出现粉紫特征值。
+        // 兜底调色板（`.fallback-ready …`）镜像的是 Tailwind 自己的 pink / violet，
+        //   只在 Tailwind 引擎缺席时生效 —— 它写的是"Tailwind 的粉色是什么"，
+        //   不是主题配色，扫进来会让判据变成永远失败。
+        // ★ 为什么必须剥注释：代码里刻意写了注释解释"这里是写死的粉"，
+        //   那些注释会被正则命中（踩过三次，见 8.60/8.62）。
         {
-            const stripComments = (s) => String(s)
+            const baseCss = readFileSync(path.join(WEB, 'css', 'base.css'), 'utf8')
                 .replace(/\/\*[\s\S]*?\*\//g, '')
-                .replace(/<!--[\s\S]*?-->/g, '')
-                .replace(/^\s*\/\/.*$/gm, '');
-            const cssNoComments = stripComments(html);
+                .replace(/\.fallback-ready[^{}]*\{[^{}]*\}/g, '');
             const PINK_SIGNS = [
                 { re: /#ec4899/i, label: '#ec4899' },
                 { re: /#8b5cf6/i, label: '#8b5cf6' },
                 { re: /#FFF0F5/i, label: '#FFF0F5（粉渐变起）' },
                 { re: /rgba\(\s*236\s*,\s*72\s*,\s*153/, label: 'rgba(236,72,153)（粉）' },
                 { re: /rgba\(\s*244\s*,\s*114\s*,\s*182/, label: 'rgba(244,114,182)（粉）' },
+                { re: /rgba\(\s*139\s*,\s*92\s*,\s*246/, label: 'rgba(139,92,246)（紫）' },
+                { re: /rgba\(\s*167\s*,\s*139\s*,\s*250/, label: 'rgba(167,139,250)（紫）' },
             ];
             for (const s of PINK_SIGNS) {
-                c.ok(!s.re.test(cssNoComments),
-                    `★ 默认主题下没有写死的粉紫 ${s.label}（注释不计）`);
+                c.ok(!s.re.test(baseCss),
+                    `★ 默认主题下没有写死的粉紫 ${s.label}（注释与兜底调色板不计）`);
             }
             // `--color-primary` 这套只服务"自定义"主题与 Tailwind 兜底，
             // 不该被宿主样式直接当强调色用（那会在默认主题下变粉）。
-            c.ok(!/var\(--color-primary\)|var\(--color-secondary\)|var\(--color-accent\)/.test(cssNoComments),
+            c.ok(!/var\(--color-primary\)|var\(--color-secondary\)|var\(--color-accent\)/.test(baseCss),
                 '★ 宿主规则不再直接引用 --color-*（那套是粉紫，只给自定义主题/兜底用）');
         }
 
         // ★★★ 2026-10 所有下拉必须**统一外观**（用户："其他比如语言主题那里的下拉还是老下拉"）
-        //
         // `<select>` 默认由浏览器原生绘制（Windows 是方角小箭头），
         // 与圆角输入框/组合框不一致，且深色下原生箭头不跟随。
         // 修法是 `appearance: none` + 内联 SVG 自绘三角。
@@ -1046,7 +959,6 @@ async function caseTheme(c) {
         }
 
         // ★★★ 2026-10 组合框必须是**一个整体外框**（用户："下拉是一个整体而不是和输入框分成两个部分"）
-        //
         // 第一版把边框画在 input 和三角按钮**各自**身上（靠 -1px 重叠骗眼睛），
         // 结果用户一眼看出是两块；而且高度还对不上（46 vs 48）。
         // 正确做法：外框画在**容器** `.model-combo-row` 上，两个子元素都不带边框。
@@ -1079,13 +991,11 @@ async function caseTheme(c) {
         }
 
         // ★★★ 2026-10 导航按钮组必须**居中**（用户："导航栏应该是居中的，现在选择靠左"）
-        //
         // 这条防的是一个很隐蔽的失效：`#settingsTabNav` 上写着
         // `width: max-content` + `margin: 0 auto`（本意居中），
         // 但元素上还挂着 Tailwind 的 **`flex-1`**（= `flex: 1 1 0%`）——
         // 在 flex 父容器里它会撑满整行，于是 max-content 被忽略、auto margin 无空间可分，
         // 按钮组贴在左边。实测（1440px 视口）按钮组中心偏离视口中心 **317px**。
-        //
         // 修法是把 flex 改成 `0 1 auto`（让 max-content 生效）。
         // 断言两件事：
         //   ① flex 不能再是 `1 1 0%`（不能靠 flex-1 撑满）
@@ -1094,63 +1004,35 @@ async function caseTheme(c) {
         //      左侧那半永远滚不回来（`scrollLeft` 最小是 0）。这条坑在基础规则的
         //      长注释里记着，这里反向钉住，防止有人"顺手"把它改成 center。
         {
-            // ★ 取**基础** #settingsTabNav 规则块 —— 文件里有**三处**同名选择器：
-            //   移动端媒体查询里的两份（只改 max-width/padding 之类）+ 基础规则一份。
-            //   ★★ 提取必须用**花括号配对**，不能用 `\{([\s\S]*?)\n    \}` 这种正则：
-            //      媒体查询里那份的缩进是 12 空格，而正则要求 4 空格，
-            //      于是非贪婪匹配会**一路跑过它自己的 `}`**、吞进后面几百行
-            //      （实测：选出的"基础规则"里混着 .settings-tab-btn 的样式，
-            //        导致 flex / max-content 两条断言假失败）。
-            const navBodies = [];
-            for (let i = 0; i < html.length; i++) {
-                if (!html.startsWith('#settingsTabNav', i)) continue;
-                const open = html.indexOf('{', i);
-                if (open < 0) break;
-                let depth = 0;
-                for (let j = open; j < html.length; j++) {
-                    if (html[j] === '{') depth++;
-                    else if (html[j] === '}') { depth--; if (depth === 0) { navBodies.push(html.slice(open + 1, j)); break; } }
-                }
-                i = open;
-            }
-            c.ok(navBodies.length >= 2, '找到多处 #settingsTabNav 规则（基础 + 移动端）',
-                '实际 ' + navBodies.length + ' 处');
-            // 基础规则 = 含 `flex:` 简写的那一份（移动端那份只有 max-width/padding）
-            const body = navBodies.find((b) => /(^|\s)flex\s*:\s*\d/.test(b)) || '';
-            c.ok(!!body, '找得到基础 #settingsTabNav 规则（含 flex 简写的那一份）');
-            if (body) {
-                // ★ 断言前先**剥掉注释**：这段规则里刻意写了注释解释"flex: 1 1 0% 会撑满整行"
-                //   （说明为什么不能这么写），而那条注释本身会被正则命中 ——
-                //   于是"不该有 flex: 1 1 0%"这条断言被**解释为什么不该有的注释**触发了。
-                //   这是"注释污染判据"的第二次踩坑（第一次见 check-agent-phone.mjs）。
-                const code = body
-                    .replace(/\/\*[\s\S]*?\*\//g, '')
-                    .replace(/\/\/[^\n]*/g, '');
-                c.ok(/flex:\s*0\s+1\s+auto/.test(code),
-                    '★ 导航用 flex: 0 1 auto（写成 flex-1 会撑满整行、居中失效）');
-                c.ok(!/flex:\s*1\s+1\s+0%/.test(code),
-                    '★ 导航不再被 flex: 1 1 0% 撑满（那会让 max-content 失效）');
-                c.ok(/width:\s*max-content/.test(code), '导航宽度是 max-content（才能被 auto margin 居中）');
-                c.ok(/margin:\s*0\s+auto/.test(code), '导航靠 margin: 0 auto 居中');
-                c.ok(/justify-content:\s*flex-start/.test(code),
-                    '★★ justify-content 仍是 flex-start（改成 center 会让溢出部分滚不回来）');
-            }
-            // 元素上不能同时挂 flex-1（那是当初失效的来源）
+            // ★★★ 导航的滚动不变量：`justify-content` 必须是 flex-start。
+            //   容器 `overflow-x: auto` + 内容比容器宽时，`center` 会把溢出部分均分到
+            //   两侧，而 `scrollLeft` 最小是 0 —— 左边那半永远滚不回来（首/末项被裁）。
+            //   这条属性由 redesign.css 的 `html.rd #settingsTabNav` 拥有：基础层那份
+            //   同属性声明被它的 `!important` 压掉，改基础层不会有任何反应。
+            //   ★ 提取必须用**花括号配对**，不能用正则 —— 同文件里有同名选择器好几处，
+            //     缩进各不相同，非贪婪匹配会一路跑过自己的 `}`、吞进后面几百行。
+            const ownerCss = readFileSync(path.join(WEB, 'css', 'redesign.css'), 'utf8');
+            const navOwner = cssBlockAfter(ownerCss, 'html.rd #settingsTabNav {');
+            c.ok(Boolean(navOwner), '找得到 #settingsTabNav 规则的属主（redesign.css）');
+            c.ok(/display:\s*flex/.test(navOwner), '导航是 flex 容器（属主规则里声明）');
+            c.ok(/justify-content:\s*flex-start/.test(navOwner),
+                '★★ justify-content 仍是 flex-start（改成 center 会让溢出部分滚不回来）');
+            c.ok(!/flex:\s*1\s+1\s+0%/.test(ownerCss),
+                '★ 导航没有被 flex: 1 1 0% 撑满（那会让内容宽度失效）');
+            // 元素上不能挂 flex-1（Tailwind 的 flex: 1 1 0%，会盖掉 CSS 的 flex 简写）
             const navTag = html.match(/<div id="settingsTabNav"[^>]*>/);
             c.ok(!!navTag, '找得到 #settingsTabNav 元素');
             if (navTag) {
                 c.ok(!/class="[^"]*\bflex-1\b/.test(navTag[0]),
-                    '★★ 元素上没有 flex-1（有它会盖掉 CSS 里的 flex: 0 1 auto）');
+                    '★★ 元素上没有 flex-1（有它会盖掉 CSS 里的 flex 简写）');
             }
         }
 
         // ★★ 结构完整性：各分栏不能互相嵌套
-        //
         // 这条是补的回归。搬移主题块时插入的 HTML 少了一个 `>`（写成 `</div`），
         // 浏览器把它当成"未闭合的 div 开始"，**后面 8 个分栏全被嵌进了 tab-appearance**。
         // 而 CSS 是 `.settings-tab-panel{display:none}` + `.active-panel{display:block}`，
         // 表现就是"除了外观，其他设置全都不见了"。
-        //
         // 这里用 div 配对算出每个分栏的范围，检查有没有谁被包在别人里面。
         const overlayStart = html.indexOf('id="settingsOverlay"');
         if (overlayStart < 0) {
@@ -1216,7 +1098,6 @@ async function caseTheme(c) {
     {
         // ★★★ 2026-10 用户实测：「删了几个插件之后，再点删除插件，
         //   弹窗里的「确定」按钮在 DOM 里、视觉上却看不见」。
-        //
         //   根因两层，都要钉住：
         //   ① theme.js 的 unregisterTemplate 把"用户是否正停在这套主题上"的判断写在
         //      splice **之后** —— 那一刻 id 已不在清单里，currentTemplate() 一律返回
@@ -1238,20 +1119,15 @@ async function caseTheme(c) {
             '★★ unregisterTemplate 的"是否正停在这套主题上"必须在 splice **之前**判（写在之后恒为 false）',
             `guard@${guardIdx} splice@${spliceIdx}`);
 
+        // v2 不再用 --tpl-primary 写覆盖规则：按钮/气泡直接吃 --rd-accent 一类的令牌。
+        //   那个"变量没了但属性还在 → 白字透明底"的失效链条因此不存在了；
+        //   但旧插件仍可能读 --tpl-primary，所以它必须保留为**有值**的兼容别名，且不能被裸用。
         const css = readFileSync(path.join(WEB, 'css', 'themes.css'), 'utf8')
-            .replace(/\/\*[\s\S]*?\*\//g, '');   // 同上：注释里也提到过 --tpl-primary
-        const btnRule = css.match(/html\[data-theme-template\]\s+\.modal-panel\s+\.btn-primary\s*\{([^}]*)\}/);
-        c.ok(!!btnRule, '找得到 html[data-theme-template] .modal-panel .btn-primary 规则');
-        if (btnRule) {
-            c.ok(/var\(--tpl-primary\s*,/.test(btnRule[1]),
-                '★★ var(--tpl-primary) 带兜底值（缺变量时不会整条渐变失效 → 按钮不会消失）');
-            c.ok(!/var\(--tpl-primary\s*\)/.test(btnRule[1]),
-                '★ 没有裸用 var(--tpl-primary)（取不到值时 background 会回落成透明）');
-        }
-        // 同一类失效就在下面几行：用户气泡也是 `color:#fff !important` + 裸变量
-        const bubbleRule = css.match(/html\[data-theme-template\]\s+body\s+\.bubble-user\s*\{([^}]*)\}/);
-        c.ok(!!bubbleRule && /var\(--tpl-primary\s*,/.test(bubbleRule[1]),
-            '★ 用户气泡的 var(--tpl-primary) 也带兜底（缺变量会变成"看不见的白字"）');
+            .replace(/\/\*[\s\S]*?\*\//g, '');
+        c.ok(/--tpl-primary:\s*var\(--rd-accent\)/.test(css),
+            '★ --tpl-primary 是 --rd-accent 的兼容别名（旧插件取得到值）');
+        c.ok(!/var\(--tpl-primary\s*\)/.test(css),
+            '★★ 没有裸用 var(--tpl-primary)（取不到值时会回落成透明）');
     }
 
     console.log('\n=== 4. 同步（APK 端要用）===');
@@ -1266,12 +1142,9 @@ async function caseTheme(c) {
 
 }
 
-// ────────────────────────────────────────────────────────────
 // 旅行日记的浏览体验（按对话分组 / 点侧栏筛选 / 弹窗看全文）
-//
 // 真起一次 serve.mjs + Playwright 点页面 —— 这一块的 bug 全是"点着点着不对"，
 // 纯源码断言抓不到。
-// ────────────────────────────────────────────────────────────
 
 async function caseDiary(c) {
     const read = (p) => readFileSync(p, 'utf8');
@@ -1281,9 +1154,14 @@ async function caseDiary(c) {
     // ============================================================ 1. 源码约定
     console.log('=== 1. 源码约定 ===');
     {
-        const ui = readFileSync(path.join(WEB, 'js', 'ui.js'), 'utf8');
-        const core = readFileSync(path.join(WEB, 'js', 'core.js'), 'utf8');
-        const html = readFileSync(path.join(WEB, 'index.html'), 'utf8');
+        const ui = readFileSync(path.join(WEB, 'js', 'conversations.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'favorites.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'diary.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'ui.js'), 'utf8');
+        const core = readFileSync(path.join(WEB, 'js', 'core-state.js'), 'utf8')
+        + '\n' + readFileSync(path.join(WEB, 'js', 'core.js'), 'utf8');
+        // 日记栅格的样式在 base.css，DOM 挂载点在 index.html
+        const html = readHtmlAndStyles();
 
         // ① 按对话分组
         c.ok(/function renderDiaryPage/.test(ui), '有 renderDiaryPage');
@@ -1333,10 +1211,8 @@ async function caseDiary(c) {
             '★ 离开日记页要关掉详情弹窗（它挂在 body 上，不随页面隐藏）');
 
         // ⑦ ★★ 日记页里点对话，侧栏也要有选中高亮
-        //
         //   用户报："对话记录这里选中后会有选中的特性，但在日记系统中选中没有对应特效，
         //   只有回到聊天才能正常使用。"
-        //
         //   根因：侧栏条目高亮判的是 `conv.id === state.currentConversationId`，
         //   而"日记页点对话只筛选不跳转"这个行为**恰恰不改** currentConversationId
         //   —— 于是点了对话，侧栏没有任何条目被判定为选中。
@@ -1352,7 +1228,6 @@ async function caseDiary(c) {
             '★★ 离开日记页时重绘侧栏（高亮要切回"当前对话那段"）');
 
         // ⑥ ★★ 删除对话时，日记与收藏都要一起清掉
-        //
         //   用户报："删除对话时会删除日记但是不会删除收藏的句子"。
         //   查下来是**两处删除入口各自只做了一半**（一个删收藏不删日记、
         //   另一个也一样）。所以这里既钉"有共用函数"，也钉"两个入口都调它"。
@@ -1594,7 +1469,6 @@ async function caseDiary(c) {
                 '★★ 「进入对话」按钮仍能切到那段对话（入口没被去掉）', JSON.stringify(enterBtn));
 
             // ---------- 2.6 ★★ 非日记页时点侧栏必须照旧进对话 ----------
-            //
             //   这是最容易被"筛选逻辑"改坏的地方：进对话是最常用的操作，
             //   弄坏它比原来的问题严重得多。所以单独钉一条。
             const normal = await page.evaluate(async () => {
@@ -1625,7 +1499,6 @@ async function caseDiary(c) {
                 JSON.stringify(reenter));
 
             // ---------- 2.8 ★★ 删除对话 → 日记与收藏都要清掉 ----------
-            //
             //   用户报："删除对话时会删除日记但是不会删除收藏的句子"。
             //   这里直接调真实的 deleteConversation（走确认框会自动 resolve 吗？——
             //   不行，所以先 stub 掉 showCustomConfirm 让它直接同意）。
@@ -1708,12 +1581,10 @@ async function caseDiary(c) {
                 JSON.stringify(liveRefresh));
 
             // ---------- 2.10 ★★ 日记页点对话 → 侧栏要有选中高亮 ----------
-            //
             //   用户报的原话："对话记录这里选中后会有选中的特性，但在日记系统中选中
             //   没有对应特效，只有回到聊天才能正常使用。"
             //   所以这里必须测**侧栏条目本身**拿到了 .sidebar-item-active，
             //   而不只是"筛选生效了"（那是另外几条断言的事）。
-            //
             //   ★ 必须先恢复 cA/cB：上面 2.8/2.9 两节为了测删除，
             //     已经把 state.conversations 换成了别的 id —— 不恢复的话
             //     侧栏里根本没有 cA/cB，querySelector 返回 null，
@@ -1798,14 +1669,11 @@ async function caseDiary(c) {
 
 }
 
-// ────────────────────────────────────────────────────────────
 // 「星屑之日」生日模块（已从宿主摘出、改为插件）
-//
 // ★ 插件源码不再随仓库分发（仓库只推软件本体，插件一律走应用内上传安装）。
 //   所以本地没有 mods/birthday/ 是**正常状态**，不是缺陷 ——
 //   第 5 节整节跳过，否则每次 npm run check 都会红一片，把真正的回归淹没掉。
 //   第 1~4 节查的是**宿主**那一侧，与插件在不在无关，照常跑到底。
-// ────────────────────────────────────────────────────────────
 
 async function caseBirthday(c) {
     const MOD = path.join(ROOT, 'mods', 'birthday');
@@ -1816,9 +1684,30 @@ async function caseBirthday(c) {
     const themeJs = read(path.join(WEB, 'js', 'theme.js'));
     const themesCss = read(path.join(WEB, 'css', 'themes.css'));
     const storeJs = read(path.join(WEB, 'js', 'store.js'));
-    const modsJs = read(path.join(WEB, 'js', 'mods.js'));
-    const dataJs = read(path.join(WEB, 'js', 'data.js'));
-    const initJs = read(path.join(WEB, 'js', 'init.js'));
+    const modsJs = read(path.join(WEB, 'js', 'mods-loader.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-contributions.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-services.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-slots.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-summary.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-deps.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-capabilities.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-load.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-enable.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-load-one.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-faults.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-host.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-forget.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-api.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-storage.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-host-core.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods-host-extras.js')) + '\n'
+        + read(path.join(WEB, 'js', 'mods.js'));
+    const dataJs = read(path.join(WEB, 'js', 'announcements.js')) + '\n'
+        + read(path.join(WEB, 'js', 'roleplay.js')) + '\n'
+        + read(path.join(WEB, 'js', 'chat.js')) + '\n'
+        + read(path.join(WEB, 'js', 'data.js'));
+    const initJs = read(path.join(WEB, 'js', 'bindings.js')) + '\n'
+        + read(path.join(WEB, 'js', 'init.js'));
     const achJs = read(path.join(WEB, 'js', 'achievements.js'));
 
     // 所有宿主前端脚本（用来断言"没有任何一处还在引用旧的 ElainaBirthday"）
@@ -1892,7 +1781,7 @@ async function caseBirthday(c) {
             '★★ host.theme 的句柄带 use()/restore()（临时切主题再还原）');
         c.ok(/unlock\(id,\s*detail\)\s*\{/.test(modsJs), '★★ host.unlock(id, detail) 已提供（触发宿主成就）');
         c.ok(/markAppReady\(/.test(modsJs), '★★ markAppReady()（init 末尾广播 app-ready）');
-        c.ok(/appReadyFired/.test(modsJs) && /event === 'app-ready' && appReadyFired/.test(modsJs),
+        c.ok(/appReadyFired/.test(modsJs) && /event === 'app-ready' && (appReadyFired|isAppReady\(\))/.test(modsJs),
             '★★ app-ready 对晚注册的插件会补调（否则慢加载的插件永远等不到启动信号）');
 
         c.ok(/function registerTemplate/.test(themeJs), '★ theme.js 有 registerTemplate()');
@@ -1906,7 +1795,6 @@ async function caseBirthday(c) {
     }
 
     // ============================================================ 5. 插件本体就位
-    //
     // ★ 2026-10 起**插件源码不再随仓库分发**（仓库只推软件本体，插件一律走应用内
     //   上传安装）。所以本地没有 mods/birthday/ 是**正常状态**，不是缺陷 ——
     //   这一节整节跳过，否则每次 npm run check 都会红一片，把真正的回归淹没掉。
@@ -2021,5 +1909,6 @@ await runChecks({
     usage: 'node scripts/check-ui.mjs [用例名子串]',
     cases,
 });
+
 
 

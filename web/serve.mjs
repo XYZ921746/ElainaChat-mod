@@ -20,10 +20,21 @@ import { createModManager } from '../server/mods.mjs';
 //   插件扩应用本身（代码、可装可卸），技能给 AI 用（文本、不注册进应用）。
 // 所以它有自己的管理器与自己的接口（/api/skills），绝不混进插件清单（详见 server/skills.mjs）。
 import { createSkillManager } from '../server/skills.mjs';
+// 备份里的插件 / 技能目录：与 data/ 的键值分开收集，但合进同一个 zip ——
+// 用户备份时只该拿一个文件（见 server/backup-packages.mjs）。
+import { createPackageBackup } from '../server/backup-packages.mjs';
+import { createLanShare, LAN_SHARE_PREFIX } from '../server/lan-share.mjs';
+// 版本检测：查 GitHub 的最新 Release（设置 → 高级「版本与更新」的数据来源）。
+// 单独成模块：可注入 fetch/时钟，网络失败与限流能被穷举断言。
+import { createUpdateChecker } from '../server/update-check.mjs';
 // 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
 // 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
 // 而它放行的是"第三方 JS 在服务端进程里注册接口"，判定错了后面全是空的。
 import { createModServer } from '../server/mod-server.mjs';
+// MCP（Model Context Protocol）**客户端**：把外部 MCP 服务器的工具接进 AI 的工具清单。
+//   只做客户端方向 —— "把本机能力暴露成 MCP 服务器"等于把文件读写与命令执行交给
+//   任何能连上它的客户端，与 BYOK / 权限闸的定位直接冲突（见 mcp-client.mjs 头部说明）。
+import { createMcpRegistry } from '../server/mcp-registry.mjs';
 // "看电脑在干什么"（前台窗口 + 进程）—— 供桌宠让 AI 知道用户在做什么。
 // 单独成模块：纯函数式便于测试，且以后"AI 操作电脑"要判断当前窗口时能直接复用。
 import { activitySummaryCached } from '../server/activity.mjs';
@@ -55,6 +66,11 @@ import { createRelay } from '../server/relay.mjs';
 // 网络边界判定（是否本机请求 / 回环主机名 / 内网地址）放在 server/net-guard.mjs ——
 //   手机端那条中继要用**同一份**判定，安全逻辑不留两份。
 import { isLocalRequest, isLoopbackHostname, isPrivateIPv4, isInternalAddress } from '../server/net-guard.mjs';
+// AI 用浏览器：真的开一个 Chrome / Edge，看页面、点东西、填表单。
+//   与 pc-command 分开是刻意的 —— 命令通道是"文本进文本出"，看不到页面；
+//   浏览器通道要读 DOM、要真点，两件事的失败方式与安全边界都不一样
+//   （浏览器的调试端口能读会话 cookie，所以它只许绑 127.0.0.1）。
+import { createBrowserSession, runBrowserAction, findBrowserExecutable } from '../server/browser.mjs';
 
 const scryptAsync = promisify(scrypt);
 
@@ -70,6 +86,9 @@ const STORE_FILE = path.join(DATA_DIR, 'store.json');
 const CERT_FILE = path.join(DATA_DIR, 'cert.pem');
 const KEY_FILE = path.join(DATA_DIR, 'key.pem');
 const STORE_MAX_BYTES = 32 * 1024 * 1024; // 端侧数据（聊天记录等）单次提交上限
+// 单个键的上限（字符数）。超限必须**报错**而不是丢弃：聊天记录全装在一个键里，
+//   丢掉它等于"保存成功但什么都没写"，用户重启后才发现消息没了。
+const STORE_KEY_MAX_CHARS = 8 * 1024 * 1024;
 // 默认监听 0.0.0.0：局域网内其他设备（手机/平板）可通过 http://<本机IP>:4173 访问。
 // 可用 HOST 环境变量覆盖（如 HOST=127.0.0.1 仅本机）。
 const host = process.env.HOST || '0.0.0.0';
@@ -97,13 +116,11 @@ const PORT_SCAN_SPAN = 100;
 const EXIT_ALREADY_RUNNING = 3;
 
 // 已有实例在跑 → 不起第二个服务（用户把 启动.bat 双击了两次就是这条）。
-//
 // 为什么必须分辨「谁占着端口」：端口被占有两种，处置完全相反 ——
 //   · **别的软件**（QQ、别的服务）占着 → 该往后换端口照常起服务；
 //   · **本项目上一个实例**占着 → 再起一个只会多出一份启动窗口、多占一个端口，
 //     而用户要的还是那个已经在跑的界面，于是把浏览器指过去、自己退出。
 // 判定只认我们自己（见 isOurInstance），别的软件不会被误当成"已有实例"。
-//
 // 只在未显式传 PORT 时做（用户双击启动这条路）：检查脚本各自传 PORT 起服务，
 // 它们要的就是"起一个干净的新实例"，不能被这个分支拦下。
 if (!PORT_EXPLICIT) {
@@ -121,19 +138,16 @@ if (!PORT_EXPLICIT) {
 
 // 插件（mod）根目录。把 xxx.zip 丢进来就会被自动解压并写进 index.json，
 // 前端只读清单 —— 因为浏览器没法列目录（详见 server/mods.mjs 的说明）。
-//
 //   `mods/` 放在**项目根**、不在静态根 `web/` 里：`web/` 是**静态文件根**，
 //   插件住在那儿意味着"插件目录"与"应用自己的前端资源"混在同一棵树里 ——
 //   既不好区分（`web/js` 是宿主的，插件的 JS 是插件的），也让"哪些是程序本体"
 //   这个问题变得含糊。放在根目录下与 `data/` 平级：两者都是"运行期内容"，
 //   都不在静态根内。
-//
 //   ⚠️ 代价（必须由代码补上，否则插件资源全部 404）：
 //      静态处理器只发 `web/` 里的东西，够不到 `mods/`，
 //      所以下面有一条**显式的 /mods/* 路由**（见「插件静态资源」那段）。
 //      少了那条路由，立绘 / 背景 / Live2D 模型 / 插件自带的 panel.html
 //      全部 404 —— 正是本项目最忌讳的"装了等于没装"。
-//
 // 可用环境变量 MODS_DIR 覆盖：
 //   自动化检查要往插件目录里放测试 zip，而**用户自己的服务可能正跑着** ——
 //   它每次被请求 /api/plugins 都会重新扫描目录，于是会把测试的 zip 抢走，
@@ -166,33 +180,24 @@ function isBlockedWritePath(target) {
 }
 
 // ===== 日志系统 =====
-//
 // 格式参照 AstrBot（`astrbot/core/log.py`）：
-//
 //   控制台  [HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息     （终端支持时带 ANSI 颜色）
 //   文件    [YYYY-MM-DD HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息
-//
 // 时间戳带毫秒：同一秒里能连打十几条日志，秒级精度下它们在查看器里
 // 分不出先后、也无法与 bat 面板逐行对齐。
-//
 // 级别固定四位（DBUG/INFO/WARN/ERRO/CRIT），WARN 及以上再带 ` [v版本]` —— 都照 AstrBot 抄的，
 // 等宽、能一眼扫出来、也好 grep。
-//
 // 时间用**本地时间**，不用 toISOString() 的 UTC：否则文件名写着 20:04、
 // 行内却是 12:04，差 8 小时对不上号 —— 日志最基础的可用性就是这个。
-//
 // 两个文件，各管一件事：
 //   <启动时刻>.log         主日志：一行一条记录，方便 grep。服务、访问、中转摘要、Agent、页面报错。
 //   <启动时刻>.trace.log   追踪日志：LLM 的完整请求消息 + 完整回复 + 完整上游报错。
 //                          多行原样保留（这是给人读的），主日志里则压成一行并截断。
-//
 // 为什么分成两个：对话内容又长又私密。混在主日志里会把 grep 结果淹掉；而且排查问题时
 // 主日志常常是要直接发出去的 —— 分开之后"要不要发对话内容"就变成一个明确的动作。
 // 追踪日志默认开（`LOG_CHAT=0` 关掉），启动时会打一行提醒。
-//
 // 落盘策略：**每次启动一组文件**，文件名就是启动时刻；单个文件超过 LOG_MAX_BYTES 就拆 `_2`/`_3`；
 // 只保留最近 LOG_KEEP 次启动（同一次启动的主日志与追踪日志一起留、一起删）。
-//
 // 不记录请求头：Authorization 就在里面，落盘等于把 API Key 写到磁盘上。
 // 请求体/响应体里的凭据形态由 redactSecrets() 兜底。
 // LOG_DIR 可以覆盖：自动化检查要起真实服务、跑真实的日志写入，
@@ -252,10 +257,8 @@ const LEVEL_INPUT_ALIASES = {
 };
 
 // ---- 落盘级别 ----
-//
 // 与 AstrBot 的分工一致：**控制台 sink 恒为 DEBUG（终端永远看全量），文件 sink 按级别过滤**。
 // 这样"排查时终端不丢东西"和"日志文件不被 DEBUG 刷爆"可以同时成立。
-//
 // **级别不是用户配置**（设置界面里没有这块，见 index.html 说明）。
 //   只有"环境变量 > 默认"两档，运行期仍可用 /api/logs/settings 临时改（调试与自动化检查要用）。
 //   为什么**不持久化到磁盘**：data/logs/log-settings.json 是给界面用的 ——
@@ -270,10 +273,8 @@ function normalizeLevelName(raw) {
 }
 
 // ── 控制台级别──────────────────────────────────────────
-//
 // 控制台不能无条件全量：请求日志是 DEBUG 级，全量会把终端刷成
 // 每个请求一行 —— 对日常使用是纯噪音，反而耽误排查问题的进度。
-//
 // 所以**控制台与文件各有级别开关**（都可在 设置 → 高级 → 日志 运行时调整）：
 //   · consoleLevel = DEBUG → 什么都能看到（排查时用）
 //   · consoleLevel = INFO（默认）→ 日常干净，请求细节/页面调试不刷屏
@@ -348,6 +349,15 @@ if (!process.env.APP_VERSION) {
         APP_VERSION = JSON.parse(readFileSync(path.join(APP_ROOT, 'package.json'), 'utf8')).version || APP_VERSION;
     } catch { /* 读不到就算了 */ }
 }
+
+// 运行形态：桌面壳通过 ELAINA_EDITION 告诉服务端自己是谁 ——
+//   电脑版（C# + WebView2）传 windows；直接跑源码 / 浏览器打开时不传。
+//   版本检测要据此给出对应的安装包，所以只认白名单，
+//   未知值一律当 web（宁可少标一个平台，不可标错）。
+const APP_EDITION = (() => {
+    const raw = String(process.env.ELAINA_EDITION || '').trim().toLowerCase();
+    return raw === 'windows' ? raw : 'web';
+})();
 
 // 消息开头的 [xxx] 会被抽出来当标签，正文里不再重复 —— 所以调用点照旧写
 // `console.log('[relay] ...')` 即可。这里把历史遗留的标签收敛成一套固定词汇，
@@ -473,7 +483,6 @@ function pruneOldLogs() {
  */
 const SECRET_RULES = [
     // 启动横幅：只保留标签。
-    //
     // 这条规则必须容忍"标签与冒号之间还有别的字"。
     //   收紧写法 `/访问密码[:：]\s*\S+/`（要求 `访问密码` 后面**紧跟**冒号）会漏：
     //   文案「局域网访问密码（初始随机）：xxxx」中间多了「（初始随机）」，
@@ -497,6 +506,10 @@ const SECRET_RULES = [
     // 兜底：万一日志里带上了 Authorization 头或 key=value 形式的凭据
     [/(Bearer\s+)[A-Za-z0-9._\-]{8,}/gi, '$1******'],
     [/((?:apiKey|api_key|api-key|accessKey|access_key|token|password|secret|authorization)"?\s*[:=]\s*"?)([A-Za-z0-9._\-]{12,})/gi, '$1******'],
+    // Tavily 的 Key 形态是 tvly-xxxx。上面那条按"字段名"匹配，而 Tavily 走的是
+    //   Authorization: Bearer tvly-…（已被 Bearer 规则覆盖）与请求体里的裸 key 两种形态 ——
+    //   裸 key 没有字段名，只能按厂商前缀认。
+    [/\btvly-[A-Za-z0-9._\-]{8,}/g, 'tvly-******'],
     // 常见厂商的裸 key 形态（sk- / rc- 等），万一出现在对话或报错里
     [/\b(sk|rc|hk|ak)-[A-Za-z0-9._\-]{16,}/g, '$1-******'],
 ];
@@ -544,7 +557,6 @@ function appendToFile(sink, text) {
             sink.file = sinkPath(sink);
             sink.bytes = 0;
             // 走 console.log（→ emitLog）而不是 consoleOriginal.log。
-            //
             //   必须走 console.log 而不是 consoleOriginal 直推终端：直推的话
             //   **这条只在 bat 面板里、查看器里没有** —— 而"日志被拆成第二个文件了"
             //   恰恰是要在查看器里解释的现象（日志续写在 <时刻>_2.log 里，
@@ -625,7 +637,6 @@ function emitLog(level, args) {
 function formatForFile(body, now, tag, short, verTag, loc) {
     const head = `[${logTimeFull(now)}] [${tag}] [${short}]${verTag} [${loc}]: `;
     // 先去掉正文**开头**的空行。
-    //
     //   为什么：诊断块为了在终端里和上一条隔开，正文以 `\n` 开头
     //   （`section()` 就是这么产出的）。若原样落盘，记录的首行会变成
     //   `[时刻] [Core] [INFO] [serve:558]: ` —— 冒号后面空空如也，
@@ -643,7 +654,6 @@ function formatForFile(body, now, tag, short, verTag, loc) {
 }
 
 // ── 内存日志缓冲（软件内日志查看器的数据源）────────────────────────────
-//
 // 每条日志在 emitLog 里存一份解析好的结构化记录；/api/logs/tail 按级别/模块/
 // 关键词过滤后返回给前端。**写入不受落盘级别约束** —— 过滤发生在读的时候，
 // 这样查看器切到 DEBUG 能看到全量（等同终端），切到 ERROR 只看报错。
@@ -693,15 +703,12 @@ pruneOldLogs();   // 放在包装之后：清理动作本身也进日志
 const BOOT_AT = Date.now();
 
 // ── 启动输出：**简短、英文、信息密度优先**──────
-//
 // 两条要求：日志要的是"详细"，不是往里加不相干的信息；
 // 正文用全英文（中文日志不如英文日志好用）。
-//
 // 两条约束：
 //   · 日志里不能塞「这是什么 / 怎么用」这类大段说明 —— 那是文档不是日志，
 //     每次启动都滚一遍，把真正的事件淹没，从日志提取信息反而变难。
 //   · 正文不能用中文长句（"无法加载" vs "加载失败"同义不同词），无法 grep。
-//
 // 取舍：
 //   · 日志正文 = **一行一个事件，英文**，给 grep / AI / 日志查看器用
 //   · 面向人的引导（地址、密码、注意事项）只在**首次生成密码**那一条里保留中文，
@@ -801,6 +808,62 @@ const modManager = createModManager({
     log: (msg) => console.log('[Mod] ' + msg),
 });
 
+// ===== MCP 客户端注册表 =====
+// MCP 服务器是**长命子进程**，所以只建一份注册表跨请求复用 ——
+//   每个请求各建一个会长出成堆的 node 进程（它们不会自己退出）。
+const mcpRegistry = createMcpRegistry({
+    log: (msg) => console.log('[MCP] ' + msg),
+});
+
+/**
+ * 读用户配置的 MCP 服务器清单。
+ *
+ * 设置存在 data/main/store.json 的 elaina_open_settings 里（与前端同一个键），
+ *   走 store 的公开接口而不是自己读文件 —— 布局变动后自拼路径会静默失效，
+ *   那时"关掉了却还能被调起来"正是最该防住的情况（与 browserEnabledByUser 同理）。
+ *
+ * ⚠️ 返回的服务器**一个都不启动**：这是纯读配置。真启动发生在
+ *   listTools / callTool 里，由调用方按需触发。
+ */
+function normalizeMcpHeaders(headers) {
+    // 自定义请求头（远程鉴权）：只保留字符串值，其余丢掉 ——
+    //   非字符串进 header 会让 fetch 抛 TypeError，报错看不懂
+    if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return {};
+    return Object.fromEntries(Object.entries(headers)
+        .filter(([k, v]) => k && (typeof v === 'string' || typeof v === 'number'))
+        .map(([k, v]) => [String(k), String(v)]));
+}
+
+function normalizeMcpServer(s) {
+    return {
+        id: String(s.id || '').trim(),
+        name: String(s.name || s.id || '').trim(),
+        // 远程传输：url 非空就走 HTTP（见 server/mcp-http-client.mjs）
+        url: String(s.url || '').trim(),
+        command: String(s.command || '').trim(),
+        args: Array.isArray(s.args) ? s.args.map(String) : [],
+        env: (s.env && typeof s.env === 'object') ? s.env : {},
+        cwd: String(s.cwd || '').trim(),
+        headers: normalizeMcpHeaders(s.headers),
+    };
+}
+
+async function mcpServersFromSettings() {
+    try {
+        const data = await loadStore();
+        const settings = JSON.parse(data['elaina_open_settings'] || '{}');
+        const list = Array.isArray(settings.mcpServers) ? settings.mcpServers : [];
+        return list
+            .filter((s) => s && typeof s === 'object' && s.enabled === true)
+            .map(normalizeMcpServer)
+            // 只要有 url 或 command 就能连；两者都没有的条目在客户端已被标 disabled，
+            //   这里再挡一次，避免把空配置传给 registry 建一个必然失败的连接。
+            .filter((s) => s.id && (s.url || s.command));
+    } catch {
+        return [];
+    }
+}
+
 // ===== 技能（skill）管理器 =====
 // 与 modManager 复用**同一份** unzip（已含体积上限、危险类型拦截、路径穿越防护）——
 // 解压是安全敏感代码，只该有一个实现（见 server/zip.mjs 的说明）。
@@ -812,6 +875,16 @@ const skillManager = createSkillManager({
     isUnsafeEntryName,
     effectiveExt,
     log: (msg) => console.log('[Skill] ' + msg),
+});
+
+// 数据备份里的插件 / 技能：共用安装接口那套路径与扩展名校验，
+// 这样从备份恢复的包与从市场安装的包受同一份安全规则约束。
+const packageBackup = createPackageBackup({
+    modsDir: MODS_DIR,
+    skillsDir: SKILLS_DIR,
+    isUnsafeEntryName,
+    effectiveExt,
+    log: (msg) => console.log('[Backup] ' + msg),
 });
 
 /**
@@ -872,12 +945,9 @@ const modServer = createModServer({
 
 
 // ===== AI Agent 文件操作 API =====
-//
 // 权限模型是**四档**：`off` / `strict` / `auto` / `full`。
-//
 //   "能碰哪里"与"要不要问"必须拆成两件事。捆在一个开关上（能碰任意路径 = 不再逐条确认）
 //   的话，用户想要"能碰任意路径但仍然每次都问"时无从表达。
-//
 //   所以**三档都能访问任意路径**，区别只在"要不要问"与"允不允许删除"。
 //   再加上一个"整块关闭"的 `off` 档：
 //     · off    关闭     —— 电脑操作**整体不存在**：不能读（列目录 / 读文件 / 拿真实路径）、
@@ -887,7 +957,6 @@ const modServer = createModServer({
 //                          读取（列目录 / 读文件）不问。
 //     · auto   自动通过 —— 改动类操作直接放行，但**禁止删除**（删除接口整体拒绝）。
 //     · full   完全访问 —— 含删除在内全部放行。
-//
 //   ⚠️ 两个必须记住的后果（都是刻意的，不是疏漏）：
 //     ① **读取在 strict/auto/full 任何一档下都不询问**。所以 strict 档下 AI 仍可无声地读
 //        `data/store.json`（内含 API Key 明文）、`~/.ssh/id_rsa` 等任意文件。
@@ -939,6 +1008,59 @@ function accessAsksBeforeChange(access) {
     return normalizeAgentAccess(access) === 'strict';
 }
 
+// ===== AI 用浏览器 =====
+// 一个**进程级单例**：浏览器是有状态的（当前在哪个页面、登录态、profile 目录），
+//   每次请求新建一个的话，"看页面 → 点一下 → 再看"这条链就断了。
+// 空闲自动关闭由 session 自己管（见 browser.mjs 的 IDLE_CLOSE_MS）。
+const browserSession = createBrowserSession({
+    log: (msg) => console.log('[Browser] ' + msg),
+    // 有头模式：让用户**看得见** AI 在点什么。这是这个项目一贯的要求
+    //   （"AI 到底动了什么"必须可见，见 recordTurnTool 那套）。
+    //   代价是它会弹出一个窗口；不想要的话把环境变量 ELAINA_BROWSER_HEADLESS 设为 1。
+    headless: process.env.ELAINA_BROWSER_HEADLESS === '1',
+});
+
+/**
+ * 浏览器接口的统一鉴权与档位判定。
+ *
+ * 边界比文件操作更紧，两条理由：
+ *   ① 调试端口能读**所有** cookie 与 localStorage —— 它等价于"这个浏览器里的
+ *      全部登录态"。所以只认**本机**，局域网设备一律拒绝（文件/命令是"登录即可"，
+ *      浏览器不是）。
+ *   ② 关闭档（off）同样整块关闭：浏览记录与页面内容都属于"电脑信息"。
+ *
+ * @returns {string|null} 拒绝原因；null 表示放行
+ */
+function browserDenyReason(request, access) {
+    if (!isLocalRequest(request)) return '只有本机能用 AI 浏览器（调试端口能读到这台机器上所有登录态）';
+    if (accessDisabled(access)) return 'AI 的电脑操作已在设置里关闭（「AI 权限 → 关闭」）';
+    return null;
+}
+
+/**
+ * 用户有没有打开「允许 AI 用浏览器」。
+ *
+ * 为什么服务端要自己读一遍设置，而不是信前端传来的开关：
+ *   这个接口会**在这台机器上起一个浏览器进程**。前端可以被绕过（同源 fetch 谁都能发），
+ *   而"关掉了却还能被调起来"是最糟的那种失效 —— 用户以为关了就没事了。
+ *
+ * 设置存在 data/store.json 的 elaina_open_settings 里（与前端同一个键）。
+ *   读不到（文件不存在 / JSON 坏 / 键缺失）一律当**关闭**：默认值就是关。
+ */
+async function browserEnabledByUser() {
+    try {
+        // 走 store 的公开接口而不是自己读文件：store.json 的真身是
+        //   data/main/store.json（分类布局），且它有自己的内存缓存与迁移逻辑。
+        //   自己拼路径读会在布局变动后静默失效 —— 那时"关掉了却还能被调起来"，
+        //   正是这段代码最该防住的情况。
+        const data = await loadStore();
+        const settings = JSON.parse(data['elaina_open_settings'] || '{}');
+        return settings.agentBrowserEnabled === true;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * 两个路径是不是同一个。
  *
@@ -979,7 +1101,6 @@ function isPathInside(target, dir) {
 // 而 AI 只会按惯例猜这个路径 —— 猜错就是一句「目录不存在」，然后它就没招了
 // （典型故障：桌面在 D:\桌面，AI 猜 C:\Users\Administrator\Desktop，404，操作终止）。
 // 权威答案在注册表 HKCU\...\Explorer\User Shell Folders 里，这里读出来给 AI 用。
-//
 // fallback 是「注册表读不到」时的按惯例猜测（非 Windows、或安全策略拦住 reg.exe/PowerShell）。
 const SHELL_FOLDER_SPECS = [
     { key: 'desktop', label: '桌面', reg: ['Desktop'], fallback: ['Desktop', '桌面', 'OneDrive/Desktop', 'OneDrive/桌面'], aliases: ['desktop', '桌面'] },
@@ -1257,94 +1378,112 @@ async function agentRead(params, res, privileged) {
     }
 }
 
+async function readAgentWriteBody(request, res) {
+    // 读请求体并限制大小（不设上限的话，一个超大 body 就能把进程内存吃满）
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of request) {
+        total += chunk.length;
+        if (total > AGENT_WRITE_LIMIT) {
+            request.resume();
+            jsonResponse(res, 413, { ok: false, message: `写入内容超过 ${Math.round(AGENT_WRITE_LIMIT / 1024)}KB 上限` });
+            return null;
+        }
+        chunks.push(chunk);
+    }
+    try {
+        return { body: JSON.parse(Buffer.concat(chunks).toString('utf8')) };
+    } catch {
+        jsonResponse(res, 400, { ok: false, message: '请求体无效' });
+        return null;
+    }
+}
+
+function rejectBlockedWriteTarget(target, access, res) {
+    // web/ 内禁写危险类型（.html/.js/.svg）：这些文件一旦落进 web/，静态服务就会
+    // 以同源身份执行/渲染它们（.html 直接构成存储型 XSS）。
+    // 三档模型下只有 `full` 放行 —— 它对应旧的 computer 模式，语义就是
+    //   "用户已授权操作电脑任意路径，风险自担"。strict / auto 仍然拦。
+    // 判据走 isBlockedWritePath（剥掉 ADS / 尾随点 / 尾随空格后再取扩展名）——
+    // 直接 path.extname(target) 会被 `x.html::$DATA` 这类写法绕过，落盘仍是 x.html。
+    // 所以 in-web 的保护**永不**因"目标在 web/ 外"而放宽。
+    // ⚠️ 诚实说明：这道闸门只挡"通过写入接口"这条路 —— 有了命令执行之后，
+    //    `echo x > web/a.html` 这类写法被危险判定归为 **safe**（重定向目标不是
+    //    绝对系统路径），不带授权就能落盘。所以它防的是"模型顺手写个文件"，
+    //    不是"铁了心要注入的人"。真正的边界是"要不要给命令执行"。
+    const inAppRoot = target === AGENT_APP_ROOT || target.startsWith(AGENT_APP_ROOT + path.sep);
+    if (inAppRoot && access !== 'full' && isBlockedWritePath(target)) {
+        jsonResponse(res, 400, { ok: false, message: '应用文件夹内不允许写 .html/.js/.svg 等可执行类型的文件（防止同源代码注入）' });
+        return true;
+    }
+    return false;
+}
+
+async function confirmAgentWrite(target, access, body, res) {
+    // strict 档下**任何写入都要先确认**（新建与覆盖都算"改动电脑"）。
+    //   这与设置页文案（「写入、覆盖已有文件、删除、执行命令 …… 每一次都会问你」）
+    //   以及注入给模型的提示词（data.js 的 accessNote）保持一致。
+    //   历史缺口：早期实现只对"覆盖已有文件"要确认，于是 strict 档下
+    //   **新建一个文件（例如在桌面新建）既不弹窗也不询问** —— 用户选了最低档
+    //   却仍被无声写入。这条缺口已在此补上：目标不存在时回 `needCreate`。
+    // 三档语义（见文件顶部那段说明）：
+    //   strict → 回 needOverwrite / needCreate，前端弹一次确认，
+    //            同意后带 overwrite:true 重发
+    //   auto   → 直接放行（用户选的就是"自动通过"）
+    //   full   → 直接放行
+    // ⚠️ `auto` 档放行覆盖是有意的：它只禁删除。代价是 AI 可以用
+    //    "写入同名文件"绕过删除禁令 —— 见文件顶部第 ② 条说明。
+    // 判据用 stat 而不是 existsSync：目标可能是目录（写它会 ENOTDIR/EISDIR），
+    // 那种情况交给下面的 writeFile 自己报错，不在这里伪装成"覆盖确认"。
+    let targetExists = false;
+    try {
+        const existed = await stat(target);
+        targetExists = existed.isFile();
+    } catch { /* 不存在 / 无权限：都按"新建"处理，真正的错误由 writeFile 抛出 */ }
+    // overwrite:true = 用户已确认这次写入。新建与覆盖共用这一个确认令牌，
+    // 因为前端两条确认分支复用同一个 send(true) 通道（见 agent.js 的 doAgentFile）。
+    if (accessAsksBeforeChange(access) && body.overwrite !== true) {
+        if (targetExists) {
+            jsonResponse(res, 403, {
+                ok: false,
+                needOverwrite: true,
+                message: '目标文件已存在：这次写入会**覆盖**它原有的内容。需要你确认后才能继续。',
+            });
+            return false;
+        }
+        jsonResponse(res, 403, {
+            ok: false,
+            needCreate: true,
+            message: 'AI 想在你的电脑上新建一个文件：' + target + '。需要你确认后才能写入。',
+        });
+        return false;
+    }
+    return true;
+}
+
+async function ensureWriteParent(target) {
+    // 只在目录不存在时创建（Windows 对盘符根目录如 D:\ 执行 mkdir 会报 EPERM）
+    const dir = path.dirname(target);
+    try {
+        await stat(dir);
+    } catch {
+        try { await mkdir(dir, { recursive: true }); } catch (e) { /* 忽略已存在等错误 */ }
+    }
+}
+
 async function agentWrite(request, res, privileged) {
     try {
-        // 读请求体并限制大小（不设上限的话，一个超大 body 就能把进程内存吃满）
-        const chunks = [];
-        let total = 0;
-        for await (const chunk of request) {
-            total += chunk.length;
-            if (total > AGENT_WRITE_LIMIT) {
-                request.resume();
-                return jsonResponse(res, 413, { ok: false, message: `写入内容超过 ${Math.round(AGENT_WRITE_LIMIT / 1024)}KB 上限` });
-            }
-            chunks.push(chunk);
-        }
-        let body;
-        try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { return jsonResponse(res, 400, { ok: false, message: '请求体无效' }); }
+        const parsed = await readAgentWriteBody(request, res);
+        if (!parsed) return;
+        const body = parsed.body;
         const access = normalizeAgentAccess(body.access || body.permission);
         if (accessDisabled(access)) return agentDisabledResponse(res);
         const r = resolveAgentPathEx(body.path, access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
-        // web/ 内禁写危险类型（.html/.js/.svg）：这些文件一旦落进 web/，静态服务就会
-        // 以同源身份执行/渲染它们（.html 直接构成存储型 XSS）。
-        //
-        // 三档模型下只有 `full` 放行 —— 它对应旧的 computer 模式，语义就是
-        //   "用户已授权操作电脑任意路径，风险自担"。strict / auto 仍然拦。
-        //
-        // 判据走 isBlockedWritePath（剥掉 ADS / 尾随点 / 尾随空格后再取扩展名）——
-        // 直接 path.extname(target) 会被 `x.html::$DATA` 这类写法绕过，落盘仍是 x.html。
-        // 所以 in-web 的保护**永不**因"目标在 web/ 外"而放宽。
-        //
-        // ⚠️ 诚实说明：这道闸门只挡"通过写入接口"这条路 —— 有了命令执行之后，
-        //    `echo x > web/a.html` 这类写法被危险判定归为 **safe**（重定向目标不是
-        //    绝对系统路径），不带授权就能落盘。所以它防的是"模型顺手写个文件"，
-        //    不是"铁了心要注入的人"。真正的边界是"要不要给命令执行"。
-        const inAppRoot = target === AGENT_APP_ROOT || target.startsWith(AGENT_APP_ROOT + path.sep);
-        if (inAppRoot && access !== 'full' && isBlockedWritePath(target)) {
-            return jsonResponse(res, 400, { ok: false, message: '应用文件夹内不允许写 .html/.js/.svg 等可执行类型的文件（防止同源代码注入）' });
-        }
-
-        // strict 档下**任何写入都要先确认**（新建与覆盖都算"改动电脑"）。
-        //
-        //   这与设置页文案（「写入、覆盖已有文件、删除、执行命令 …… 每一次都会问你」）
-        //   以及注入给模型的提示词（data.js 的 accessNote）保持一致。
-        //
-        //   历史缺口：早期实现只对"覆盖已有文件"要确认，于是 strict 档下
-        //   **新建一个文件（例如在桌面新建）既不弹窗也不询问** —— 用户选了最低档
-        //   却仍被无声写入。这条缺口已在此补上：目标不存在时回 `needCreate`。
-        //
-        // 三档语义（见文件顶部那段说明）：
-        //   strict → 回 needOverwrite / needCreate，前端弹一次确认，
-        //            同意后带 overwrite:true 重发
-        //   auto   → 直接放行（用户选的就是"自动通过"）
-        //   full   → 直接放行
-        //
-        // ⚠️ `auto` 档放行覆盖是有意的：它只禁删除。代价是 AI 可以用
-        //    "写入同名文件"绕过删除禁令 —— 见文件顶部第 ② 条说明。
-        //
-        // 判据用 stat 而不是 existsSync：目标可能是目录（写它会 ENOTDIR/EISDIR），
-        // 那种情况交给下面的 writeFile 自己报错，不在这里伪装成"覆盖确认"。
-        let targetExists = false;
-        try {
-            const existed = await stat(target);
-            targetExists = existed.isFile();
-        } catch { /* 不存在 / 无权限：都按"新建"处理，真正的错误由 writeFile 抛出 */ }
-        // overwrite:true = 用户已确认这次写入。新建与覆盖共用这一个确认令牌，
-        // 因为前端两条确认分支复用同一个 send(true) 通道（见 agent.js 的 doAgentFile）。
-        if (accessAsksBeforeChange(access) && body.overwrite !== true) {
-            if (targetExists) {
-                return jsonResponse(res, 403, {
-                    ok: false,
-                    needOverwrite: true,
-                    message: '目标文件已存在：这次写入会**覆盖**它原有的内容。需要你确认后才能继续。',
-                });
-            }
-            return jsonResponse(res, 403, {
-                ok: false,
-                needCreate: true,
-                message: 'AI 想在你的电脑上新建一个文件：' + target + '。需要你确认后才能写入。',
-            });
-        }
-
-        // 只在目录不存在时创建（Windows 对盘符根目录如 D:\ 执行 mkdir 会报 EPERM）
-        const dir = path.dirname(target);
-        try {
-            await stat(dir);
-        } catch {
-            try { await mkdir(dir, { recursive: true }); } catch (e) { /* 忽略已存在等错误 */ }
-        }
+        if (rejectBlockedWriteTarget(target, access, res)) return;
+        if (!(await confirmAgentWrite(target, access, body, res))) return;
+        await ensureWriteParent(target);
         await writeFile(target, String(body.content ?? ''), 'utf8');
         jsonResponse(res, 200, { ok: true, path: target });
     } catch (err) {
@@ -1450,6 +1589,66 @@ async function agentExec(request, res, privileged) {
  * 服务端自己判档位，不信前端的 confirmed —— 绕过前端直接 POST 也删不掉。
  *   这是与 agentExec 同一条理由：授权不能只是客户端的礼貌动作。
  */
+function rejectDeleteTarget(target, res) {
+    // 拒绝删除几个"删了就回不来 / 会连坐"的位置。
+    // 判据刻意是**精确匹配**（+ 系统目录用前缀），不是"整个 web/ 子树"：
+    //   「完全访问」这一档的定义就是"AI 能做任何事，包括删除" ——
+    //   如果把 web/ 下所有文件都禁掉，那 AI 连自己刚建的一个临时文件都删不掉，
+    //   这一档就名不副实了。
+    //   所以只挡**整锅端**的那几个：盘符根、Windows、Program Files、
+    //   以及应用自己的两个根目录（web/ 与项目根）**本身**。
+    //   删它们等于把应用连根拔掉，而删它们**里面的某个文件**是用户的自由。
+    //   ⚠️ 诚实说明：这条保护是"防手滑"，不是"防恶意" ——
+    //      完全访问档下 AI 仍可以逐个删掉 web/ 里的文件。
+    //      真正的边界是"要不要开这一档"，这正是设置页里那段后果说明的意义。
+    const projectRoot = path.resolve(AGENT_APP_ROOT, '..');
+    const rootOfTarget = path.parse(target).root;
+    if (samePath(target, rootOfTarget)) {
+        jsonResponse(res, 400, { ok: false, message: '不能删除盘符根目录：' + target });
+        return true;
+    }
+    // 比较必须走 samePath（Windows 下大小写不敏感）——
+    //   直接 `target === path.resolve(g.p)` 会被 `D:\222\elainachat-open\web`
+    //   这种**换了个大小写**的写法绕过（Windows 认为是同一个目录）。
+    const exactGuard = [
+        { p: projectRoot, why: '项目根目录' },
+        { p: AGENT_APP_ROOT, why: '应用自己的文件夹（web/）' },
+    ];
+    for (const g of exactGuard) {
+        if (samePath(target, g.p)) {
+            jsonResponse(res, 400, {
+                ok: false,
+                message: '不能删除' + g.why + '本身：' + target
+                    + '\n（它里面的单个文件可以删，但整个目录不行 —— 那会把应用连根拔掉。）',
+            });
+            return true;
+        }
+    }
+    const prefixGuard = [
+        { p: process.env.SystemRoot || 'C:\\Windows', why: '系统目录' },
+        { p: process.env.ProgramFiles || 'C:\\Program Files', why: '程序目录' },
+    ];
+    for (const g of prefixGuard) {
+        if (isPathInside(target, g.p)) {
+            jsonResponse(res, 400, { ok: false, message: '不能删除' + g.why + '：' + target });
+            return true;
+        }
+    }
+    return false;
+}
+
+function deleteFailureReason(rmErr) {
+    // 删除失败要给**人能看懂**的原因，不能把 Node 的原始错误码甩出去。
+    //   最常见的两种：EBUSY（文件被别的程序占用 —— 比如正开着这个文件）、
+    //   EPERM（没有权限 / 只读）。这两种都不是"操作错了"，而是"现在删不了"。
+    const code = String(rmErr?.code || '');
+    if (code === 'EBUSY') return '这个文件或目录正被别的程序占用（先关掉它再试）';
+    if (code === 'EPERM') return '没有权限删除它（可能是只读，或需要管理员权限）';
+    if (code === 'ENOTEMPTY') return '目录非空且其中有删不掉的内容';
+    if (code === 'ENOENT') return '它已经不存在了（可能刚被别的程序删掉）';
+    return '删除失败（' + code + '）';
+}
+
 async function agentDelete(request, res, privileged) {
     try {
         let body;
@@ -1473,51 +1672,7 @@ async function agentDelete(request, res, privileged) {
         const r = resolveAgentPathEx(body.path, access, privileged);
         if (!r.ok) return denyPath(res, r.reason, privileged);
         const target = r.path;
-
-        // 拒绝删除几个"删了就回不来 / 会连坐"的位置。
-        //
-        // 判据刻意是**精确匹配**（+ 系统目录用前缀），不是"整个 web/ 子树"：
-        //   「完全访问」这一档的定义就是"AI 能做任何事，包括删除" ——
-        //   如果把 web/ 下所有文件都禁掉，那 AI 连自己刚建的一个临时文件都删不掉，
-        //   这一档就名不副实了。
-        //
-        //   所以只挡**整锅端**的那几个：盘符根、Windows、Program Files、
-        //   以及应用自己的两个根目录（web/ 与项目根）**本身**。
-        //   删它们等于把应用连根拔掉，而删它们**里面的某个文件**是用户的自由。
-        //
-        //   ⚠️ 诚实说明：这条保护是"防手滑"，不是"防恶意" ——
-        //      完全访问档下 AI 仍可以逐个删掉 web/ 里的文件。
-        //      真正的边界是"要不要开这一档"，这正是设置页里那段后果说明的意义。
-        const projectRoot = path.resolve(AGENT_APP_ROOT, '..');
-        const rootOfTarget = path.parse(target).root;
-        if (samePath(target, rootOfTarget)) {
-            return jsonResponse(res, 400, { ok: false, message: '不能删除盘符根目录：' + target });
-        }
-        // 比较必须走 samePath（Windows 下大小写不敏感）——
-        //   直接 `target === path.resolve(g.p)` 会被 `D:\222\elainachat-open\web`
-        //   这种**换了个大小写**的写法绕过（Windows 认为是同一个目录）。
-        const exactGuard = [
-            { p: projectRoot, why: '项目根目录' },
-            { p: AGENT_APP_ROOT, why: '应用自己的文件夹（web/）' },
-        ];
-        for (const g of exactGuard) {
-            if (samePath(target, g.p)) {
-                return jsonResponse(res, 400, {
-                    ok: false,
-                    message: '不能删除' + g.why + '本身：' + target
-                        + '\n（它里面的单个文件可以删，但整个目录不行 —— 那会把应用连根拔掉。）',
-                });
-            }
-        }
-        const prefixGuard = [
-            { p: process.env.SystemRoot || 'C:\\Windows', why: '系统目录' },
-            { p: process.env.ProgramFiles || 'C:\\Program Files', why: '程序目录' },
-        ];
-        for (const g of prefixGuard) {
-            if (isPathInside(target, g.p)) {
-                return jsonResponse(res, 400, { ok: false, message: '不能删除' + g.why + '：' + target });
-            }
-        }
+        if (rejectDeleteTarget(target, res)) return;
 
         const info = await stat(target).catch(() => null);
         if (!info) return jsonResponse(res, 404, { ok: false, message: '要删除的东西不存在：' + target });
@@ -1541,17 +1696,8 @@ async function agentDelete(request, res, privileged) {
                 await rm(target, { force: true });
             }
         } catch (rmErr) {
-            // 删除失败要给**人能看懂**的原因，不能把 Node 的原始错误码甩出去。
-            //   最常见的两种：EBUSY（文件被别的程序占用 —— 比如正开着这个文件）、
-            //   EPERM（没有权限 / 只读）。这两种都不是"操作错了"，而是"现在删不了"。
             const code = String(rmErr?.code || '');
-            let why = '删除失败';
-            if (code === 'EBUSY') why = '这个文件或目录正被别的程序占用（先关掉它再试）';
-            else if (code === 'EPERM') why = '没有权限删除它（可能是只读，或需要管理员权限）';
-            else if (code === 'ENOTEMPTY') why = '目录非空且其中有删不掉的内容';
-            else if (code === 'ENOENT') why = '它已经不存在了（可能刚被别的程序删掉）';
-            else why = '删除失败（' + code + '）';
-            return jsonResponse(res, 500, { ok: false, code, message: why + '：' + target });
+            return jsonResponse(res, 500, { ok: false, code, message: deleteFailureReason(rmErr) + '：' + target });
         }
         return jsonResponse(res, 200, {
             ok: true,
@@ -1845,10 +1991,90 @@ async function ensureCertificate(force = false) {
     }
 }
 
+/**
+ * 数据导入的完整判定（纯逻辑，不碰 request / response）。
+ *
+ * 拆成函数是为了让"先校验、后落盘"看得见：整包解不开 / 没有任何可导入的内容时
+ * 必须在**写任何文件之前**返回错误，否则一个坏包会先把已有数据清掉再报失败。
+ *
+ * 备份 zip 的顶层三件（与项目根一一对应）：data/（聊天数据）、mods/（插件）、
+ * skills/（技能）。data/ 交给 store，后两者交给 packageBackup（见 server/backup-packages.mjs）。
+ *
+ * @param {Buffer} raw   原始备份字节（zip 或 v1 单 JSON）
+ * @param {'merge'|'replace'} mode
+ * @returns {Promise<{status:number, body:object}>}
+ */
+async function importBackupPayload(raw, mode) {
+    const isZip = raw.length >= 4 && raw.readUInt32LE(0) === 0x04034b50;
+    let packageFiles = null;
+    let hasPackages = false;
+    if (isZip) {
+        // 插件 / 技能条目要从同一个 zip 里单独读一遍：数据解析刻意不开
+        // allowScripts（默认黑名单保护数据路径），而插件入口本来就是 .js。
+        // 两次解析换来两条路径各自的安全边界，值这个内存与时间。
+        try {
+            packageFiles = readZip(raw, { maxTotal: 256 * 1024 * 1024, maxEntry: 64 * 1024 * 1024, allowScripts: true });
+        } catch (err) {
+            return { status: 400, body: { ok: false, message: '这个文件不是有效的 zip 备份：' + String((err && err.message) || err) } };
+        }
+        // 先看**恢复器认不认**这个包：至少要有一个能落盘的插件 / 技能。
+        // 纯 .exe 的 mods/ 目录会让"有包"为真却一个也恢复不了，那种情况该报
+        // "没有可导入的数据"，而不是先清数据再报错。
+        const preview = await packageBackup.restore(packageFiles, { dryRun: true });
+        hasPackages = preview.mods > 0 || preview.skills > 0;
+    }
+
+    // 先读不写：hasImportableData 只解析不落盘，避免坏包先清掉数据再报失败。
+    const hasData = await store.hasImportableData(raw).catch(() => false);
+    if (!hasData && !hasPackages) {
+        return { status: 400, body: { ok: false, message: '备份里没有可导入的数据' } };
+    }
+
+    // 数据先落盘：包恢复失败时聊天记录与设置至少已经回来了。
+    let result = { ok: false, keys: 0, source: isZip ? 'zip' : 'json', message: '备份里没有可导入的数据' };
+    if (hasData) result = await store.importBackup(raw, mode);
+
+    let pkg = null;
+    if (hasPackages) {
+        pkg = await packageBackup.restore(packageFiles, { allowScripts: true });
+        // 插件 / 技能目录变了，清单必须重扫：否则前端拿到的还是旧 index.json，
+        // 表现为"导入成功但插件列表没变"。
+        if (pkg.mods || pkg.skills) {
+            try { await modManager.scanAndSync(); } catch (err) { console.warn('[备份] 重扫插件失败：' + String((err && err.message) || err)); }
+            try { await skillManager.scan(); } catch (err) { console.warn('[备份] 重扫技能失败：' + String((err && err.message) || err)); }
+        }
+    }
+
+    const restoredAny = Boolean(pkg && (pkg.mods || pkg.skills));
+    if (!result.ok && !restoredAny) {
+        const why = (pkg && pkg.errors && pkg.errors[0]) || (pkg && pkg.error)
+            || result.message || '备份里没有可导入的数据';
+        return { status: 400, body: { ok: false, message: why } };
+    }
+
+    let message = result.message || `已导入 ${result.keys} 项数据`;
+    if (pkg) {
+        const parts = [];
+        if (pkg.mods) parts.push(pkg.mods + ' 个插件');
+        if (pkg.skills) parts.push(pkg.skills + ' 个技能');
+        if (parts.length) {
+            message = '已导入 ' + (result.keys ? result.keys + ' 项数据、' : '') + parts.join('、')
+                + '（' + (mode === 'replace' ? '替换' : '合并') + '模式）';
+        }
+        if (pkg.skipped) message += '；跳过 ' + pkg.skipped + ' 个不安全文件';
+        if (pkg.errors && pkg.errors.length) message += '；' + pkg.errors.length + ' 个包未恢复：' + pkg.errors[0];
+        if (pkg.error) message += '；插件与技能未恢复：' + pkg.error;
+    }
+
+    return {
+        status: 200,
+        body: { ok: true, mode, keys: result.keys, source: result.source, packages: pkg, message },
+    };
+}
+
 // ===== 端侧数据存储（data/ 分类落盘）=====
 // localStorage 是"每台设备各存一份"：电脑上聊的记录、填的 API Key，手机上完全看不到。
 // 这里把需要跨设备共享的那几项落到服务端 data/ 目录，前端启动时拉取、写入时回推。
-//
 // 存储结构见 server/store.mjs —— 那边负责把整块键值拆成分类文件（人设卡一卡一文件、
 // 聊天记录与记忆各自独立），读的时候再拼回键值。**前端仍然只看到键值**，所以
 // data-sync.js 与 APK 侧一行都不用改。
@@ -1858,6 +2084,25 @@ const store = createStore({
 });
 const loadStore = () => store.loadStore();
 const saveStore = () => store.saveStore();
+
+/** 打包一份完整备份（data/ + mods/ + skills/）。导出接口与局域网共享共用这一份实现。 */
+async function buildBackupBuffer() {
+    const packages = await packageBackup.collect();
+    return await store.exportZip(packages.entries, packages.counts);
+}
+
+// 局域网共享数据：与「我的数据」的导出 / 导入共用同一套备份实现。
+const lanShare = createLanShare({
+    collectBackup: buildBackupBuffer,
+    maxUpload: MAX_UPLOAD,
+    // 局域网设备只在本机设置过访问密码后才能用：默认状态（未设置密码）不算。
+    isPasswordSet: hasAccessPassword,
+    log: (msg) => console.log('[LAN共享] ' + msg),
+});
+
+// 版本检测器：跨请求复用，成功结果缓存十分钟（未登录的 GitHub 接口每小时 60 次）。
+// 仓库名可用 ELAINA_UPDATE_REPO 覆盖 —— 给 fork 的用户留一条不改代码的路。
+const updateChecker = createUpdateChecker({});
 
 /**
  * 校验并收敛 POST /api/store 提交上来的补丁。
@@ -1870,30 +2115,27 @@ const saveStore = () => store.saveStore();
  * 插件失败记录清不掉，卡片一直显示上一次的「加载失败 · 已自动停用」。
  */
 function normalizeStorePatch(raw) {
-    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
-    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { patch: {}, oversized: [] };
+    const patch = {};
+    const oversized = [];
     for (const [k, v] of Object.entries(raw)) {
         if (typeof k !== 'string' || !k || k.length > 120) continue;
-        if (v === null) { out[k] = null; continue; }
+        if (v === null) { patch[k] = null; continue; }
         if (typeof v !== 'string') continue;
-        if (v.length > 8 * 1024 * 1024) continue;         // 单键 8MB 上限
-        out[k] = v;
+        if (v.length > STORE_KEY_MAX_CHARS) { oversized.push({ key: k, size: v.length }); continue; }
+        patch[k] = v;
     }
-    return out;
+    return { patch, oversized };
 }
 
 // ===== 多设备实时同步（store 变更广播） =====
-//
 // 一个服务连多台设备（电脑 + 手机 + 平板）是常见用法。没有推送时
 // "手机改了设置、电脑要手动刷新才看到"，体验上像两个应用。
-//
 // 实现：每个打开的页面用 EventSource 订阅 /api/store/stream，
 // POST /api/store 成功后把**这次改动的键**推给所有订阅者。
-//
 // 为什么只推"键名 + 值"而不是让所有设备重新拉全量：
 //   聊天记录可能几 MB，每改一个字就全量广播会浪费带宽。
 //   推送增量由客户端按键合并，和 POST 的语义完全一致。
-//
 // 为什么要带 origin 标记（谁改的）：
 //   改动的发起方自己不需要重新应用（它已经改过了），否则会出现
 //   "输入框里的字被自己推回来的旧值覆盖"这类回环问题。
@@ -1949,45 +2191,72 @@ function handleStoreStream(request, response) {
 // ===== 访问鉴权（局域网访问控制） =====
 // 背景：服务默认监听 0.0.0.0（手机/平板可访问），而 Agent 文件接口没有鉴权、权限模式又由请求方
 // 自己传参决定。如果不设访问控制，同一局域网内任何设备都能打开应用、甚至读写本机文件。
-//
 // 规则：
 //   · 本机（127.0.0.1）自动视为管理员：免密进入，且可修改访问密码 —— 这也是忘记密码时的找回入口。
 //   · 局域网设备必须登录，登录后种 HttpOnly Cookie 会话（默认 7 天）。
-//   · 首次启动生成随机密码并在控制台打印；用户改过密码后只存加盐哈希，控制台不再打印。
-//
+//   · 默认状态是「尚未设置访问密码」：此时只有本机可用。要允许局域网设备进入，必须在本机主动设置密码。
 // 文件位置：data/auth.json。
 // 不放进 web/ 下的 .local-auth.json —— 那是"运行时私密数据混在源码目录里"，
 // 只能靠 .gitignore 单独排除 + 静态服务的"禁止访问隐藏文件"规则兜住，位置本身就不对。
 // 统一收进 data/（和 store.json、证书、日志同一处），那里的老文件首次启动自动搬过来。
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
 const LEGACY_AUTH_FILE = path.join(root, '.local-auth.json');
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_COOKIE = 'elaina_session';
 // 登录防爆破：单 IP 指数退避 + 全局限流。参数集中在 auth-guard.mjs 里，那里有完整的推导。
-//
 // 为什么不用"5 次 / 锁 60 秒"这类固定窗口：它等于告诉攻击者
 // "每 60 秒能试 5 次" —— 保持低频就能一天试七千多次。这里锁定时间逐次翻倍（上限 1 小时），
 // 且**计数只在成功时清零**，持续攻击只会越锁越久。
 const loginGuard = createLoginGuard();
-const sessions = new Map();   // token -> 过期时间戳
+// 会话表：键是 token 的 sha256，值是过期时间戳。
+//   为什么不以明文 token 为键：这张表要落盘，文件被读走时不该直接得到可用的会话凭据。
+//   为什么落盘：桌面壳每次启动都会新起一个 node 进程，会话只放内存的话重启一次就要所有人
+//   （包括本机）重新输一次密码 —— 那正是"输入了很多次密码"的来源。
+const sessions = new Map();
+
+function sessionKey(token) {
+    return createHash('sha256').update(String(token)).digest('hex');
+}
+
+async function loadSessions() {
+    try {
+        const list = JSON.parse(await readFile(SESSIONS_FILE, 'utf8'));
+        if (!Array.isArray(list)) return;
+        const now = Date.now();
+        for (const row of list) {
+            if (!Array.isArray(row)) continue;
+            const [key, exp] = row;
+            if (typeof key === 'string' && key && Number(exp) > now) sessions.set(key, Number(exp));
+        }
+    } catch { /* 文件不存在或损坏：视为没有可恢复的会话 */ }
+}
+
+async function saveSessions() {
+    try {
+        await mkdir(DATA_DIR, { recursive: true });
+        const now = Date.now();
+        const list = [];
+        for (const [key, exp] of sessions) if (exp > now) list.push([key, exp]);
+        await writeFile(SESSIONS_FILE, JSON.stringify(list), 'utf8');
+    } catch (err) {
+        // 落盘失败不该挡住登录本身：本次运行仍靠内存里的表工作，只是重启后需要重新登录。
+        console.error('[鉴权] 会话保存失败（本次运行仍有效，重启后需重新登录）:', String(err?.message || err));
+    }
+}
 
 // 定期清理过期会话。
 // 只在"该 token / 该 IP 再次被访问"时顺带清理是不够的：长期运行会缓慢堆积内存。
 const pruneTimer = setInterval(() => {
     const now = Date.now();
-    for (const [token, exp] of sessions) if (now > exp) sessions.delete(token);
+    let pruned = false;
+    for (const [token, exp] of sessions) if (now > exp) { sessions.delete(token); pruned = true; }
+    if (pruned) saveSessions();
+    // 登录守卫的 per-IP 记录同样只增不减（换源的扫描 / DHCP 续租 / IPv6 隐私地址都会产生新键），
+    //   一并在这里清：它自己的规则保证"还欠着失败次数"的记录不会被抹掉。
+    try { loginGuard.prune(now); } catch { /* 清理失败不影响鉴权 */ }
 }, 10 * 60 * 1000);
 pruneTimer.unref?.();
-
-// 去掉容易看错的字符（0/O、1/l/I），方便手输
-const PWD_CHARS = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
-function randomPassword(len = 12) {
-    const bytes = randomBytes(len);
-    let out = '';
-    for (let i = 0; i < len; i++) out += PWD_CHARS[bytes[i] % PWD_CHARS.length];
-    return out;
-}
 
 function hashPassword(password, salt) {
     return scryptAsync(String(password), String(salt), 64).then(buf => Buffer.from(buf).toString('hex'));
@@ -2039,15 +2308,17 @@ async function saveAuthFile(o) {
     await writeFile(AUTH_FILE, JSON.stringify(o, null, 2), 'utf8');
 }
 
-// 启动时准备密码：没有就生成；仍是初始随机密码就再打印一次（方便重启后查看）
+// 启动时准备密码：默认状态就是「尚未设置」。局域网设备只认用户主动设置的密码，
+// 不生成随机默认密码 —— 一个没人设置过的随机串对局域网没有意义，只会在界面上误导用户。
 async function ensureAuth() {
     auth = await loadAuthFile();
-    if (auth && auth.isDefault === false && auth.salt && auth.hash) return { generated: false, isDefault: false };
-    if (auth && auth.isDefault && auth.password) return { generated: false, isDefault: true, password: auth.password };
-    const password = randomPassword();
-    auth = { isDefault: true, password, createdAt: new Date().toISOString() };
-    await saveAuthFile(auth);
-    return { generated: true, isDefault: true, password };
+    if (auth && (auth.isDefault === false || (auth.salt && auth.hash))) return { generated: false, isDefault: false };
+    const createdAt = (auth && auth.createdAt) || new Date().toISOString();
+    if (!auth || auth.isDefault !== true || auth.password) {
+        auth = { isDefault: true, createdAt };
+        await saveAuthFile(auth);
+    }
+    return { generated: false, isDefault: true, password: '' };
 }
 
 // 校验密码。scrypt 是本服务里最重的计算，必须异步执行，
@@ -2065,6 +2336,7 @@ async function setPassword(next) {
     auth = { isDefault: false, salt, hash: await hashPassword(next, salt), changedAt: new Date().toISOString() };
     await saveAuthFile(auth);
     sessions.clear(); // 改密码后所有已登录设备需重新登录
+    await saveSessions();
 }
 
 function parseCookies(request) {
@@ -2074,7 +2346,11 @@ function parseCookies(request) {
     for (const part of String(raw).split(';')) {
         const i = part.indexOf('=');
         if (i < 0) continue;
-        out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+        const key = part.slice(0, i).trim();
+        let value = part.slice(i + 1).trim();
+        // 别的程序也可能往本机写 cookie，百分号编码坏了不该让整页 404 —— 解不开就按原文用。
+        try { value = decodeURIComponent(value); } catch { /* 保持原文 */ }
+        out[key] = value;
     }
     return out;
 }
@@ -2082,9 +2358,10 @@ function parseCookies(request) {
 function hasValidSession(request) {
     const token = parseCookies(request)[SESSION_COOKIE] || '';
     if (!token) return false;
-    const exp = sessions.get(token);
+    const key = sessionKey(token);
+    const exp = sessions.get(key);
     if (!exp) return false;
-    if (Date.now() > exp) { sessions.delete(token); return false; }
+    if (Date.now() > exp) { sessions.delete(key); return false; }
     return true;
 }
 
@@ -2117,9 +2394,23 @@ async function suggestModDir(wantId) {
     return '';
 }
 
-// 本机 = 管理员：免密 + 可改密码
+// 本机 = 管理员（未设置密码时免密；设置后需要先登录）
 function isAdmin(request) { return isLocalRequest(request); }
-function isAuthenticated(request) { return isAdmin(request) || hasValidSession(request); }
+
+/** 本机是否已经主动设置过访问密码（老 auth 文件没有 isDefault 字段时看 salt/hash） */
+function hasAccessPassword() {
+    if (!auth) return false;
+    if (auth.isDefault === false) return true;
+    return Boolean(auth.salt && auth.hash);
+}
+
+function isAuthenticated(request) {
+    // 未设置访问密码：只有本机可用（局域网接口在 muxSocket 处已直接关闭）。
+    if (!hasAccessPassword()) return isAdmin(request);
+    // 设置过密码：本机与局域网一律要登录。本机不再是「永久免密」——
+    //   设置密码后第一次打开同样要输入密码，之后靠会话 Cookie 保持登录。
+    return hasValidSession(request);
+}
 
 // 简单 CSRF 防护：浏览器发起的跨站请求会带 Origin，这里要求它与 Host 同源。
 // 否则任意网页都能在你浏览器里悄悄 POST /api/auth/change-password 改掉本机密码。
@@ -2135,7 +2426,6 @@ function isSameOrigin(request) {
 const QUIET_FILE_RE = /\.(?:js|mjs|css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot|map)$/i;
 //
 // 高频轮询接口在**成功时**不打日志。
-//
 //   /api/logs/tail 是日志查看器自己每 2 秒拉一次的数据源 ——
 //   若每次轮询也记一行，日志系统就在"观察自己"：查看器一打开，
 //   启动窗口每 2 秒滚一条 GET /api/logs/tail，把其它事件全挤走
@@ -2151,16 +2441,13 @@ function ipOf(request) {
 }
 
 // 把 response 包一层，结束时打一行。
-//
 // 级别纪律：
 //   之前每个成功请求都记 INFO —— 一次页面加载十几行 GET /api/xxx 200，
 //   把真正的启动/插件/对话事件淹没（用户："大量无用日志耽误排查进度"）。
 //   AstrBot 的做法是常规成功事件归 DEBUG。这里照做：
-//
 //     DEBUG  正常请求（默认不可见 —— 排查时把级别调到 DEBUG 就全回来了）
 //     WARN   请求失败（4xx）或响应超慢（>3s，能让"怎么这么卡"有据可查）
 //     ERROR  服务端错误（5xx）
-//
 //   也就是说：**默认终端/文件一条请求日志都看不到**（除了失败和超慢的），
 //   但软件内日志查看器（内存缓冲全量）随时能按需翻 —— 信息不丢，只是不再刷屏。
 function attachRequestLog(request, response) {
@@ -2217,20 +2504,21 @@ async function readRawBody(request, limit = 64 * 1024) {
         if (total > limit) { overflow = true; chunks.length = 0; continue; }
         chunks.push(chunk);
     }
-    if (overflow) throw new Error('请求体过大');
+    if (overflow) {
+        const err = new Error('请求体过大');
+        err.code = 'LIMIT_EXCEEDED';
+        throw err;
+    }
     return Buffer.concat(chunks);
 }
 
 // ===== 本地中转 /api/relay =====
-//
 // **实现放在 server/relay.mjs，电脑端与手机端共用一份**。
-//
 //   为什么能共用：手机端内嵌的 Node 面对的是同一个问题 —— WebView 页面在
 //   https://localhost，而内嵌服务在 http://127.0.0.1:<随机端口>，天生跨源，
 //   和电脑版"浏览器直连被 CORS 挡住"是一模一样的处境。两边没有理由各写一套
 //   （否则"同一个 Key、同一个地址在电脑上通、在手机上不通"这类问题要查两遍）。
 //   "为什么需要它 / 追踪日志为什么埋在这一层"的说明就在那个模块里。
-//
 //   这里只做接线：把它接到**本机这一侧**的能力上。
 //     · traceLine           追踪日志（本文件的 data/logs/<启动时刻>.trace.log）
 //     · 后面三个安全判定     本文件自己的实现 —— 这台机器在局域网里，有别的设备
@@ -2246,6 +2534,16 @@ const handleRelay = relayHandler.handleRelay;
 
 async function handleLogin(request, response) {
     const ip = ipOf(request);
+    // 未设置访问密码时，局域网设备不能登录。默认状态不是给局域网用的，
+    // 必须在主机上主动设一个密码。
+    if (!isLocalRequest(request) && !hasAccessPassword()) {
+        request.resume();
+        return jsonResponse(response, 403, {
+            ok: false,
+            code: 'PASSWORD_NOT_SET',
+            message: '本机还没有设置访问密码，局域网设备暂时不能使用。请先在本机的「设置 → 高级 → 访问密码」里设置密码。',
+        });
+    }
     // ① 先看是否已被锁（全局冻结优先报出来 —— 它连正常用户一起挡，用户需要知道原因）
     const st = loginGuard.status(ip);
     if (st.blocked) {
@@ -2272,13 +2570,19 @@ async function handleLogin(request, response) {
     }
     loginGuard.succeed(ip);
     const token = randomBytes(32).toString('hex');
-    sessions.set(token, Date.now() + SESSION_TTL_MS);
+    sessions.set(sessionKey(token), Date.now() + SESSION_TTL_MS);
+    await saveSessions();
     jsonResponse(response, 200, { ok: true }, {
-        'Set-Cookie': SESSION_COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Strict; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
+        // HTTPS 下必须带 Secure：否则同一个 token 在明文 HTTP 路径上也会被浏览器发出去。
+        //   HTTP 访问时不能加，否则用户根本登录不上 —— 那也是项目明确支持的降级用法。
+        'Set-Cookie': SESSION_COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Strict'
+            + (request.socket.encrypted ? '; Secure' : '')
+            + '; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
     });
 }
 
 function loginPageHtml() {
+    const authPathHtml = String(AUTH_FILE).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -2327,6 +2631,10 @@ function loginPageHtml() {
   }
   button:hover { background:#98ad5c; }
   button:active { transform: translateY(1px); }
+  /* 忘记密码：次要按钮，别抢主按钮的位置 */
+  button.forgot { margin-top:10px; padding:9px; background:transparent; color:#738746; border:1px solid #d9c7c0; font-size:13px; font-weight:600; }
+  button.forgot:hover { background:#f8f5f2; }
+  .forgot-hint { margin-top:10px; padding:10px 12px; background:#f8f5f2; border:1px solid #e9ddda; border-radius:10px; text-align:left; }
   .err { min-height:18px; margin:10px 0 0; font-size:12px; color:#d9541f; }
   .divider { height:1px; background:#e9ddda; margin:18px 0 14px; }
   .hint { margin:0; font-size:11.5px; line-height:1.75; color:#765e52; }
@@ -2338,16 +2646,21 @@ function loginPageHtml() {
   <div class="card">
     <div class="eyebrow">ElainaChat Mod · 局域网访问</div>
     <h1>需要访问密码</h1>
-    <p class="sub">这台设备不是本机，请输入访问密码后进入。</p>
+    <p class="sub">这台设备需要访问密码，请输入后进入。</p>
     <form id="loginForm">
       <input id="pwd" type="password" placeholder="访问密码" autocomplete="current-password" autofocus>
       <button type="submit">进入</button>
     </form>
     <p class="err" id="err"></p>
+    <button type="button" class="forgot" id="forgotBtn">忘记密码？</button>
+    <p class="hint forgot-hint" id="forgotHint" style="display:none">
+      忘记密码只能重置：删除这个文件后重启应用 —— <code>${authPathHtml}</code><br>
+      删除后应用会回到「尚未设置密码」状态（局域网接口关闭，只有本机能用），再重新设置即可。
+    </p>
     <div class="divider"></div>
     <p class="hint">
-      密码显示在服务端启动的 cmd 窗口里（形如 <code>访问密码: xxxxxxxx</code>）。<br>
-      如果你已经改过密码，请用改后的那个。
+      还没设置密码时只有本机能用；设置之后，本机与局域网设备打开应用都需要输入这个密码。<br>
+      首次设置请在本机的「设置 → 高级 → 访问密码」里完成。
     </p>
     <div class="divider" id="httpsDivider" style="display:none"></div>
     <p class="hint" id="httpsHint" style="display:none">
@@ -2380,6 +2693,11 @@ function loginPageHtml() {
       .catch(function () { /* 拿不到就不显示，不影响登录 */ });
   })();
 
+  document.getElementById('forgotBtn').addEventListener('click', function () {
+    var h = document.getElementById('forgotHint');
+    if (h) h.style.display = h.style.display === 'none' ? 'block' : 'none';
+  });
+
   document.getElementById('loginForm').addEventListener('submit', async function (e) {
     e.preventDefault();
     var err = document.getElementById('err');
@@ -2408,19 +2726,16 @@ const requestHandler = async (request, response) => {
     try {
         const url = new URL(request.url || '/', `http://${host}`);
         // 反斜杠先归一成斜杠。
-        //
         //   为什么必须做：`new URL()` 按 WHATWG 规范会规范化 `..`，但**不碰反斜杠** ——
         //   而 Windows 上 path.resolve() 把 `\` 和 `/` 都当分隔符。于是
         //       GET /live2d/models/..\..\serve.mjs
         //   到达这里时 pathname 里仍是 `..\..\serve.mjs`，path.resolve 一解析就上跳两层，
         //   落到 web/serve.mjs —— 在 root 之内，所以通过了边界检查。实测确认回 200。
-        //
         //   严重性（别夸大）：它**穿不出 web/** —— 想读 data/（访问密码、聊天记录）
         //   会被 `target.startsWith(root)` 挡住，实测 /..\..\data\auth.json 是 403。
         //   而 web/ 下的文件本来就是公开的。所以这不是"新泄漏"，是**路径解析错误**：
         //   不存在的路径该 404。但它必须修 —— 它让"谁负责这条 URL"变得含糊，
         //   也绕过了插件静态映射的逐段校验。
-        //
         //   在 decodeURIComponent **之后**归一：%5c（编码的反斜杠）也要一起处理。
         const pathname = decodeURIComponent(url.pathname).replace(/\\/g, '/');
 
@@ -2493,12 +2808,19 @@ const requestHandler = async (request, response) => {
                 // 现在**同一个端口**就支持 https，所以返回主端口本身
                 httpsPort: certInfo ? port : 0,
                 httpPort: port,
+                // 版本与运行形态：设置页的「版本与更新」要显示当前版本，
+                // 并按形态给出对应的安装包。不含敏感信息，登录页也拿得到。
+                version: APP_VERSION,
+                edition: APP_EDITION,
             });
         }
 
         // 登录页（无需鉴权）。同样加防嵌套头 —— 登录页能被 iframe 嵌套就等于给了
         // 点击劫持一个落点（诱导用户在伪造页面上输入访问密码）。
         if (pathname === '/login') {
+            // 已经持有有效会话就不该再看到密码表单：浏览器前进/后退、刷新回到这里时
+            //   再要一次密码会让用户以为刚才根本没登录成功。直接回首页（那才是有内容的页面）。
+            if (hasValidSession(request)) return redirect(response, '/');
             response.writeHead(200, {
                 'Content-Type': 'text/html; charset=utf-8',
                 'Cache-Control': 'no-store',
@@ -2512,15 +2834,6 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/auth/login' && request.method === 'POST') {
             return await handleLogin(request, response);
         }
-        // 退出登录
-        if (pathname === '/api/auth/logout' && request.method === 'POST') {
-            const token = parseCookies(request)[SESSION_COOKIE] || '';
-            if (token) sessions.delete(token);
-            return jsonResponse(response, 200, { ok: true }, {
-                'Set-Cookie': SESSION_COOKIE + '=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0',
-            });
-        }
-
         // 访问控制：本机（管理员）放行，其余必须已登录
         if (!isAuthenticated(request)) {
             if (pathname.startsWith('/api/')) {
@@ -2567,10 +2880,8 @@ const requestHandler = async (request, response) => {
         }
 
         // 日志查看器的数据源：从内存缓冲按条件取。
-        //
         // 查询参数（都是可选）：level（最低级别）、tags（逗号分隔的模块名）、
         // search（关键词）、limit（条数上限）、since + sinceSeq（增量游标，见下）。
-        //
         // 为什么放内存缓冲而不是读文件：文件是"落盘级别"过滤后的产物，
         // 且读大文件再解析既慢又占内存；缓冲里是**全量**（不受落盘级别约束），
         // 查看器切级别/模块都是即时的。
@@ -2648,7 +2959,17 @@ const requestHandler = async (request, response) => {
             } catch {
                 return jsonResponse(response, 400, { ok: false, message: '提交内容过大或格式无效' });
             }
-            const patch = normalizeStorePatch(body && body.data);
+            const { patch, oversized } = normalizeStorePatch(body && body.data);
+            if (oversized.length) {
+                const first = oversized[0];
+                return jsonResponse(response, 413, {
+                    ok: false,
+                    code: 'KEY_TOO_LARGE',
+                    message: '「' + first.key + '」过大（约 ' + Math.round(first.size / 1024 / 1024) + 'M 字符），'
+                        + '本次未保存。请先在设置里导出备份并清理聊天记录，再继续。',
+                    keys: oversized,
+                });
+            }
             const current = await loadStore();
             // 按键合并：只覆盖本次提交的键，不动其它设备的其它键。
             //   null 是删除标记，必须 delete 而不是赋成 null —— 赋 null 会把
@@ -2658,17 +2979,24 @@ const requestHandler = async (request, response) => {
                 if (v === null) delete current[k];
                 else current[k] = v;
             }
-            await saveStore();
+            try {
+                await saveStore();
+            } catch (err) {
+                return jsonResponse(response, 500, {
+                    ok: false,
+                    code: 'STORE_WRITE_FAILED',
+                    message: '保存失败（数据还在本机内存里，检查磁盘空间 / 文件权限后重试）：'
+                        + String((err && err.message) || err),
+                });
+            }
             // 广播给所有其它设备（多设备实时同步，见 /api/store/stream）
             broadcastStoreChange(patch, request);
             return jsonResponse(response, 200, { ok: true, keys: Object.keys(patch).length });
         }
 
         // 多设备实时同步：SSE 长连接，服务端把 store 的变更推给所有打开的页面。
-        //
         // 为什么需要它：一个服务连多台设备（电脑 + 手机 + 平板）是常见用法，
         // 没有推送时"手机改了设置，电脑要手动刷新才看到" —— 体验上像两个应用。
-        //
         // 为什么用 SSE 而不是 WebSocket：服务端是零依赖的静态服务，SSE 只需
         // 一个普通 HTTP 长连接（`text/event-stream`），浏览器端用 EventSource
         // 原生支持、自动重连。WebSocket 要多一层握手与帧协议实现，为这个场景
@@ -2680,16 +3008,23 @@ const requestHandler = async (request, response) => {
         // 数据导出：把 data/ 下的全部分类数据打包成一个 JSON 文件下载。
         // 用途：换机器、重装、版本升级前备份 —— 用户最怕的"更新一次聊天记录没了"。
         if (pathname === '/api/data/export' && request.method === 'GET') {
-            const body = await store.exportZip();
+            let body;
+            try {
+                body = await buildBackupBuffer();
+            } catch (err) {
+                // 插件目录读不到（被占用 / 权限）时不能悄悄退回"只导出 data/"：
+                // 用户会以为备份是全的，换机器时才发现插件全没了。
+                const msg = String((err && err.message) || err);
+                console.error('[备份] 导出失败：' + msg);
+                return jsonResponse(response, 500, { ok: false, message: '导出失败：' + msg });
+            }
             const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
             const filename = `elainachat-backup-${stamp}.zip`;
             // 刻意**不发** Content-Disposition: attachment。
-            //
             // 原因：迅雷/FDM 这类下载器会往 Chrome 里装机器级扩展（HKLM 注册表强制安装，
             // 任何 profile 都躲不掉），只要看到 attachment 就把这个 URL 抢走转给自己的
             // 下载引擎 —— 结果是浏览器里拿到一个被改写的空响应（实测是 204 + 0 字节），
             // 用户既拿不到文件、也不知道为什么，还会被弹一个下载器窗口。
-            //
             // 改成：这里只把字节正常发出去，前端 fetch 成 blob 后用 <a download> 触发保存。
             // blob: 是内存地址，外部下载器无从接管，也不会弹窗。
             // 文件名通过自定义头带过去（自定义头不触发下载器识别）。
@@ -2707,19 +3042,20 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/data/import' && request.method === 'POST') {
             let raw;
             try {
-                raw = await readRawBody(request, STORE_MAX_BYTES);
-            } catch {
-                return jsonResponse(response, 400, { ok: false, message: '备份文件过大' });
+                // 备份现在含插件与技能（可能几十 MB），不能再用只够聊天记录的 32MB。
+                // 与插件 / 技能上传同一个上限，避免"市场能装、备份导不回来"。
+                raw = await readRawBody(request, MAX_UPLOAD);
+            } catch (err) {
+                const over = err && (err.code === 'LIMIT_EXCEEDED' || /过大|too large/i.test(String(err.message || err)));
+                return jsonResponse(response, over ? 413 : 400, {
+                    ok: false, message: over ? '备份文件过大' : '读取备份失败：' + String((err && err.message) || err),
+                });
             }
             // mode 走 query（body 是二进制，塞不进 JSON 字段）
             const mode = url.searchParams.get('mode') === 'replace' ? 'replace' : 'merge';
             try {
-                const result = await store.importBackup(raw, mode);
-                if (!result.ok) return jsonResponse(response, 400, { ok: false, message: result.message || '备份里没有可导入的数据' });
-                return jsonResponse(response, 200, {
-                    ok: true, mode, keys: result.keys, source: result.source,
-                    message: result.message || `已导入 ${result.keys} 项数据`,
-                });
+                const out = await importBackupPayload(raw, mode);
+                return jsonResponse(response, out.status, out.body);
             } catch (err) {
                 return jsonResponse(response, 400, { ok: false, message: '导入失败：' + (err && err.message ? err.message : '未知错误') });
             }
@@ -2728,13 +3064,18 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/data/info' && request.method === 'GET') {
             const storeData = await loadStore();
             const keys = Object.keys(storeData);
-            const counts = { characters: 0, conversations: 0, memoryEntries: 0 };
+            const counts = { characters: 0, conversations: 0, memoryEntries: 0, mods: 0, skills: 0 };
             try { counts.characters = JSON.parse(storeData['elaina_open_character_cards'] || '[]').length; } catch { /* 忽略 */ }
             try { counts.conversations = JSON.parse(storeData['elaina_open_conversations'] || '[]').length; } catch { /* 忽略 */ }
             try {
                 const mem = JSON.parse(storeData['elaina_open_memory_core'] || '{}');
                 counts.memoryEntries = Array.isArray(mem.diary) ? mem.diary.length : 0;
             } catch { /* 忽略 */ }
+            try {
+                const pkg = await packageBackup.counts();
+                counts.mods = pkg.mods;
+                counts.skills = pkg.skills;
+            } catch { /* 目录读不到时仍返回其它统计 */ }
             return jsonResponse(response, 200, {
                 ok: true,
                 dir: path.relative(APP_ROOT, DATA_DIR) || 'data',
@@ -2743,6 +3084,8 @@ const requestHandler = async (request, response) => {
                     characters: 'characters/（一卡一文件）',
                     conversations: 'conversations/（一对话一文件）',
                     memory: 'memory.json',
+                    mods: 'mods/（已安装插件，导入备份时原样写回）',
+                    skills: 'skills/（本地技能，导入备份时原样写回）',
                     logs: 'logs/',
                 },
                 counts,
@@ -2750,7 +3093,21 @@ const requestHandler = async (request, response) => {
             });
         }
 
-        // 鉴权状态（供设置页展示：是否本机管理员、是否仍是初始随机密码）
+        // 版本检测：查 GitHub 仓库的最新 Release，供「设置 → 高级 → 版本与更新」用。
+        // 放在鉴权闸门之后：它会替本机去访问外部站点，不能让未登录的访客当跳板。
+        // 只做检测与提示，不做自动替换（三端安装方式不同，见 web/js/update-check.js）。
+        if (pathname === '/api/app/update' && request.method === 'GET') {
+            const result = await updateChecker.check();
+            return jsonResponse(response, 200, Object.assign({ current: APP_VERSION, edition: APP_EDITION }, result));
+        }
+
+        // 局域网共享数据：与「我的数据」的导出 / 导入配套。
+        // 放在这里是因为它同属 /api/data/*；仍走上面的鉴权闸门。
+        if (pathname.startsWith(LAN_SHARE_PREFIX + '/')) {
+            if (await lanShare.handle(request, response, { pathname, url })) return;
+        }
+
+        // 鉴权状态（供设置页展示：是否本机管理员、是否已设置访问密码）
         // 注意：初始明文密码只回给本机管理员，局域网会话拿不到（避免"能登录的人就能拿到明文密码"）
         if (pathname === '/api/auth/status' && request.method === 'GET') {
             const admin = isAdmin(request);
@@ -2759,12 +3116,15 @@ const requestHandler = async (request, response) => {
                 isAdmin: admin,
                 isDefaultPassword: Boolean(auth && auth.isDefault),
                 passwordHint: (admin && auth && auth.isDefault && auth.password) ? auth.password : '',
+                // 本机管理员才拿到真实路径：重置密码要删的就是它（DATA_DIR 可被环境变量覆盖，
+                // 所以这里回实际路径而不是写死 data/auth.json）。
+                authFile: admin ? AUTH_FILE : '',
             });
         }
-        // 修改访问密码（仅本机管理员；这也是忘记密码时的找回入口）
+        // 修改访问密码（仅本机、且已登录；忘记密码只能删 data/auth.json 重置）
         if (pathname === '/api/auth/change-password' && request.method === 'POST') {
-            if (!isAdmin(request)) {
-                return jsonResponse(response, 403, { ok: false, message: '只有本机（管理员）可以修改访问密码' });
+            if (!isAdmin(request) || !isAuthenticated(request)) {
+                return jsonResponse(response, 403, { ok: false, message: '只有本机（已登录的管理员）可以修改访问密码' });
             }
             let body;
             try { body = await readJsonBody(request); } catch { return jsonResponse(response, 400, { ok: false, message: '请求无效' }); }
@@ -2780,17 +3140,26 @@ const requestHandler = async (request, response) => {
             // 改密码后把登录失败记录一并清掉：旧密码攒下的锁定不该连累新密码，
             // 否则用户刚设完强密码却发现自己的手机还被锁着。
             loginGuard.reset();
-            console.log('[鉴权] 访问密码已更新（局域网设备需重新登录）');
+            // 当前这台设备刚设完密码，直接补发一个会话：setPassword() 会清空所有会话
+            //   （其它设备必须用新密码重新登录），若连本机一起踢回登录页，用户还得把
+            //   刚设的密码再输一遍 —— 这正是"输入了很多次密码"的来源。
+            const token = randomBytes(32).toString('hex');
+            sessions.set(sessionKey(token), Date.now() + SESSION_TTL_MS);
+            await saveSessions();
+            console.log('[鉴权] 访问密码已更新（其它设备需重新登录）');
             return jsonResponse(response, 200, {
                 ok: true,
-                message: '访问密码已更新，局域网设备需要重新登录',
+                message: '访问密码已更新，其它设备需要用新密码重新登录',
                 minLength: PWD_MIN_LEN,
+            }, {
+                'Set-Cookie': SESSION_COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Strict'
+                    + (request.socket.encrypted ? '; Secure' : '')
+                    + '; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
             });
         }
 
 
         // ===== 插件（mod）接口 =====
-        //
         // 列出插件：每次请求都重新扫描目录。为什么不在启动时扫一次就够 ——
         // 用户完全可能在服务运行期间把 zip 拷进 mods/（那正是"丢个 zip 就装好"
         // 的用法），启动时扫一次会让他以为没生效。扫描本身很轻（一次 readdir）。
@@ -2814,12 +3183,10 @@ const requestHandler = async (request, response) => {
             }
         }
         // 在文件管理器里打开插件目录（方便开发者改插件文件）。
-        //
         // 安全：这是"让服务进程去唤起本机程序"的特权操作，所以两道限制：
         //   ① **只限本机**（isLocalRequest）—— 局域网设备调它等于远程指挥本机开窗口
         //   ② **不接受任意路径**：只认 `?id=<插件id>`（开某个插件目录，且 id 过白名单）
         //      或不带参数（开插件根目录）。绝不把请求里的路径直接交给 shell。
-        //
         // 为什么值得做：开发者改插件要反复"找目录 → 编辑 → 回设置页点重新扫描"，
         //   而插件目录藏在 mods/ 下，路径不直观。一个按钮省掉这段路。
         if (pathname === '/api/plugins/open-folder' && request.method === 'POST') {
@@ -2908,7 +3275,6 @@ const requestHandler = async (request, response) => {
             }
             // 用 spawn 而不是 exec：参数以数组传入，不经过 shell 解析，
             // 路径里即使有空格/引号也不会变成命令注入。
-            //
             // **不能只"发出去就报成功"**：explorer/open/xdg-open 都是瞬间返回的子进程，
             //   文件管理器没起来（没有桌面会话、被策略禁用、xdg-open 未安装）时
             //   接口照样回 200，用户看到的是"点了没反应"—— 这正是最难查的一类故障。
@@ -2945,18 +3311,16 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机可以卸载插件' });
             }
             try {
-                await modManager.uninstall(decodeURIComponent(plugDel[1]));
+                await modManager.uninstall(plugDel[1]);
                 return jsonResponse(response, 200, { ok: true });
             } catch (err) {
                 return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
             }
         }
         // 上传安装插件：POST /api/plugins/install?name=xxx
-        //
         // 为什么需要这个接口：只靠"把 zip 拷进 mods/ 目录"再让服务端扫描是不够的。
         // 那条路在电脑上可行，但**手机/平板用户根本碰不到文件系统**（尤其 APK，
         // 连服务端都没有）。所以另开一个应用内上传的入口。
-        //
         // 请求体就是 zip 原始字节（不是 multipart）—— 前端用 fetch 直接把
         // File 对象当 body 发，省掉解析 multipart 的一整套代码，也不引入依赖。
         // 插件名从 query 取（zip 文件名），与"丢文件进目录"那条路命名规则一致。
@@ -2969,7 +3333,6 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 400, { ok: false, message: '缺少插件名（请把 zip 文件名作为 name 参数）' });
             }
             // 先拒绝"名字里带路径成分"的请求，**再**净化。
-            //
             //   顺序很重要：如果先净化（`replace(/^.*[\\/]/, '')`）再校验，
             //   `../../hack.zip` 会被静默改成 `hack` 并安装成功 —— 用户意图被曲解，
             //   而且掩盖了一次路径穿越尝试（非法名会返回 HTTP 200）。
@@ -3004,12 +3367,10 @@ const requestHandler = async (request, response) => {
         }
 
         // ===== 技能（skill）接口 =====
-        //
         // 技能与插件是**两回事**（见 server/skills.mjs 的说明）：插件扩展应用本身
         //   （代码、可装可卸），技能是**给 AI 的指令与知识**（纯文本、不注册进应用）。
         //   所以这里独立成一组 /api/skills，绝不复用 /api/plugins —— 混在一起会让
         //   "插件列表"里冒出本不该在那儿的项，而且两者卸载方式根本不同。
-        //
         // 列出技能：每次请求都重新扫描（理由同 /api/plugins：用户可能刚好往
         // skills/ 里拷了个目录，启动时扫一次就够会让"我刚放的没出现"无从排查）。
         if (pathname === '/api/skills' && request.method === 'GET') {
@@ -3021,7 +3382,6 @@ const requestHandler = async (request, response) => {
             }
         }
         // 上传安装技能：POST /api/skills/install?name=xxx
-        //
         // 与插件上传**同一种传输方式**：请求体就是 zip 原始字节（不是 multipart）——
         // 前端用 fetch 直接把 File 当 body 发，省掉 multipart 解析、也不引依赖。
         if (pathname === '/api/skills/install' && request.method === 'POST') {
@@ -3072,24 +3432,22 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机可以卸载技能' });
             }
             try {
-                await skillManager.uninstall(decodeURIComponent(skillDel[1]));
+                await skillManager.uninstall(skillDel[1]);
                 return jsonResponse(response, 200, { ok: true });
             } catch (err) {
                 return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
             }
         }
         // 读技能的 SKILL.md（界面上的「查看」）：GET /api/skills/<id>/content
-        //
         // 为什么走接口而不是让前端 fetch 静态文件：技能目录不在静态根 web/ 内，
         // 前端拼不出路径；而且随附技能的 id 带斜杠（owner/rel），前端更无从拼。
-        //
         // 这里用 `(.+)`（可含斜杠）而不是 `([^/]+)`：插件随附技能的 id 是
         //   `owner/rel` 形式。安全性不靠正则，靠 skillManager.readSkill 内部
         //   "反查已注册技能"的路径校验（前端传不了任意路径）。
         const skillContent = pathname.match(/^\/api\/skills\/(.+)\/content$/);
         if (skillContent && request.method === 'GET') {
             try {
-                const id = decodeURIComponent(skillContent[1]);
+                const id = skillContent[1];
                 const r = await skillManager.readSkill(id);
                 if (!r.ok) {
                     // 404 表示"没有这个技能 / 没有 SKILL.md"，前端据此提示；不是服务器错误
@@ -3102,7 +3460,6 @@ const requestHandler = async (request, response) => {
         }
 
         // API：AI Agent 文件/命令操作（权限档位：off=关闭 / strict=逐条确认 / auto=自动通过 / full=完全访问）
-        //
         // privileged = 本机（免密管理员）**或已登录的局域网设备**。
         //   这是刻意的设计：登录之后的设备与本机同等能力（文件 + 命令）。
         //   相应地，密码强度与登录防爆破成了这套权限模型的必要组成（见 auth-guard.mjs）。
@@ -3115,7 +3472,6 @@ const requestHandler = async (request, response) => {
             const { roots } = resolveShellFolders();
             // strict / auto / full 三档都能访问任意路径，所以真实路径一律可见（只要已认证）。
             // 不按权限档区分可见性：三档都能访问任意路径，可见性只取决于是否已认证。
-            //
             // `off` 档例外：整块关闭时"桌面在哪"也是**电脑信息**，一并隐去
             //   （与未认证时的形状一致：只给标签，不给 path）。
             const rootsAccess = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
@@ -3140,10 +3496,175 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/agent/exec' && request.method === 'POST') {
             return await agentExec(request, response, privileged);
         }
+        // AI 用浏览器：真的开一个 Chrome / Edge，看页面、点东西、填表单。
+        // 与 /api/agent/exec 的分工：命令通道是"文本进、文本出"，AI 看不到页面；
+        //   这条通道给的是"看页面 → 决定 → 真点一下"。
+        // 鉴权比文件/命令更紧（见 browserDenyReason）：**只认本机**。
+        //   调试端口能读这个浏览器里的全部 cookie，等于把登录态交出去，
+        //   而局域网设备只要拿到访问密码就能调 —— 密码不该成为它的唯一防线。
+        if (pathname === '/api/agent/browser' && request.method === 'POST') {
+            let body;
+            try { body = await readJsonBody(request, 64 * 1024); } catch { return jsonResponse(response, 400, { ok: false, message: '请求体无效' }); }
+            const access = normalizeAgentAccess(body.access || body.permission);
+            const deny = browserDenyReason(request, access);
+            if (deny) return jsonResponse(response, 403, { ok: false, message: deny });
+            if (!await browserEnabledByUser()) {
+                return jsonResponse(response, 403, {
+                    ok: false,
+                    message: '浏览器功能没有打开。请在「设置 → 能力 → 浏览器」里打开「允许 AI 用浏览器」。',
+                });
+            }
+            const result = await runBrowserAction(browserSession, body.action, body.args || {});
+            // 一律 200：ok 在 body 里。浏览器"打不开这个网址"是**正常结果**，
+            //   不是接口故障 —— 用 4xx/5xx 会让前端把它当成"服务端坏了"，
+            //   而模型需要的恰恰是那条具体原因（DNS 失败 / 证书错 / 404）。
+            return jsonResponse(response, 200, result);
+        }
+        // 浏览器状态：给设置页显示"现在开着吗 / 装没装浏览器"。
+        //   放在这里而不是让前端去试探 —— 试探会真的把浏览器拉起来。
+        if (pathname === '/api/agent/browser/status' && request.method === 'GET') {
+            const access = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
+            const deny = browserDenyReason(request, access);
+            if (deny) return jsonResponse(response, 403, { ok: false, message: deny });
+            const exe = findBrowserExecutable();
+            return jsonResponse(response, 200, {
+                ok: true,
+                available: Boolean(exe),
+                executable: exe,
+                running: browserSession.isRunning(),
+            });
+        }
+        // ===== MCP 客户端 =====
+        // 列出"用户配置的 MCP 服务器此刻提供哪些工具"。前端启动时拉一次，
+        //   把它们注册成操作注册表里的条目（ns:'mcp'），于是 AI 的工具清单里就有了。
+        if (pathname === '/api/mcp/tools' && request.method === 'GET') {
+            const access = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
+            // 与电脑操作同一道闸：MCP 工具可能读写文件 / 发网络请求，
+            //   所以 'off' 档一律不给。这不是"技术限制"而是明确的权限声明。
+            if (access === 'off') {
+                return jsonResponse(response, 403, { ok: false, message: '电脑操作已关闭，MCP 工具也不可用' });
+            }
+            const servers = await mcpServersFromSettings();
+            const out = [];
+            for (const def of servers) {
+                const res = await mcpRegistry.listTools(def);
+                out.push({
+                    id: def.id,
+                    name: def.name,
+                    ok: res.ok,
+                    error: res.error,
+                    // 工具名带服务器前缀，避免两台服务器都有 search 时撞名
+                    tools: res.tools.map((t) => ({
+                        name: t.name,
+                        description: t.description,
+                        inputSchema: t.inputSchema,
+                    })),
+                });
+            }
+            return jsonResponse(response, 200, { ok: true, servers: out });
+        }
+        // 调一个 MCP 工具。前端工具通道把 AI 的 tool_call 转到这里。
+        if (pathname === '/api/mcp/call' && request.method === 'POST') {
+            let body;
+            try { body = await readJsonBody(request, 256 * 1024); } catch { return jsonResponse(response, 400, { ok: false, message: '请求体无效' }); }
+            const access = normalizeAgentAccess(body.access || body.permission);
+            if (access === 'off') {
+                return jsonResponse(response, 403, { ok: false, message: '电脑操作已关闭，MCP 工具也不可用' });
+            }
+            const serverId = String(body.server || '').trim();
+            const toolName = String(body.tool || '').trim();
+            if (!serverId || !toolName) {
+                return jsonResponse(response, 400, { ok: false, message: '需要 server 与 tool' });
+            }
+            const servers = await mcpServersFromSettings();
+            const def = servers.find((s) => s.id === serverId);
+            // 不在"已启用"清单里的服务器一律拒绝：前端可以被绕过（同源 fetch 谁都能发），
+            //   "配置里没有却能调起来"等于绕过用户关掉的那个开关。
+            if (!def) {
+                return jsonResponse(response, 403, { ok: false, message: '没有这台 MCP 服务器，或它没有启用：' + serverId });
+            }
+            const result = await mcpRegistry.callTool(def, toolName, body.arguments || {});
+            // 一律 200：ok 在 body 里。工具自身报错（isError / 超时）是**正常结果**，
+            //   模型需要的是那条具体原因，不是"接口 500"。
+            return jsonResponse(response, 200, result);
+        }
+        // 测试连接：拿一份**还没保存**的配置去连一次，只回报能不能连、有什么工具。
+        //   为什么需要：现在只有"保存后才知道连不连得上"，配错了要改三轮。
+        //   注意它接受 body 里的完整配置（而不是 server id）—— 配置还没落盘，
+        //   服务端没有它，只能由前端把候选配置递过来。
+        if (pathname === '/api/mcp/test' && request.method === 'POST') {
+            let body;
+            try { body = await readJsonBody(request, 64 * 1024); } catch { return jsonResponse(response, 400, { ok: false, message: '请求体无效' }); }
+            const access = normalizeAgentAccess(body.access || body.permission);
+            if (access === 'off') {
+                return jsonResponse(response, 403, { ok: false, message: '电脑操作已关闭，MCP 工具也不可用' });
+            }
+            const raw = body.server;
+            if (!raw || typeof raw !== 'object') {
+                return jsonResponse(response, 400, { ok: false, message: '需要 server 配置对象' });
+            }
+            const def = {
+                id: String(raw.id || 'test').trim() || 'test',
+                name: String(raw.name || raw.id || 'test').trim(),
+                url: String(raw.url || '').trim(),
+                command: String(raw.command || '').trim(),
+                args: Array.isArray(raw.args) ? raw.args.map(String) : [],
+                env: (raw.env && typeof raw.env === 'object') ? raw.env : {},
+                cwd: String(raw.cwd || '').trim(),
+                headers: (raw.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers))
+                    ? Object.fromEntries(Object.entries(raw.headers)
+                        .filter(([k, v]) => k && (typeof v === 'string' || typeof v === 'number'))
+                        .map(([k, v]) => [String(k), String(v)]))
+                    : {},
+            };
+            if (!def.url && !def.command) {
+                return jsonResponse(response, 200, { ok: false, message: '需要 url（远程）或 command（本地），否则连不上' });
+            }
+            // 用独立的 id 前缀避免和已保存的同名服务器串在一起（registry 按 id 复用连接）
+            def.id = '__test__' + def.id;
+            try {
+                // listTools 会按需启动并完成握手 —— 正是"测试连接"要验证的全过程
+                const res = await mcpRegistry.listTools(def);
+                if (!res.ok) {
+                    return jsonResponse(response, 200, { ok: false, message: res.error || '连接失败' });
+                }
+                const tools = (res.tools || []).map((t) => t.name);
+                const st = mcpRegistry.status(def);
+                return jsonResponse(response, 200, {
+                    ok: true,
+                    message: '连接成功，发现 ' + tools.length + ' 个工具',
+                    serverInfo: (st && st.serverInfo) || null,
+                    tools,
+                });
+            } catch (err) {
+                return jsonResponse(response, 200, { ok: false, message: String((err && err.message) || err) });
+            } finally {
+                // 测完立刻断开：测试连接不该长期占着一个进程 / 会话
+                try { await mcpRegistry.stop({ id: def.id }); } catch { /* 忽略 */ }
+            }
+        }
+        // 停掉进程（改了配置 / 点了刷新时前端会调）。**不传 server 就是全部停掉**。
+        if (pathname === '/api/mcp/stop' && request.method === 'POST') {
+            let body = {};
+            try { body = await readJsonBody(request, 16 * 1024); } catch { body = {}; }
+            const serverId = String((body && body.server) || '').trim();
+            if (serverId) {
+                await mcpRegistry.stop({ id: serverId });
+                return jsonResponse(response, 200, { ok: true, stopped: [serverId] });
+            }
+            await mcpRegistry.stop();
+            return jsonResponse(response, 200, { ok: true, stopped: 'all' });
+        }
+        // 状态：给设置页显示"起来了吗 / 有什么错"（不启动进程 —— 刷新状态不该拉起子进程）
+        if (pathname === '/api/mcp/status' && request.method === 'GET') {
+            const servers = await mcpServersFromSettings();
+            return jsonResponse(response, 200, {
+                ok: true,
+                servers: servers.map((def) => ({ id: def.id, name: def.name, ...mcpRegistry.status(def) })),
+            });
+        }
         // 看电脑在干什么（前台窗口 + 进程）—— 供桌宠让 AI"知道你在做什么"并主动搭话。
-        //
         // **已登录的局域网设备也可以读**。
-        //
         //   这是"用户在看什么"的隐私数据（前台窗口标题与可见文本、进程列表），
         //   放开等于把它交给了每一个拿到访问密码的设备。仍然拦住的只有"未登录"，
         //   以及下面 certInfo 之外的情况 —— 也就是说**密码就是这道门**。
@@ -3162,28 +3683,24 @@ const requestHandler = async (request, response) => {
         }
 
         // ===== 插件（mod）注册的服务端路由 =====
-        //
         // 位置很关键：排在**宿主所有路由之后**、静态文件之前。
         //   · 排最后 → 宿主永远优先（第二道保险；撞名其实在装载期就被拒了）
         //   · 排静态之前 → 插件的 /api 前缀不会被静态处理器当成"找不到的文件"
-        //
         // 能走到这里说明请求已过 isAuthenticated 闸门（见上面的访问控制），
         // 所以插件接口**自动受同一套鉴权保护**，插件作者不需要自己写一遍。
         if (await modServer.handle(request, response, { pathname, url })) return;
 
         // 读插件的 README（插件页的「说明」按钮）。
-        //
         // 为什么走接口而不是让前端 fetch `/mods/<id>/README.md`：
         //   · 插件目录名与 id 可能不一致（用户改过名），前端拼路径会 404
         //   · 静态服务对 mods/ 下的文件按扩展名给 MIME，而 .md 不在表里，
         //     拿到 octet-stream 后浏览器会当下载而不是显示
         //   · 更重要的：这里用**白名单文件名**读，前端传不了任意路径
-        //
         // 放在 modServer.handle 之后：插件自己的路由优先（万一它也提供同名接口）。
         const readmeMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/readme$/);
         if (readmeMatch && request.method === 'GET') {
             try {
-                const id = decodeURIComponent(readmeMatch[1]);
+                const id = readmeMatch[1];
                 const r = await modManager.readReadme(id);
                 if (!r.ok) {
                     // 404 表示"这个插件没有 README"，前端据此提示；不是服务器错误
@@ -3196,21 +3713,17 @@ const requestHandler = async (request, response) => {
         }
 
         // 插件清单必须**每次请求都重新扫描**，不能当静态文件发。
-        //
         // 为什么：
         //   若 index.json 只在 `/api/plugins` 被请求时才重新生成，而**前端加载
         //   插件读的是这个静态文件**，那么用户手动改了插件目录名之后、只刷新页面
         //   （没打开设置页 → 没触发 /api/plugins）时，清单还是旧的：
-        //
         //       [Mod] 加载 elaina-avatar → 去请求 /mods/<旧目录名>/index.js → 404
         //       → 插件加载失败 → 立绘不出来
-        //
         //   故障形态（把目录从 fafdaf 改名成 1111，只刷新页面）：
         //       失败请求: 404 /mods/fafdaf/index.js
         //       插件状态: elaina-avatar=error
         //   而"先打开一次设置页"（触发扫描）再刷新就正常 —— 这就是用户
         //   觉得"改个名就用不了了"的根因：**清单的更新时机不对**。
-        //
         // 所以把它当成动态接口：每次请求都扫描一次目录再生成。
         // 扫描本身很轻（一次 readdir + 读几个 manifest），而这个文件是
         // 插件系统的入口 —— 它过期会让整个插件系统指向错误路径。
@@ -3242,25 +3755,21 @@ const requestHandler = async (request, response) => {
         }
 
         // ===== 插件静态资源：/mods/* =====
-        //
         // 为什么必须有这一段：插件目录是**项目根**下的 `mods/`
         //   （见 MODS_DIR 的说明），而 `web/` 才是静态文件根 ——
         //   静态处理器只发 `web/` 里的东西，够不到 `/mods/*`，
         //   没有这一段就是**全部 404**：
         //   立绘、场景背景、Live2D 模型、插件自带的 panel.html 全部加载失败 ——
         //   正是本项目最忌讳的"装了等于没装"。
-        //
         // MIME 必须**按真实扩展名**发（不能一律 octet-stream）：
         //   插件会 `fetch(host.assetUrl('panel.html'))` 拿自己的设置面板 HTML，
         //   还有 `.mjs`（live2d-models 的服务端半边）、`.css`、`.js`。
         //   一律 octet-stream 的话，配合下面的 `nosniff`，浏览器会**拒绝执行**
         //   脚本、拒绝解析 HTML —— 表现为"插件装了但界面是空的"。
-        //
         // 为什么这里发真实 MIME 不增加风险：插件本来就能在页面里执行任意 JS
         //   （加载器就是注入它的 `<script>`），所以给它自带目录放行真实 MIME
         //   并没有给出它本来没有的能力。（用户**上传**的内容仍走
         //   modServer 的 uploadRoots 分支，那里一律 octet-stream —— 见下面。）
-        //
         // 安全约束（与静态处理器同一套，逐条对应）：
         //   · 路径穿越：`..` 已在上面被拒（relative 的段检查）；
         //     这里再用 resolve + startsWith 二次确认，双保险。
@@ -3317,19 +3826,16 @@ const requestHandler = async (request, response) => {
         }
 
         // 路径穿越：`..` 段一律拒绝。
-        //
         //   为什么需要单独一条：pathname 只做了 decodeURIComponent，**没有规范化**。
         //   于是 `/live2d/models/../../serve.mjs` 会被 path.resolve(root, relative)
         //   解析成 web/serve.mjs —— 它在 root 之内，所以能通过下面那道边界检查。
         //   实测确认过：加这条之前它回 200 并吐出 serve.mjs 的源码。
-        //
         //   严重性说明（别夸大）：它**逃不出 web/** —— 想穿到 data/（密码、聊天记录）
         //   会被 `target.startsWith(root)` 挡住，而 web/ 下的文件本来就能直接访问
         //   （/serve.mjs 就是公开的）。所以这不是"新泄漏"，而是
         //     ① 语义错误：不存在的路径该 404，不该 200
         //     ② 它绕过了插件静态映射，让"谁负责这条 URL"变得含糊
         //   仍然必须修：将来若有人把敏感文件放进 web/，这条就变成真漏洞。
-        //
         //   在**解码之后**判：%2e%2e 这类写法必须在这里已经被还原成 ..
         if (relative.split(/[\\/]+/).some(seg => seg === '..')) {
             response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
@@ -3337,12 +3843,10 @@ const requestHandler = async (request, response) => {
         }
 
         // 先问插件：这条 URL 是不是某个插件声明的静态资源？
-        //
         //   Live2D 模型就是这样：URL 仍是 /live2d/models/<名>/…，而文件住在
         //   mods/live2d-models/models/ 下（见那个插件的 manifest.server.static）。
         //   排在宿主静态解析**之前**：宿主目录里已经不再有 live2d/ 了，
         //   交给下面的 root 解析只会 404。
-        //
         //   resolveStatic 内部负责：段边界匹配、解码后再解析、逐段白名单、
         //   解析后必须仍在映射目录内（挡 `..` / 绝对路径 / `%2e%2e` 绕过）。
         const modStatic = modServer.resolveStatic(pathname, (abs) => {
@@ -3350,13 +3854,11 @@ const requestHandler = async (request, response) => {
         });
         if (modStatic) {
             // MIME 由插件**声明**决定（manifest.server.static 的 mime 字段）：
-            //
             //   'binary'（默认）—— 用户上传的内容。一律 application/octet-stream：
             //       模型 zip 里若混入 .html/.svg，同源渲染就是一个 XSS 执行点。
             //   'auto' —— mod **自带**的代码/资源（如 Live2D 引擎的三个库）。
             //       必须按真实 MIME 返回，否则浏览器因 nosniff + 错误 MIME 拒绝执行，
             //       懒加载脚本直接失败。
-            //
             // 为什么 'auto' 不增加风险：mod 本来就能在页面里执行任意 JS
             //   （加载器就是注入它的 <script>）。所以给它的**自带**目录放行真实 MIME，
             //   并没有给出它本来没有的能力。关键是这个选择必须**声明出来**，
@@ -3465,9 +3967,11 @@ if (process.argv.includes('--reset-password')) {
     // 新旧两个位置都清，否则迁移逻辑会把老文件又搬回来，"重置"等于没重置
     await rm(AUTH_FILE, { force: true });
     await rm(LEGACY_AUTH_FILE, { force: true });
+    await rm(SESSIONS_FILE, { force: true });
     console.log('[鉴权] 已按 --reset-password 清除旧密码，将重新生成');
 }
 const authInfo = await ensureAuth();
+await loadSessions();
 
 // 数据存储迁移：单文件 data/store.json 把聊天记录/人设卡/记忆全挤在一起，
 // 所以按类别拆开（见 server/store.mjs）。这一步在监听之前跑完，保证第一个请求
@@ -3513,6 +4017,13 @@ if (httpsServer) {
 }
 
 const muxSocket = (socket) => {
+    // 未设置访问密码时，局域网接口**直接关闭**：非回环地址的连接不进 HTTP / TLS，
+    //   也不回任何提示，直接销毁 socket（客户端看到的是连接被重置）。
+    //   本机回环照常可用；设置密码后新连接立即放行，不需要重启。
+    if (!hasAccessPassword() && !isLocalRequest({ socket })) {
+        try { socket.destroy(); } catch (e) { /* 已关 */ }
+        return;
+    }
     // 客户端"连上又立刻断开"（浏览器 DevTools 的自动探测就是连上→发半截→RST）会让
     // 裸 socket 抛 ECONNRESET —— 分路发生在首包之后，分路之前没人接这个错误，
     // 未捕获的 'error' 事件会带崩整个进程（实测：壳版 WebView2 里整服务退出）。
@@ -3557,12 +4068,12 @@ mainServer.on('error', (err) => printListenError(err, 'HTTP/HTTPS', port));
 //   万一还是撞上，宁可明确报错，也不要两个监听者共用一个端口、连接看运气。
 mainServer.listen({ port, host, exclusive: true }, async () => {
     // ── 启动事件：**一行一个事实，英文**─────────
-    //
     // "怎么用"的引导文字已全部移出日志流 —— 地址和密码在应用里都能看到
     // （设置页 / 登录页），日志里刷一遍只会让机器与人更难提取有用信息。
     // 日志行回答"什么在什么端口、装了什么插件、密码是不是初始的"这些**事实**。
     const urls = ['http://127.0.0.1:' + port];
-    if (host === '0.0.0.0' || host === '::') {
+    // 没设置访问密码时局域网接口是关闭的，不再把局域网地址当成可用入口印出来。
+    if ((host === '0.0.0.0' || host === '::') && hasAccessPassword()) {
         for (const ip of localIPv4List()) urls.push('http://' + ip + ':' + port);
     }
     console.log(`[boot] listening on ${urls.join(', ')} (HTTP+HTTPS on the same port)`);
@@ -3571,10 +4082,9 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
     // 地址用**实际监听到的端口**：端口漂移过之后，写着 3999 的地址是打不开的。
     openBrowser('http://127.0.0.1:' + port);
 
-    // 访问密码：只有仍是初始随机密码时才打明文（用户没别的地方看它）。
-    // 用户自己设置过之后，这里只剩一行事实，不再重复提示。
+    // 访问密码：默认状态是「尚未设置」，局域网设备因此在设置密码前不可用。
     if (authInfo.isDefault) {
-        console.log(`[auth] LAN access password (initial, change it in Settings → Advanced): ${authInfo.password}`);
+        console.log('[auth] LAN access password: not set (set one in Settings → Advanced before LAN devices can connect)');
     } else {
         console.log('[auth] LAN access password: user-configured');
     }
@@ -3598,7 +4108,20 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
         // 插件的**服务端半边**（manifest.server）：启动时装载一次。
         // 装好之后不再重新装载 —— 路由是常驻注册表，随运行状态增减会让
         // "哪些接口存在"无法复现；装了新插件请在 /api/plugins 里看 needsRestart。
-        const srv = await modServer.loadAll(r.installed);
+        // 必须按用户的启用状态过滤（与手机端 bootstrap 同一套判据）：
+        //   · 总开关 elaina_plugins_enabled === '0' → 全部不装；
+        //   · 某插件 elaina_plugin_<id> === '0' → 不装；
+        //   · 没写过开关时看 manifest.defaultEnabled。
+        // 不传 isEnabled 的话停用只停前端、服务端路由照旧活着，与"停用要真的停用"矛盾。
+        const enabledState = await loadStore();
+        const isEnabled = (id, entry) => {
+            if (String(enabledState['elaina_plugins_enabled'] ?? '') === '0') return false;
+            const v = enabledState['elaina_plugin_' + id];
+            if (v === '1') return true;
+            if (v === '0') return false;
+            return Boolean(entry && entry.defaultEnabled === true);
+        };
+        const srv = await modServer.loadAll(r.installed, isEnabled);
         if (srv.needsRestart.length) {
             for (const n of srv.needsRestart) console.warn(`[mod] server side pending restart: ${n.id} - ${n.why}`);
         }

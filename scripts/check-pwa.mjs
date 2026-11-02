@@ -1,21 +1,17 @@
 // 「网页版装成桌面应用」（PWA）的回归检查。
-//
 // 这一层坏掉时的表现非常安静：**安装按钮就是不出现**，页面本身一切正常，
 // 控制台最多一句含糊的 "Manifest: Syntax error"。所以必须在这里钉死三件事：
-//
 //   ① 三段拼装齐全：manifest 通过 HTTP 发得出去、类型正确；图标是真的 PNG
 //      且尺寸够；SW 真的注册成功并接管 —— 缺任一条，浏览器就判定「不可安装」；
 //   ② SW **不缓存任何东西**：本项目所有资源都是 `Cache-Control: no-store`，
 //      缓存住就等于「改了代码它不变」，而这套项目没有构建期 hash；
 //   ③ 安装入口只有浏览器一个裁判：按钮默认 `hidden`，只在
 //      `beforeinstallprompt` 之后显形，绝不在业务代码里自己编"该不该显示"。
-//
 // 判据里有两处是**实测过的坑**，不要凭直觉改回去：
 //   · 图标必须是 PNG。用 JPEG 时 Chrome 直接报
 //     `manifest-missing-suitable-icon`（即便 sizes 写着 192x192），按钮永远不出现；
 //   · pwa.js 里不许出现 Capacitor / isNativePlatform（AGENTS.md D5）——
 //     平台判断留在 core.js 的适配段，业务模块只读去平台化的语义。
-//
 // 用法：node scripts/check-pwa.mjs           跑全部
 //       node scripts/check-pwa.mjs 图标      只跑名字含该子串的用例
 
@@ -211,7 +207,7 @@ runChecks({
                         '★ 按钮默认 hidden（只在浏览器给出 beforeinstallprompt 后才显形）');
                 }
 
-                c.ok(/<script src="\/js\/pwa\.js"><\/script>/.test(html), 'index.html 加载了 pwa.js');
+                c.ok(/<script[^>]*src="\/js\/pwa\.js"[^>]*><\/script>/.test(html), 'index.html 加载了 pwa.js');
 
                 c.ok(existsSync(PWA_JS), 'web/js/pwa.js 存在');
                 if (!existsSync(PWA_JS)) return;

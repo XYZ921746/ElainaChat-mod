@@ -1,34 +1,24 @@
-// ============================================================================
 //  流式输出：SSE 增量解析 + 各协议增量合成
-// ============================================================================
-//
 //  为什么需要这个文件
-//  ----------------
 //  在它之前，整条链路是"攒包"的：服务端其实早就把 SSE 一块块转发过来了
 //  （serve.mjs 的 /api/relay 是 `for await (const chunk of upstream.body) response.write(chunk)`，
 //  逐块透传、且强制 `accept-encoding: identity` 关掉了压缩），但前端最后一步
 //  是 `await response.text()` —— 把整条流读完拼成一个字符串再返回。
 //  于是"流式"在服务端做对了、在客户端被丢掉了：用户盯着"伊蕾娜正在想…"等几十秒，
 //  然后一大段字**一次性**蹦出来。
-//
 //  对普通聊天这只是观感问题；对 agent 自主操作则是**可用性问题**：
 //  一次自主操作可能跑十几步、几十秒，全程黑箱，用户既不知道它在干什么，
 //  也没法在它跑偏时及时喊停。所以流式是 agent 能力的前置条件，不是锦上添花。
-//
 //  三种协议的增量事件形状完全不同，全部收在这里
-//  ------------------------------------------
 //    openai-compatible   data: {"choices":[{"delta":{"content":"…","reasoning_content":"…"}}]}
 //    anthropic           event: content_block_delta / data: {"delta":{"type":"text_delta"|"thinking_delta",…}}
 //    openai-responses    event: response.output_text.delta / response.reasoning_summary_text.delta
-//
 //  设计要点：**只做增量解析，不做协议实现**
 //  本文件把流"翻译"成统一的 chunk 流，最后合成为一个**与非流式响应同构的 payload**，
 //  交回给 chat-providers.js 里那三个函数已有的解析代码。
 //  这样协议实现仍然只有一处（chat-providers.js），本文件只负责"把流拆开"，
 //  两边不会各维护一份字段映射 —— 那种重复迟早会有一边忘了改。
-//
 //  降级：拿不到流就退回非流式
-//  ---------------------------
 //  APK 走原生 ByokHttpPlugin.post，它一次性返回整个 body，没有流通道；
 //  有些中转站也不支持 stream。所以本模块是**可选加速**：
 //  调用方先试流式，失败（抛错/不支持）就退回非流式请求。绝不能因为
@@ -125,10 +115,7 @@
         flush();
     }
 
-    // ========================================================================
     //  各协议的增量提取
-    // ========================================================================
-    //
     //  每个 extractor 接收一个解析后的 SSE 事件，返回若干 chunk：
     //    { kind: 'text',      text }        正文增量
     //    { kind: 'reasoning', text }        思维链增量
@@ -223,10 +210,7 @@
         'openai-responses': extractOpenAIResponses,
     });
 
-    // ========================================================================
     //  合成：把增量拼回"和非流式响应同构"的 payload
-    // ========================================================================
-    //
     //  这一步是本文件存在的关键理由。合成的形状必须和**非流式**响应完全一致，
     //  这样 chat-providers.js 里那三个解析函数一个字都不用改 ——
     //  流式与非流式走同一段解析代码，就不可能出现"流式能显示、非流式显示不了"
@@ -326,6 +310,7 @@
             throw new Error('响应没有可读流（该环境不支持流式）');
         }
         const reader = response.body.getReader();
+        let drained = false;
         try {
             await readSse(reader, (event) => {
                 for (const chunk of extractor(event)) {
@@ -340,8 +325,12 @@
                     }
                 }
             }, idleTimeoutMs);
+            drained = true;
         } finally {
-            // 提前 return/抛错时也要放掉 reader，否则连接会挂在那里
+            // 提前 return/抛错时也要放掉 reader，否则连接会挂在那里。
+            //   releaseLock 只解除占用、**不关闭流** —— 没读完就退出时必须 cancel，
+            //   否则底层连接会一直挂到服务端超时。
+            if (!drained) { try { await reader.cancel(); } catch { /* 已经关闭 */ } }
             try { reader.releaseLock(); } catch { /* 已经释放过就算了 */ }
         }
         const compose = COMPOSERS[format] || composeOpenAICompatible;

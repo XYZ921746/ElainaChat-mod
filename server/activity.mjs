@@ -1,24 +1,17 @@
 // "看电脑在干什么" —— 读取前台窗口标题/文本、正在运行的进程。
-//
 // ── 这个模块解决什么 ────────────────────────────────────────────────────
-//
 // 用户要求：桌宠模式让 AI **知道你在干什么**，从而主动搭话。
 // 上游桌宠（C# / WPF）用 `UiTextReader.cs` 做这件事 —— 靠 .NET 的
 // `System.Windows.Automation`（UIAutomation）读前台窗口的标题与控件文本。
-//
 // 我们是 Web 应用，浏览器里拿不到 UIAutomation。但**服务端可以** ——
 // `web/serve.mjs` 就跑在同一台电脑上，而它本来就在调 PowerShell
 // （见 resolveShellFolders）。所以走 PowerShell 调 .NET，能力等价，
 // 且**不需要新增任何依赖**（powershell.exe 是 Windows 自带）。
-//
 // ── 为什么单独成模块（不直接写进 serve.mjs）────────────────────────────
-//
 // ① 可测：纯函数式，输入输出清晰，能脱离 HTTP 层单测
 // ② 可复用：以后"AI 操作电脑"要判断"当前在哪个窗口"，直接调这里
 // ③ serve.mjs 已经 2600+ 行，安全相关的逻辑该往外挪
-//
 // ── 安全边界 ───────────────────────────────────────────────────────────
-//
 //   · **只读**：本模块不执行写操作、不启动程序、不改变系统状态
 //   · **只本机**：调用方（serve.mjs）必须限制 isLocalRequest —— 这是
 //     "用户在看什么"的隐私数据，绝不能经局域网泄露
@@ -136,7 +129,10 @@ public class FgWin {
     Write-Output ('{"ok":false,"reason":"' + ($_.Exception.Message -replace '"', "'") + '"}')
 }
 `;
-    const out = runPowerShell(script).trim();
+    return parseForegroundOutput(runPowerShell(script).trim());
+}
+
+function parseForegroundOutput(out) {
     if (!out) return { ok: false, reason: 'PowerShell 无输出（可能被安全策略拦截）' };
     try {
         const j = JSON.parse(out);
@@ -185,7 +181,10 @@ $list = Get-Process | Where-Object { $_.WorkingSet64 -gt 0 } |
     }
 ConvertTo-Json -InputObject @($list) -Compress -Depth 3
 `;
-    const out = runPowerShell(script).trim();
+    return parseProcessOutput(runPowerShell(script).trim());
+}
+
+function parseProcessOutput(out) {
     if (!out) return { ok: false, reason: 'PowerShell 无输出' };
     try {
         const arr = JSON.parse(out);
@@ -203,23 +202,17 @@ ConvertTo-Json -InputObject @($list) -Compress -Depth 3
 
 export const __test__ = { MAX_WINDOW_TEXT, CMD_TIMEOUT, decode };
 
-// ============================================================================
 //  缓存
-//
 //  ── 为什么需要 ────────────────────────────────────────────────────────
-//
 //  实测单次调用耗时：读前台窗口 ~2.6s、列进程 ~1.7s（PowerShell 启动 +
 //  UIAutomation 遍历控件树）。如果每次拼提示词都同步调，每轮对话要多等
 //  4 秒 —— 不可接受。
-//
 //  ── 缓存策略 ──────────────────────────────────────────────────────────
-//
 //  · 有 TTL（默认 10 秒）：避免"完全实时"带来的性能问题，同时保证
 //    "AI 看到的"不会太旧（10 秒前你在干什么，基本还是现在在干什么）
 //  · 失败结果**也缓存**但 TTL 短（3 秒）：读不到时不要立刻反复重试
 //    （每次都要 2.6 秒），但也不能缓存太久 —— 用户可能刚切了窗口
 //  · 提供 force 参数绕过缓存（需要精确判断时用）
-// ============================================================================
 
 const CACHE_TTL_OK = 10_000;
 const CACHE_TTL_FAIL = 3_000;
@@ -283,3 +276,4 @@ export function activitySummaryCached(force = false) {
         };
     });
 }
+
