@@ -1,15 +1,7 @@
 // 版本检测回归检查：设置 → 高级「版本与更新」。
-//
-// 这一块的风险与 MCP / 搜索同类：它处理**远端内容**（GitHub Release 的
-// tag / 说明 / 资产地址），并据此让用户去下载安装包。判错的后果不是"显示不好看"，
-// 而是"把用户引到一个错的包"或"把 javascript: 地址画成下载按钮"。所以检查分三层：
-//   ① 版本比较与资产归类用 **vm 真跑 web/js/update-check.js**，断言的是实现本身，
-//      而不是把逻辑在检查脚本里再抄一份（抄一份 = 以后只测抄件）；
-//   ② 服务端检测器注入假 fetch，穷举 404 / 限流 / DNS / 超时 / 坏 JSON / 非法仓库；
-//   ③ 接线断言：路由存在、运行形态来自 ELAINA_EDITION、页脚版本与 package.json 同步。
-//
-// 资产归类的断言刻意包含"发布时改了名"的样本 —— 改名不该让用户下错平台。
-//
+// 处理远端内容（GitHub Release），判错会把用户引到错的包。检查分三层：
+// ① vm 真跑 web/js/update-check.js（不测抄件）；② 服务端注入假 fetch 穷举失败分类；
+// ③ 接线断言（路由 / ELAINA_EDITION / 页脚版本同步）。资产归类刻意含改了名的样本。
 // 用法：node scripts/check-update.mjs           跑全部
 //       node scripts/check-update.mjs 版本比较   只跑名字含该子串的用例
 
@@ -68,10 +60,7 @@ const RENAMED_RELEASE = {
     ],
 };
 
-/**
- * 在 vm 里跑真正的前端文件，拿它自己暴露的纯函数。
- * 给一个"什么都不做"的 document 就够 —— 这里只测不碰 DOM 的那部分。
- */
+/** 在 vm 里跑真正的前端文件拿其纯函数；给一个什么都不做的 document 就够（只测不碰 DOM 的部分） */
 function loadFrontend() {
     const code = read(path.join(WEB, 'js', 'update-check.js'));
     const sandbox = {
@@ -107,7 +96,6 @@ async function caseVersion(c) {
     c.ok(cmp('2.0.10', '2.0.9') === 1, '按数字比较而不是字符串比较');
     c.ok(cmp('2.0.1', '2.0.1-rc.1') === 1, '正式版大于同号预发布版');
     c.ok(cmp('2.1.0-rc.2', '2.1.0-rc.10') === -1, '预发布之间也能分出先后');
-    // Tag 改名：从 release-2.1.0 / ElainaChat-v2.1.0 里也要能抽出数字版本
     c.ok(cmp('release-2.1.0', '2.0.1') === 1, 'Tag 带 release- 前缀仍能比较');
     c.ok(cmp('ElainaChat-v2.1.0', 'v2.0.1') === 1, 'Tag 带产品名前缀仍能比较');
     c.ok(cmp('nightly', '1.0.0') === null, '解析不了的版本返回 null，不瞎判');
@@ -123,7 +111,6 @@ async function caseAssets(c) {
     c.ok(/Setup\.exe$/.test(a.desktop[0].name), '桌面版里 exe 排在便携 zip 前面');
     c.ok(/source\.zip$/.test(a.source), '发布者上传的 source.zip 优先作为源码包');
 
-    // 改名样本：文件里没有 Setup 字样，靠扩展名仍要归类正确
     const r = t.classifyAssets(t.normalizeGithubRelease(RENAMED_RELEASE));
     c.ok(r.apk.length === 1 && /3\.0\.0\.apk$/.test(r.apk[0].name), '改名后 APK 仍按 .apk 认出');
     c.ok(r.desktop.length === 2, '改名后 exe / zip 仍归桌面版');
@@ -190,12 +177,10 @@ async function caseChecker(c) {
     await okChecker.check();
     c.ok(calls === 2, '缓存过期后重新请求');
 
-    // —— 404：仓库没有 Release ——
     const noRelease = createUpdateChecker({ repo: 'x/y', fetchImpl: async () => fakeResponse(404, {}) });
     const r404 = await noRelease.check();
     c.ok(r404.ok === false && r404.code === 'NO_RELEASE', '404 报「还没有 Release」');
 
-    // —— 403 + 限流头：把 reset 时间翻成分钟 ——
     const limited = createUpdateChecker({
         repo: 'x/y',
         now: () => clock,
@@ -208,7 +193,7 @@ async function caseChecker(c) {
     c.ok(rLimit.ok === false && rLimit.code === 'RATE_LIMIT', '403 限流被认出来');
     c.ok(/分钟/.test(rLimit.message), '限流提示给出大约多久后重试');
 
-    // —— 网络失败分类（关掉绕过，单测分类本身） ——
+    // —— 网络失败分类（关掉绕过，单测分类本身）——
     const timeout = createUpdateChecker({
         repo: 'x/y', bypass: false, readHosts: () => null,
         fetchImpl: async () => { const e = new Error('timeout'); e.name = 'TimeoutError'; throw e; },
@@ -222,7 +207,7 @@ async function caseChecker(c) {
     const rDns = await dns.check();
     c.ok(rDns.code === 'DNS' && /hosts/.test(rDns.message), 'DNS 失败归为 DNS，并提示查 hosts');
 
-    // —— hosts 劫持诊断（喂文本，不碰真实系统文件） ——
+    // —— hosts 劫持诊断（喂文本，不碰真实系统文件）——
     const hijacked = createUpdateChecker({
         repo: 'x/y', bypass: false,
         readHosts: () => ({ path: 'C:/fake/hosts', text: '# x\n127.0.0.1 api.github.com\n' }),
@@ -239,7 +224,6 @@ async function caseChecker(c) {
     c.ok(findHostsHijack('8.8.8.8 api.github.com\n', 'api.github.com') === null, '把 GitHub 指到公网地址不算劫持');
     c.ok(PUBLIC_DNS_SERVERS.length >= 2, '公共 DNS 有多台候选（一台被挡还有下一台）');
 
-    // —— 直连失败后换公共 DNS 直连：成功后如实标记 viaBypass ——
     let bypassRequests = 0;
     const viaDns = createUpdateChecker({
         repo: 'x/y',
@@ -262,7 +246,6 @@ async function caseChecker(c) {
     });
     c.ok((await via404.check()).code === 'NO_RELEASE', '绕过拿到 404 时按「还没有 Release」报');
 
-    // 解析不到公网 IP：回到原始错误并带上 hosts 证据
     const noIp = createUpdateChecker({
         repo: 'x/y',
         resolveIp: async () => '',
@@ -272,11 +255,9 @@ async function caseChecker(c) {
     const rNoIp = await noIp.check();
     c.ok(rNoIp.ok === false && /第 1 行/.test(rNoIp.message), '绕过拿不到 IP 时回到原始错误 + hosts 行号');
 
-    // —— 坏 JSON ——
     const badJson = createUpdateChecker({ repo: 'x/y', fetchImpl: async () => fakeResponse(200, undefined) });
     c.ok((await badJson.check()).code === 'BAD_RESPONSE', '返回不是 JSON 时报 BAD_RESPONSE');
 
-    // —— 非法仓库名：不能拼进 URL ——
     let calledWithBadRepo = false;
     const badRepo = createUpdateChecker({
         repo: 'x/../../evil',
@@ -285,7 +266,6 @@ async function caseChecker(c) {
     const rBad = await badRepo.check();
     c.ok(rBad.code === 'CONFIG' && !calledWithBadRepo, '非法仓库名直接拒绝，不发请求');
 
-    // —— 纯函数：收敛与判定 ——
     c.ok(isValidRepo('owner/repo') === true, '合法仓库名放行');
     c.ok(isValidRepo('../x') === false && isValidRepo('a/b/c') === false && isValidRepo('') === false,
         '非法仓库名（含纯点段 / 多段 / 空）被拒绝');
@@ -354,9 +334,8 @@ async function caseWiring(c) {
 }
 
 /**
- * 用例 6：更新说明的渲染。Release 正文是 GitHub 上的 Markdown，
- * 用户看到的不该是 ## / - 原样露出的纯文本；这里用真的 readme-view.js 跑一遍，
- * 断言标题、列表、加粗都变成对应标签，且渲染器缺失时回落到纯文本。
+ * 用例 6：更新说明的渲染。Release 正文是 GitHub Markdown，不该原样露出 ## / -；
+ * 用真的 readme-view.js 跑一遍，断言标题/列表/加粗渲染成标签，渲染器缺失时回落纯文本。
  */
 async function caseNotesRender(c) {
     const readmeCode = read(path.join(WEB, 'js', 'readme-view.js'));

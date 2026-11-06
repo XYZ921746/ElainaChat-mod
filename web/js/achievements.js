@@ -1,19 +1,6 @@
-/* ============================================================================
- * 成就系统（生日纪念也收在这里）
- *
- * 分类弹窗（ui.js 的 openCategoriesModal）没有常规入口：
- * 成就面板不放管理按钮；竖栏按钮在成就模块不可用时会回落打开弹窗
- * （见 init.js 的 manageCategoriesBtn 处理），实现保持可用。
- *
- * 两类成就：
- *   ① 可判定成就（DEFS 里有 check）—— 由当前数据实时算出，达到条件自动解锁；
- *   ② 事件成就（special: true）—— 无法从数据推算，只能由具体事件主动上报
- *      （unlock(id, detail)），生日纪念由 birthday 插件调用 recordMemorial()。
- *
- * 解锁结果必须持久化到 Store（elaina_achievements），不能每次实时算：
- * 用户删掉几段对话后，"旅途同行"不该又变回未解锁 —— 成就记录的是"做到过"。
- * 该键必须在 store.js 的 DATA_KEYS 白名单里，否则重刷即丢。
- * ========================================================================== */
+// 成就分两类：DEFS 里有 check 的由数据实时判定；special 的只能由事件 unlock() 上报。
+// 解锁记录必须落 Store（elaina_achievements，须在 store.js 的 DATA_KEYS 里），
+// 不能实时算：用户删对话后"旅途同行"不该退回未解锁，成就记录的是"做到过"。
 (function () {
     'use strict';
 
@@ -29,12 +16,10 @@
         ));
     }
 
-    //  成就定义
-    //  顺序即展示顺序：**事件成就排前面**（它们是"故事"，用户最想看），
-    //    判定类成就（进度型）排后面。
+    // 顺序即展示顺序：事件成就（故事）在前，进度成就（判定）在后。
 
     const DEFS = [
-        // ---- 生日纪念（事件成就，由 birthday.js 上报）----
+        // 生日纪念（事件成就，由 birthday.js 上报）
         {
             id: 'stardust_day',
             title: '星屑之日',
@@ -68,7 +53,7 @@
             memorial: true,
         },
 
-        // ---- 进度成就（由当前数据实时判定）----
+        // 进度成就（由当前数据实时判定）
         {
             id: 'first_words',
             title: '初次相遇',
@@ -98,9 +83,6 @@
             check: (ctx) => ctx.unlockedCount >= 5,
         },
 
-        // ---- 来自设计原型的演示数据（根目录 js/data.js 的 achievements）----
-        // 原型 9 枚里有 3 枚与宿主已有成就重合（初次相遇 / 星屑之日 / 旅途同行同名），
-        // 只搬剩下 6 枚；判定条件按宿主真实数据落地。
         {
             id: 'long_journey',
             title: '漫长的旅途',
@@ -146,21 +128,11 @@
         },
     ];
 
-    //  读写
-
     /** 已解锁记录：{ [id]: { unlockedAt, detail } } */
     let unlocked = {};
 
-    /**
-     * 是否已经过了 `Store.bootstrap()`。
-     *
-     * 与 birthday.js 里那道闸门同一个理由：本模块在**脚本求值阶段**就
-     *   `load()` 了一次，而那一刻 `Store` 缓存还是空的（`bootstrap()` 要等
-     *   `init()` 才跑）—— 读到的必然是"没有任何成就"。
-     *   更要紧的是 `save()`：bootstrap 之前写回会把一份**空的成就表**
-     *   推进推送队列，可能覆盖掉 data/ 里用户真实的成就记录。
-     *   所以 bootstrap 之前只读不写，由 `refresh()` 放行。
-     */
+    // 脚本求值阶段读过一次，那时 Store 缓存还是空的；bootstrap 前只读不写，
+    // 否则 save() 会把空成就表推进推送队列，覆盖 data/ 里的真实记录。
     let ready = false;
 
     function load() {
@@ -182,13 +154,8 @@
         } catch (e) { /* 忽略：存不下不影响本次会话内的展示 */ }
     }
 
-    /**
-     * 从消息时间戳里取"小时"（本地时区），认不出返回 null。
-     *
-     * 消息的 timestamp 有两种长相：主链路用 `toLocaleTimeString()`
-     *   （"13:23:43" / "下午1:23:43" 这类纯时刻，12 小时制时带 上午/下午/凌晨/晚上
-     *   或 am/pm 前缀），备份导入与部分模块用 ISO 串。两种都要能认出 0～3 点。
-     */
+    // 消息 timestamp 有两种：主链路的 toLocaleTimeString()（"下午1:23:43"），
+    // 以及备份导入与部分模块的 ISO 串；两种都要能认出 0～3 点。
     function messageHour(ts) {
         const s = String(ts == null ? '' : ts);
         if (!s) return null;
@@ -242,16 +209,9 @@
         };
     }
 
-    /**
-     * 重新判定所有"进度型"成就，把新达成的解锁掉。
-     *
-     * 为什么"星屑之日"这类事件成就不在这里判定：它们没有 `check`，
-     *   只能由事件上报（见文件顶部说明）。这里跳过没有 check 的定义，
-     *   而不是给它们一个恒为 false 的 check —— 后者会让"这个成就是干嘛的"
-     *   变得难以阅读。
-     *
-     * @returns {string[]} 本次新解锁的成就 id
-     */
+    // 重判所有进度型成就。没有 check 的定义（事件成就）直接跳过：
+    // 给它们一个恒为 false 的 check 只会让定义更难读。
+    // @returns {string[]} 本次新解锁的成就 id
     function evaluate() {
         const ctx = snapshot();
         const gained = [];
@@ -269,26 +229,14 @@
         return gained;
     }
 
-    /**
-     * 主动解锁一个"事件成就"。
-     *
-     * @param {string} id 成就 id（必须在 DEFS 里，否则忽略 —— 防止拼错 id
-     *        静默写进一条界面上永远看不到的记录）
-     * @param {string} [detail] 纪念正文（会显示在成就卡片里）
-     * @returns {boolean} 是否**本次新解锁**（已经解锁过返回 false，便于调用方
-     *          避免重复庆祝）
-     */
+    // 主动解锁事件成就。id 必须在 DEFS 里，否则拼错的 id 会静默写进
+    // 一条界面上永远看不到的记录。
+    // @returns {boolean} 是否本次新解锁（已解锁返回 false，便于调用方避免重复庆祝）
     function unlock(id, detail) {
         if (!DEFS.some((d) => d.id === id)) return false;
         if (unlocked[id]) {
-            // 已解锁：**允许刷新**纪念正文。
-            // 为什么是"覆盖"而不是"只在为空时补写"：
-            //   生日纪念的正文是**分两步**生成的 —— 打开应用那天先写一句
-            //   "10 月 17 日 · 星屑之日"，等他选完「记得 / 忘了」之后，
-            //   正文里才该出现"他一开口就说『当然记得』"。
-            //   若只在为空时补写，后半句永远进不去（先解锁时已经有了正文），
-            //   纪念就会丢掉最该留下的那一笔。
-            //   重复调用是幂等的（正文一样就还是同一段文字）。
+            // 已解锁时允许覆盖纪念正文：生日正文分两步生成（先解锁时已有第一句，
+            // 选完「记得/忘了」才补后半句），只在为空时补写会永远丢掉后半句。
             if (detail) {
                 unlocked[id] = { ...unlocked[id], detail: String(detail) };
                 save();
@@ -312,25 +260,11 @@
         }));
     }
 
-    //  界面
-
     let overlay = null;
 
-    /**
-     * 建成就弹窗的骨架。
-     *
-     * 为什么在 JS 里建而不是写进 index.html：
-     *   这块界面只有"打开成就页"时才需要，写进 HTML 会让首屏多背一段
-     *   平时看不见的结构；而且成就卡片数量由 DEFS 决定，本来就该由 JS 渲染。
-     *   用 `el.id = '...'` 赋值而不是只写 innerHTML 字符串 ——
-     *     check-dom-refs 靠"`id=` 赋值"识别运行期动态创建的 id，
-     *     只写在 innerHTML 里它认不出来，会把 getElementById 误报成悬空引用。
-     *
-     * 为什么页头用 page-secondary-* 结构：语笺/日记的整页样式（页眉竖线、
-     *   英文眉题、副标题、返回胶囊）都钉在 page-secondary-header 这套类名上
-     *   （css/pages-luxe.css），成就页沿用同一套类名才能吃到同一套排版，
-     *   三个次级页面的页头才是一回事。
-     */
+    // 界面由 JS 建：只在打开成就页时需要，卡片数量也由 DEFS 决定。
+    // id 必须用 el.id 赋值 —— check-dom-refs 靠赋值识别动态创建的 id，只写 innerHTML 会被误报悬空引用。
+    // 页头沿用 page-secondary-* 类名，才能吃到 css/pages-luxe.css 的次级页排版。
     function build() {
         if (overlay) return;
         overlay = document.createElement('div');
@@ -367,8 +301,7 @@
         const ordered = items.slice().sort((a, b) => (b.unlocked ? 1 : 0) - (a.unlocked ? 1 : 0));
         box.innerHTML = ordered.map((it) => {
             const cls = 'ach-card' + (it.unlocked ? ' is-unlocked' : '') + (it.memorial ? ' is-memorial' : '');
-            // 纪念正文走 textContent 语义（esc 转义后插入），
-            //   它是**模型/用户内容**，不能当 HTML 解析
+            // 纪念正文是模型/用户内容，esc 转义后插入，不能当 HTML 解析
             const detail = it.unlocked && it.detail
                 ? '<div class="ach-detail">' + esc(it.detail) + '</div>' : '';
             const when = it.unlocked && it.unlockedAt
@@ -389,10 +322,9 @@
         // 打开时重算一次进度成就 —— 用户可能是刚聊完/刚写完日记就点进来的
         evaluate();
         render();
-        overlay.classList.remove('hidden');
-        overlay.classList.add('flex');
+        openOverlayPanel(overlay);
         // 成就页是"看内容"的整页：宽屏把对话面板收起来，页面拿整幅宽度。
-        //   这个浮层是打开时才建的，watchSidePanel 启动时还观察不到它，所以这里显式同步。
+        // 浮层打开时才建，watchSidePanel 启动时观察不到它，所以这里显式同步。
         try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
         try { if (typeof setRailActive === 'function') setRailActive('categories'); }
         catch (e) { /* 忽略 */ }
@@ -400,18 +332,16 @@
 
     function close() {
         if (!overlay) return;
-        overlay.classList.add('hidden');
-        overlay.classList.remove('flex');
-        try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
-        try { if (typeof syncRailActive === 'function') syncRailActive(); }
-        catch (e) { /* 忽略 */ }
+        closeOverlayPanel(overlay, function () {
+            try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
+            try { if (typeof syncRailActive === 'function') syncRailActive(); }
+            catch (e) { /* 忽略 */ }
+        });
     }
 
     function isOpen() {
         return Boolean(overlay && !overlay.classList.contains('hidden'));
     }
-
-    //  对外接口
 
     load();
 
@@ -424,12 +354,8 @@
         open,
         close,
         isOpen,
-        /**
-         * `Store.bootstrap()` 之后由 init.js 调用。
-         *
-         * 脚本求值阶段读到的必然是空表（缓存还没填），不重读的话
-         * **每次刷新成就都会看起来"全都没解锁"**，而 data/ 里其实好好存着。
-         */
+        // Store.bootstrap() 之后由 init.js 调用：脚本求值阶段读到的是空表，
+        // 不重读会让每次刷新看起来"全都没解锁"。
         refresh: () => {
             ready = true;
             load();

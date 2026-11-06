@@ -1,9 +1,4 @@
-/* ============================================================================
- * 插件系统 —— core host API
- *
- * 从 mods.js 拆出：core 组永远下发的基础能力（存储 / 插槽 / 事件 / 语音 / 提示词等）。
- * 依赖由 mods.js 的 getHostCore() 注入，保持经典脚本的加载语义不变。
- * ========================================================================== */
+/* 插件系统 —— core host API：core 组永远下发的基础能力（存储 / 插槽 / 事件 / 语音 / 提示词等）。 */
 (function () {
     'use strict';
 
@@ -20,35 +15,24 @@
         return {
             id: name,
             manifestId: manifest.id,
-            /** 插件自己的版本（历史字段，保留兼容；新代码请用 pluginVersion） */
+            /** 插件自己的版本（兼容字段，新代码请用 pluginVersion） */
             version: manifest.version || '0.0.0',
             /** 插件自己的版本（与 hostVersion 分开，避免把两者混用） */
             pluginVersion: manifest.version || '0.0.0',
             /** 宿主契约版本（core.js 的 ElainaHost.version），插件据此做能力判断 */
             hostVersion: String(host().version || ''),
-            /**
-             * 宿主停用/卸载这个插件时触发。长任务（轮询、下载）应监听它并退出；
-             * 用户只是临时关掉再打开时**不会**触发（同一个 api 要能继续用）。
-             */
+            /* 宿主停用/卸载这个插件时触发：长任务（轮询、下载）应监听它并退出；
+             * 用户只是临时关掉再打开时**不会**触发（同一个 api 要能继续用）。 */
             signal: lifecycle ? lifecycle.signal : undefined,
 
-            /**
-             * 注册一个插件服务，供宿主或其它插件按名字取用。
-             * 返回取消函数；停用/卸载时宿主会自动摘掉（不必手动调）。
-             */
+            /* 注册一个插件服务，供宿主或其它插件按名字取用。返回取消函数，
+             * 停用/卸载时宿主会自动摘掉（不必手动调）。 */
             service(serviceName, api) {
                 return registerService(manifest.id, serviceName, api);
             },
 
-            /**
-             * 取本插件资源的 URL 基址（结尾带 /）。
-             *
-             * 必须用它而不是自己拼 '/mods/<名字>/…'：插件**声明的 id** 与它**实际被安装成**的目录名
-             *   可能不一致（曾把带版本号的 zip 名当目录名，装出 elaina-avatar-1.0.0/，写死的 URL 全部 404）。
-             * 这里用的是磁盘上真实的 manifest.dir。
-             *
-             * 典型用法：host.assetUrl('img/p_calm.png') → '/mods/elaina-avatar/img/p_calm.png'
-             */
+            /* 取本插件资源的 URL 基址（结尾带 /）。插件**声明的 id** 与它**实际被安装成**的目录名可能不一致，
+             * 自己拼 '/mods/<名字>/…' 会全部 404；这里用的是磁盘上真实的 manifest.dir。 */
             assetUrl(rel) {
                 const url = resolveModAsset(manifest, rel, 'assetUrl');
                 return url == null ? '' : url;
@@ -56,16 +40,8 @@
             /** 本插件资源目录的 URL（结尾带 /），供需要自行拼路径的场合 */
             assetBase() { return getModRoot() + modDir(manifest) + '/'; },
 
-            /**
-             * 按**注册名 / 清单 id / 目录名**中的任意一个查找插件。
-             *
-             * 插件之间互相依赖时（galgame 要用 elaina-avatar 的立绘）自己拼路径是脆的：
-             *   用户改了目录名、或清单 id 与注册名不一致，路径就错了。交给系统查表才稳。
-             *
-             *   const av = host.require('elaina-avatar');
-             *   if (!av.ok) { host.error(av.reason); return; }
-             *   const url = av.url('img/p_calm.png');
-             */
+            /* 按**注册名 / 清单 id / 目录名**中的任意一个查找插件（自己拼路径会在改名或 id 不一致时出错）：
+             * 返回 { ok, api, url(), … }；找不到或对方不是 ready 时 ok=false 并带上原因。 */
             require(key) {
                 try {
                     const found = window.ElainaMods.find(key);
@@ -126,16 +102,9 @@
                 return { notes: !!(st && st.notesMode), diary: !!(st && st.diaryMode) };
             },
 
-            /**
-             * 以用户身份发一条消息。复用宿主的 handleUserInput，保证与主输入框完全同一条链路
-             * （记忆、续跑、停止、语音都自动生效）。
-             *
-             * 必须自己构造消息**对象**：handleUserInput 签名是 `(message, conversation)`，内部读
-             *   `message.text` / `message.id`；传字符串会得到 `message.text === undefined`，
-             *   发出去的是**空消息**（role=user 的内容长度 0，模型什么都看不到）。
-             *   主输入框那条路也是 id + role + text + timestamp 再 push 进 conversation.messages。
-             */
-            sendUserMessage(text) {
+            /* 以用户身份发一条消息：复用宿主的 sendUserMessage，与主输入框完全同一条链路
+             * （记忆、续跑、停止、语音都自动生效）。必须自己构造消息对象，传字符串会发出**空消息**。 */
+            sendUserMessage(text, opts) {
                 try {
                     const msg = String(text || '').trim();
                     if (!msg) return false;
@@ -149,11 +118,16 @@
                         text: msg,
                         timestamp: new Date().toLocaleTimeString(),
                     };
+                    // 带图消息（opts.imageDataUrl = data:image/jpeg;base64,…）：与主输入框的图片理解
+                    // 同一个字段、同一条视觉管线（视觉模型先转述再进对话），插件不用自己懂视觉 API。
+                    const image = opts && opts.imageDataUrl;
+                    if (typeof image === 'string' && /^data:image\/(?:jpeg|png|webp);base64,[a-z0-9+/=]+$/i.test(image)) {
+                        message.imageDataUrl = image;
+                    }
                     if (!Array.isArray(c.messages)) c.messages = [];
                     c.messages.push(message);
 
-                    // 给会话起个名（与主输入框走同一个判据）：插件发出的消息
-                    //   同样不该让标题停在"新对话"上。
+                    // 给会话起个名（与主输入框走同一个判据）：插件发出的消息同样不该让标题停在"新对话"上
                     try {
                         if (H.refreshAutoConversationTitle && H.refreshAutoConversationTitle(c)) {
                             if (H.renderFolderList) H.renderFolderList();
@@ -180,18 +154,8 @@
                     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
             },
 
-            /**
-             * 让宿主把一段话念出来。
-             *
-             * 必须走宿主：用哪个 TTS 供应商、有没有配 Key、要不要日语朗读稿，都是宿主设置里的知识
-             *   （见 core.js 的 ElainaHost.speech）。插件再实现一遍等于把"哪家 API、什么鉴权"复制一份。
-             * 与"播放这条消息的语音"是同一条链路：会抢占正在播的、走缓存，onEnd 在播完或被取消时都会回调
-             *   （插件据此收嘴型 / 恢复状态）。
-             *
-             * @param {string} text
-             * @param {{onStart?:Function,onEnd?:Function,messageId?:string}} [opts]
-             * @returns {Promise} 宿主没有语音能力时抛错，调用方自己 catch（别静默吞）
-             */
+            /* 让宿主把一段话念出来。用哪个 TTS 供应商、有没有配 Key、要不要日语朗读稿都是宿主设置里的知识，
+             * 插件再实现一遍等于把"哪家 API、什么鉴权"复制一份；onEnd 在播完或被取消时都会回调（插件据此收嘴型）。 */
             speak(text, opts) {
                 const sp = host().speech;
                 if (!sp || typeof sp.speak !== 'function') {
@@ -204,19 +168,14 @@
                 const sp = host().speech;
                 return Boolean(sp && sp.configured);
             },
-            /** 停掉正在播放的语音 */
             stopSpeech() {
                 const sp = host().speech;
                 if (sp && typeof sp.stop === 'function') return sp.stop();
                 return Promise.resolve();
             },
 
-            /**
-             * 开麦 / 结束并发送。走宿主那颗麦克风按钮的同一个动作（host.dictation），
-             * 所以识别结果与主输入框走同一条链路（记忆、续跑、TTS 都自动生效）。
-             *
-             * @param {'start'|'stop'} [action] 缺省 = 切换（正在听就结束，否则开始）
-             */
+            /* 开麦 / 结束并发送：走宿主那颗麦克风按钮的同一个动作，识别结果与主输入框同一条链路；
+             * action 缺省 = 切换（正在听就结束，否则开始）。 */
             dictate(action) {
                 const d = host().dictation;
                 if (!d) throw new Error('宿主没有语音输入能力');
@@ -235,14 +194,8 @@
                 return d ? String(d.state || 'idle') : 'idle';
             },
 
-            /**
-             * 弹一个提示框（带标题）。
-             *
-             * 不让插件直接调 window.showCustomAlert：那是宿主的**内部实现**，宿主改名或改签名就会
-             *   悄悄弄坏插件（这正是 host API 收窄清单要防的事）。走这里之后宿主可自由重构。
-             * 没有该能力时（老宿主 / 极端环境）回落到原生 alert ——
-             *   宁可弹得难看，也不要让插件的重要提示（如"重命名失败"）消失。
-             */
+            /* 弹一个提示框（带标题）。不让插件直接调宿主的**内部实现** window.showCustomAlert
+             * （宿主改名或改签名就会悄悄弄坏插件）；没有该能力时回落到原生 alert，不让重要提示消失。 */
             alert(message, title) {
                 const text = String(message == null ? '' : message);
                 const fn = host().showCustomAlert;
@@ -262,73 +215,31 @@
                 try { return window.confirm((title ? title + '\n\n' : '') + text); } catch (e) { return false; }
             },
 
-            /**
-             * `host.storage`：一块**带插件命名空间**的存储，落宿主 data/。
-             *
-             *   const s = host.storage;
-             *   s.set('seen', '2026-10-17');   // 存（值须 JSON 可序列化）
-             *   s.get('seen', '');              // 读；不存在返回第二个参数
-             *   s.remove('seen'); s.keys(); s.all();
-             *
-             * 由宿主提供：插件拿不到宿主的 Store 内部键，而自己写 localStorage 又进不了 data/
-             *   （不跨设备、不进备份）。全部插件的存储收在 `elaina_mod_storage` 一个键里按 id 分区。
-             * 停用插件**不会**清掉它的数据 —— 那是"关掉功能"，不是"抹掉记录"。
-             */
+            /* `host.storage`：一块**带插件命名空间**的存储，落宿主 data/（全部插件的存储收在
+             * `elaina_mod_storage` 一个键里按 id 分区）。插件拿不到宿主 Store 内部键；停用**不会**清掉数据。 */
             storage: createModStorage(manifest.id),
 
-            /**
-             * 往宿主插槽里注册一项。设置分栏 / 顶部按钮都是插槽实例。
-             *
-             *   const tab = host.slot('settings.tabs', {
-             *       id: 'live2d', label: 'Live2D',
-             *       render(container) { … },      // 可被重复调用（重新挂载时会再调）
-             *   });
-             *
-             * 返回句柄 `{ el, dispose() }`。**通常不需要自己 dispose** —— 停用/卸载插件时 mod 系统
-             * 会统一回收；只有"插件还在、但这一项不要了"时才手动调。
-             *
-             * @returns {{el:Element|null, dispose:Function}|null} 注册失败（插槽名写错）返回 null
-             */
+            /* 往宿主插槽里注册一项（设置分栏 / 顶部按钮都是插槽实例）。返回句柄 `{ el, dispose() }`；
+             * **通常不需要自己 dispose** —— 停用/卸载时会被统一回收，只有"插件还在、这一项不要了"时才手动调。 */
             slot(name, spec) { return registerSlot(manifest.id, name, spec, log); },
             /** 宿主当前提供的插槽名（mod 想探测可用扩展点时用） */
             slots() { return [...slotImpls.keys()]; },
 
-            /**
-             * 打开**另一个插件**的设置窗（按它的 id）。
-             *
-             * 为什么要有这个：插件之间常互相引导（"模型在另一个扩展包里管理"），
-             *   若各自去摸宿主内部的登记表，就等于把宿主的实现细节当成插件 API；
-             *   走这里，插件不必知道打开函数存在哪，也拿得到明确的 false
-             *   （对方没装 / 没启用 / 没有设置窗）。
-             *
-             * @returns {boolean} 是否真的打开了
-             */
+            /* 打开**另一个插件**的设置窗（按它的 id）：插件之间常互相引导（"模型在另一个扩展包里管理"），
+             * 若各自去摸宿主内部的登记表就等于把实现细节当成插件 API；这里拿得到明确的 false。 */
             openSettings(targetId) { return openModSettings(targetId); },
             /** 目标插件有没有设置窗（插件据此决定要不要显示那颗齿轮/引导） */
             hasSettings(targetId) { return hasModSettings(targetId); },
 
-            /**
-             * 注入一份插件自己的样式表。
-             *
-             * 传相对路径即可（`host.injectStyle('extra.css')`），由系统按本插件真实目录拼；
-             *   也可传 host.assetUrl() 的结果。外链与越界路径会被拒绝 ——
-             *   一份清单/一行插件代码就能把任意站点的 CSS 拉进页面，那等同于让第三方改写整个界面。
-             *
-             * 停用时会**真的失效**（`disabled=true`，不重新下载），启用时恢复；
-             *   与清单里 `styles` 声明的那份走同一段代码，两条路径都会回收。
-             */
+            /* 注入一份插件自己的样式表（传相对路径即可，由系统按本插件真实目录拼）。外链与越界路径会被拒绝 ——
+             * 一份清单/一行插件代码就能把任意站点的 CSS 拉进页面。停用时**真的失效**（disabled=true，启用时恢复）。 */
             injectStyle(href) {
                 const url = resolveModAsset(manifest, href, 'injectStyle');
                 return url == null ? null : injectStyleLink(manifest, url);
             },
 
-            /**
-             * 注册一段"动态 system 提示词"。宿主在每次构造对话消息时调用它。
-             * 用注册而不是直接改：插件不该知道宿主怎么拼提示词，宿主也不该知道有哪些插件 ——
-             *   注册表是唯一的耦合点。
-             * 插件被停用时这段提示词会被**摘掉**（文本留着，启用时原样恢复）——
-             *   不摘就会出现"关掉的插件还在影响模型行为"，看不见也想不到去查。
-             */
+            /* 注册一段"动态 system 提示词"，宿主在每次构造对话消息时调用它（注册表是唯一的耦合点）。
+             * 停用时这段提示词会被**摘掉**（文本留着，启用时原样恢复），否则关掉的插件还在影响模型行为。 */
             setPromptHint(text) {
                 const t = String(text || '');
                 promptHintText.set(manifest.id, t);
@@ -340,11 +251,8 @@
                 promptHints.delete(manifest.id);
             },
 
-            /**
-             * 订阅宿主事件。返回取消订阅的函数。
-             * 停用插件时订阅会被摘掉（回调留着，启用时再接上）—— 否则停用的插件仍在后台响应事件。
-             *   返回的取消函数仍然可用（用于插件自己中途退订）。
-             */
+            /* 订阅宿主事件，返回取消订阅的函数。停用插件时订阅会被摘掉（回调留着，启用时再接上）——
+             * 否则停用的插件仍在后台响应事件；返回的取消函数仍然可用（用于插件自己中途退订）。 */
             on(event, handler) {
                 if (typeof handler !== 'function') {
                     log('error', 'host.on 的第二个参数必须是函数，已忽略');
@@ -357,10 +265,8 @@
                 const attach = () => {
                     if (!bus.has(event)) bus.set(event, new Set());
                     bus.get(event).add(wrapped);
-                    // 'app-ready' 是"一次性、且可能已经发生过"的事件：mod 在
-                    //   DOMContentLoaded 就加载，而初始化完成可能早于某个 mod 的
-                    //   注册（loadAll 异步）→ 慢加载的 mod 会永远等不到这个信号。
-                    //   所以订阅时若它已经发生过，立刻补调一次。
+                    // 'app-ready' 是"一次性、且可能已经发生过"的事件：慢加载的 mod 会永远等不到它，
+                    //   所以订阅时若它已经发生过，立刻补调一次
                     if (event === 'app-ready' && isAppReady()) {
                         guardModAsync(manifest.id, 'app-ready 处理', () => handler());
                     }
@@ -382,15 +288,8 @@
                 dispatch(event, detail);
             },
 
-            /**
-             * `host.has(capability)` —— 宿主**声明的**能力是否可用。
-             *
-             * 参数是一份固定清单里的名字（见 HOST_CAPABILITIES），不是任意全局名。
-             * 早期版本是 `typeof window[name] !== 'undefined'`，等于把 window 上
-             * 的一切都变成了 API：插件随便写一个名字就能探到另一个
-             * 插件的私有全局名，宿主也没法据这份清单做兼容性判断。名字写错时
-             * 现在会明确报出来，而不是安静返回 false。
-             */
+            /* `host.has(capability)` —— 宿主**声明的**能力是否可用。参数是一份固定清单（HOST_CAPABILITIES）里的名字，
+             * 不是任意全局名：不可用 typeof window[name] 探测，否则插件能探到别的插件的私有全局名；名字写错会明确报出来。 */
             has(capability) {
                 const key = String(capability || '');
                 if (!Object.prototype.hasOwnProperty.call(HOST_CAPABILITIES, key)) {
@@ -406,20 +305,6 @@
             grantedGroups() { return [...groups]; },
         };
     }
-
-    /**
-     * 在系统文件管理器里打开这个插件的目录。
-     *
-     *   await host.openFolder();                  // 插件自己的目录
-     *   await host.openFolder('models/deepseek'); // 插件目录内的一层子路径
-     *
-     * 由宿主代劳：路径白名单在**服务端**，插件只要说"我想开自己目录下的这个子路径"，
-     *   越界与否由宿主拒绝 —— 插件不必也不该知道 `mods/` 在哪、白名单长什么样。
-     * 只有本机（有服务端）能开；APK / 局域网设备会拿到明确的失败原因，
-     *   插件据此给用户提示即可（不要静默）。
-     *
-     * @returns {Promise<{ok:boolean, path?:string, message?:string}>}
-     */
 
         return coreHostApi;
     };

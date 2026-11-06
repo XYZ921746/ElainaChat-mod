@@ -1,24 +1,5 @@
-/* 版本与更新（设置 → 高级）
- *
- * 从 GitHub 仓库的最新 Release 判断有没有新版本，并按**运行形态**给出对应安装包：
- *   手机版（安卓 APK）/ 桌面版（exe 安装包）/ 电脑版（源码运行、浏览器打开）。
- * 这是宿主自带的运维功能，不放插件里：插件是"扩应用"，而这是"应用自己在哪个版本"。
- *
- * 只检测、不自动更新：三端安装方式不同（APK 要系统安装器、桌面壳要先退出程序），
- * 静默替换的失败方式（锁文件、装到一半）比"手动点一下"危险得多。
- *
- * 资产按**扩展名**分组，不按固定文件名认：发布时给安装包改名（Setup.exe 换成
- * 带版本号的名字、桌面版换壳改名）都不该让用户下错包。组内多个包时每个包一个按钮
- * 并显示文件名，当前形态的那个标「（当前平台）」。
- *
- * 数据来源两条路，处理逻辑共用这一份：
- *   · 有本机 Node 服务（桌面版 / 电脑版 / 浏览器跑源码）→ GET /api/app/update，
- *     服务端带 UA、做十分钟缓存、把网络错误翻成中文；
- *   · 安卓 APK（没有服务端）→ 经设备网络出口（原生 ByokHttp，回落裸 fetch）直接问 GitHub。
- *
- * 平台判定留在 core.js 的适配段（AGENTS.md D5）：APK 形态只读它暴露的
- * window.ElainaRuntime.isNativeShell，桌面形态由服务端 ELAINA_EDITION 经 server-info 告知。
- */
+// 版本与更新（设置 → 高级）：从 GitHub 最新 Release 判断有没有新版本，并按运行形态给出对应安装包（手机版 APK / 桌面版 exe / 电脑版源码运行）；宿主自带的运维功能，不放插件里，只检测、不自动更新 —— 三端安装方式不同，静默替换的失败方式（锁文件、装到一半）比"手动点一下"危险得多。
+// 资产按扩展名分组、不按固定文件名认（发布时改名不该让用户下错包），组内多个包时每个包一个按钮、当前形态的那个标「（当前平台）」；数据来源两条路：有本机服务 → GET /api/app/update（服务端带 UA、十分钟缓存），安卓 APK → 经原生出口直接问 GitHub；平台判定留在 core.js 的适配段（AGENTS.md D5）：APK 形态只读 window.ElainaRuntime.isNativeShell，桌面形态由服务端 ELAINA_EDITION 经 server-info 告知。
 (function () {
     'use strict';
 
@@ -41,7 +22,7 @@
     };
     const GROUP_ORDER = ['apk', 'desktop', 'source'];
 
-    // ==================== 纯函数（无 DOM / 无网络，检查脚本直接断言）====================
+    // 纯函数（无 DOM / 无网络，检查脚本直接断言）
 
     /** 标记调试 / 模拟器专用的包：正常发布里不该让一般用户看到。 */
     function isDebugName(name) {
@@ -53,8 +34,7 @@
         const text = String(raw == null ? '' : raw).trim().replace(/^v/i, '');
         let m = /^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?$/.exec(text);
         if (!m) {
-            // 发布者可能写成 release-2.1.0 / ElainaChat_v2.1.0：再从里面抽第一段数字版本。
-            // 宁可抽到数字就当版本，也比"Tag 改了个前缀就永远看不到更新"强。
+            // 发布者可能写成 release-2.1.0 / ElainaChat_v2.1.0：再从里面抽第一段数字版本 —— 宁可抽到数字就当版本，也比"Tag 改了个前缀就永远看不到更新"强。
             const loose = /(?:^|[^0-9])(\d+(?:\.\d+)+)(?:-([0-9A-Za-z.-]+))?/.exec(text);
             if (!loose) return null;
             m = loose;
@@ -77,12 +57,7 @@
         return comparePrerelease(x.pre, y.pre);
     }
 
-    /**
-     * 预发布段比较（semver 规则）：点分段逐个比，数字段按数值比、字母段按字典序，
-     * 数字段小于字母段，段数少的更小。
-     * 为什么不能整串按字典序：rc.10 会被判成小于 rc.2（字符 1 < 2），
-     * 于是正式版发布时会把 -rc.10 认成更新。
-     */
+    // 预发布段按 semver 逐段比（数字段 < 字母段）；整串按字典序会把 rc.10 判成小于 rc.2。
     function comparePrerelease(a, b) {
         const xa = String(a).split('.'), ya = String(b).split('.');
         const len = Math.max(xa.length, ya.length);
@@ -114,13 +89,7 @@
         return safeHttpsUrl(asset && (asset.browser_download_url || asset.url));
     }
 
-    /**
-     * 按扩展名把上传的资产归成三类：
-     *   apk     —— 手机版（.apk；有正式包时把 debug / 模拟器包滤掉）
-     *   desktop —— 桌面版（上传的 .exe 与便携 .zip；GitHub 自动生成的源码归档不在 assets 里，不会混进来）
-     *   source  —— 电脑版源码：优先发布者上传的 source*.zip，没有就用 GitHub 的 zipball_url
-     * 不按固定文件名认 —— 改名不该让用户下错平台。
-     */
+    // 按扩展名分三类：apk = 手机版（有正式包时滤掉 debug / 模拟器）、desktop = .exe 与便携 .zip、source = 发布者上传的 source*.zip，没有就用 zipball_url。
     function classifyAssets(release) {
         const assets = (release && Array.isArray(release.assets)) ? release.assets : [];
         const lower = function (a) { return String((a && a.name) || '').toLowerCase(); };
@@ -152,7 +121,6 @@
         return 0;
     }
 
-    /** 界面视图模型：版本比较 + 资产分组 + 当前形态的组排最前。 */
     function releaseSummary(release, currentVersion, edition) {
         const classified = classifyAssets(release);
         const groups = GROUP_ORDER.map(function (key) {
@@ -229,7 +197,7 @@
         return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
     }
 
-    // ==================== 运行时状态 ====================
+    // 运行时状态
 
     let currentVersion = '';
     let edition = 'web';
@@ -238,10 +206,7 @@
 
     function el(id) { return document.getElementById(id); }
 
-    /**
-     * 本地版本读侧栏页脚的 data-version，而不是读 package.json：
-     * APK 里没有 package.json，页脚是随包同步的唯一版本标记（检查脚本盯着它与 package.json 同步）。
-     */
+    // 本地版本读侧栏页脚的 data-version，而不是读 package.json：APK 里没有 package.json，页脚是随包同步的唯一版本标记（检查脚本盯着它与 package.json 同步）。
     function readLocalVersion() {
         const node = el('appVersionFooter');
         return node ? String(node.getAttribute('data-version') || '').trim() : '';
@@ -265,11 +230,7 @@
         node.className = 'text-[11px] ' + color;
     }
 
-    /**
-     * 让本机服务告诉我们当前版本与运行形态。
-     * 拿不到（安卓 APK / 服务瞬时不可用）就沿用本地信息 —— 显示不准也要能显示，
-     * 不能因为一次探测失败让整块界面停在"读取中"。
-     */
+    // 让本机服务告诉我们当前版本与运行形态。拿不到（安卓 APK / 服务瞬时不可用）就沿用本地信息 —— 显示不准也要能显示，不能因为一次探测失败让整块界面停在"读取中"。
     async function syncRuntimeInfo() {
         try {
             if (window.ElainaRuntime && window.ElainaRuntime.isNativeShell) edition = 'apk';
@@ -328,8 +289,7 @@
             meta.textContent = parts.join(' · ');
         }
         if (notes) {
-            // Release 正文是 GitHub 上的 Markdown，与插件 README 同一套渲染器；
-            // 渲染器先把整段输入转义再拼标签，原始 HTML 只会显示成字面量。
+            // Release 正文是 GitHub 上的 Markdown，与插件 README 同一套渲染器；渲染器先把整段输入转义再拼标签，原始 HTML 只会显示成字面量。
             const text = summary.notes || '（这次 Release 没有写更新说明）';
             const R = window.ElainaReadme;
             if (R && typeof R.renderChat === 'function') notes.innerHTML = R.renderChat(text);

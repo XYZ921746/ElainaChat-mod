@@ -1,10 +1,6 @@
-/* ========================================================================
- * 界面：收藏 / 语笺 / 弹窗 / 会话 / 侧边栏 / 消息渲染
- * ======================================================================== */
+/* 界面：收藏 / 语笺 / 弹窗 / 会话 / 侧边栏 / 消息渲染 */
 
-// ==================== 日志（设置里的独立分栏） ====================
-// 日志不是页面模式：它是设置面板里的分栏（#tab-log），面板打开时聊天区本来就藏着 ——
-//   所以不需要 state.logMode 与 enterLogMode/exitLogMode，只由 init.js 的 switchSettingsTab() 调 LogViewer.open()/close()。
+// 日志（设置里的独立分栏）：日志不是页面模式，由 shell.js 的 switchSettingsTab() 经 LogViewer.open()/close() 显隐；关设置时 settings.js 也会顺带关掉它。
 
 function showInitialState() {
     state.notesMode = false;
@@ -31,7 +27,7 @@ function showInitialState() {
 }
 
 
-// ==================== 侧边栏渲染====================
+// 侧边栏渲染
 
 function escapeHtml(text) {
     return String(text || '')
@@ -43,41 +39,16 @@ function escapeHtml(text) {
         .replace(/`/g, '&#96;');
 }
 
-// 内联 onclick 里嵌 id 用的消毒：只保留字母数字和 - _
-// （注意：不能靠 escapeHtml 把 ' 转成 &#39; —— HTML 解析器会先把属性值里的实体解码，
-//   再交给 JS 解析，' 依然会闭合字符串。所以这里做的是白名单剔除。）
+// 内联 onclick 里嵌 id 用的消毒：白名单只留字母数字和 - _。escapeHtml 不行 —— HTML 解析器会先解码属性值里的 &#39; 再交给 JS，单引号照样闭合字符串。
 function safeAttrId(id) {
     return String(id == null ? '' : id).replace(/[^A-Za-z0-9_-]/g, '');
 }
 
-/**
- * 把 AI 回复的文本渲染成 HTML：Markdown 子集 + LaTeX 公式（离线，无网络依赖）。
- *
- * 为什么需要它（从上游 v1.3.1 合并过来的能力）：
- *   · 模型很爱输出 `**加粗**`、`- 列表`、```代码块```、表格与数学公式。
- *     按纯文本 `whitespace-pre-wrap` 显示的话，这些标记会原样露出，
- *     读起来很吵。Markdown 渲染是上游界面的重要体验改进。
- *   · Galgame mod 也依赖它（对话框要渲染富文本），所以它属于**宿主能力**，
- *     不能放进某个 mod 里 —— 那样别的 mod 用不到，且 mod 停用就没了。
- *
- * 安全（这是关键，不能为了好看牺牲它）：
- *   ① 渲染器（web/js/readme-view.js）把输入一律当**纯文本** Markdown：
- *      所有文本先转义再拼标签，原始 HTML 只会以字面量出现，不经过任何 HTML 解析。
- *      这与"先 escapeHtml 再交给 marked"是同一个意图，但不再依赖调用顺序 ——
- *      上游那条路只要有一处忘了先转义，就是模型输出直接变成页面上可执行的标签。
- *   ② 数学公式在转义后用占位符换出，避免 $...$ 里的内容被 Markdown 误解析，
- *      也避免 KaTeX 拿到已被转义的源码。
- *   ③ 渲染器或 katex 不可用（脚本没加载、离线失败）就**静默回落**到
- *      纯文本转义 —— 宁可少个样式，也不能白屏或抛错。
- *   ④ 代码块原样保留，不做任何 Markdown 处理。
- *
- * @param {string} text 原始文本
- * @returns {string} 可安全插入 innerHTML 的 HTML
- */
+// 把 AI 回复渲染成 HTML：Markdown 子集 + LaTeX 公式（离线）。Galgame mod 也依赖它，所以属于**宿主能力**，不能放进某个 mod 里；安全靠渲染器把输入一律当纯文本（先转义再拼标签），公式在转义后换占位符，渲染器或 katex 不可用就静默回落纯文本转义。
 function renderMessageText(text) {
     const raw0 = String(text == null ? '' : text);
 
-    // ① 先把三反引号围栏整体挖出来占位，避免后续正则误伤代码块里的内容
+    // 先把三反引号围栏整体挖出来占位，避免后续正则误伤代码块里的内容
     const FENCE = String.fromCharCode(96, 96, 96);
     const PH0 = String.fromCharCode(0xE100), PH1 = String.fromCharCode(0xE101);
     const fences = [];
@@ -86,19 +57,15 @@ function renderMessageText(text) {
         return PH0 + (fences.length - 1) + PH1;
     });
 
-    // ② 剥掉独占一行的场景标记（Galgame 的内部指令，不该显示给用户）
+    // 剥掉独占一行的场景标记（Galgame 的内部指令，不该显示给用户）
     raw = raw.replace(/^[ \t]*<scene>[^<\n]{0,64}<\/scene>[ \t]*$/gim, '').trim();
 
-    // ③ 把围栏放回来
     raw = raw.replace(new RegExp(PH0 + '(\\d+)' + PH1, 'g'), (m, i) => fences[Number(i)] || '');
 
     const R = window.ElainaReadme;
     if (!R || typeof R.renderChat !== 'function') return escapeHtml(raw);
 
-    // ④ 数学公式先换成占位符：Markdown 会吃掉 $...$ 里的 * _ 之类字符，
-    //    而 KaTeX 需要的是原始 TeX 源码。
-    //    顺序：先把成对的 $$...$$ 挖走，再处理单个 $...$，
-    //    否则 `$$x$$` 会被当成两个行内公式。
+    // 数学公式先换占位符：Markdown 会吃掉 $...$ 里的 * _，KaTeX 要原始 TeX 源码；$$...$$ 必须先于 $...$ 挖走，否则会被当成两个行内公式。
     const mathStore = [];
     const PH = (k) => '\uE000' + k + '\uE001';
     const withPh = String(raw)
@@ -115,7 +82,7 @@ function renderMessageText(text) {
     try { html = R.renderChat(withPh); }
     catch (e) { return escapeHtml(raw); }
 
-    // ⑤ 公式换回 KaTeX。katex 不可用时还原成原来的 $...$ 文本（至少不丢内容）
+    // 公式换回 KaTeX。katex 不可用时还原成原来的 $...$ 文本（至少不丢内容）
     return html.replace(/\uE000(\d+)\uE001/g, (m, i) => {
         const it = mathStore[Number(i)];
         if (!it) return m;
@@ -180,13 +147,7 @@ function bindConversationItemEvents(div, conv) {
             return;
         }
         closeConversationContextMenu();
-        // **在日记页时**点侧栏的对话不跳去聊天，
-        //   而是把这本日记**筛选/滚动到那段对话的分组** ——
-        //   "聊天记录本身就是一种分类"。
-        //   为什么用"筛选"而不是"跳走"：用户此时正在看日记，
-        //   点一下只是想"看这段对话的日记"，把他踢去聊天页等于打断当前意图。
-        //   而在**非**日记页时行为完全不变（照旧进对话）—— 这是关键，
-        //   否则日常切换对话会被弄坏（那是最常用的操作）。
+        // 日记页里点侧栏对话是筛选该对话的分组，不是跳转：用户正在看日记，把他踢去聊天页等于打断当前意图；非日记页行为不变。
         if (state.diaryMode && typeof focusDiaryGroup === 'function') {
             focusDiaryGroup(conv.id);
             return;
@@ -206,13 +167,8 @@ function bindConversationItemEvents(div, conv) {
 
 function createConversationItem(conv) {
     const div = document.createElement('div');
-    // 日记页里"选中"的是**筛选中的那段对话**。
-    //   日记页点对话只筛选、不跳转，所以 `state.currentConversationId`
-    //   **不会**变 —— 只看它的话，用户在日记页点了对话，侧栏
-    //   **没有任何高亮**（看起来像没点中），必须回聊天页才正常。
-    //   所以日记页时把 diaryFilterConvId 也算作"当前项"。
-    //   两个状态各管各的语义，但**视觉上都是"你正在看这一段"**，
-    //   所以共用同一个高亮样式。
+    // 日记页里"选中"的是**筛选中的那段对话**：点对话只筛选、不跳转，`state.currentConversationId` 不变，只看它侧栏没有任何高亮。
+    // 所以日记页把 diaryFilterConvId 也算作"当前项"：两者各管各的语义，视觉上都是"你正在看这一段"，共用同一个高亮样式。
     const activeId = state.diaryMode ? (state.diaryFilterConvId || '') : state.currentConversationId;
     const isActive = conv.id === activeId;
     div.className = `conversation-item group flex items-center gap-2 px-2.5 py-2 rounded-xl cursor-pointer transition-all text-sm ${isActive ? 'sidebar-item-active' : 'hover:bg-white/50'}`;
@@ -335,7 +291,7 @@ function renderFolderList() {
 }
 
 
-// ==================== 管理分类弹窗 ====================
+// 管理分类弹窗
 
 let catSelected = new Set();
 
@@ -442,8 +398,7 @@ async function catDeleteSelected() {
     const confirmed = await showCustomConfirm(`确认删除选中的 ${catSelected.size} 个对话？`);
     if (!confirmed) return;
     state.conversations = state.conversations.filter(c => !catSelected.has(c.id));
-    // 批量删除同样要清日记 + 收藏（与 deleteConversation 共用同一个函数，
-    //   免得两个入口再次各自只做一半 —— 那正是用户报的那个 bug 的成因）。
+    // 批量删除同样要清日记 + 收藏：与 deleteConversation 共用同一个函数，免得两个入口各自只做一半。
     purgeConversationDependents(catSelected);
     saveConversations();
     updateNotesBadge();
@@ -464,19 +419,17 @@ async function catDeleteSelected() {
 }
 
 
-// ==================== 消息渲染 ====================
+// 消息渲染
 
-/**
- * AI 头像内容：这段对话绑定了人设卡就显示卡名首字，
- * 跟随全局则显示软件自带的图标。思考气泡与流式预览用（消息行的头像
- * 由 rd 主题的 .message-item-ai::before 绘制，走 is-bound-card 分支）。
- */
+// AI 头像内容（思考气泡与流式预览用）：会话自定义头像 > 绑卡首字 > 软件图标。
+//   消息行的头像由 rd 主题的 .message-item-ai::before 绘制（走 has-bot-avatar / is-bound-card 分支）。
 function aiAvatarInnerHtml() {
+    const conv = getCurrentConversation();
+    const avatar = typeof conversationBotAvatar === 'function' ? conversationBotAvatar(conv) : '';
+    if (avatar) return '<img src="' + avatar + '" alt="" draggable="false">';
     let bound = null;
     try {
-        bound = typeof conversationBoundCard === 'function'
-            ? conversationBoundCard(getCurrentConversation())
-            : null;
+        bound = typeof conversationBoundCard === 'function' ? conversationBoundCard(conv) : null;
     } catch (e) { /* 数据层未就绪时按跟随全局显示 */ }
     if (bound) {
         const ch = String(bound.name || '').trim().slice(0, 1) || '伊';
@@ -485,25 +438,47 @@ function aiAvatarInnerHtml() {
     return '<img src="/icons/icon-192.png" alt="" draggable="false">';
 }
 
-/** 消息行根节点上的绑卡标记：rd 主题据此把伪元素头像从图标切成卡名首字。 */
-function applyBoundCardToMessageItem(div) {
+/** 没有自定义头像时编辑器预览用的回落：绑卡首字 / 软件图标。 */
+function conversationBotAvatarFallbackHtml(conv) {
     let bound = null;
     try {
-        bound = typeof conversationBoundCard === 'function'
-            ? conversationBoundCard(getCurrentConversation())
-            : null;
+        bound = typeof conversationBoundCard === 'function' ? conversationBoundCard(conv) : null;
+    } catch (e) { bound = null; }
+    if (bound) {
+        const ch = String(bound.name || '').trim().slice(0, 1) || '伊';
+        return '<span class="conversation-bot-initial">' + escapeHtml(ch) + '</span>';
+    }
+    return '<img src="/icons/icon-192.png" alt="" draggable="false">';
+}
+
+/** 消息行根节点上的身份标记：rd 主题据此画头像（自定义图片 / 绑卡首字 / 图标）。 */
+function applyBoundCardToMessageItem(div) {
+    const conv = typeof getCurrentConversation === 'function' ? getCurrentConversation() : null;
+    let bound = null;
+    try {
+        bound = typeof conversationBoundCard === 'function' ? conversationBoundCard(conv) : null;
     } catch (e) { bound = null; }
     if (bound) {
         div.classList.add('is-bound-card');
         div.dataset.cardInitial = String(bound.name || '').trim().slice(0, 1) || '伊';
+    } else {
+        div.classList.remove('is-bound-card');
+        delete div.dataset.cardInitial;
+    }
+    const avatar = typeof conversationBotAvatar === 'function' ? conversationBotAvatar(conv) : '';
+    if (avatar) {
+        div.classList.add('has-bot-avatar');
+        div.style.setProperty('--rd-ai-avatar', 'url("' + avatar + '")');
+    } else {
+        div.classList.remove('has-bot-avatar');
+        div.style.removeProperty('--rd-ai-avatar');
     }
 }
 
-/**
- * 对话列表行的头像内容：绑了卡显示卡名首字，跟随全局显示应用图标。
- * 桌面侧栏与手机首页列表共用；底色/圆角由各自的容器给。
- */
+// 对话列表行的头像内容：会话自定义头像 > 绑卡首字 > 应用图标；桌面侧栏与手机首页列表共用。
 function conversationAvatarMarkup(conv) {
+    const avatar = typeof conversationBotAvatar === 'function' ? conversationBotAvatar(conv) : '';
+    if (avatar) return '<img class="conv-avatar-img" src="' + avatar + '" alt="" draggable="false">';
     let bound = null;
     try {
         bound = typeof conversationBoundCard === 'function' ? conversationBoundCard(conv) : null;
@@ -515,10 +490,23 @@ function conversationAvatarMarkup(conv) {
     return '<img class="conv-avatar-img" src="/icons/icon-192.png" alt="" draggable="false">';
 }
 
-function renderMessage(message) {
+/** 保存会话人设后，把当前对话里的消息头像 / 说话人名字 / 两侧列表就地刷新。 */
+function refreshConversationIdentityInDom(conv) {
+    const target = conv || getCurrentConversation();
+    const name = typeof conversationBotName === 'function'
+        ? conversationBotName(target)
+        : (state.characterCard.name || '伊蕾娜');
+    document.querySelectorAll('#conversationHistory .ai-speaker-name').forEach((el) => { el.textContent = name; });
+    document.querySelectorAll('#conversationHistory .message-item-ai').forEach(applyBoundCardToMessageItem);
+    const avatarHosts = document.querySelectorAll('#thinking-bubble .pixso-chat-avatar, #streaming-reply-preview .pixso-chat-avatar');
+    Array.prototype.forEach.call(avatarHosts, (el) => { el.innerHTML = aiAvatarInnerHtml(); });
+}
+
+/** animate=false 用于整列表重渲（loadConversation）：逐条重播入场会整屏闪一遍，动画只属于"新出现的那条"。 */
+function renderMessage(message, animate = true) {
     const div = document.createElement('div');
     div.id = `msg-${safeAttrId(message.id)}`;
-    div.className = `message-item ${message.role === 'user' ? 'message-item-user' : 'message-item-ai'} animate-fade-in-up`;
+    div.className = `message-item ${message.role === 'user' ? 'message-item-user' : 'message-item-ai'}${animate ? ' animate-fade-in-up' : ''}`;
 
     if (message.role === 'user') {
         const userImageUrl = isSafeComposerImageDataUrl(message.imageDataUrl) ? message.imageDataUrl : '';
@@ -548,7 +536,10 @@ function renderMessage(message) {
         `;
     } else {
         const faved = isMessageFavorited(state.currentConversationId, message.id);
-        const name = state.characterCard.name || '伊蕾娜';
+        // 说话人名字走「这段对话的 bot」：会话自定义 > 绑定 / 全局人设卡名。
+        const name = typeof conversationBotName === 'function'
+            ? conversationBotName(getCurrentConversation())
+            : (state.characterCard.name || '伊蕾娜');
         const voiceDurationSeconds = estimateVoiceDurationSeconds(message.voiceJp || message.text);
         const voiceCard = `
                         <div class="ai-voice-card">
@@ -587,10 +578,7 @@ function renderMessage(message) {
         `;
         applyBoundCardToMessageItem(div);
     }
-    // 每消息插槽：把标题行里的容器交给注册过 chat.message.actions 的 mod。
-    //   在节点**进入文档之前**画好，否则会先闪一个空位再冒出按钮。
-    //   守卫是必要的：消息渲染是核心链路，插槽模块没加载（或插件抛错）都不该影响它 ——
-    //   decorateMessageSlots 内部已对每个 mod 做失败隔离。
+    // 每消息插槽：在节点**进入文档之前**画好，否则会先闪一个空位再冒出按钮。消息渲染是核心链路，插槽模块没加载或插件抛错都不该影响它。
     if (typeof applyMessageVoiceError === 'function') applyMessageVoiceError(message.id, div);
     if (typeof window.decorateMessageSlots === 'function') window.decorateMessageSlots(div);
 

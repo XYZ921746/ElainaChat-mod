@@ -1,9 +1,5 @@
-/* ============================================================================
- * 全局 state 与 DOM elements（从 core.js 拆出）
- *
- * 依赖 core-config 的 DEFAULT_SETTINGS / DEFAULT_CHARACTER_CARD；必须在 core.js 之前加载。
- * elements 在脚本执行时取 DOM 引用（页面脚本位于 body 末尾）。
- * ========================================================================== */
+// 全局 state 与 DOM elements。依赖 core-config 的 DEFAULT_SETTINGS / DEFAULT_CHARACTER_CARD，
+// 必须在 core.js 之前加载；elements 在脚本执行时取 DOM 引用（页面脚本位于 body 末尾）。
 'use strict';
 
 const state = {
@@ -21,13 +17,11 @@ const state = {
     diaryMode: false,
     // 记忆页与日记页同级：也是"整页浏览"，不是弹窗。
     memoryPageMode: false,
-    // 日记页的"只看某段对话"筛选（空 = 显示全部）。
-    //   由 focusDiaryGroup() 设置；进/出日记页时清掉，避免下次进来
-    //   莫名其妙只看到一部分（那会让人以为日记丢了）。
+    // 日记页的"只看某段对话"筛选（空 = 显示全部）。由 focusDiaryGroup() 设置；进/出日记页时清掉，
+    // 避免下次进来莫名其妙只看到一部分（那会让人以为日记丢了）。
     diaryFilterConvId: '',
-    // 记忆页的"只看某段对话"筛选（空 = 全部）。
-    //   记忆目前只有 diary 类目带 conversationId，其余类目是全局条目；
-    //   筛选时没有归属的条目会隐去，等以后把归属补齐再放开。
+    // 记忆页的"只看某段对话"筛选（空 = 全部）。记忆目前只有 diary 类目带 conversationId，
+    // 其余类目是全局条目；筛选时没有归属的条目会隐去，等以后把归属补齐再放开。
     memoryFilterConvId: '',
     notesTab: 'message',
     selectedFavoriteId: null,
@@ -35,8 +29,7 @@ const state = {
     thinkingMessageId: null,
     memoryCore: null,
     memorySummaryRunning: false,
-    // 用户资料（左下角头像点开的那个面板）：名称 / 头像是用户自己填的，
-    //   impression 是伊蕾娜写的印象 —— 用户不可编辑（见 data.js 用户资料段）。
+    // 用户资料（左下角头像点开的面板）：名称/头像是用户自己填的，impression 是伊蕾娜写的（用户不可编辑）。
     userProfile: { name: '', avatar: '', impression: '' },
     userImpressionRunning: false,
     announcement: null,
@@ -71,8 +64,7 @@ const elements = {
     settingsOverlay: document.getElementById('settingsOverlay'),
     chatHeader: document.getElementById('chatHeader'),
     closeSettings: document.getElementById('closeSettings'),
-    // cancelSettings / saveSettings 已随底部按钮栏一起删除
-    //   不再查这两个 id —— 它们现在恒为 null，留着会让人误以为还在用。
+    // cancelSettings / saveSettings 已不存在，不要再查这两个 id —— 恒为 null，留着会让人误以为还在用。
     sidebar: document.getElementById('sidebar'),
     mobileSidebarClose: document.getElementById('mobileSidebarClose'),
     sidebarOverlay: document.getElementById('sidebarOverlay'),
@@ -86,12 +78,13 @@ const elements = {
     notesBadge: document.getElementById('notesBadge'),
     manageCategoriesBtn: document.getElementById('railCategoriesBtn'),
     railChatBtn: document.getElementById('railChatBtn'),
-    railDiaryBtn: document.getElementById('railDiaryBtn'),
     railMemoryBtn: document.getElementById('railMemoryBtn'),
     railSettingsBtn: document.getElementById('railSettingsBtn'),
     headerSettingsBtn: document.getElementById('headerSettingsBtn'),
     railProfileBtn: document.getElementById('railProfileBtn'),
     currentConversationTitle: document.getElementById('currentConversationTitle'),
+    // 顶栏「模型与会话人设」胶囊上的模型名（redesign-extras 与会话设定弹窗都会写它）。
+    rdModelLabel: document.getElementById('rdModelLabel'),
     floatingMic: document.getElementById('floatingMic'),
     floatingVoiceTitle: document.getElementById('floatingVoiceTitle'),
     floatingVoiceHint: document.getElementById('floatingVoiceHint'),
@@ -110,6 +103,9 @@ const elements = {
     memoryBody: document.getElementById('memoryBody'),
     memoryEmpty: document.getElementById('memoryEmpty'),
     memoryCount: document.getElementById('memoryCount'),
+    memoryTierSettingsBtn: document.getElementById('memoryTierSettingsBtn'),
+    memoryViewTiers: document.getElementById('memoryViewTiers'),
+    memoryViewDiary: document.getElementById('memoryViewDiary'),
     exitMemoryBtn: document.getElementById('exitMemoryBtn'),
     exitNotesBtn: document.getElementById('exitNotesBtn'),
     notesSearch: document.getElementById('notesSearch'),
@@ -176,20 +172,32 @@ const elements = {
     serverAnnounceAction: document.getElementById('serverAnnounceAction'),
     serverAnnounceClose: document.getElementById('serverAnnounceClose'),
     conversationPromptOverlay: document.getElementById('conversationPromptOverlay'),
-    conversationCardOptions: document.getElementById('conversationCardOptions'),
+    conversationCardSelect: document.getElementById('conversationCardSelect'),
+    conversationModelSelect: document.getElementById('conversationModelSelect'),
     conversationWorldInput: document.getElementById('conversationWorldInput'),
     conversationCharacterInput: document.getElementById('conversationCharacterInput'),
     conversationPromptCount: document.getElementById('conversationPromptCount'),
     conversationPromptError: document.getElementById('conversationPromptError'),
     conversationPromptCancelBtn: document.getElementById('conversationPromptCancelBtn'),
     conversationPromptSaveBtn: document.getElementById('conversationPromptSaveBtn'),
-    // 对话模型的旧单模型字段（settingApiFormat/settingBaseUrl/settingChatModel/settingApiKey）
-    //   已随多提供商改造移除；卡片与两个下拉由 providers.js 直接 getElementById，不经 elements。
-    // 对话优化：思考强度（四档下拉，off 即"不思考"）+ 第三人称两段式开关。
-    // 位置在「设置 → 模型」（输入框旁的 ⊕ 菜单只放本轮操作）。
+    // 会话人设里的「这段对话的 bot」：头像选择/清除 + 名字。
+    conversationBotAvatarBtn: document.getElementById('conversationBotAvatarBtn'),
+    conversationBotAvatarInput: document.getElementById('conversationBotAvatarInput'),
+    conversationBotAvatarClear: document.getElementById('conversationBotAvatarClear'),
+    conversationBotNameInput: document.getElementById('conversationBotNameInput'),
+    // 对话模型的单模型字段已移除；卡片与两个下拉由 providers.js 直接 getElementById，不经 elements。
+    // 对话优化：思考强度（四档下拉，off 即"不思考"）+ 第三人称两段式开关，位置在「设置 → 模型」。
     settingThinkingEffort: document.getElementById('settingThinkingEffort'),
     thinkingModeHint: document.getElementById('thinkingModeHint'),
     settingThirdPerson: document.getElementById('settingThirdPerson'),
+    // 对话优化：采样参数（开关 + 滑杆 + 数值文案）。开关关着 = 该项不发送（服务商默认），
+    // 定义与范围见 core-config.js 的 CHAT_SAMPLING_FIELDS。
+    settingOptTemperature: document.getElementById('settingOptTemperature'),
+    settingOptTemperatureOn: document.getElementById('settingOptTemperatureOn'),
+    settingOptTemperatureValue: document.getElementById('settingOptTemperatureValue'),
+    settingOptTopP: document.getElementById('settingOptTopP'),
+    settingOptTopPOn: document.getElementById('settingOptTopPOn'),
+    settingOptTopPValue: document.getElementById('settingOptTopPValue'),
     // AI 联网搜索：与「对话优化」其它项同组
     settingTavilyEnabled: document.getElementById('settingTavilyEnabled'),
     settingSearchProvider: document.getElementById('settingSearchProvider'),
@@ -226,7 +234,7 @@ const elements = {
     memoryEveryMinus: document.getElementById('memoryEveryMinus'),
     memoryEveryPlus: document.getElementById('memoryEveryPlus'),
     memoryNowBtn: document.getElementById('memoryNowBtn'),
-    // settingLogLevel / settingLogTrace 已随「日志设置」界面一起移除（见 index.html 的说明）
+    // settingLogLevel / settingLogTrace 不在 elements 里：「日志设置」界面不存在（见 index.html 的说明）。
     memoryBtn: document.getElementById('headerMemoryBtn'),
     memoryStatusDot: document.getElementById('memoryStatusDot'),
     dashscopeAsrFields: document.getElementById('dashscopeAsrFields'),

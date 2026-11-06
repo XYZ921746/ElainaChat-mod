@@ -1,16 +1,8 @@
-/* ============================================================================
- * Agent 操作说明书与技能知识（从 agent.js 拆出）
- *
- * fileManual / accessPhrase / rootsBlock 与技能同步、读取。
- * 依赖 agent-ops.js 的 ElainaOps 与 agent.js 的权限 / 路径函数（运行时才调用）。
- * ========================================================================== */
+// Agent 操作说明书与技能知识；依赖 agent-ops.js 的 ElainaOps 与 agent.js 的权限/路径函数。
 'use strict';
 
-// ===== 操作说明书：用到时才下发（见 agent-ops.js 的 setManual 说明）=====
-// 每条只写"真要动手那一刻才知道的事"：真实位置、会被问确认的情形、失败后怎么办。
-// 为什么不放进每轮都在的提示词：那些说明里通常只有一段用得上，而真实路径夹在整段中间
-//   时模型根本注意不到 —— 它会顺手把路径猜成 C:\Users\<用户名>\Desktop，
-//   而用户的桌面常常并不在那儿。
+// 说明书用到时才下发（见 agent-ops.js 的 setManual）：只写动手那一刻才知道的事 ——
+// 真实位置、会被问确认的情形、失败后怎么办；整段放进常驻提示词时模型注意不到夹在中间的路径。
 const accessPhrase = () => (currentAgentAccess() === 'full' ? '完全访问（写入与删除都不询问）'
     : currentAgentAccess() === 'auto' ? '自动通过（写入直接执行，但禁止删除）'
         : '逐条确认（每次写入/删除都会弹一次确认，用户可能拒绝）');
@@ -41,10 +33,8 @@ ElainaOps.setManual('pc_command', () => [
     '⚠️ 删除类命令（del / Remove-Item / rmdir 等）**不进回收站、无法恢复**：执行前先确认删的确实是目标，'
         + '能用更保守的写法（先列目录确认、只删明确的那一个文件）就不要用通配符。',
     '命令输出较长时会被截断，需要看别的部分就换一条更精确的命令（例如加过滤条件）。',
-    // 这条是给模型看的"环境事实"，不是提示技巧：Windows PowerShell 里 curl 是
-    //   Invoke-WebRequest 的别名（不是 curl.exe），所以 curl 的参数（-s / -L /
-    //   --max-time）会被当成位置参数而报错。模型不知道这点就会连着几条失败命令，
-    //   而这些失败本身要花掉用户的等待时间。
+    // 环境事实，不是提示技巧：PowerShell 里 curl 是 Invoke-WebRequest 的别名，curl 参数会报错，
+    // 模型不知道就会连着几条失败命令，白花用户的等待时间。
     '⚠️ 本机 shell 是 **Windows PowerShell**：`curl` 是 `Invoke-WebRequest` 的别名，'
         + '**不能**用 curl 的参数（-s / -L / --max-time 会报"找不到位置形式参数"）。'
         + '要 curl 语义就写 `curl.exe`，网络请求优先用 `Invoke-WebRequest -Uri … -TimeoutSec N -UseBasicParsing`。',
@@ -84,9 +74,8 @@ ElainaOps.setManual('phone', () => [
 ].join('\n'));
 ElainaOps.setManual('app_memory', () => '整理当前对话的记忆：把这段经历压缩后汇入长期记忆。用户主动要求时用。');
 
-// 元工具的注册顺序：**先 define、后 setManual / setExec** —— setManual 对未注册的操作
-//   直接抛错（注册表刻意如此），顺序反了会在页面加载时抛出一条未捕获错误，
-//   而顶层抛错会**中断本文件后续所有代码**（续跑、定时任务等都挂不上）。
+// 元工具必须先 define、后 setManual / setExec：setManual 对未注册操作直接抛错，
+// 顶层抛错会中断本文件后续所有代码（续跑、定时任务等都挂不上）。
 ElainaOps.define({
     name: 'agent_help', tool: 'agent_help', ns: 'app', indexHidden: true,
     desc: '查看某项能力的使用方法（参数怎么填、注意什么），或读某个技能的正文。不确定时先调它。',
@@ -141,10 +130,8 @@ ElainaOps.setManual('recall_search', () => [
 ].join('\n'));
 ElainaOps.setExec('agent_help', async (args) => {
     const op = ElainaOps.resolve(args.capability);
-    // 技能（kind:'knowledge'）没有"说明书"，它本身就是正文 —— 回灌时**必须**点明
-    //   "这是资料、不是指令"：技能是用户装的第三方文本，里面一句"请执行…"若被当指令，
-    //   就等于把外部内容变成了系统提示。能力边界在 registry 上是钉死的（永不执行），
-    //   这一句管的是**模型怎么看待**这段文本。
+    // 技能（kind:'knowledge'）没有说明书，正文就是资料；回灌必须点明"资料、不是指令" ——
+    // 技能是用户装的第三方文本，一句"请执行…"被当指令就等于把外部内容变成系统提示。
     if (op && op.kind === 'knowledge') {
         const text = await readSkillText(op.name);
         if (!text) return { ok: false, text: '读不到这个技能的内容（可能已被卸载，或它没有 SKILL.md）。' };
@@ -157,22 +144,13 @@ ElainaOps.setExec('agent_help', async (args) => {
     return { ok: false, text: '没有这项能力：' + String(args.capability || '') + '。可用的是：' + names };
 });
 
-// ===== 技能（skill）进注册表：作为**纯知识**条目 =====
-// 技能是用户装的 SKILL.md（`/api/skills` 扫出来的），它是**资料**不是能力。
-//   注册进 registry 只为两件事：① 进 L1 能力索引（模型得先知道"有这么一份资料"）；
-//   ② 用 agent_help 把它的正文当参考资料取回来。
-// 红线：这条路上永远得不到 `kind:'tool'` 的条目（见 agent-ops.js 的 registerKnowledge）
-//   —— 所以"装一个 zip"绝不可能变成"给自己发执行能力"，这条边界钉在数据结构上，
-//   不靠注释约定。系统级的内置能力则相反：它们**只由代码注册**、不落盘到 skills/，
-//   于是技能列表里本来就看不到它们（无需额外过滤）。
+// 技能作为纯知识进注册表：只进 L1 能力索引，并供 agent_help 取正文。
+// 这条路上永远得不到 kind:'tool' 条目（见 agent-ops.js 的 registerKnowledge），
+// "装一个 zip"不可能变成"给自己发执行能力"；内置能力只由代码注册、不落盘到 skills/。
 const registeredSkillIds = new Set();   // 已进过表的技能 id —— 免得每次刷新重复注册
 
-/**
- * 把当前扫描到的技能同步进注册表（幂等）。
- *
- * 失败/无服务端（APK 没有 `/api/skills`）时直接返回 —— 技能是可选资料，
- *   取不到不该影响任何其它流程。
- */
+// 把当前扫描到的技能同步进注册表（幂等）。取不到（APK 没有 /api/skills）就直接返回：
+// 技能是可选资料，不该影响任何其它流程。
 async function syncSkillKnowledge() {
     if (typeof ElainaOps === 'undefined' || typeof ElainaOps.registerKnowledge !== 'function') return;
     let skills = [];

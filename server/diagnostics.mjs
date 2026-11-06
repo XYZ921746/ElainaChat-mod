@@ -1,24 +1,5 @@
-// 诊断输出：让**完全不了解本软件的人（或 AI）**也能从日志里看懂
-// 「这是什么」「我该做什么」「哪里有问题」「怎么修」。
-// ── 为什么单独成模块 ────────────────────────────────────────────────────
-// ① **可测**：文案是纯函数产出，能穷举断言"每条问题都必须有原因和下一步"。
-//    文案质量靠人眼盯是盯不住的 —— 漏了"怎么办"这一句，用户就卡住了。
-// ② serve.mjs 已 3000 行，输出格式该往外挪。
-// ③ 格式会长期演进，集中一处才改得动。
-// ── 排版原则 ──────────────────────────────────────────────────────────
-//   ① **按"用户要做什么"排序，不按"程序有哪些模块"排序**。
-//      用户打开这一屏最想知道的是「我怎么开始用」，所以地址在最上面；
-//      Node 版本、进程号这类信息压到最后，只在贴给别人排查时才需要。
-//   ② **一个意思只说一遍**。开头说"服务已启动，可以用了"，就不要再在结尾说
-//      "一切正常，服务已就绪" —— 同一件事说两遍纯占地方。
-//   ③ **该重的重**：地址、密码这类"要照着敲"的东西单独成块，不和说明文字混排。
-//   ④ **技术细节降级**：进程号 / Node 版本 / 日志路径收进一个「技术信息」块，
-//      普通用户可以直接跳过，排查的人一眼能找到。
-//   ⑤ **每条问题三段式**：发生了什么（what）/ 为什么（why）/ 怎么办（how）。
-//      怎么办必须**具体到能照做**（点哪个按钮、敲哪条命令），不能是"请检查配置"。
-//   ⑥ **区分「正常」与「需要处理」**：默认关闭、还没配置是正常状态，
-//      不该和真故障混在一起报警 —— 否则用户会对警告脱敏。
-//   ⑦ **不用内部标识符当主语**：说「桌宠（pet）」而不是裸 `pet`。
+// 诊断输出：让完全不了解本软件的人（或 AI）也能从日志里看懂「这是什么」「我该做什么」「哪里有问题」「怎么修」—— 文案是纯函数产出，能穷举断言"每条问题都必须有原因和下一步"。
+// 排版按"用户要做什么"排序、一个意思只说一遍、要照着敲的东西单独成块、技术细节收进「技术信息」块；每条问题三段式（发生了什么 / 为什么 / 怎么办），怎么办必须具体到能照做。
 
 /** 状态图标。四个符号语义固定，不要混用。 */
 export const MARK = {
@@ -28,23 +9,11 @@ export const MARK = {
     bad: '✘',       // 坏了，功能不可用
 };
 
-/** 缩进常量：让多行输出对齐，扫读时不跳 */
 const IND = '  ';
 const SUB = '      ';
 const RULE = '='.repeat(64);
 
-/**
- * 启动头：**极简**，只回答"这是什么"。
- *
- * 「这是什么」「现在在做什么」这类说明是文档该干的活 —— 放在每次启动都要
- * 滚过去的日志里只会变成噪音。所以只留三行。
- *
- * @param {object} ctx
- * @param {string} ctx.name 软件名
- * @param {string} ctx.version 版本
- * @param {string} [ctx.tagline] 一句话定位
- * @returns {string}
- */
+/** 启动头：极简，只回答"这是什么" —— 说明性内容该由文档承担，放进每次启动都要滚过去的日志只会变成噪音。 */
 export function banner(ctx) {
     return [
         RULE,
@@ -54,16 +23,7 @@ export function banner(ctx) {
     ].join('\n');
 }
 
-/**
- * 「怎么用」块：把要照着敲的东西集中放在最前面。
- *
- * 为什么单独成块：地址和密码是**要照着输入**的内容，和说明文字混排时
- * 很容易被看漏。这里用缩进 + 图标把它们顶出来。
- *
- * @param {Array<{state?:string, label:string, value?:string, hint?:string}>} items
- * @param {string} [heading]
- * @returns {string}
- */
+/** 「怎么用」块：地址和密码是要照着输入的内容，和说明文字混排时很容易被看漏，这里用缩进 + 图标把它们顶出来。 */
 export function usage(items, heading = '怎么用') {
     const rows = [section(heading)];
     for (const it of items) {
@@ -75,21 +35,10 @@ export function usage(items, heading = '怎么用') {
     return rows.join('\n');
 }
 
-/**
- * 分组标题。空行 + `【标题】`，让输出在视觉上分段。
- * @param {string} title
- * @returns {string}
- */
 export function section(title) {
     return `\n【${title}】`;
 }
 
-/**
- * 检查清单：逐项给出状态与说明。
- * @param {Array<{state:'ok'|'note'|'warn'|'bad', label:string, detail?:string, hint?:string}>} items
- * @param {string} [title]
- * @returns {string}
- */
 export function checklist(items, title = '启动检查') {
     const rows = [title ? section(title) : ''];
     for (const it of items) {
@@ -100,15 +49,7 @@ export function checklist(items, title = '启动检查') {
     return rows.join('\n');
 }
 
-/**
- * 技术信息块：给排查的人看的，普通用户可以跳过。
- *
- * 为什么收进一块：Node 版本、进程号、日志路径这些每次启动都打，
- * 但 99% 的时候用户不需要看 —— 放在最后、统一缩进，既不挡视线又好找。
- *
- * @param {Array<[string, string]>} pairs [标签, 值]
- * @returns {string}
- */
+/** 技术信息块：Node 版本、进程号、日志路径这些每次启动都打、但 99% 的时候用户不需要看的东西 —— 放最后、统一缩进，既不挡视线又好找。 */
 export function techInfo(pairs, heading = '技术信息（出问题时连同上面的内容一起复制给别人）') {
     const rows = [section(heading)];
     for (const [k, v] of pairs) {
@@ -118,15 +59,7 @@ export function techInfo(pairs, heading = '技术信息（出问题时连同上�
     return rows.join('\n');
 }
 
-/**
- * 单个问题的三段式报告。
- *
- * `what` 说清发生了什么，`why` 说清原因，`how` 给出**具体到能照做**的下一步。
- * 三者缺一，用户就得自己猜 —— 而"猜"正是这个模块要消灭的东西。
- *
- * @param {{what:string, why?:string, how?:string|string[], where?:string}} p
- * @returns {string}
- */
+/** 单个问题的三段式报告：what 说清发生了什么，why 说清原因，how 给出具体到能照做的下一步 —— 三者缺一，用户就得自己猜，而"猜"正是这个模块要消灭的东西。 */
 export function problem(p) {
     const rows = [`${MARK.bad} ${p.what}`];
     if (p.where) rows.push(`${IND}位置：${p.where}`);
@@ -141,16 +74,7 @@ export function problem(p) {
     return rows.join('\n');
 }
 
-/**
- * 收尾：只在**真有问题**时出现。
- *
- * 正常时不打收尾：开头已经说清"服务已启动，可以用了"，再打一条
- *   "一切正常，服务已就绪"只是重复。只有存在问题才汇总，
- *   把"要做什么"集中到一屏内。
- *
- * @param {string[]} problems 已经格式化好的问题文本（取首行做汇总）
- * @returns {string} 无问题时返回空串（调用方 console.log 空串会被日志系统丢弃）
- */
+/** 收尾：只在真有问题时出现（开头已经说清"服务已启动，可以用了"，再打一条"一切正常"只是重复）；无问题时返回空串（调用方 console.log 空串会被日志系统丢弃）。 */
 export function summary(problems) {
     if (!problems || !problems.length) return '';
     const rows = ['', RULE, `${MARK.bad} 有 ${problems.length} 项需要处理（逐条见上）：`];
@@ -161,12 +85,7 @@ export function summary(problems) {
     return rows.join('\n');
 }
 
-/**
- * 插件状态的**中文说明**。
- *
- * 与 web/js/mods.js 的 STATE_LABEL 保持一致 —— 同一种状态在前端日志与
- * 服务端日志里必须是同一句话，否则对照着看会以为不是一回事。
- */
+/** 插件状态的中文说明。状态名（ready/disabled/blocked/error/pending）与 web/js/mods-summary.js 的 STATE_LABEL 是同一套；中文措辞两侧按版面取舍，但同一状态的语义必须对应，不能一边读着像成功、另一边像失败。 */
 export const MOD_STATE_LABEL = {
     ready: '已加载',
     disabled: '未启用（插件默认关闭，属正常状态）',
@@ -175,16 +94,7 @@ export const MOD_STATE_LABEL = {
     pending: '正在加载',
 };
 
-/**
- * 把插件清单渲染成一段**人能读懂的**说明。
- *
- * 为什么不让调用点自己拼字符串：`elaina-avatar=disabled galgame=ready pet=ready`
- * 那种键值对是机器视角的 —— 不了解本项目的人看到，既不知道 `disabled` 是好是坏，
- * 也看不出"前置没启用、依赖它的却起来了"这个关键矛盾。
- *
- * @param {Array<{id:string, name?:string, state:string, dir?:string, error?:string}>} plugins
- * @returns {{text:string, problems:string[]}}
- */
+/** 把插件清单渲染成人能读懂的说明：`elaina-avatar=disabled galgame=ready` 那种键值对是机器视角，看不出"前置没启用、依赖它的却起来了"这个关键矛盾。 */
 export function describePlugins(plugins) {
     const problems = [];
     if (!plugins.length) {
@@ -211,9 +121,6 @@ export function describePlugins(plugins) {
 
     if (byState.ready.length) {
         rows.push(`${SUB}${MARK.ok} 可用：${byState.ready.map(label).join('、')}`);
-        // 目录名与 id 不同时要**如实说明**，即使是正常工作的插件。
-        //   为什么：用户手动改过目录名很常见，而排查"路径为什么不对"时
-        //   必须知道它实际装在哪个目录。只报 id 会让人以为目录也叫这个名。
         for (const p of byState.ready) {
             if (p.dir && p.dir !== p.id) {
                 rows.push(`${SUB}   · ${p.name || p.id} 实际装在目录 ${p.dir}/（它的 id 是 ${p.id}）`);

@@ -1,9 +1,4 @@
-/* ============================================================================
- * 插件系统 —— 依赖图与提示文案（纯函数）
- *
- * 从 mods.js 拆出：拓扑排序、依赖缺失说明、拒绝文案、依赖方名单。
- * 不持有 registry 状态，输入输出都靠参数。
- * ========================================================================== */
+/* 插件系统 —— 依赖图与提示文案（纯函数）：拓扑排序、依赖缺失说明、拒绝文案、依赖方名单；不持有 registry 状态。 */
 (function () {
     'use strict';
 
@@ -32,13 +27,8 @@
         return out;
     }
 
-
-    /**
-     * 把"前置为什么不可用"翻译成每条一句话（原因 + 可执行的下一步）。
-     *
-     * loadAll 的拒绝加载与 setEnabled 的拒绝启动**共用**这一份 ——
-     * 两个入口各写一份必然漂移，用户在不同地方会看到两种说法。
-     */
+    /* 把"前置为什么不可用"翻译成每条一句话（原因 + 可执行的下一步）。loadAll 的拒绝加载与 setEnabled 的拒绝启动
+     * **共用**这一份 —— 两个入口各写一份必然漂移，用户在不同地方会看到两种说法。 */
     function describeMissingDeps(missingDeps) {
         return (Array.isArray(missingDeps) ? missingDeps : []).map((d) => {
             const what = '前置插件「' + d.id + '」' + d.reason;
@@ -61,19 +51,16 @@
         }).join('；');
     }
 
-
     /** 拒绝加载 / 拒绝启动时的完整说明（措辞与 describeMissingDeps 同源） */
     function refusalMessage(missingDeps) {
         return '已拒绝加载：' + describeMissingDeps(missingDeps)
             + '。（缺了前置就启动，功能只会是残缺的，所以这里直接拒绝而不是带病运行。）';
     }
 
-
     /** 依赖方名单拼成「A」「B」这样的可读串（日志与弹窗共用一份措辞） */
     function dependentNames(using) {
         return (using || []).map((d) => '「' + (d.name || d.id) + '」').join('、');
     }
-
 
     window.ElainaModsGraph = { sortByDependency, describeMissingDeps, refusalMessage, dependentNames };
 })();

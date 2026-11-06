@@ -1,30 +1,5 @@
-// 浏览器工具：让 AI 真的打开一个浏览器、看页面、点东西、填表单。
-// ── 这个模块解决什么 ────────────────────────────────────────────────────
-// 用户要求：「AI 使用浏览器的功能」。和「电脑命令」不是一回事 ——
-//   命令通道是**文本进、文本出**：AI 看不到页面长什么样，只能靠 `curl` 猜，
-//   而且对需要登录态、JS 渲染、点开菜单才出现的页面完全无能为力。
-//   浏览器通道是**看页面 → 决定 → 真点一下**，这才是"用浏览器"。
-// ── 为什么用 CDP（Chrome DevTools Protocol）而不是别的 ──────────────────
-//   · 不需要 npm 依赖（项目硬约束：零依赖、免构建），puppeteer/playwright 都是重依赖；
-//   · 不需要额外装浏览器 —— 用户机器上大概率已经有 Chrome/Edge，
-//     而 CDP 就是它们自带的一个调试口，加个命令行参数就能开；
-//   · 无头模式也能跑，但有头模式让用户**看得见** AI 在点什么（这个项目的
-//     "AI 到底动了什么"一贯要求可见，见 recordTurnTool 那套）。
-// ── 安全边界（三条，缺一不可）──────────────────────────────────────────
-//   ① **只本机**：调试端口一旦暴露到局域网，等于把这台机器上所有浏览器的
-//      会话 cookie 交出去（CDP 能读 cookie、能执行任意 JS）。所以：
-//      · 浏览器只用 `--remote-debugging-port=0`（内核分配端口）+ 绑定 127.0.0.1；
-//      · HTTP 侧调用方必须再判一次 isLocalRequest（见 serve.mjs 的路由）。
-//   ② **独立 profile**：绝不接用户正在用的那个浏览器（`--user-data-dir` 指向
-//      临时目录）。接上去既会污染用户的书签/登录态，也会因为"用户正在用"
-//      导致启动失败。代价是**没有用户的登录态** —— 这是刻意的取舍：
-//      要登录的站点得由用户在面板里自己登（见下文的"有头模式"）。
-//   ③ **URL 协议白名单**：只允许 http/https，挡掉 file://（读本地文件）、
-//      chrome://（改浏览器设置）、devtools://、以及 `javascript:` 伪协议。
-// ── 生命周期 ───────────────────────────────────────────────────────────
-//   浏览器**按需启动、空闲即关**（IDLE_CLOSE_MS）。理由：常驻一个无头 Chrome
-//   在用户机器上跑着，既吃内存又让人不安（"我没开浏览器啊"）。
-//   关闭由定时器驱动，每次操作会重置计时。
+// 浏览器工具：让 AI 真的打开浏览器、看页面、点东西、填表单 —— 走 Chrome DevTools Protocol（零依赖，Chrome/Edge 自带调试口）。
+// 安全边界：只绑 127.0.0.1 且 HTTP 侧调用方还要再判 isLocalRequest（CDP 能读 cookie、能执行任意 JS）、独立临时 profile（不碰用户正在用的浏览器）、URL 只允许 http/https、空闲即关。
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -39,16 +14,14 @@ export const IDLE_CLOSE_MS = 5 * 60 * 1000;
 const CDP_TIMEOUT = 15000;
 const NAV_TIMEOUT = 30000;
 
-/** 只允许这两种协议（见文件头 ③）。 */
+/** 只允许这两种协议（对应文件头安全边界里「URL 只允许 http/https」一条）。 */
 const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
 
 /** 页面快照里最多返回多少个可交互元素 —— 太多会把提示词撑爆，模型也读不完。 */
 export const MAX_SNAPSHOT_ITEMS = 120;
 
 /**
- * 常见安装位置。**顺序有意义**：Chrome 优先（CDP 行为最标准），
- *   Edge 次之（Windows 自带，覆盖率最高）。
- * 环境变量 ELAINA_BROWSER 可覆盖（用户把浏览器装在非标准位置时用）。
+ * 常见安装位置，顺序有意义：Chrome 优先（CDP 行为最标准），Edge 次之（Windows 自带，覆盖率最高）；ELAINA_BROWSER 可覆盖。
  */
 export function browserCandidates() {
     const env = String(process.env.ELAINA_BROWSER || '').trim();
@@ -83,15 +56,7 @@ export function findBrowserExecutable() {
     return '';
 }
 
-/**
- * 校验一个要导航过去的地址。
- *
- * 只认 http/https：其余协议在这个能力里没有正当用途，而每一个都有明确的危害
- *   （file:// 读本地文件、chrome:// 改浏览器设置、javascript: 在当前页执行任意代码）。
- * 也顺手挡掉带换行的输入 —— 那是在试探命令行注入。
- *
- * @returns {{ok:true, url:string} | {ok:false, reason:string}}
- */
+/** 校验一个要导航过去的地址：只认 http/https（file:// 读本地文件、chrome:// 改浏览器设置、javascript: 在当前页执行任意代码），并挡掉含换行/空字符的输入（那是在试探命令行注入）；返回 { ok, url } 或 { ok:false, reason } */
 export function normalizeNavigationUrl(raw) {
     const text = String(raw || '').trim();
     if (!text) return { ok: false, reason: '没有给出网址' };
@@ -104,17 +69,7 @@ export function normalizeNavigationUrl(raw) {
     return { ok: true, url: url.toString() };
 }
 
-/**
- * 页面快照用的注入脚本。
- *
- * 为什么要在**页面里**跑这段而不是用 CDP 的 DOM 域：DOM 域给的是节点树，
- *   要自己算可见性、自己拼文本，几百行且容易出错；这里直接在页面上下文里
- *   用 getBoundingClientRect + innerText，语义与用户看到的完全一致。
- *
- * 给每个可交互元素打上 `data-elaina-ref`：模型拿到的是 "ref: 3"，
- *   点的时候按 ref 找回元素 —— 比让模型算坐标可靠得多（坐标会随滚动、
- *   响应式布局变化，而 ref 不会）。
- */
+/** 页面快照用的注入脚本：在页面上下文里用 getBoundingClientRect + innerText 算可见性（DOM 域给的是节点树，要自己拼几百行且容易出错），语义与用户看到的完全一致；给每个可交互元素打上 data-elaina-ref，模型点时按 ref 找回元素（比坐标可靠，坐标会随滚动、响应式布局变化） */
 const SNAPSHOT_SCRIPT = `(() => {
   const MAX_ITEMS = __MAX_ITEMS__;
   const SEL = 'a,button,input,textarea,select,[role=button],[role=link],[role=tab],[role=checkbox],[onclick]';
@@ -168,9 +123,7 @@ function snapshotExpression(maxItems = MAX_SNAPSHOT_ITEMS, maxText = 4000) {
 }
 
 /**
- * 拼出启动浏览器的命令行参数。
- * 端口交给内核分配（再读 profile 里的 DevToolsActivePort），profile 指向独立
- *   临时目录：既不会撞上用户自己开着的调试实例，也不碰用户正在用的浏览器。
+ * 拼出启动浏览器的命令行参数：端口交给内核分配（写死端口会撞上用户自己开着的调试实例），profile 指向独立临时目录，不碰用户正在用的浏览器。
  */
 function browserLaunchArgs(profileDir, headless) {
     return [
@@ -194,10 +147,7 @@ function parseDevToolsActivePort(text) {
     return Number(String(text).split('\n')[0].trim()) || 0;
 }
 
-/**
- * 把一条 CDP 消息解析成响应用得上的三样：配对 id、错误文本、结果。
- * 事件没有 id（不参与配对），非法消息返回 null，调用方据此忽略。
- */
+/** 把一条 CDP 消息解析成响应用得上的三样（配对 id、错误文本、结果）：事件没有 id、不参与配对，非法消息返回 null，调用方据此忽略 */
 function parseCdpMessage(msg) {
     if (!msg || typeof msg !== 'object' || !msg.id) return null;
     return {
@@ -207,10 +157,7 @@ function parseCdpMessage(msg) {
     };
 }
 
-/**
- * Runtime.evaluate 的响应只有两种结局：脚本抛错（给出可直接抛出的文案），
- *   或正常返回值。exceptionDetails 存在时 result 不可信，所以先判它。
- */
+/** Runtime.evaluate 的响应只有两种结局：脚本抛错（给出可直接抛出的文案）或正常返回值；exceptionDetails 存在时 result 不可信，所以先判它 */
 function parseEvaluation(res) {
     if (res && res.exceptionDetails) {
         return { error: '页面脚本出错：' + String(res.exceptionDetails.text || '未知') };
@@ -219,10 +166,7 @@ function parseEvaluation(res) {
 }
 
 /**
- * 浏览器会话：启动 / 关掉 / 执行 CDP 命令 / 页面操作。
- *
- * 状态全在闭包里，对外只有几个方法 —— 服务端路由只需要 `createBrowserSession()`
- *   一次，然后调 `ensure()` / `goto()` 这些。
+ * 浏览器会话：启动 / 关掉 / 执行 CDP 命令 / 页面操作。状态全在闭包里，对外只有几个方法 —— 服务端路由只需 createBrowserSession() 一次，再调 ensure() / goto() 这些。
  */
 export function createBrowserSession(options = {}) {
     const idleMs = Number.isFinite(options.idleCloseMs) ? options.idleCloseMs : IDLE_CLOSE_MS;
@@ -286,10 +230,7 @@ export function createBrowserSession(options = {}) {
     }
 
     /**
-     * 确保浏览器在跑，并返回一个可用的页面 target。
-     *
-     * 并发调用要合并：两个工具调用同时到达时不能起两个浏览器
-     *   （第二个会因 profile 目录被占用而失败，报错还很难懂）。
+     * 确保浏览器在跑并返回一个可用的页面 target。并发调用要合并：两个工具调用同时到达时不能起两个浏览器（第二个会因 profile 目录被占用而失败，报错还很难懂）。
      */
     function ensure() {
         if (ws) { touchIdle(); return Promise.resolve(); }
@@ -301,12 +242,8 @@ export function createBrowserSession(options = {}) {
             }
             profileDir = await mkdtemp(path.join(os.tmpdir(), 'elaina-browser-'));
             child = spawn(exe, browserLaunchArgs(profileDir, options.headless), { stdio: 'ignore', windowsHide: true });
-            // ⚠️ 不要监听 child 的 'exit' 来判定"浏览器死了"。
-            //   在 Windows 上 Chrome 的**启动器进程**把活交给真正的浏览器进程后
-            //   自己立刻退出（实测 ~230ms），而浏览器仍在跑。把这个正常的进程交接
-            //   当成崩溃，会让刚连上的 ws 被清空 —— 现象是"浏览器启动了、命令全报
-            //   '浏览器没有连上'"，而日志里写着"浏览器已启动"。
-            //   真正的存活判据是 **ws 连接**（见下面 onClose），它断开才是真没了。
+            // 不要监听 child 的 'exit' 来判"浏览器死了"：Windows 上 Chrome 的启动器进程把活交给浏览器进程后自己立刻退出，而浏览器仍在跑 —— 把它当崩溃会清空刚连上的 ws（现象：命令全报"浏览器没有连上"）。
+            // 真正的存活判据是 ws 连接（见下面 onClose），它断开才是真没了。
             const deadline = Date.now() + 20000;
             // DevToolsActivePort：第一行端口，第二行 ws 路径（Chrome 系通用）
             let port = 0;
@@ -329,9 +266,7 @@ export function createBrowserSession(options = {}) {
             if (!created.ok) throw new Error('新建标签页失败（HTTP ' + created.status + '）');
             const target = await created.json();
             targetId = String(target.id || '');
-            // 另开一条**浏览器级**连接：关浏览器要走 Browser.close。
-            //   直接 kill 启动器进程在 Windows 上不可靠（它可能已经退出了，
-            //   而浏览器本体是它派生出来的、不在我们手里）。
+            // 另开一条浏览器级连接：关浏览器要走 Browser.close —— 直接 kill 启动器进程在 Windows 上不可靠（它可能已退出，浏览器本体是它派生的、不在我们手里）
             browserWs = await connectWebSocket(browserWsUrl, { timeoutMs: 8000 });
             browserWs.onClose(() => { browserWs = null; });
             ws = await connectWebSocket(String(target.webSocketDebuggerUrl));
@@ -408,9 +343,7 @@ export function createBrowserSession(options = {}) {
         if (!checked.ok) throw new Error(checked.reason);
         const nav = await send('Page.navigate', { url: checked.url }, NAV_TIMEOUT);
         if (nav && nav.errorText) throw new Error('打不开这个网址：' + nav.errorText);
-        // 等 load：Page.navigate 只保证"开始导航"，不等资源加载完。
-        //   不等的话紧接着的快照会拍到半截页面（白屏或骨架屏），
-        //   模型据此判断就会做出错误决定。
+        // 等 load：Page.navigate 只保证"开始导航"，不等资源加载完；不等的话紧接着的快照会拍到半截页面（白屏或骨架屏），模型据此判断就会做出错误决定
         await waitForLoad(NAV_TIMEOUT);
         return checked.url;
     }
@@ -422,9 +355,7 @@ export function createBrowserSession(options = {}) {
             const finish = () => { if (done) return; done = true; clearTimeout(timer); resolve(); };
             const timer = setTimeout(finish, timeoutMs);
             if (timer.unref) timer.unref();
-            // 用一个短轮询代替 Page.loadEventFired 事件订阅：
-            //   事件订阅需要改 onMessage 的分发逻辑（现在只处理带 id 的响应），
-            //   而 readyState 本来就直接反映"加载完了没有"。
+            // 用短轮询代替 Page.loadEventFired 事件订阅：事件订阅要改 onMessage 的分发逻辑（现在只处理带 id 的响应），而 readyState 本来就反映"加载完了没有"
             const poll = async () => {
                 if (done) return;
                 try {
@@ -446,12 +377,7 @@ export function createBrowserSession(options = {}) {
     }
 
     /**
-     * 按 ref 找回页面元素并聚焦/滚动到它。
-     *
-     * 为什么按属性**扫描**而不是拼选择器：ref 是我们自己写的数字，但拼进
-     *   `[data-elaina-ref="…"]` 时要经过 CSS 转义 —— `CSS.escape("3")` 返回
-     *   `\33 `（数字必须转义），语义上仍然等于 "3"，可读性却全没了，
-     *   而且换个浏览器实现就未必一致。直接遍历带这个属性的元素最稳。
+     * 按 ref 找回页面元素并聚焦/滚动到它。不拼选择器：`CSS.escape("3")` 返回 `\33 `，语义上等于 "3" 但可读性全无、换个浏览器实现未必一致，直接遍历带这个属性的元素最稳。
      */
     function findByRef(ref, body) {
         const target = JSON.stringify(String(ref));
@@ -510,10 +436,7 @@ export function createBrowserSession(options = {}) {
 }
 
 /**
- * 把快照整理成回灌给 AI 的一段话。
- *
- * 为什么在服务端拼而不是让前端拼：两条通道（工具调用 / 标签降级）最终都拿到
- *   同一个字符串，形状一致才不会出现"工具通道看到的东西和标签通道不一样"。
+ * 把快照整理成回灌给 AI 的一段话：在服务端拼，让工具调用与标签降级两条通道拿到同一个字符串，形状一致才不会出现"两边看到的东西不一样"。
  */
 export function formatSnapshot(snap) {
     const lines = [];
@@ -541,17 +464,9 @@ export function formatSnapshot(snap) {
 }
 
 /**
- * 把一次「浏览器操作」的请求派发到会话方法上。
- *
- * 单独抽成函数（而不是写在路由里）的两个理由：
- *   ① 路由只负责鉴权与 JSON 往返，不该知道"open 和 goto 有什么区别"；
- *   ② 这个函数不碰 HTTP，可以用假的 session 穷举断言动作名与参数校验 ——
- *      参数错了要报得清楚（模型靠这句话自我纠正），不能变成一句"操作失败"。
- *
+ * 把一次「浏览器操作」的请求派发到会话方法上；单独抽成函数是因为路由只该负责鉴权与 JSON 往返，而这个函数不碰 HTTP，可以用假的 session 穷举断言动作名与参数校验。
+ * 参数错了要报得清楚（模型靠这句话自我纠正），不能变成一句"操作失败"。
  * @param {object} session createBrowserSession() 的返回值
- * @param {string} action 动作名
- * @param {object} args 参数
- * @returns {Promise<{ok:true, text:string, data?:object} | {ok:false, text:string}>}
  */
 export async function runBrowserAction(session, action, args = {}) {
     const name = String(action || '').trim();

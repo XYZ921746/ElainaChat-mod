@@ -1,20 +1,5 @@
-/* ============================================================================
- * AI 标签协议：剥离 + 分发（宿主自有，不依赖 Live2D）
- *
- * 这套东西不能长在可选的 Live2D mod 里：stripTags / drive / handleAgentOperation 原先都住在
- *   `web/live2d-video.js`，而 handleAgentOperation 是**全部 [操作:…] 标签的唯一分发器**
- *   （文件 / 命令 / 手机 / 记忆）；宿主调用点带着 Live2D 全局名判断。于是 Live2D 一旦不在
- *   （被当成可选 mod 卸掉、或那个文件加载失败），后果不是少了视频通话：
- *     ① 整个 Agent 系统失效 —— 文件/命令/手机标签全部不会被执行；
- *     ② 标签漏进可见文本 —— stripTags 也没了，用户直接看到 `[表情:开心]`。
- *   拆 Live2D 的阻塞点不是界面耦合，是**能力寄生**。
- *
- * 分工：本文件（宿主，永远加载）负责标签剥离 + 操作分发；live2d-video.js（可选）
- *   只负责表现（表情/动作/情绪/位置/大小/背景 + 水印/静音），经 registerOperationHandler
- *   往分发链里**追加**，而不是拥有整条链。
- *
- * 两个入口：strip(text) 剥标签得正文；drive(text) 先分发操作再把表现交给 presenters。
- * ========================================================================== */
+// AI 标签协议：剥离 + 分发（宿主自有，不依赖 Live2D）。分发器若寄生在可选的 Live2D mod 里，该 mod 一卸整个 Agent 系统就失效，且标签漏进可见文本。
+// 本文件永远加载；表现层（表情/动作/情绪等）经 registerOperationHandler 往分发链里追加，而不是拥有整条链。两个入口：strip(text) 剥标签得正文；drive(text) 先分发操作再把表现交给 presenters。
 (function () {
     'use strict';
 
@@ -23,40 +8,21 @@
     /** 全部标签名的权威清单。剥离用一份，避免各处正则走样。 */
     const TAG_NAMES = ['表情', '动作', '情绪', '位置', '大小', '背景', '操作', '任务'];
 
-    /**
-     * 剥掉标签，返回给用户看的正文。
-     * 剥离只留这一份：分散在多处会出现"某个标签在 A 处被剥、在 B 处漏出来"。
-     */
+    // 剥掉标签，返回给用户看的正文。剥离只留这一份：分散在多处会出现某个标签在 A 处被剥、在 B 处漏出来。
     function strip(text) {
         let out = String(text == null ? '' : text);
         for (const name of TAG_NAMES) {
             out = out.replace(new RegExp('\\[' + name + '[:：][^\\]]*\\]', 'g'), '');
         }
-        // 未闭合的标签（模型被输出长度截断、或忘了收尾的 `]`）上面那条闭合判据匹配不上，
-        //   于是整块标签连同里面的文件内容、模型编造的"操作结果"会原样显示并存进聊天记录。
-        // 容错与流式预览 sanitizeStreamingPreviewText 同判据：**从开标签起截到文末** ——
-        //   两处不一致就会出现"打字时藏得住、提交后整块漏出来"。
-        // 只认 TAG_NAMES 里的标签名，避免误删正文里普通的 `[`。
+        // 未闭合的标签（输出被截断 / 忘了收尾 ]）匹配不上上面那条，整块会原样显示并存进聊天记录；与 sanitizeStreamingPreviewText 同判据，从开标签截到文末，只认 TAG_NAMES。
         out = out.replace(new RegExp('\\[(?:' + TAG_NAMES.join('|') + ')[:：][\\s\\S]*$'), '');
         return out.trim();
     }
 
-    /**
-     * Live2D 等"表现层"注册进来的操作处理器。
-     *
-     * 每个处理器 = { test: (v) => boolean, run: (v) => void }。
-     * 加这一层是为了让 Live2D 的 水印/静音 能挂上，
-     * 同时**宿主自己的操作不经过它** —— 否则又变成寄生。
-     */
+    // 表现层注册进来的操作处理器，每个 = { test: (v) => boolean, run: (v) => void }；宿主自己的操作不经过它，否则又变成寄生。
     const extraHandlers = [];
 
-    /**
-     * 注册一个额外的操作处理器（供表现层扩展）。
-     *
-     * @param {(v:string)=>boolean} test 判据：这个操作名归我管吗
-     * @param {(v:string)=>void} run 执行
-     * @returns {() => void} 取消注册
-     */
+    // 注册一个额外的操作处理器（供表现层扩展），返回取消注册的函数。
     function registerOperationHandler(test, run) {
         const entry = { test, run };
         extraHandlers.push(entry);
@@ -78,16 +44,7 @@
         return false;
     }
 
-    /**
-     * ASCII 工具名 → 中文操作名。
-     *
-     * 模型混用两条通道是**常态**而不是例外：清单里有 `save_file` / `run_command`，它很容易
-     *   写成 `[操作:save_file D:\桌面2\a.txt hi]`。没人认领时只打一行 console.warn 就丢掉：
-     *   动作没执行，模型却以为发出去了，下一轮顺着编造"我做完了" —— 用户桌面上一无所有。
-     *   所以工具名必须与标签名认成同一个操作（映射只在 agent-ops.js 维护，这里按 tool 名换算）。
-     *
-     * 只做"名字换中文动词"：参数处理仍交给中文分支，两条写法走**同一条**执行链。
-     */
+    // ASCII 工具名 → 中文操作名：模型常把清单里的 save_file 写成 [操作:save_file …]，没人认领时动作没执行，它却顺着编造"我做完了"；只换名字，参数仍交给中文分支。
     const TOOL_NAME_TO_TAG = {
         list_files: '列出文件',
         read_file: '查看文件',
@@ -109,13 +66,7 @@
         return tag + m[2];
     }
 
-    /**
-     * 分发**一个**操作标签的内容。
-     *
-     * 分支顺序是有讲究的：`^电脑命令` 必须排在文件操作**之前** —— `[操作:电脑命令 git status]`
-     *   的命令正文里可能含「查看文件」这类词，而文件分支判据很宽泛，排在前面会把命令正文吃掉。
-     *   `^(手机|设备)` 锚定开头，与命令分支不冲突。
-     */
+    // 分发一个操作标签的内容。分支顺序有讲究：^电脑命令 必须排在文件操作之前（命令正文里可能含「查看文件」这类词，文件分支判据很宽泛）；^(手机|设备) 锚定开头，与命令分支不冲突。
     function handleOperation(v) {
         const name = String(v == null ? '' : v).trim();
         if (!name) return;
@@ -133,11 +84,9 @@
         if (/打开|开始|进入/.test(name) && /视频通话|通话|live2d/i.test(name)) return void callAction('openVideoCall');
         if (/关闭|结束|挂断/.test(name) && /视频通话|通话|live2d/i.test(name)) return void callAction('closeVideoCall');
         if (/整理记忆|记忆整理/.test(name)) return void callAction('organizeMemory');
-        // 浏览器：锚定开头，与「电脑命令」不冲突 ——
-        //   [操作:电脑命令 start chrome] 是命令，不是浏览器操作，两者不能互相吃掉。
+        // 浏览器锚定开头，与「电脑命令」不冲突：[操作:电脑命令 start chrome] 是命令，不是浏览器操作。
         if (/^(浏览器|网页|打开网址)/.test(name)) return void callAction('agentBrowserOperation', name);
-        // 搜索：必须排在文件分支之前 —— 「搜索」两个字不会误吃别的分支，
-        //   但反过来「查看文件 搜索记录.txt」会被这里吃掉，所以锚定开头。
+        // 搜索必须排在文件分支之前并锚定开头，否则「查看文件 搜索记录.txt」会被这里吃掉。
         if (/^(搜索|搜一下|联网搜索|查一下)/.test(name)) return void callAction('agentWebSearchOperation', name);
         if (/^(手机|设备)/.test(name)) return void callAction('agentPhoneOperation', name);
         if (/^(电脑命令|执行命令|运行命令|电脑执行)/.test(name)) return void callAction('agentCommandOperation', name);
@@ -146,8 +95,7 @@
         if (/列出文件|列出目录|查看文件夹|查看文件|读取文件|读文件|保存文件|写入文件|写文件|创建文件|新建文件/.test(name)) {
             return void callAction('agentFileOperation', name);
         }
-        // 模型把工具名写进了标签（见 TOOL_NAME_TO_TAG）：换算成中文操作名**重新过一遍**本函数，
-        //   保证与中文写法走同一条分支，而不是在这里另抄一套分发。
+        // 工具名换算成中文操作名后重新过一遍本函数，保证与中文写法走同一条分支，不另抄一套分发。
         const asTag = normalizeToolNameTag(name);
         if (asTag !== name) return handleOperation(asTag);
         console.warn('[Tags] 未知操作:', name);
@@ -167,15 +115,7 @@
         for (const op of extractOperations(text)) handleOperation(op);
     }
 
-    /**
-     * 统一入口：解析一条 AI 回复里的全部标签。
-     *
-     *   ① 操作标签 → 分发（宿主自己的 + 表现层注册的）
-     *   ② 表现标签（表情/动作/情绪/位置/大小/背景）→ 交给表现层
-     *
-     * 表现层是可选的：Live2D 不在时第 ② 步什么也不做，
-     * 但第 ① 步照常执行 —— 这正是解耦的目的。
-     */
+    // 统一入口：操作标签 → 分发（宿主 + 表现层注册的）；表现标签（表情/动作/情绪/位置/大小/背景）→ 交给表现层。表现层可选：Live2D 不在时第 2 步空转、第 1 步照常，这正是解耦的目的。
     function drive(text) {
         const t = String(text == null ? '' : text);
         if (!t) return;

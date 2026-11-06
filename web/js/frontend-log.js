@@ -17,8 +17,7 @@
                     else parts.push(String(a));
                 } catch (e) { parts.push('[无法序列化]'); }
             }
-            // 上限 2000 与服务端主日志一致：更短会把最关键的上游报错砍在半截
-            // （`requestedModel":"Qwen3.8-` 就断了）。
+            // 上限 2000 与服务端主日志一致：更短会把最关键的上游报错砍在半截（`requestedModel":"Qwen3.8-` 就断了）。
             return parts.join(' ').slice(0, 2000);
         }
 
@@ -43,17 +42,15 @@
         console.error = function () { origError.apply(console, arguments); push('error', toText(arguments)); };
         var origWarn = console.warn;
         console.warn = function () { origWarn.apply(console, arguments); push('warn', toText(arguments)); };
-        // console.debug 也转发（记为 DBUG）：pixi / Live2D 等第三方库会调，出问题时那些输出
-        // 正是最需要看到的；服务端只在落盘级别为 DEBUG 时才写文件，平时不造成噪音。
+        // console.debug 也转发（记为 DBUG）：pixi / Live2D 等第三方库会调，出问题时那些输出最需要看到；
+        // 服务端只在落盘级别为 DEBUG 时才写文件，平时不造成噪音。
         var origDebug = console.debug;
         if (typeof origDebug === 'function') {
             console.debug = function () { origDebug.apply(console, arguments); push('debug', toText(arguments)); };
         }
 
-        // console.log 只转发 `[Mod:` 前缀的那几条：插件加载成功走 host.log() 落到 console.log，
-        // 失败才有 [Mod:…] 的 error —— 不补这一段，"没有 mod 日志"既可能是成功也可能是
-        // mods.js 压根没跑，两者在启动窗口里长得一模一样。
-        // 不转发全部 console.log：宿主日志量大，全转会把启动窗口刷满、把真正的错误埋掉。
+        // console.log 只转发 `[Mod:` 前缀的那几条：插件加载成功走 host.log() 落到 console.log，失败才有 [Mod:…] 的 error ——
+        // 不补这一段，"没有 mod 日志"既可能是成功也可能是 mods.js 压根没跑。不转发全部 console.log：宿主日志量大，会把启动窗口刷满。
         var origLog = console.log;
         console.log = function () {
             origLog.apply(console, arguments);

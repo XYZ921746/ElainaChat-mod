@@ -1,10 +1,6 @@
-/* ============================================================================
- * 次级页面：书卷式排版 / 整页成就与市场 / 设置细节
- *
- * 只作用于 app/web；用 --rd-* 主题 token，四套主题共用同一套结构。
- * ========================================================================== */
+/* 次级页面：书卷式排版 / 整页成就与市场 / 设置细节（只作用于 app/web，用 --rd-* token）。 */
 
-/* ---------- 语笺 / 日记 / 成就公共页头 ---------- */
+/* 语笺 / 日记 / 成就公共页头 */
 
 html.rd #notesPage,
 html.rd #diaryPage,
@@ -100,7 +96,7 @@ html.rd #memoryPage .page-secondary-back:hover {
     color: var(--rd-accent) !important;
 }
 
-/* ---------- 语笺 ---------- */
+/* 语笺 */
 
 html.rd #notesPage > .flex-1 {
     padding: 22px 40px 46px !important;
@@ -258,7 +254,7 @@ html.rd #memoryEmpty p {
     line-height: 1.7;
 }
 
-/* ---------- 旅行日记 ---------- */
+/* 旅行日记 */
 
 html.rd .diary-toolbar { display: none !important; }
 
@@ -384,10 +380,9 @@ html.rd .diary-essence {
     font-size: 9.5px !important;
 }
 
-/* ---------- 记忆页：按类目分区 ---------- */
+/* 记忆页：按类目分区 */
 
-/* 计数行不复用 .diary-toolbar：那一条在全站被判"日记页专用"并隐藏，
-   记忆页需要一个**一直可见**的计数。 */
+/* 计数行不复用 .diary-toolbar：那条在全站被判"日记页专用"并隐藏，记忆页需要一个一直可见的计数。 */
 html.rd .memory-toolbar {
     display: flex;
     width: 100%;
@@ -404,33 +399,6 @@ html.rd #memoryBody {
 
 html.rd .memory-section { margin-top: 22px; }
 html.rd .memory-section:first-child { margin-top: 2px; }
-
-html.rd .memory-section-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--rd-border);
-}
-
-html.rd .memory-section-icon { font-size: 14px; line-height: 1; }
-
-html.rd .memory-section-title {
-    color: var(--rd-text-2) !important;
-    font-size: 13px !important;
-    font-weight: 600 !important;
-    letter-spacing: .04em;
-}
-
-html.rd .memory-section-count {
-    margin-left: auto;
-    padding: 2px 8px;
-    border: 1px solid var(--rd-border);
-    border-radius: 999px;
-    background: var(--rd-surface) !important;
-    color: var(--rd-text-3) !important;
-    font-size: 9.5px !important;
-}
 
 html.rd .memory-list {
     display: grid;
@@ -456,7 +424,7 @@ html.rd .memory-item-text {
     word-break: break-word;
 }
 
-/* ---------- 成就：整页（页头走上面的公共结构） ---------- */
+/* 成就：整页（页头走上面的公共结构） */
 
 html.rd #achievementsOverlay {
     inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
@@ -483,7 +451,6 @@ html.rd #achievementsOverlay .modal-panel {
     flex-direction: column;
 }
 
-/* 页头右侧：计数靠右，与「管理分类」「返回」排成一组 */
 html.rd #achievementsOverlay .ach-count {
     margin-left: auto;
     flex: none;
@@ -503,9 +470,7 @@ html.rd #achList {
     min-height: 0;
     overflow-y: auto;
     width: 100%;
-    /* 内容区随可用宽度伸缩：小窗不低于语笺页宽，超宽屏封顶。
-       高/低 DPI 由系统缩放换算成 CSS 像素后自然落到这条连续区间里，
-       auto-fill 没有分辨率断点，125% / 150% 这类缩放不会踩坑。 */
+    /* 内容区随可用宽度伸缩：小窗不低于语笺页宽，超宽屏封顶；auto-fill 没有分辨率断点，系统缩放不会踩坑。 */
     max-width: clamp(1120px, 92%, 1520px);
     margin: 0 auto;
     padding: 26px 40px 50px !important;
@@ -560,8 +525,7 @@ html.rd .rd-ach-ring::after {
     position: absolute;
     inset: 7px;
     border-radius: 50%;
-    /* 石墨/雾蓝的 surface 带透明度，直接铺会让进度环的颜色透进圆心，白字看不清。
-       叠在实色背景上，既保留主题质感又保证数字可读。 */
+    /* 石墨/雾蓝的 surface 带透明度，直接铺会让进度环透色、白字看不清；叠在实色背景上既保留主题质感又保证数字可读。 */
     background: linear-gradient(var(--rd-surface), var(--rd-surface)), var(--rd-bg);
 }
 
@@ -641,7 +605,7 @@ html.rd .ach-detail {
     border-radius: 0 8px 8px 0;
 }
 
-/* ---------- 插件市场：整页 ---------- */
+/* 插件市场：整页 */
 
 html.rd #marketOverlay {
     inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
@@ -864,7 +828,7 @@ html.rd #marketPrereqToggle {
     font-size: 10.5px !important;
 }
 
-/* ---------- 设置：主区整页 ---------- */
+/* 设置：主区整页 */
 
 /* 整页模式下顶栏后面是原聊天内容，半透明会透出气泡；临时改成不透明底色。 */
 html.rd body.rd-page-overlay-open #mainContent > header {
@@ -874,7 +838,7 @@ html.rd body.rd-page-overlay-open #mainContent > header {
 }
 
 html.rd #settingsOverlay {
-    /* 原型里设置是主区页面：让出外壳顶栏，不再盖住汉堡、标题和右侧按钮。 */
+    /* 原型里设置是主区页面：让出外壳顶栏，别盖住汉堡、标题和右侧按钮。 */
     inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
     width: auto !important;
     height: auto !important;
@@ -965,17 +929,8 @@ html.rd #settingsTabNav {
     overflow-y: auto !important;
 }
 
-/* ===== 扩展的二次分栏在**竖排**导航下的形态 =====
-   rd 主题的导航是左侧一列（见上面 flex-direction: column），所以：
-     · 分组容器本身也变成纵向，占满一列宽度；
-     · 去掉横排那条竖分隔（竖排里它没有意义），改成子项整体缩进 + 一条细竖线；
-     · 子项占满宽度、左对齐，与父项同一个视觉体系，只是更小一号、缩进一级。 */
-/* 分组容器 = 导航列里的一项。
-   ⚠️ 宽度要跟着**导航方向**走，不能一律写 auto：
-     · 宽屏（导航竖排一列）→ 占满列宽，否则子项的缩进会让分组变窄、
-       子项往右溢出到导航列外面（实测：分组只有 79px 宽，而列宽 165px，
-       子项左边缘 461 超出列右边缘 447 —— 用户看到的就是"错位"）；
-     · 窄屏（导航横排一行）→ 必须 auto，铺满会把其余分栏全挤出屏幕。 */
+/* 扩展的二次分栏在竖排导航下：分组纵向占满一列，去掉横排的竖分隔，改成子项缩进 + 一条细竖线。 */
+/* 分组容器 = 导航列里的一项。宽度必须跟着导航方向走：竖排时占满列宽（否则子项缩进会让分组变窄、溢出到列外），横排时 auto（铺满会挤掉其余分栏）。 */
 html.rd #settingsExtNav {
     display: block !important;
     width: 100% !important;
@@ -983,10 +938,7 @@ html.rd #settingsExtNav {
     margin: 0 !important;
     padding: 0 !important;
 }
-/* 判据是"**导航本身是竖排**"，而 rd 主题下导航**在任何宽度**都是竖排
-   （见上面 html.rd #settingsTabNav 的 flex-direction: column，没有媒体查询）。
-   所以这段不需要断点 —— 加断点反而会让手机上（rd 主题、竖排导航）用横排子项，
-   子项被挤成一行小字。 */
+/* 判据是"导航本身是竖排"，rd 主题下导航在任何宽度都是竖排（见上面 flex-direction: column），所以这段不需要断点。 */
 html.rd .ext-nav-children {
     flex-direction: column !important;
     gap: 1px !important;
@@ -1004,9 +956,7 @@ html.rd .ext-nav-btn {
     font-size: 11.5px !important;
     color: var(--rd-text-3, var(--pixso-brown-soft)) !important;
 }
-/* 选中项：**无底色**。分支是"线 + 文字"的极简构成，
-   加底色块会立刻变回"胶囊按钮"，与展开动画的观感冲突。
-   区分只靠文字颜色与字重（见窄屏那段）。 */
+/* 选中项不加底色：区分只靠文字颜色与字重，加底色块会立刻变回"胶囊按钮"。 */
 html.rd .ext-nav-btn.is-active {
     color: var(--rd-accent, var(--pixso-brown)) !important;
     background: transparent !important;
@@ -1052,9 +1002,7 @@ html.rd .settings-tab-btn[data-settings-tab="tab-capability"] { order: 4; }
 html.rd .settings-tab-btn[data-settings-tab="tab-advanced"] { order: 5; }
 html.rd .settings-tab-btn[data-settings-tab="tab-mods"] { order: 6; }
 html.rd .settings-tab-btn[data-settings-tab="tab-log"] { order: 7; }
-/* ⚠️ 「扩展」被包进了 #settingsExtNav 分组，而上面那条 order 只作用于**按钮本身** ——
-   分组容器没有 order，默认 0，于是整组跑到导航最前面（比"外观"的 1 还小）。
-   用户看到的正是"设置顺序被改了"。分组必须显式继承"扩展"的位置（6）。 */
+/* 「扩展」被包进了 #settingsExtNav 分组，上面那条 order 只作用于按钮本身，分组容器必须显式继承"扩展"的位置（6）。 */
 html.rd #settingsExtNav { order: 6; }
 html.rd #settingsExtNav .settings-tab-btn[data-settings-tab="tab-mods"] { order: 0; }
 
@@ -1099,7 +1047,6 @@ html.rd .theme-tpl-card.is-active {
     background: var(--rd-accent-soft) !important;
 }
 
-/* 主题卡的迷你界面预览：竖栏 / 列表 / 内容线，尺寸与原型保持一致。 */
 html.rd .theme-tpl-preview {
     display: flex;
     gap: 0;
@@ -1256,13 +1203,15 @@ html.rd .rd-display-card .switch.on::after {
 html.rd[data-texture="off"] body::before,
 html.rd[data-texture="off"] body::after { display: none !important; }
 
+html.rd[data-texture="off"] #mainContent { background-image: none !important; }
+
 html.rd[data-bubble="compact"] .bubble-ai,
 html.rd[data-bubble="compact"] .bubble-user {
-    border-radius: 8px !important;
-    padding: 9px 13px !important;
+    border-radius: 4px !important;
+    padding: 6px 10px !important;
 }
 
-/* ---------- 设置：卡片与表单 ---------- */
+/* 设置：卡片与表单 */
 
 html.rd #settingsContent .settings-tab-panel > section,
 html.rd #settingsContent .settings-tab-panel > div.mb-4,
@@ -1391,7 +1340,7 @@ html.rd .memory-now-btn:hover {
     border-color: var(--rd-accent-border) !important;
 }
 
-/* ---------- 设置：插件与技能 ---------- */
+/* 设置：插件与技能 */
 
 
 html.rd #tab-mods .mod-card,
@@ -1432,7 +1381,7 @@ html.rd #tab-mods .mod-switch input:checked ~ .knob {
     background: var(--rd-accent-contrast);
 }
 
-/* ---------- 设置：日志 ---------- */
+/* 设置：日志 */
 
 html.rd #tab-log .log-pill {
     color: var(--rd-text-3) !important;
@@ -1496,7 +1445,7 @@ html.rd #marketList > #marketPrereqToggle {
     }
 }
 
-/* ---------- 顶栏：公告面板 ---------- */
+/* 顶栏：公告面板 */
 
 html.rd #announcePanel {
     top: calc(100% + 10px) !important;
@@ -1631,13 +1580,7 @@ html.rd .announce-empty {
     font-size: 11.5px !important;
 }
 
-/* ---------- 手机操作：实现方式面板 ---------- */
-
-html.rd #backendList > p[style*="#fffbeb"] {
-    background: var(--rd-warn-bg) !important;
-    border-color: var(--rd-warn-border) !important;
-    color: var(--rd-warn) !important;
-}
+/* 手机操作：实现方式面板 */
 
 html.rd #backendList .backend-card {
     background: var(--rd-surface-2) !important;
@@ -1665,26 +1608,7 @@ html.rd #backendList .backend-card .text-indigo-300 {
     color: var(--rd-text-3) !important;
 }
 
-html.rd #backendList .backend-card p[style*="color:#059669"] { color: var(--rd-ok) !important; }
-html.rd #backendList .backend-card p[style*="color:#b45309"] { color: var(--rd-warn) !important; }
-html.rd #backendList .backend-card p[style*="color:#db2777"] { color: var(--rd-accent) !important; }
-
-html.rd #backendList span[style*="#ecfdf5"] {
-    color: var(--rd-ok) !important;
-    background: var(--rd-ok-soft) !important;
-}
-
-html.rd #backendList span[style*="#fffbeb"] {
-    color: var(--rd-warn) !important;
-    background: var(--rd-warn-bg) !important;
-}
-
-html.rd #backendList span[style*="#eef2ff"] {
-    color: var(--rd-accent) !important;
-    background: var(--rd-accent-soft) !important;
-}
-
-/* ---------- 响应式 ---------- */
+/* 响应式 */
 
 html.rd #achList > *,
 html.rd #marketList > * { margin-top: 0 !important; }
@@ -1695,8 +1619,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
 }
 
 @media (max-width: 980px) {
-    /* 新版布局把设置/成就/市场铺满整屏，原版为刘海屏预留的 safe-area 内边距
-       被一并覆盖掉了；这里补回，普通设备上 env() 为 0，视觉不变。 */
+    /* redesign 全屏布局盖掉了为刘海屏预留的 safe-area 内边距，这里补回（普通设备 env() 为 0）。 */
     html.rd #settingsOverlay,
     html.rd #achievementsOverlay,
     html.rd #marketOverlay {
@@ -1724,8 +1647,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
     html.rd #achievementsOverlay .page-secondary-title,
     html.rd #memoryPage .page-secondary-title { font-size: 25px !important; }
 
-    /* 手机端顶栏原本把「返回」按钮收成 38px 圆图标（字号 0 隐藏文字）。
-       新版选择器提高了优先级，会把文字重新显示出来并竖排换行，这里补回圆图标。 */
+    /* 补回手机端顶栏「返回」的 38px 圆图标形态（redesign 层选择器优先级更高，会把文字重新显示出来并竖排换行）。 */
     html.rd #notesPage .page-secondary-back,
     html.rd #diaryPage .page-secondary-back,
     html.rd #achievementsOverlay .page-secondary-back,
@@ -1748,7 +1670,6 @@ html.rd #marketList > * { margin-top: 0 !important; }
     html.rd #achievementsOverlay .page-secondary-back svg,
     html.rd #memoryPage .page-secondary-back svg { width: 16px; height: 16px; }
 
-    /* 窄屏页头会换行，计数不再推到最右，跟着按钮组排 */
     html.rd #achievementsOverlay .ach-count { margin-left: 0; }
 
     html.rd #notesPage > .flex-1 {
@@ -1853,15 +1774,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
         overflow-y: hidden !important;
     }
 
-    /* ===== 手机：点「扩展」后，子项**竖着排在它正下方**，每项与「扩展」同宽同高 =====
-       位置由**绝对定位 + 父项作为定位参照**决定：
-         · 参照是 #settingsExtNav（position: relative），所以它天然跟着「扩展」
-           一起滚动、一起被裁切 —— 不像定位于视口那样父容器一滚就脱队
-           （实测：滚内容区时浮层停在原地，和导航"裂"成两块）；
-         · 又因为脱离文档流，导航栏高度不变（仍是 32px），
-           其余分栏不会被推到新的一行。
-       导航栏是横向滚动容器（overflow-x: auto），子项超出右边缘会被裁 ——
-       所以下面把 #settingsTabNav 的裁剪在展开期间放开（.is-open 由 JS 维护）。 */
+    /* 手机：子项绝对定位在「扩展」正下方（父项 #settingsExtNav 是 position: relative），脱离文档流所以导航栏高度不变；导航是横向滚动容器，展开期间放开 #settingsTabNav 的裁剪。 */
     html.rd #settingsExtNav {
         position: relative !important;
         display: flex !important;
@@ -1870,19 +1783,8 @@ html.rd #marketList > * { margin-top: 0 !important; }
         width: auto !important;
         flex: 0 0 auto !important;
     }
-    /* ===== 手机：点「扩展」后，子项以"线 + 文字"的形式从按钮下方展开 =====
-       构成只有三样东西，**没有框**（无边框 / 无底色块 / 无阴影 / 无圆点）：
-         · 竖线（容器 ::before）：从「扩展」按钮内部往下，到末行横线为止；
-         · 横线（每个按钮的 ::before）：从竖线向右伸 9px；
-         · 文字（按钮里的 span）：淡入 + 轻微右移。
-       末行的横线与竖线相接形成 └ 拐角，竖线不再往下 —— 这是"收尾"的视觉信号。
-
-       为什么容器是透明的：它是定位容器，不是卡片。任何底色/阴影都会让它
-       读成"另插进来的浮层"，而不是「扩展」这一项长出来的分支。
-
-       子项被 JS 挂到 #settingsPanel 下（见 init.js），因为落在
-       #settingsTabNav / #settingsTopBar 这类 overflow:auto 容器里会被裁掉，
-       而放开它们的 overflow 会让滚动失效（用户报过"展开后别的地方拖不动"）。 */
+    /* 展开的子项只有三样东西、没有框：竖线（容器 ::before）、横线（按钮 ::before，向右伸 9px）、文字（span 淡入右移）；末行横线与竖线相接成 └，作为收尾信号。 */
+    /* 容器必须透明（它是定位容器不是卡片）；子项由 init.js 挂到 #settingsPanel 下，否则会被 #settingsTabNav / #settingsTopBar 的 overflow:auto 裁掉。 */
     html.rd .ext-nav-children.ext-menu-floating {
         position: absolute !important;
         top: var(--ext-menu-top, 0) !important;
@@ -1901,8 +1803,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
         box-shadow: none !important;
         overflow: visible;
     }
-    /* 竖线：起点抬到按钮内部（-12px），长度到末行横线所在的中线。
-       两个数值互相配合 —— 改一个必须同时改另一个，否则末行横线会脱开竖线。 */
+    /* 竖线：起点抬到按钮内部（-12px），长度到末行横线所在的中线；两个数值必须同步改，否则末行横线会脱开竖线。 */
     html.rd .ext-nav-children.ext-menu-floating::before {
         content: '';
         position: absolute;
@@ -1917,20 +1818,16 @@ html.rd #marketList > * { margin-top: 0 !important; }
         transform-origin: top center;
         pointer-events: none;
     }
-    /* 展开判据**只看** .is-open（由 switchExtTab 唯一维护）。
-       不用 :has()：它判的是"父项有没有 active"，而 active 由事件委托在别的
-       监听器里改，两者顺序不稳定 —— 实测会"类已清掉但 :has() 仍命中"，
-       表现就是"点两下才展开"。 */
+    /* 展开判据只看 .is-open（由 switchExtTab 唯一维护）；:has() 判的 active 由别处监听器改，顺序不稳会"点两下才展开"。 */
     html.rd #settingsExtNav.is-open .ext-nav-children,
     html.rd #settingsPanel > .ext-nav-children.is-open { display: flex; }
 
-    /* 竖线：自上而下长出来 */
     html.rd #settingsPanel > .ext-nav-children.is-open::before {
         animation: ext-spine-grow .26s cubic-bezier(.3,.8,.3,1) forwards;
     }
     @keyframes ext-spine-grow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 
-    /* 子项：高度与「扩展」一致，宽度按内容（不再撑满，因为没有底色块） */
+    /* 子项：高度与「扩展」一致，宽度按内容（没有底色块，撑满就失去"分支"的形态） */
     html.rd .ext-nav-btn {
         position: relative !important;
         box-sizing: border-box !important;
@@ -1971,7 +1868,6 @@ html.rd #marketList > * { margin-top: 0 !important; }
         opacity: 0;
         transform: translateX(-5px);
     }
-    /* 三行依次错开：横线先，文字后，整体自上而下 */
     html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(1)::before { animation: ext-tick-grow .12s ease-out .10s forwards; }
     html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(2)::before { animation: ext-tick-grow .12s ease-out .17s forwards; }
     html.rd #settingsPanel > .ext-nav-children.is-open .ext-nav-btn:nth-child(3)::before { animation: ext-tick-grow .12s ease-out .24s forwards; }
@@ -1985,22 +1881,12 @@ html.rd #marketList > * { margin-top: 0 !important; }
     html.rd .ext-nav-btn.is-active { color: var(--rd-accent, var(--pixso-brown)) !important; }
     html.rd .ext-nav-btn.is-active .ext-nav-label { font-weight: 600; }
 
-    /* ===== 「扩展」按钮在展开时的呼应 =====
-       只变颜色不够：竖线从按钮下方长出来，按钮本身毫无形态变化，
-       读起来像"线自己飘出来"、按钮不参与 —— 这就是"割裂"。
-
-       做法：**按钮底边开口 + 竖线接在开口处**。
-         · 收起：普通胶囊（浅色底）；
-         · 展开：底色转透明、四周细描边、**底边描边断掉**，
-           分支的竖线正好从断开处往下走 —— 视觉上按钮和分支是
-           "同一个形状的两段"，而不是两个不相干的东西。
-       为什么不用箭头：窄屏按钮只有 67px（"▣ 扩展"占满），
-         放右下角会被导航栏裁掉一半，放行内会把文字挤出按钮 —— 两条路都试过。 */
+    /* 「扩展」按钮在展开时的呼应：底色转透明、上/左/右细描边、底边断开，分支竖线正好从断开处往下走，按钮和分支读成"同一个形状的两段"。
+       不用箭头：窄屏按钮只有 67px，放右下角会被导航栏裁掉、放行内会把文字挤出按钮。 */
     html.rd #settingsExtNav .settings-tab-btn.active {
         background: transparent !important;
         color: var(--rd-accent, var(--pixso-brown)) !important;
-        /* 用四个方向的 inset 阴影画描边，只画上/左/右 —— 底边故意留空，
-           让分支竖线从那里接出去。border 做不到"只断底边"。 */
+        /* 用四个方向的 inset 阴影画描边、只画上/左/右：底边故意留空让分支竖线接出去（border 做不到"只断底边"）。 */
         box-shadow:
             inset 0 1px 0 0 var(--rd-accent-border, var(--pixso-line)),
             inset 1px 0 0 0 var(--rd-accent-border, var(--pixso-line)),
@@ -2008,12 +1894,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
         border-radius: 9px 9px 0 0 !important;
     }
 
-    /* ===== 收起动画：展开的逆序 =====
-       顺序刻意反过来 —— 展开是"线先出、文字后现"，收起就"文字先走、线最后退"，
-       否则会出现"文字还挂着、骨架先没了"的断层感。
-       时机：文字 0ms 起淡出；横线 60/100/140ms 依次收回；竖线 200ms 后缩回。
-       收起过程中菜单仍保持 display: flex（.is-closing），
-       等动画播完再由 JS 摘掉类，否则会立刻消失、看不到动画。 */
+    /* 收起是展开的逆序（"文字先走、线最后退"），否则会"文字还挂着、骨架先没了"；收起中保持 .is-closing 的 display: flex，动画播完再由 JS 摘类。 */
     html.rd #settingsPanel > .ext-nav-children.is-closing { display: flex !important; }
     html.rd #settingsPanel > .ext-nav-children.is-closing .ext-nav-label {
         animation: ext-label-out .12s ease-in forwards !important;
@@ -2059,9 +1940,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
 }
 
 @media (max-width: 720px) {
-    /* 原型在手机上把主题卡改成单列，预览图更容易看清。 */
     html.rd #themePickerBox { grid-template-columns: 1fr !important; }
-    /* 手机上把顶栏让给标题和两个图标，主题切换留在设置里。 */
     html.rd .header-theme-switch { display: none !important; }
 }
 
@@ -2076,28 +1955,21 @@ html.rd #marketList > * { margin-top: 0 !important; }
     /* 原型在超窄屏只留设置分栏图标，避免横向滚动条太长。 */
     html.rd .settings-tab-btn { font-size: 0 !important; padding: 8px 10px !important; }
     html.rd .settings-tab-btn::before { font-size: 14px; }
-    /* ⚠️ 但**下拉面板里的子项**必须恢复字号：它们是 .ext-nav-btn（不带那类名），
-       可"扩展"父项是 .settings-tab-btn —— 若在这里一并压成 0，菜单会变成
-       一条空白面板（文字全隐形）。所以子项显式给字号，优先级用 !important 压回来。 */
+    /* 下拉面板里的 .ext-nav-btn 必须有正常字号，否则菜单会变成一条空白面板（文字全隐形）。 */
     html.rd .ext-nav-btn {
         font-size: 12.5px !important;
-        /* 内边距必须与展开动画的"横线 9px + 间距 6px"一致，
-           否则 420px 以下横线和文字会错位 */
+        /* 内边距必须与展开动画的"横线 9px + 间距 6px"一致，否则 420px 以下横线和文字会错位。 */
         padding: 0 6px 0 15px !important;
     }
 }
 
-/* ============================================================================
- * 设置 · 模型 / 能力 / 插件：按原型改成单列卡片
- * ========================================================================== */
+/* 设置 · 模型 / 能力 / 插件：按原型改成单列卡片 */
 
 html.rd #settingsContent #tab-model.active-panel,
 html.rd #settingsContent #tab-capability.active-panel {
     max-width: 900px;
 }
-/* 扩展页**不设**上限：插件 / 技能 / MCP 是卡片网格，列数本来就随宽度自适应；
-   卡在 900px 会让 1920 宽的窗口右侧空出一大块（用户报「右边大量未使用」）。
-   模型 / 能力两页仍是长表单，保留 900px 的阅读宽度。 */
+/* 扩展页不设宽度上限：插件 / 技能 / MCP 是卡片网格，列数随宽度自适应，卡在 900px 会让宽窗口右侧空出一大块。 */
 html.rd #settingsContent #tab-mods.active-panel {
     max-width: none;
 }
@@ -2117,7 +1989,7 @@ html.rd #settingsContent #tab-mods > section {
     padding: 22px 24px !important;
 }
 
-/* ---------- 表单控件：整行、统一高度、带箭头 ---------- */
+/* 表单控件：整行、统一高度、带箭头 */
 
 html.rd #settingsContent input[type="text"],
 html.rd #settingsContent input[type="url"],
@@ -2152,15 +2024,11 @@ html.rd #settingsContent input[type="number"] {
     text-overflow: ellipsis;
 }
 
-html.rd #settingsContent .model-combo-input {
-    padding-right: 36px !important;
-}
-
 html.rd #settingsContent .settings-tab-panel > section > .flex.items-center.justify-between {
     min-height: 40px;
 }
 
-/* ---------- 能力：权限选项与警告色跟随主题 ---------- */
+/* 能力：权限选项与警告色跟随主题 */
 
 html.rd #agentPermissionSection input[type="radio"] { accent-color: var(--rd-accent); }
 
@@ -2191,7 +2059,7 @@ html.rd #agentPermissionSection [style*="#9a3412"] {
     }
 }
 
-/* ---------- 插件：插件行更像原型里的条目 ---------- */
+/* 插件：插件行更像原型里的条目 */
 
 html.rd #settingsContent .mod-card {
     padding: 15px 16px 12px !important;
@@ -2281,7 +2149,6 @@ html.rd #settingsContent .mod-card .text-red-600,
 html.rd #settingsContent .mod-card .text-red-500,
 html.rd #settingsContent .mod-card .text-red-400 { color: var(--rd-danger) !important; }
 
-/* 技能区块与插件列表分开，不再像同一张卡里堆两段。 */
 html.rd #skillsList {
     margin-top: 6px;
     padding-top: 12px;
@@ -2297,9 +2164,7 @@ html.rd #settingsContent .memory-step-input {
     text-align: center;
 }
 
-/* ── 插件市场 · 下载悬浮窗（index.html #marketDlPanel / mod-market.js dlTasks）──
-   与市场全屏页同一套表面与文字色；进度条保持语义色（进行/成功/失败），
-   颜色本身是信息，不随主题换。 */
+/* 插件市场 · 下载悬浮窗（index.html #marketDlPanel / mod-market.js dlTasks）：与市场全屏页同一套表面与文字色；进度条保持语义色，颜色本身是信息，不随主题换。 */
 html.rd #marketDlPanel {
     background: var(--rd-surface) !important;
     border-color: var(--rd-border) !important;
@@ -2312,30 +2177,18 @@ html.rd #marketDlPanel .text-indigo-300 { color: var(--rd-text-2) !important; }
 html.rd #marketDlPanel .bg-black\/10 { background: var(--rd-border) !important; }
 html.rd #marketDlPanel #marketDlClear:hover { background: var(--rd-surface-2) !important; }
 
-/* ============================================================================
- * 设置 · 紧凑版式
- *
- * 三件事：
- *   ① 整条标题行不要 —— 当前分栏已由左侧导航高亮，标题再写一遍只占高度；
- *      关闭按钮改挂成导航栏的第一项。
- *   ② 卡片内边距、标题下边距、控件高度各收一档，一屏能多看一两组设置。
- *   ③ 长说明收进 <details class="rd-more">：默认只占一行，点开仍能看到全文。
- * ========================================================================== */
+/* 设置 · 紧凑版式：整条标题行不要（分栏由左侧导航高亮，标题再写一遍只占高度，关闭按钮改挂成导航栏第一项）；卡片/控件各收一档，长说明收进 details。 */
 
 html.rd #settingsContent {
     padding: 14px 24px 26px !important;
 }
 
-/* 分栏之间不需要额外留白：一次只显示一个分栏，而它自己的顶部内边距就是间距
-   （Tailwind 的 space-y-7 会给第二个及以后的分栏再加 28px 上边距）。 */
+/* 分栏之间不加额外留白：一次只显示一个分栏，它自己的顶部内边距就是间距（Tailwind 的 space-y-7 会再加 28px 上边距）。 */
 html.rd #settingsContent > .settings-tab-panel {
     margin-top: 0 !important;
 }
 
-/* ---------- 关闭按钮 ---------- */
-
-/* 宽屏：左侧导航的第一项。它本来是绝对定位在标题行右端，标题行删掉后
-   那个位置会压到第一张卡片上，所以改成导航里的一个整宽按钮。 */
+/* 关闭按钮：宽屏下是左侧导航的第一项；标题行删掉后，绝对定位会压到第一张卡片上，所以改成导航里的整宽按钮。 */
 html.rd #settingsPanel #settingsTopBar > #closeSettings {
     position: static !important;
     flex: none;
@@ -2362,7 +2215,7 @@ html.rd #settingsPanel #settingsTopBar > #closeSettings:hover {
 html.rd .settings-close-label { display: inline; }
 
 
-/* ---------- 卡片与标题 ---------- */
+/* 卡片与标题 */
 
 html.rd #settingsContent .settings-tab-panel > section,
 html.rd #settingsContent .settings-tab-panel > div.mb-4,
@@ -2389,7 +2242,7 @@ html.rd #settingsContent .rd-field-hint {
     line-height: 1.6;
 }
 
-/* ---------- 表单行 ---------- */
+/* 表单行 */
 
 html.rd #settingsContent .settings-tab-panel label.text-xs.block {
     margin-bottom: 3px !important;
@@ -2423,14 +2276,14 @@ html.rd #settingsContent .settings-tab-panel.active-panel {
 html.rd .rd-display-card .set-row { padding: 9px 0; }
 html.rd .rd-display-card .set-row:first-of-type { padding-top: 0; }
 
-/* 当前主题徽标已并入卡片标题行，这里给它一个明确的小药丸形态 */
+/* 当前主题徽标要与卡片标题行读成一体，给它一个小药丸形态 */
 html.rd #rdCurrentTheme {
     padding: 1px 8px;
     border-radius: 999px;
     line-height: 1.6;
 }
 
-/* ---------- 折叠说明 ---------- */
+/* 折叠说明 */
 
 html.rd #settingsContent .rd-more {
     margin: 8px 0 0;
@@ -2470,21 +2323,16 @@ html.rd #settingsContent .rd-more > summary:hover { opacity: 1; color: var(--rd-
 html.rd #settingsContent .rd-more p { margin: 7px 0 0; }
 html.rd #settingsContent .rd-more p:first-of-type { margin-top: 6px; }
 
-/* 宽屏下「模型」页回到两列：它是最长的一页，单列在 1280px 以上会空掉小半屏。
-   需要整行的卡片（多行文本域 / 插件列表 / 明确标了 settings-span-2 的）
-   仍由上面的通栏规则决定，这里只改列数。 */
+/* 宽屏下「模型」仍按两列铺开各个区块（入口列表只在窄屏出现）。 */
 @media (min-width: 1280px) {
     html.rd #settingsContent #tab-model.active-panel {
         max-width: none;
         grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
     }
-    /* 通栏判定里的 :has(textarea) 会命中本页里**藏着的**文本域
-       （音色描述 / 自定义搜索请求体），把两张半宽卡拉成整行 ——
-       那样两列只剩一列在用，反而比单列更高。这里让本页的卡片都按格子排队。 */
     html.rd #settingsContent #tab-model > section {
         grid-column: auto !important;
     }
-    /* 「能力」页保持单列，但不再卡 900px：宽屏下权限说明与警告列表能少折几行。 */
+    /* 「能力」页保持单列，但不设 900px 上限：宽屏下权限说明与警告列表能少折几行。 */
     html.rd #settingsContent #tab-capability.active-panel {
         max-width: none;
     }
@@ -2520,4 +2368,271 @@ html.rd #settingsContent .rd-more p:first-of-type { margin-top: 6px; }
     html.rd #tab-mods .settings-card {
         padding: 14px 15px !important;
     }
+}
+
+/* ============================================================
+   记忆分层（热/温/冷）：对话组头、分区条、分类卡片、分层设置弹层
+   ============================================================ */
+
+html.rd .memory-toolbar { display: flex; align-items: center; gap: 10px; }
+html.rd .memory-toolbar .diary-count { margin-right: auto; }
+
+html.rd .memory-tier-settings-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 11px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px;
+    background: var(--rd-surface);
+    color: var(--rd-text-2);
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease;
+}
+html.rd .memory-tier-settings-btn svg { width: 12px; height: 12px; }
+html.rd .memory-tier-settings-btn:hover { color: var(--rd-text-1); border-color: var(--rd-text-3); }
+
+/* 对话组头：标题 + 三层分布徽标 */
+html.rd .memory-conv-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 24px;
+    padding-bottom: 6px;
+}
+html.rd .memory-conv-title {
+    color: var(--rd-text-1) !important;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+html.rd .memory-conv-badges { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+html.rd .memory-conv-badge {
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    border: 1px solid var(--rd-border);
+    background: var(--rd-surface);
+    color: var(--rd-text-3);
+}
+html.rd .memory-conv-badge.is-hot { color: #d96a3a; border-color: rgba(217, 106, 58, .35); }
+html.rd .memory-conv-badge.is-warm { color: #b8862f; border-color: rgba(184, 134, 47, .35); }
+html.rd .memory-conv-badge.is-cold { color: #6d7fd1; border-color: rgba(109, 127, 209, .35); }
+
+/* 三层分区条 */
+html.rd .memory-tier-block { margin-top: 16px; }
+html.rd .memory-tier-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px 12px;
+    border: 1px solid var(--rd-border);
+    border-radius: 12px;
+    background: var(--rd-surface);
+}
+html.rd .memory-tier-badge { font-size: 12px; line-height: 1; }
+html.rd .memory-tier-name {
+    color: var(--rd-text-2) !important;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .03em;
+}
+html.rd .memory-tier-stat { margin-left: auto; color: var(--rd-text-3) !important; font-size: 10px; }
+html.rd .memory-tier-block.is-hot .memory-tier-head { border-left: 3px solid rgba(217, 106, 58, .55); }
+html.rd .memory-tier-block.is-warm .memory-tier-head { border-left: 3px solid rgba(184, 134, 47, .55); }
+html.rd .memory-tier-block.is-cold .memory-tier-head { border-left: 3px solid rgba(109, 127, 209, .55); }
+
+html.rd .memory-tier-note {
+    margin-top: 8px;
+    color: var(--rd-text-3) !important;
+    font-size: 10.5px;
+    line-height: 1.6;
+}
+
+/* 分类卡片：meta 行（分类徽标/日期/token）+ 文本 + 实体标签 */
+html.rd .memory-item-meta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+html.rd .memory-kind-badge {
+    padding: 1.5px 8px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 600;
+    border: 1px solid var(--rd-border);
+    color: var(--rd-text-2);
+    background: var(--rd-surface);
+}
+html.rd .memory-tier-card.is-hot .memory-kind-badge { color: #d96a3a; border-color: rgba(217, 106, 58, .4); }
+html.rd .memory-tier-card.is-warm .memory-kind-badge { color: #b8862f; border-color: rgba(184, 134, 47, .4); }
+html.rd .memory-tier-card.is-cold .memory-kind-badge { color: #6d7fd1; border-color: rgba(109, 127, 209, .4); }
+html.rd .memory-kind-scope { color: var(--rd-text-3) !important; font-size: 9.5px; }
+html.rd .memory-item-date { color: var(--rd-text-3) !important; font-size: 10px; }
+html.rd .memory-item-tokens { margin-left: auto; color: var(--rd-text-3) !important; font-size: 9.5px; font-variant-numeric: tabular-nums; }
+html.rd .memory-tier-card.is-cold { opacity: .78; }
+html.rd .memory-essence-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+html.rd .memory-essence-tag {
+    padding: 1.5px 8px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    border: 1px dashed var(--rd-border);
+    color: var(--rd-text-3);
+}
+
+/* 分层设置弹层 */
+html.rd .memory-tier-ctx-row { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+html.rd .memory-tier-ctx-label { color: var(--rd-text-1) !important; font-size: 13px; font-weight: 600; flex: 1; }
+html.rd .memory-tier-ctx-select {
+    padding: 6px 10px;
+    border: 1px solid var(--rd-border);
+    border-radius: 10px;
+    background: var(--rd-surface);
+    color: var(--rd-text-1);
+    font-size: 12.5px;
+}
+
+/* 双点区间滑块：轨道三段配色（冷=蓝紫 / 温=琥珀 / 热=橙），两个手柄可拖 */
+html.rd .memory-tier-slider { margin: 6px 0 4px; }
+html.rd .mts-track {
+    position: relative;
+    height: 16px;
+    border-radius: 999px;
+    background: var(--rd-surface);
+    border: 1px solid var(--rd-border);
+    overflow: visible;
+}
+html.rd .mts-seg { position: absolute; top: 0; bottom: 0; }
+html.rd .mts-seg.is-idle { background: repeating-linear-gradient(45deg, rgba(140, 130, 120, .16) 0 6px, rgba(140, 130, 120, .07) 6px 12px); border-radius: 999px 0 0 999px; }
+html.rd .mts-seg.is-warm { background: rgba(184, 134, 47, .35); }
+html.rd .mts-seg.is-hot { background: rgba(217, 106, 58, .38); border-radius: 0 999px 999px 0; }
+html.rd .mts-handle {
+    position: absolute;
+    top: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border-radius: 50%;
+    background: #fffdf9;
+    border: 3px solid #8b7ff0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, .22);
+    cursor: grab;
+    box-sizing: border-box;
+    touch-action: none;
+    z-index: 2;
+}
+html.rd .mts-handle:active { cursor: grabbing; box-shadow: 0 2px 12px rgba(0, 0, 0, .3); }
+html.rd .mts-handle:focus-visible { outline: 2px solid #8b7ff0; outline-offset: 2px; }
+html.rd .mts-scale {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 5px;
+    color: var(--rd-text-3) !important;
+    font-size: 9.5px;
+    font-variant-numeric: tabular-nums;
+}
+html.rd .mts-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 14px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--rd-text-2);
+}
+html.rd .mts-legend b { font-variant-numeric: tabular-nums; color: var(--rd-text-1); }
+html.rd .mts-legend .is-idle b { color: #8d8478; }
+html.rd .mts-legend .is-warm b { color: #b8862f; }
+html.rd .mts-legend .is-hot b { color: #d96a3a; }
+html.rd .memory-tier-hints { margin-top: 12px; }
+html.rd .memory-tier-hint {
+    margin: 0 0 6px;
+    color: var(--rd-text-3) !important;
+    font-size: 10.5px;
+    line-height: 1.7;
+}
+
+html.rd .memory-tier-input {
+    width: 110px;
+    padding: 6px 10px;
+    border: 1px solid var(--rd-border);
+    border-radius: 10px;
+    background: var(--rd-surface);
+    color: var(--rd-text-1);
+    font-size: 13px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+html.rd .memory-tier-input:focus { outline: none; border-color: var(--rd-text-3); }
+html.rd .memory-tier-input.is-invalid { border-color: #d96a3a; }
+html.rd .memory-tier-unit { color: var(--rd-text-3) !important; font-size: 10.5px; min-width: 34px; }
+html.rd .memory-tier-hint {
+    margin-top: 6px;
+    color: var(--rd-text-3) !important;
+    font-size: 10.5px;
+    line-height: 1.7;
+}
+html.rd .memory-tier-btn {
+    padding: 7px 18px;
+    border-radius: 12px;
+    font-size: 12.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity .15s ease;
+}
+html.rd .memory-tier-btn:hover { opacity: .85; }
+html.rd .memory-tier-btn.is-primary {
+    background: linear-gradient(135deg, #8b7ff0, #6d5fd6);
+    color: #fff;
+    border: none;
+}
+html.rd .memory-tier-btn.is-ghost {
+    background: transparent;
+    color: var(--rd-text-2);
+    border: 1px solid var(--rd-border);
+}
+
+/* 记忆页「选择对话」按钮：手机端由 mobile-shell.css 在窄屏接管样式；桌面端在这里给出等价外观（此前该按钮被 mobile-shell.css 的桌面隐藏规则藏住）。 */
+html.rd .memory-toolbar .conv-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 11px;
+    margin-right: 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px;
+    background: var(--rd-surface);
+    color: var(--rd-text-2);
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: color .15s ease, border-color .15s ease;
+}
+html.rd .memory-toolbar .conv-filter-btn svg { width: 12px; height: 12px; flex: none; }
+html.rd .memory-toolbar .conv-filter-btn:hover { color: var(--rd-text-1); border-color: var(--rd-text-3); }
+html.rd .memory-toolbar .conv-filter-btn.is-filtered { color: #8b7ff0; border-color: rgba(139, 127, 240, .45); }
+html.rd .memory-tier-card.is-expandable { cursor: pointer; transition: border-color .15s ease; }
+html.rd .memory-tier-card.is-expandable:hover { border-color: var(--rd-text-3); }
+
+/* 记忆页双页签：分层记忆 / 日记（共用对话筛选与工具栏） */
+html.rd .memory-view-tabs { display: flex; gap: 6px; padding: 8px 16px 0; }
+html.rd .memory-view-tab {
+    padding: 6px 14px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px 999px 0 0;
+    border-bottom: none;
+    background: transparent;
+    color: var(--rd-text-3);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .15s ease, background .15s ease;
+}
+html.rd .memory-view-tab:hover { color: var(--rd-text-1); }
+html.rd .memory-view-tab.is-active {
+    background: var(--rd-surface);
+    color: var(--rd-text-1);
+    border-color: var(--rd-border);
 }

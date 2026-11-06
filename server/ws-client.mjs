@@ -1,20 +1,6 @@
-// 最小 WebSocket 客户端（RFC 6455）—— 只为连 Chrome DevTools Protocol 用。
-// ── 为什么不直接用全局 WebSocket ───────────────────────────────────────
-// 全局 `WebSocket` 在 Node 21 才出现、22 才稳定。本项目 README 写的是
-//   「Node.js ≥ 20」，而 20 上没有这个全局量 —— 直接 `new WebSocket(...)`
-//   会在 20 上抛 ReferenceError，表现是"浏览器功能在别人的机器上整个不可用"，
-//   而作者本机（22+）一切正常。这类"只有别人机器上坏"的差异最难查。
-// 所以这里自己实现握手与帧编解码。代价是 ~150 行，收益是这个能力不挑 Node 版本。
-//   CDP 只用文本帧、单向请求/响应、服务端不回压缩（我们不发
-//   Sec-WebSocket-Extensions，Chrome 也就不会启用 permessage-deflate），
-//   所以协议子集足够小，实现风险可控。
-// ── 实现范围（够用即止）────────────────────────────────────────────────
-//   · 客户端→服务端：**必须掩码**（RFC 要求），只发文本帧；
-//   · 服务端→客户端：不掩码，处理分片（continuation）、ping/pong、close；
-//   · 不做：压缩、二进制帧、子协议协商。
-// 帧格式与掩码逻辑抽成纯函数（encodeClientFrame / createFrameDecoder），
-//   这样不连 Chrome 也能穷举断言 —— 掩码算错的表现是"连上但立刻断开"，
-//   光看日志根本看不出是这里错了。
+// 最小 WebSocket 客户端（RFC 6455）—— 只为连 Chrome DevTools Protocol 用。全局 WebSocket 在 Node 21 才出现、22 才稳定，而 README 写的是「Node.js ≥ 20」，直接 new WebSocket 会在 20 上报 ReferenceError，且只有别人机器上坏。
+// 实现范围够用即止：客户端帧必须掩码、只发文本帧；服务端帧不掩码，处理分片（continuation）、ping/pong、close；不做压缩、二进制帧与子协议协商。
+// 帧格式与掩码逻辑抽成纯函数（encodeClientFrame / createFrameDecoder），不连 Chrome 也能穷举断言 —— 掩码算错的表现是"连上但立刻断开"，光看日志看不出是这里错了。
 import { createHash, randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
 
@@ -31,14 +17,7 @@ const OP_PING = 0x9;
 const OP_PONG = 0xa;
 
 /**
- * 编一个客户端→服务端的帧。
- *
- * 客户端帧**必须**带掩码位与 4 字节掩码键（RFC 6455 §5.3）：
- *   Chrome 收到不带掩码的客户端帧会直接断开连接，且**不会**在 CDP 里报错 ——
- *   现象就是"握手成功、随后静默关闭"。所以这里无条件掩码。
- *
- * @param {number} opcode
- * @param {Buffer} payload
+ * 编一个客户端→服务端的帧：客户端帧必须带掩码位与 4 字节掩码键（RFC 6455 §5.3）—— Chrome 收到不带掩码的客户端帧会直接断开，且不会在 CDP 里报错（现象是"握手成功、随后静默关闭"）。
  */
 export function encodeClientFrame(opcode, payload) {
     const data = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload ?? ''), 'utf8');
@@ -64,14 +43,8 @@ export function encodeClientFrame(opcode, payload) {
 }
 
 /**
- * 增量帧解码器：喂 Buffer，产出完整的**消息**（已合并分片）。
- *
- * 为什么按"消息"而不是"帧"交付：CDP 的一条响应可能被拆成多个 continuation 帧
- *   （大截图必然如此）。把合并交给调用方，等于让每个调用点都写一遍同样的
- *   "攒够没有"判断，漏一处就是"偶尔解析到半个 JSON"。
- *
- * @param {{onMessage:(text:string)=>void, onClose?:()=>void, onError?:(e:Error)=>void, onPing?:(payload:Buffer)=>void}} handlers
- * @returns {{push:(chunk:Buffer)=>void}}
+ * 增量帧解码器：喂 Buffer，产出完整的消息（已合并分片）。按"消息"而不是"帧"交付是因为 CDP 的一条响应可能被拆成多个 continuation 帧（大截图必然如此），把合并交给调用方等于每个调用点都写一遍"攒够没有"，漏一处就是"偶尔解析到半个 JSON"。
+ * handlers = { onMessage(text), onClose?, onError?, onPing?(payload) }，返回 { push(chunk) }。
  */
 export function createFrameDecoder({ onMessage, onClose, onError, onPing }) {
     let buf = Buffer.alloc(0);
@@ -146,8 +119,7 @@ export function createFrameDecoder({ onMessage, onClose, onError, onPing }) {
                 return;
             }
             if (opcode === OP_PING) {
-                // 必须回 pong，否则 Chrome 会在一段时间后判定连接死亡。
-                // 回什么由调用方决定（connectWebSocket 会把它原样打回去）。
+                // 必须回 pong，否则 Chrome 会在一段时间后判定连接死亡；回什么由调用方决定（connectWebSocket 会把它原样打回去）
                 if (typeof onPing === 'function') {
                     try { onPing(payload); } catch { /* 回包失败不该中断解码 */ }
                 }
@@ -169,11 +141,8 @@ export function createFrameDecoder({ onMessage, onClose, onError, onPing }) {
 }
 
 /**
- * 连一个 ws:// 地址，握手成功后返回一个"发对象、收对象"的通道。
- *
- * @param {string} rawUrl 形如 ws://127.0.0.1:9222/devtools/page/<id>
+ * 连一个 ws:// 地址（形如 ws://127.0.0.1:9222/devtools/page/<id>），握手成功后返回一个"发对象、收对象"的通道。
  * @param {{timeoutMs?:number}} [opts]
- * @returns {Promise<{send:(obj:object)=>void, close:()=>void, onMessage:(fn:(obj:object)=>void)=>void, onClose:(fn:()=>void)=>void}>}
  */
 export function connectWebSocket(rawUrl, opts = {}) {
     const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 10000;

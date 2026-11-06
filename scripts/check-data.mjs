@@ -1,19 +1,5 @@
 // 数据与存储的回归检查：data/ 唯一权威 + 分类布局 + 导入导出 + zip 解压 + 多设备同步。
-// 合并自六个脚本：
-//   check-data-api（数据导入导出 API，端到端）、check-data-authority（data/ 是唯一存储）、
-//   check-data-single-source（data/ 唯一权威 + Web/APK 共用业务代码）、
-//   check-store-layout（data/ 分类存储 + zip 备份）、
-//   check-multi-device-sync（多设备实时同步）、check-zip-merge（zip 解压单一来源）。
-// 为什么合并：这六段测的是同一个对象 —— 用户数据存到哪里、怎么落盘、怎么备份与恢复。
-// 它们的失败方式也是同一种：**悄无声息地丢数据**（导出少几个文件、导入静默丢弃、
-// 删了 data/ 又从浏览器搬回来、两台设备各存一份）。拆成六个文件时，每段都要各自
-// 重算一遍 ROOT、各自抄一遍 ok/汇总样板，而且同一份"旧版单文件 → 分类布局"的
-// 前置数据要造六遍；任何一次存储层改动都得记得把这六个都跑一遍。
-// 合成一个模块后，一处改动一次跑完，失败信息带用例名，能直接定位到哪一段退化。
-// 每个用例在自己的函数作用域里跑（各自的 ROOT / ok / 临时目录 / 子进程局部化），
-// 并且**自己清理自己起的进程与临时目录**（try/finally）—— 合并后一个进程里跑六段，
-// 漏一个清理就会泄漏端口、进程或临时文件，进而把后面的用例带红。
-// 失败信息形如「导出 zip :: 不发 attachment（避免被下载器扩展拦截）」。
+// 六段测同一对象，防"悄无声息地丢数据"；每段用例各自作用域跑并自清理进程与临时目录。
 // 用法：node scripts/check-data.mjs          跑全部
 //       node scripts/check-data.mjs 迁移      只跑名字含该子串的用例
 
@@ -29,14 +15,9 @@ import { launchTestBrowser } from './test-browser.mjs';
 import { runChecks, ROOT, wait, waitFor, waitServerUp, freePort } from './check-harness.mjs';
 
 /**
- * 起一个真实服务（web/serve.mjs），带独立的 DATA_DIR / LOG_DIR。
- *
- * 为什么要真起进程：这几段检查的对象就是"进程启动时做了什么" —— 自动迁移旧数据、
- * 内置角色卡的写入、store.mjs 的内存缓存与磁盘 mtime 的绑定。抠函数体测不到这些，
- * 只有真的起一次服务、真的走 HTTP 才能覆盖到。
- *
- * 为什么必须用临时目录：检查**绝不能**碰用户的 data/，否则跑一次检查就把人家真实
- * 的聊天记录改了。LOG_DIR 也独立（LOG_TO_FILE=0 让日志不落盘）。
+ * 起一个真实服务（web/serve.mjs），带独立的 DATA_DIR / LOG_DIR：
+ * 要测的是进程启动行为（自动迁移、内置角色卡写入、缓存与磁盘绑定），必须真跑；
+ * 且绝不碰用户 data/，LOG_TO_FILE=0 让日志不落盘。
  */
 function startServer({ port, dataDir, logDir, extraEnv = {}, cwd = ROOT }) {
     const st = { out: '' };
@@ -68,10 +49,7 @@ async function killServer(st) {
 }
 
 // 1. 数据导入导出 API（端到端，zip 备份）
-// 为什么需要：导出/导入是"用户数据最后一道保险"。它出错的表现很隐蔽 ——
-// 导出的包少几个文件、导入时静默丢数据，用户往往在换机器时才发现，那时已经晚了。
-// 这段起一个**真实服务**（用独立 data 目录，不碰用户数据），走真实 HTTP，
-// 断言 zip 内容完整、导入能还原、旧版备份仍兼容、边界情况有明确报错。
+// 导出/导入是用户数据的最后一道保险，错得很隐蔽（少文件 / 静默丢）；起真实服务走 HTTP 验证。
 
 async function caseDataApi(c) {
     const ok = (cond, label, detail) => c.ok(cond, label, detail);
@@ -82,8 +60,7 @@ async function caseDataApi(c) {
     const modsDir = path.join(sandbox, 'mods');
     const skillsDir = path.join(sandbox, 'skills');
     await mkdir(dataDir, { recursive: true });
-    // 备份要含插件与技能，检查必须把它们也隔离到临时目录：
-    // 否则会读用户真实的 mods/（体积大、内容随本机安装变化）。
+    // 备份要含插件与技能，须一并隔离到临时目录（不读用户真实 mods/，其内容随本机安装变化）
     await mkdir(path.join(modsDir, 'demo-mod-1.0.0'), { recursive: true });
     await writeFile(path.join(modsDir, 'demo-mod-1.0.0', 'manifest.json'), JSON.stringify({
         id: 'demo-mod', name: '备份检查插件', version: '1.0.0', entry: 'index.js',
@@ -96,7 +73,6 @@ async function caseDataApi(c) {
     let server = null;
 
     try {
-        // 造一份"旧版" store.json（分类键全挤在里面）+ 旧的单文件 conversations.json
         const legacyCards = [
             { id: 'card_x', name: '测试卡一', title: 'T1', worldSetting: 'W1', characterPrompt: 'P1' },
             { id: 'card_y', name: '测试卡二', title: 'T2', worldSetting: 'W2', characterPrompt: 'P2' },
@@ -108,7 +84,6 @@ async function caseDataApi(c) {
             elaina_open_settings: JSON.stringify({ model: 'test-model' }),
             elainachat_open_api_secrets: JSON.stringify({ apiKey: 'sk-test' }),
         }), 'utf8');
-        // 旧版把聊天记录放单个文件
         await writeFile(path.join(dataDir, 'conversations.json'), JSON.stringify({
             version: 1,
             value: JSON.stringify([{ id: 'conv1', title: '测试对话', messages: [{ role: 'user', text: '你好' }] }]),
@@ -121,7 +96,6 @@ async function caseDataApi(c) {
         const bootLog = () => server.out;
 
         const base = `http://127.0.0.1:${PORT}`;
-        // 用空闲端口 + 30 秒截止（原脚本是 4391 硬编码端口，并行跑会互撞）
         let up = false;
         for (const deadline = Date.now() + 30000; Date.now() < deadline;) {
             try {
@@ -129,10 +103,8 @@ async function caseDataApi(c) {
             } catch { /* 还没起来 */ }
             await wait(300);
         }
-        // 起不来就无法继续：抛异常由 runChecks 记一条 FAIL，后续用例照跑
         if (!up) throw new Error('服务没能启动：\n' + bootLog().slice(0, 1500));
 
-        // ============================================================ 1. 迁移
         console.log('=== 1. 启动时自动迁移旧数据 ===');
         ok(bootLog().includes('数据已迁移到分类存储'), '启动日志报告已迁移', bootLog().split('\n').find((l) => l.includes('迁移')) || '(无)');
         ok(existsSync(path.join(dataDir, 'main', 'characters', 'card_x.json')), '人设卡迁移成独立文件');
@@ -146,7 +118,6 @@ async function caseDataApi(c) {
             ok(misc.elaina_open_character_cards === undefined, 'store.json 不再含人设卡');
         }
 
-        // ============================================================ 2. 读回
         console.log('\n=== 2. /api/store 读回（前端视角不变）===');
         {
             const r = await fetch(base + '/api/store');
@@ -163,7 +134,6 @@ async function caseDataApi(c) {
             ok(JSON.parse(j.data.elaina_open_settings || '{}').model === 'test-model', '设置读回');
         }
 
-        // ============================================================ 3. data/info
         console.log('\n=== 3. /api/data/info ===');
         {
             const r = await fetch(base + '/api/data/info');
@@ -178,15 +148,13 @@ async function caseDataApi(c) {
             ok(/conversations\//.test(JSON.stringify(j.layout)), 'layout 说明聊天记录是一对话一文件');
         }
 
-        // ============================================================ 4. 导出（zip）
         console.log('\n=== 4. 导出 zip ===');
         let zipBuf = null;
         {
             const r = await fetch(base + '/api/data/export');
             ok(r.status === 200, 'GET /api/data/export 成功');
-            // **刻意不发 Content-Disposition: attachment** —— 迅雷/FDM 的机器级扩展
-            // 看到它就会抢走这个 URL，导致浏览器里拿到被改写的空响应（实测 204 + 0 字节）。
-            // 文件名改走自定义头，前端 fetch 成 blob 后用 <a download> 保存。
+            // 刻意不发 attachment（下载器机器级扩展会抢走该 URL），文件名走自定义头，
+            // 前端 fetch 成 blob 后用 <a download> 保存。
             const cd = r.headers.get('content-disposition') || '';
             ok(!/attachment/i.test(cd), '不发 attachment（避免被下载器扩展拦截）', cd || '(无)');
             const fn = r.headers.get('x-backup-filename') || '';
@@ -196,7 +164,7 @@ async function caseDataApi(c) {
             zipBuf = Buffer.from(await r.arrayBuffer());
             ok(zipBuf.readUInt32LE(0) === 0x04034b50, '是合法 zip（PK 头）');
 
-            // allowScripts：导出包里含插件入口 .js，默认黑名单会把它们藏起来，
+            // allowScripts：备份里含插件入口 .js，默认黑名单会把它藏起来；
             // 这里要看的是"备份实际装了什么"，不是"数据分支能读什么"。
             const files = readZip(zipBuf, { allowScripts: true });
             const names = files.map((f) => f.name);
@@ -206,7 +174,7 @@ async function caseDataApi(c) {
             ok(manifest.format === 'elainachat-backup', '格式标识正确');
             ok(manifest.version === 3, '版本号为 3（zip + data/ 目录）', 'got ' + manifest.version);
             ok(typeof manifest.exportedAt === 'string', '含导出时间');
-            // 顶层三件：data/（聊天数据）、mods/（插件）、skills/（技能）—— 解压后与项目根一一对应。
+            // 顶层三件：data/ / mods/ / skills/ —— 解压后与项目根一一对应
             const topDirs = [...new Set(names.map((n) => (n.includes('/') ? n.split('/')[0] : '(根文件)')))];
             ok(topDirs.every((d) => d === 'data' || d === 'mods' || d === 'skills' || d === '(根文件)'),
                 '★ 顶层只有 data / mods / skills（外加 manifest.json）', topDirs.join(','));
@@ -231,7 +199,6 @@ async function caseDataApi(c) {
             ok(typeof JSON.parse(get(memFile).data.toString('utf8')).value !== 'undefined', 'memory/<类目>.json 是 {value} 形态');
         }
 
-        // ============================================================ 5. 写入后导出仍完整
         console.log('\n=== 5. 通过 /api/store 写入后再导出（新数据要能进备份）===');
         {
             const r = await fetch(base + '/api/store', {
@@ -255,13 +222,9 @@ async function caseDataApi(c) {
             ok(cardNames.length === 2, '分类数据未被单键写入覆盖', 'got ' + cardNames.length);
         }
 
-        // ============================================================ 5b. 删除键（null 补丁）
         console.log('\n=== 5b. /api/store 删除（removeItem → null 补丁）===');
         {
-            // 前端 Store.removeItem 提交的是 `{ 键: null }`。
-            // 服务端早先把非字符串一律丢掉 —— "删除"于是永远到不了磁盘：
-            //   内存里没了、刷新又从 store.json 读回来。用户可见的症状是
-            //   插件失败记录清不掉、卡片一直顶着上一次的错误。
+            // 前端删除提交的是 `{ 键: null }`：非字符串值若被丢弃，删除就永远落不了盘
             const post = (data) => fetch(base + '/api/store', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -285,12 +248,9 @@ async function caseDataApi(c) {
             ok(Object.values(disk).every((v) => v !== null), 'store.json 里不会留下 `键: null` 的假数据');
         }
 
-        // ============================================================ 6. 导入 zip（merge）
         console.log('\n=== 6. 导入 zip（merge 模式）===');
         {
-            // 改一份 zip：加一张新卡、改设置，重新打包。
-            // allowScripts 必须开：插件入口是 .js，默认解压黑名单会把它丢掉，
-            // 那样这段测的就不是"导入插件"而是"导入一个缺入口的残包"。
+            // 改一份 zip（加新卡 / 改设置）重打包；allowScripts 必须开，否则测的是缺入口的残包
             const files = readZip(zipBuf, { allowScripts: true });
             const entries = files.map((f) => ({ name: f.name, data: f.data }));
             const setEntry = (name, data) => {
@@ -305,7 +265,6 @@ async function caseDataApi(c) {
             const settings = JSON.parse(files.find((f) => f.name === 'data/settings.json').data.toString('utf8'));
             settings.elaina_open_settings = JSON.stringify({ model: 'from-backup' });
             setEntry('data/settings.json', settings);
-            // 备份里新增一个本机没有的插件与技能，验证导入真的把目录写回。
             setEntry('mods/from-backup-1.0.0/manifest.json',
                 { id: 'from-backup', name: '备份里的插件', version: '1.0.0', entry: 'index.js' });
             setEntry('mods/from-backup-1.0.0/index.js', 'window.__fromBackup = true;');
@@ -339,7 +298,6 @@ async function caseDataApi(c) {
                 '导入后重扫插件清单（前端能立刻看到新插件）', JSON.stringify(modIndex.plugins.map((p) => p.id)));
         }
 
-        // ============================================================ 7. 导入边界
         console.log('\n=== 7. 导入边界 ===');
         {
             const post = (body) => fetch(base + '/api/data/import', {
@@ -355,8 +313,6 @@ async function caseDataApi(c) {
             ok(JSON.parse(s.elaina_open_character_cards || '[]').length === 3, '导入失败不影响已有数据');
         }
 
-
-        // ============================================================ 8. v1 旧 JSON 备份兼容
         console.log('\n=== 8. 兼容 v1 单 JSON 旧备份 ===');
         {
             const v1 = Buffer.from(JSON.stringify({
@@ -374,7 +330,6 @@ async function caseDataApi(c) {
             ok(JSON.parse(s.elaina_open_settings).model === 'from-v1', 'v1 备份的设置生效');
         }
 
-        // ============================================================ 9. 落盘检查
         console.log('\n=== 9. 落盘检查（真正写到磁盘）===');
         {
             const idx = JSON.parse(await readFile(path.join(dataDir, 'main', 'characters', 'index.json'), 'utf8'));
@@ -392,8 +347,7 @@ async function caseDataApi(c) {
             ok(!modEntries.some((n) => n.startsWith('.restoring-')), '没有遗留的插件恢复临时目录', JSON.stringify(modEntries));
         }
 
-        // ============================================================ 10. 旧布局（名字摊在 zip 根上）
-        // 放在最后：它会合并进另一份数据，放前面会把第 6/9 步依赖的 3 张卡改掉。
+        // 放在最后：它会合并进另一份数据，放前面会把第 6/9 步依赖的 3 张卡改掉
         console.log('\n=== 10. 兼容 v2 旧布局（settings.json 等在根上）===');
         {
             const legacyZip = createZip([
@@ -424,7 +378,6 @@ async function caseDataApi(c) {
 
 // 2. data/ 是唯一存储
 // 两条核心事实：① 写入后 data/ 里有数据 ② 删掉 data/ 后数据真的为空。
-// 第 ② 条是用户实测报的那个 bug（"删掉 data 分区后重新打开还是有数据"）。
 
 async function caseDataAuthority(c) {
     const ok = (cond, label, extra) => c.ok(cond, label, extra);
@@ -440,10 +393,7 @@ async function caseDataAuthority(c) {
     let browser = null;
     let server = null;
     try {
-        // ★ 用共用的启动器：它负责两件**环境相关**的事（浏览器路径 + 屏蔽外网）。
-        //   这里原先踩过一个"看起来像产品坏了"的假失败：页面 <head> 从 jsdelivr 拉字体
-        //   CSS，检查机连不上外网时 Chromium 一直等，把 domcontentloaded 从 0.7 秒拖到
-        //   68 秒 → `page.goto: Timeout 30000ms exceeded`。详见 scripts/test-browser.mjs。
+        // 用共用的启动器：它负责浏览器路径与屏蔽外网两件环境相关的事（详见 scripts/test-browser.mjs）
         browser = await launchTestBrowser();
         server = startServerImpl();
         ok(await waitServerUp(BASE), '服务已启动', server.out.slice(-400));
@@ -455,7 +405,6 @@ async function caseDataAuthority(c) {
         await page.goto(BASE, { waitUntil: 'domcontentloaded' });
         await page.waitForTimeout(2500);
 
-        // ── ① 写一条数据（走真实业务函数） ──
         await page.evaluate(() => {
             state.conversations = [{ id: 'conv-test-1', title: '删库测试', messages: [
                 { id: 'm1', role: 'user', text: '这是应该被保存的消息', timestamp: '00:00:00' },
@@ -465,7 +414,7 @@ async function caseDataAuthority(c) {
             persistSettings();
             Store.setItem('elaina_theme', 'dark');
         });
-        // 等防抖推送（store.js 是 800ms）**真的落盘** —— 等文件内容，不等固定时长
+        // 等防抖推送（store.js 是 800ms）真的落盘 —— 等文件内容，不等固定时长
         await waitFor(() => {
             const f = path.join(DATA_DIR, 'main', 'store.json');
             return existsSync(f) && /model-should-persist/.test(readFileSync(f, 'utf8'));
@@ -476,16 +425,13 @@ async function caseDataAuthority(c) {
         ok(!!store1['elaina_open_settings'], 'settings 进了 data/');
         ok(/model-should-persist/.test(store1['elaina_open_settings'] || ''), 'settings 内容正确');
         ok(store1['elaina_theme'] === 'dark', '主题设置进了 data/');
-        // 聊天记录按设计拆成 conversations/<id>.json
         const convDir = path.join(DATA_DIR, 'conversations');
         const convFiles = existsSync(convDir) ? readdirSync(convDir).filter((f) => f.endsWith('.json')) : [];
         ok(convFiles.length > 0, '★ 聊天记录进了 data/conversations/', JSON.stringify(convFiles));
         const convBody = convFiles.map((f) => readFileSync(path.join(convDir, f), 'utf8')).join('');
         ok(/这是应该被保存的消息/.test(convBody), '★ 聊天正文确实写进了 data/');
 
-        // ── ② 刷新页面，数据应该还在（正常持久化） ──
         await page.reload({ waitUntil: 'domcontentloaded' });
-        // 等首屏真的把会话读回来，而不是等一个猜出来的毫秒数
         await waitFor(() => page.evaluate(() => typeof state !== 'undefined'
             && Array.isArray(state.conversations) && state.conversations.length === 1),
             { timeoutMs: 15000, label: '刷新后首屏读取完成' });
@@ -503,19 +449,16 @@ async function caseDataAuthority(c) {
         ok(afterReload.convs === 1, '刷新后聊天记录还在（正常持久化）', String(afterReload.convs));
         ok(afterReload.model === 'model-should-persist', '刷新后设置还在');
         ok(afterReload.theme === 'dark', '刷新后主题还在');
-        // ★ 核心断言：localStorage 里不该再有业务数据
         ok(afterReload.lsConvs === null, '★ localStorage 里没有聊天记录（已不再作主存储）', String(afterReload.lsConvs));
         ok(afterReload.lsSettings === null, '★ localStorage 里没有设置');
         ok(afterReload.lsTheme === null, '★ localStorage 里没有主题');
         const lsKeys = Object.keys(afterReload.lsAll);
-        // ★ 现在 localStorage 里**什么业务键都不该有** —— 连迁移标记也不该有
-        //   （自动迁移已按用户要求移除：删 data/ 就是真清空，靠备份功能兜底）。
+        // localStorage 里什么业务键都不该有，连迁移标记也不该有（删 data/ 就是真清空，靠备份兜底）
         ok(lsKeys.length === 0, '★ localStorage 里没有任何业务数据（也没有迁移标记）',
             JSON.stringify(lsKeys));
 
         await ctx.close();
 
-        // ── ③ 删掉 data/，重启服务，数据必须为空 ──
         console.log('\n=== 删除 data/ 并重启 ===');
         await killServer(server);
         await wait(600);
@@ -537,7 +480,6 @@ async function caseDataAuthority(c) {
         ok(afterWipe.convs === 0, '★★ 删掉 data/ 后聊天记录为空（用户报的问题已修）', String(afterWipe.convs));
         ok(afterWipe.model !== 'model-should-persist', '★★ 删掉 data/ 后设置回到默认', afterWipe.model);
         ok(afterWipe.theme !== 'dark', '★★ 删掉 data/ 后主题回到默认', String(afterWipe.theme));
-        // 而且不该被自动重建出旧数据
         await wait(1200);
         const recreated = existsSync(path.join(DATA_DIR, 'main', 'store.json'))
             ? readFileSync(path.join(DATA_DIR, 'main', 'store.json'), 'utf8') : '';
@@ -546,21 +488,16 @@ async function caseDataAuthority(c) {
 
         console.log('\n=== 服务运行中删除 data/（用户最可能的操作）===');
         {
-            // ★ 这是用户实际的做法：服务开着，直接删文件夹。
-            //   之前这里有个**真正的元凶**：server/store.mjs 的内存缓存永不失效
-            //   （`if (cache) return cache`），删掉 data/ 后缓存照旧返回旧数据，
-            //   浏览器读到了、又写回磁盘 —— 表现就是"删了还在"。
-            //   修法是让缓存与 data/ 目录 mtime 绑定（见 store.mjs 的 loadStore）。
+            // 用户实际做法是服务开着直接删文件夹：缓存必须与 data/ 目录 mtime 绑定
+            // （见 store.mjs 的 loadStore），否则内存缓存照旧返回旧数据、被写回磁盘（"删了还在"）。
             const ctx5 = await browser.newContext();
             const page5 = await ctx5.newPage();
             await page5.goto(BASE, { waitUntil: 'domcontentloaded' });
             await waitFor(() => page5.evaluate(() => typeof window.Store !== 'undefined'),
                 { timeoutMs: 15000, label: '页面 Store 就绪' });
 
-            // 先通过 API 写一条能被识别的数据
             await page5.evaluate(() => Store.setItem('elaina_open_settings',
                 JSON.stringify({ model: 'SENTINEL-BEFORE-DELETE' })));
-            // 等这条数据**真的能被服务端读到**（写入是异步推送）
             await waitFor(async () => {
                 const s = await (await fetch(BASE + '/api/store')).json();
                 return /SENTINEL-BEFORE-DELETE/.test(JSON.stringify(s.data || {}));
@@ -569,17 +506,15 @@ async function caseDataAuthority(c) {
             ok(/SENTINEL-BEFORE-DELETE/.test(JSON.stringify(s1.data || {})),
                 '（前置）写入的数据能被服务端读到');
 
-            // 服务**不重启**，直接删掉整个 data/ 目录
+            // 服务不重启，直接删掉整个 data/ 目录
             rmSync(DATA_DIR, { recursive: true, force: true });
             ok(!existsSync(path.join(DATA_DIR, 'main', 'store.json')), '（前置）data/ 已删除');
 
-            // 立刻问 API：必须是空的（缓存要感知磁盘被删）
             const s2 = await (await fetch(BASE + '/api/store')).json();
             ok(!/SENTINEL-BEFORE-DELETE/.test(JSON.stringify(s2.data || {})),
                 '★★ 服务不重启时删 data/，API 立刻读不到旧数据（缓存已失效）',
                 JSON.stringify(s2.data || {}).slice(0, 120));
 
-            // 刷新页面：界面也必须是空的
             await page5.reload({ waitUntil: 'domcontentloaded' });
             await waitFor(() => page5.evaluate(() => typeof state !== 'undefined'
                 && state.settings && state.settings.model !== 'SENTINEL-BEFORE-DELETE'),
@@ -592,9 +527,7 @@ async function caseDataAuthority(c) {
                 '★★ 刷新后界面也是空的（不会读到残留）', afterWipeLive.model);
             ok(afterWipeLive.convs === 0, '★★ 聊天记录为空', String(afterWipeLive.convs));
 
-            // 说明：data/ 目录会被**重建**（应用启动时写内置角色卡等正常数据），
-            // 但里面不该有删除前的旧数据。这一点要显式断言，
-            // 否则用户看到目录又出现会以为"没删掉"。
+            // data/ 目录会被重建（启动写内置数据），但不得有删除前的旧数据
             await wait(1200);
             if (existsSync(path.join(DATA_DIR, 'main', 'store.json'))) {
                 const rebuilt = readFileSync(path.join(DATA_DIR, 'main', 'store.json'), 'utf8');
@@ -608,12 +541,7 @@ async function caseDataAuthority(c) {
 
         console.log('\n页面错误:', errs.length ? errs.slice(0, 3).join(' | ') : '(无)');
 
-        // ── ④ 删了就该真的空：localStorage 里的旧数据**不许**被搬回来 ──
-        // 曾经有一版"把老版本 localStorage 的数据自动迁进 data/"（为了保住老用户数据），
-        // 但它制造了用户实测的那个困惑：
-        //     关服务 → 删 data/ → 重启 → data/ 又被填满了
-        // 现在定稿的原则是：**data/ 就是全部，删掉它就没了**。
-        // 老用户的数据靠"我的数据 → 导入备份"恢复（项目本来就有备份功能）。
+        // ④ 删了就该真的空：localStorage 里的旧数据不许被搬回 data/（老用户数据靠导入备份恢复）
         await ctx2.close();
         console.log('\n=== 删 data/ 后不许从 localStorage 搬回旧数据 ===');
         {
@@ -668,20 +596,9 @@ async function caseDataAuthority(c) {
     }
 }
 
-// 3. data/ 是唯一存储权威，且 Web / APK **共用同一套业务代码**
-// ── 这个检查防的两类退化 ────────────────────────────────────────────────
-// ① **业务数据又写回 localStorage**
-//    起因是实测 bug："删除 data 分区后重新打开还是有数据" ——
-//    因为 localStorage 当时才是真身，data-sync.js 还会把本机数据反向推回 data/。
-//    修法是把权威存储换成 data/（见 web/js/store.js）。若以后有人在业务代码里
-//    又直接写 localStorage，那个 bug 会以同样的方式复活。
-//    所以这里**静态扫描**：除 store.js 自身与明确的例外外，
-//    web/js 下不许出现 localStorage 的读写。
-// ② **业务代码里长出平台分支**
-//    用户明确要求："尽量让安卓和 web 代码同步，不然出问题了还要搞两套代码。"
-//    允许的平台差异**只有持久化后端那一层**（store.js 内部）。
-//    业务文件里若出现 Capacitor / isNativePlatform 判断，就说明有人开始分叉了，
-//    这个检查会在 CI 阶段拦住 —— 而不是等用户在两台设备上各报一次 bug。
+// 3. data/ 是唯一存储权威，且 Web / APK 共用同一套业务代码
+// 防两类退化：业务数据写回 localStorage（权威只有 data/ 一处，静态扫描 web/js）；
+// 业务代码长出平台分支（只允许在 store.js 存储层，CI 拦下 Capacitor / isNativePlatform）。
 
 async function caseSingleSource(c) {
     const ok = (cond, label, extra) => c.ok(cond, label, extra);
@@ -698,15 +615,8 @@ async function caseSingleSource(c) {
             .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
     }
 
-    /**
-     * 取出一个顶层函数的**函数体**（按大括号配对）。
-     *
-     * 为什么要它：检查"init 里先 bootstrap 再 load"时，整文件 indexOf 会被
-     * 别的函数体里的同名调用干扰 —— 那些函数定义在 init 之前，于是得出假失败。
-     * 只看函数体内部才是真正想断言的事。
-     */
+    /** 取顶层函数体（按大括号配对）：整文件 indexOf 会命中 init 之前定义的其它函数体内的同名调用（假失败） */
     function extractFunctionBody(text, name) {
-        // 兼容 `function foo()` 与 `async function foo()`
         const re = new RegExp('(?:async\\s+)?function\\s+' + name + '\\s*\\(');
         const m = re.exec(text);
         if (!m) return '';
@@ -723,13 +633,11 @@ async function caseSingleSource(c) {
         return '';
     }
 
-    // 1. 业务代码不许直接读写 localStorage
     console.log('=== 1. localStorage 只允许出现在存储层 ===');
     {
         // 例外清单：每条都要有理由，不能随便加
         const ALLOWED = {
-            // store.js 是存储层本身。它**也只把 localStorage 当 API 形态参考**，
-            // 实际并不使用（它用内存缓存 + 后端）。这里放行是为了注释与未来兼容。
+            // store.js 只把 localStorage 当 API 形态参考，实际用内存缓存 + 后端；放行是为注释与兼容
             'store.js': '存储层自身',
         };
         const offenders = [];
@@ -743,7 +651,6 @@ async function caseSingleSource(c) {
             '★ 业务代码里没有 localStorage 读写（数据统一走 Store → data/）',
             offenders.join(', '));
 
-        // 反向：store.js 必须真的存在且提供接口
         ok(!!src['store.js'], 'store.js 存在');
         ok(/window\.Store\s*=/.test(src['store.js'] || ''), '★ store.js 暴露 window.Store');
         for (const fn of ['bootstrap', 'getItem', 'setItem', 'removeItem']) {
@@ -751,14 +658,11 @@ async function caseSingleSource(c) {
         }
     }
 
-    // 2. 平台分支只允许在存储层
     console.log('\n=== 2. 平台差异只在存储层（Web/APK 共用一套业务代码）===');
     {
         const PLATFORM_RE = /isNativePlatform|Capacitor\.Plugins|Capacitor\.getPlatform/;
-        // 例外清单 = **功能差异**，不是数据分叉。每条都要有理由。
-        // 判断标准：这个分支是在"同一件事在两端做法不同"，还是在"某一端根本没有这个功能"？
-        //   · 数据存储 → 两端都要存同样的东西 → 必须共用（所以 store.js 是唯一允许的）
-        //   · 原生插件 → APK 有原生能力、Web 没有 → 天然只能是分支，且不产生两套业务逻辑
+        // 例外清单是功能差异而非数据分叉：数据存储两端必须共用（只放行 store.js）；
+        // 原生插件是 APK 独有能力，天然分支且不产生两套业务逻辑。
         const ALLOWED_PLATFORM = {
             'store.js': '数据后端分支（唯一允许的存储差异）',
             'core.js': 'BYOK 原生 HTTP 插件（APK 用原生绕 CORS，Web 走本机中转）',
@@ -777,22 +681,16 @@ async function caseSingleSource(c) {
             '★ 业务文件里没有新增平台分支（避免 Web/APK 分裂成两套代码）',
             branched.join(', '));
 
-        // 数据存储相关的分支必须只有 store.js 一处（用于**用户数据**）。
-        // ★ 为什么要排除 core.js：它写的是 **Live2D 模型文件**，不是用户数据。
-        //   APK 里模型必须落在应用目录（Web 端由服务端提供，两端本来就不是一回事），
-        //   而且模型是"可重新获取的资源" —— 删掉只是要重新下载，不像聊天记录会永久丢失。
-        //   判断标准：**丢了会不会心疼**。会心疼的（聊天/设置/记忆）必须只有 data/ 一处。
+        // 用户数据的写盘分支必须只有 store.js；core.js 等写的是可重新获取的资源（Live2D 模型），
+        // 判据是"丢了会不会心疼"：会心疼的（聊天/设置/记忆）必须只有 data/ 一处。
         const NON_DATA_WRITERS = {
             'core.js': 'Live2D 模型文件（可重新获取的资源，不是用户数据）',
             'core-native.js': '原生 Live2D 模型文件（从 core.js 拆出的同一类资源）',
             'core-native-mod.js': '原生插件安装/删除（mods 目录，不是用户数据）',
-            // Directory.Documents：读写**用户自己选的备份文件**（导出/导入）。
-            // 那是"跟用户交换文件"，不是"应用自己的存储"，且只在用户主动操作时发生。
+            // Directory.Documents：读写用户自己选的备份文件，是"跟用户交换文件"而非应用自身存储
             'settings.js': '备份文件的导入导出（读写用户在文档目录里选的文件）',
             'backup.js': '备份文件的导入导出（从 settings.js 拆出的同一类文件交换）',
-            // CACHE 目录的日志导出文件（log-viewer 的「导出」按钮）：写进缓存后
-            //   交由系统分享面板发出。与 settings.js 同一性质 —— 跟用户交换文件，
-            //   只在用户主动点导出时发生；缓存目录系统可随时回收，不承载任何应用状态。
+            // CACHE 目录的日志导出（log-viewer「导出」按钮）：与 settings.js 同性质，缓存可回收
             'log-viewer.js': '日志导出文件（写缓存目录供分享，用户主动触发）',
         };
         const dataBranch = Object.entries(src)
@@ -807,19 +705,16 @@ async function caseSingleSource(c) {
             '★ 没有业务文件自己往磁盘写用户数据（统一由 store.js 落 data/）', dataBranch.join(', '));
     }
 
-    // 3. data-sync.js 必须保持为空壳（防止旧的双向同步复活）
     console.log('\n=== 3. 旧的双向同步不得复活 ===');
     {
         const ds = src['data-sync.js'] || '';
         const code = stripComments(ds);
-        // 旧实现的特征：同步 XHR 读 /api/store，然后写 localStorage，再反向推回
         ok(!/XMLHttpRequest/.test(code), '★ data-sync.js 里没有同步 XHR（旧的拉取逻辑已移除）');
         ok(!/localStorage\s*\.\s*setItem/.test(code), '★ data-sync.js 不再写 localStorage');
         ok(!/api\/store/.test(code), '★ data-sync.js 不再直接打 /api/store（改由 store.js 负责）');
         ok(/store\.js|Store/.test(ds), 'data-sync.js 保留说明指向 store.js');
     }
 
-    // 4. 前端与服务端的键清单必须一致
     console.log('\n=== 4. 键清单一致（避免"某类数据没被保存"）===');
     {
         // store.js 的 DATA_KEYS 是前端权威清单
@@ -828,7 +723,6 @@ async function caseSingleSource(c) {
         if (m) {
             const keys = [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
             ok(keys.length >= 10, `DATA_KEYS 有 ${keys.length} 个键`);
-            // 关键键一个都不能少 —— 这些是用户能感知到的数据
             for (const must of [
                 'elaina_open_settings',
                 'elainachat_open_api_secrets',   // 用户选择把 Key 也存进 data/
@@ -848,24 +742,19 @@ async function caseSingleSource(c) {
         }
     }
 
-    // 5. 启动时必须先 bootstrap 再读数据
     console.log('\n=== 5. 启动顺序：先 bootstrap 再读 ===');
     {
         const init = src['init.js'] || '';
         const code = stripComments(init);
 
-        // ★ 只在 **init() 函数体内**找，不能整文件 indexOf。
-        //   原因：别的函数（如 startMultiDeviceSync）体内也会调 loadSettings() /
-        //   loadConversations()，而它们的定义位置在 init() **之前** ——
-        //   整文件搜索会命中那些位置，得出"load 早于 bootstrap"的**假失败**
-        //   （这个假失败真的出现过）。
+        // 只在 init() 函数体内找：其它函数（定义在 init 之前）体内也调 load*，
+        // 整文件 indexOf 会命中那些位置，得出"load 早于 bootstrap"的假失败。
         const body = extractFunctionBody(code, 'init');
         ok(body, '能取到 init() 函数体');
 
         const bootAt = body.indexOf('Store.bootstrap()');
         ok(bootAt >= 0, '★ init() 里调用了 Store.bootstrap()');
 
-        // bootstrap 必须早于所有 load*
         const loadCalls = ['loadSettings()', 'loadConversations()', 'loadMemoryCore()']
             .map((c) => ({ c, at: body.indexOf(c) }))
             .filter((x) => x.at >= 0);
@@ -878,23 +767,20 @@ async function caseSingleSource(c) {
             '★ bootstrap 后重刷主题（APK 异步读完后不会停在默认主题）');
     }
 
-    // 6. index.html 正确引入且顺序正确
     console.log('\n=== 6. index.html 引入顺序 ===');
     {
         const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
         ok(/<script[^>]*src="\/js\/store\.js"[^>]*><\/script>/.test(html), 'index.html 引入了 store.js');
         const storeAt = html.indexOf('/js/store.js');
-        // store.js 必须在所有业务脚本之前
         for (const f of ['/js/core.js', '/js/data.js', '/js/theme.js', '/js/mods.js']) {
             const at = html.indexOf(f);
             ok(at < 0 || at > storeAt, `store.js 排在 ${f} 之前`);
         }
         // data-sync.js 仍被引用（空壳也要在，否则老 APK 的旧文件不会被覆盖）
         ok(/<script[^>]*src="\/js\/data-sync\.js"[^>]*><\/script>/.test(html),
-            'data-sync.js 仍被引入（空壳覆盖老 APK 的旧实现）');
+            'data-sync.js 仍被引入（空壳覆盖老 APK 里的同名逻辑）');
     }
 
-    // 7. APK 后端：同一个 Store、同一套业务 API
     console.log('\n=== 7. APK 原生后端（用假 Capacitor 验证）===');
     {
         // 假 Capacitor Filesystem：用内存 Map 当"应用私有目录里的 store.json"
@@ -930,11 +816,9 @@ async function caseSingleSource(c) {
         ok(S.isDataKey('elaina_open_conversations'), 'APK：Store 认识业务键');
         ok(!S.isDataKey('some.ui.state'), 'APK：非业务键不入库');
 
-        // ① 空盘启动 → 没有数据
         await S.bootstrap();
         ok(S.getItem('elaina_open_settings') === null, 'APK：空盘启动时读不到设置（符合预期）');
 
-        // ② 写入 → 落到"磁盘文件"里
         S.setItem('elaina_open_settings', JSON.stringify({ model: 'apk-model' }));
         S._flush();
         await new Promise((r) => setTimeout(r, 50));
@@ -963,7 +847,7 @@ async function caseSingleSource(c) {
                 '★★ APK：重启应用后数据还在（与 Web 同一套 Store 语义）');
         }
 
-        // ④ 业务代码完全不感知平台 —— 断言 store.js 是唯一的判断点
+        // ④ 业务代码完全不感知平台 —— store.js 是唯一判断点
         ok(/isNativePlatform/.test(src['store.js']), 'store.js 内部做平台判断（唯一判断点）');
         const businessFiles = Object.entries(src)
             .filter(([f]) => !['store.js', 'core.js', 'data.js', 'voice.js', 'agent.js', 'settings.js'].includes(f))
@@ -975,13 +859,7 @@ async function caseSingleSource(c) {
 }
 
 // 4. data/ 分类存储（人设卡与聊天记录都是一条一文件）+ zip 备份
-// 为什么需要：存储层一旦出错就是**用户数据丢失**（聊天记录 / 人设卡 / 记忆）。
-// 这段用临时目录跑真实的读写，覆盖：
-//   · 分类落盘（人设卡一卡一文件、聊天记录一对话一文件、记忆独立文件）
-//   · 读回时拼成前端认识的键值形态
-//   · 从旧的单文件 store.json / 旧的单文件 conversations.json 自动迁移（幂等）
-//   · zip 备份导出 → 导入往返一致（含 v1 单 JSON 旧备份的兼容）
-//   · 坏数据不导致崩溃、不覆盖好数据
+// 临时目录跑真实读写：分类落盘 / 读回拼装 / 旧单文件迁移（幂等）/ zip 往返 / 坏数据不崩。
 
 async function caseStoreLayout(c) {
     const ok = (cond, label, detail) => c.ok(cond, label, detail);
@@ -998,7 +876,6 @@ async function caseStoreLayout(c) {
     const mk = () => createStore({ dataDir: tmp, log: (lvl, msg) => logs.push(lvl + ':' + msg) });
 
     try {
-        // ================================================================ 1. 全新写入
         console.log('=== 1. 全新写入（一条一文件）===');
         {
             const store = mk();
@@ -1043,7 +920,6 @@ async function caseStoreLayout(c) {
             ok(vidx.order.join(',') === 'conv_1,conv_2', 'index 记录对话顺序');
         }
 
-        // ================================================================ 2. 读回
         console.log('\n=== 2. 读回（拼成前端认识的形态）===');
         {
             const store = mk();
@@ -1059,7 +935,6 @@ async function caseStoreLayout(c) {
             ok(JSON.parse(s[KEY_SETTINGS] || '{}').model === 'x', '设置读回');
         }
 
-        // ================================================================ 3. 删除条目
         console.log('\n=== 3. 删除条目（残留文件要清掉）===');
         {
             const store = mk();
@@ -1075,7 +950,6 @@ async function caseStoreLayout(c) {
             ok(vFiles.includes('conv_2.json'), '保留的对话文件还在');
         }
 
-        // ================================================================ 4. 坏数据
         console.log('\n=== 4. 坏数据不崩、不覆盖 ===');
         {
             const store = mk();
@@ -1093,7 +967,6 @@ async function caseStoreLayout(c) {
             ok(!existsSync(path.join(tmp, '..', 'evil.json')), '非法 id 不会写到目录外');
         }
 
-        // ================================================================ 5. 迁移
         console.log('\n=== 5. 从旧的单文件布局迁移 ===');
         tmp2 = await mkdtemp(path.join(tmpdir(), 'elaina-migrate-'));
         {
@@ -1104,7 +977,6 @@ async function caseStoreLayout(c) {
                 [KEY_MEM]: JSON.stringify({ diary: [] }),
                 [KEY_SETTINGS]: JSON.stringify({ model: 'legacy' }),
             }), 'utf8');
-            // 旧版把聊天记录放在单个 conversations.json（{version,value} 形态）
             await writeFile(path.join(tmp2, 'conversations.json'), JSON.stringify({
                 version: 1,
                 value: JSON.stringify([{ id: 'oldconv', title: '旧对话', messages: [] }]),
@@ -1129,7 +1001,6 @@ async function caseStoreLayout(c) {
             ok(JSON.parse(s[KEY_CONV] || '[]')[0].id === 'oldconv', '迁移后聊天记录正确');
         }
 
-        // ================================================================ 6. 幂等
         console.log('\n=== 6. 迁移幂等 ===');
         {
             const store = createStore({ dataDir: tmp2 });
@@ -1148,15 +1019,11 @@ async function caseStoreLayout(c) {
             ok(JSON.parse(s3[KEY_CARDS])[0].name === '改过的名字', '迁移不会覆盖已更新的数据');
         }
 
-        // ================================================================ 6b. 遗留旧文件的清理
-        // 真实故障：上一次迁移已把对话拆进 conversations/，但旧的单文件 conversations.json
-        // 因为"moved 为空就跳过删除"的逻辑**永久留在了磁盘上**。
-        // 它不会被读取（loadStore 只认 conversations/），也不会被清理，白占空间还让人困惑。
+        // 6b 防的退化：已拆进 conversations/ 后，旧单文件因"moved 为空跳过删除"永久残留磁盘
         console.log('\n=== 6b. 清理遗留的旧单文件 conversations.json ===');
         {
             const tmpLegacy = await mkdtemp(path.join(tmpdir(), 'elaina-legacy-'));
             try {
-                // 造出"已经拆好"的状态：conversations/ 有内容，同时旧的单文件还在
                 await writeFile(path.join(tmpLegacy, 'store.json'), JSON.stringify({
                     [KEY_SETTINGS]: JSON.stringify({ model: 'x' }),
                 }), 'utf8');
@@ -1172,7 +1039,6 @@ async function caseStoreLayout(c) {
                 }), 'utf8');
                 ok(existsSync(path.join(tmpLegacy, 'conversations.json')), '（准备）旧单文件存在');
 
-                // 启动一次：应该清理掉旧文件，且**不能**把 stale_conv 也导进去
                 const store = createStore({ dataDir: tmpLegacy });
                 const moved = await store.migrateIfNeeded();
                 ok(moved.length === 0, '已拆好的状态不触发迁移（moved 为空）', JSON.stringify(moved));
@@ -1185,7 +1051,7 @@ async function caseStoreLayout(c) {
                 await rm(tmpLegacy, { recursive: true, force: true }).catch(() => {});
             }
 
-            // 反向：目录为空时**绝不能**删旧文件（那是唯一的数据来源）
+            // 反向：目录为空时绝不能删旧文件（那是唯一的数据来源）
             const tmpOnlyLegacy = await mkdtemp(path.join(tmpdir(), 'elaina-only-'));
             try {
                 await writeFile(path.join(tmpOnlyLegacy, 'conversations.json'), JSON.stringify({
@@ -1202,9 +1068,7 @@ async function caseStoreLayout(c) {
             }
         }
 
-        // ================================================================ 6c. 写盘幂等（内容没变不重写）
-        // 一次消息保存会重放整份聊天记录：若每个会话文件都重写一遍，写盘量是 O(会话数)。
-        // 这里断言"内容没变的文件不被重写"，防止优化被后续改动无声回退。
+        // 6c 内容没变的文件不重写：消息保存会重放整份聊天记录，防止写盘量退化为 O(会话数)。
         console.log('\n=== 6c. 内容没变的文件不重写 ===');
         {
             const tmpIdem = await mkdtemp(path.join(tmpdir(), 'elaina-idem-'));
@@ -1236,9 +1100,7 @@ async function caseStoreLayout(c) {
             }
         }
 
-        // ================================================================ 6d. 写盘失败必须上抛
-        // 队列内部吞错是为了"一次失败不影响后续保存"，但调用方必须知道这次没写成 ——
-        // 否则 /api/store 会回 ok，用户以为已保存，重启才发现消息没了。
+        // 6d 写盘失败必须上抛：内部吞错可保后续保存，但调用方必须据此回 500，否则静默丢消息
         console.log('\n=== 6d. 写盘失败抛给调用方 ===');
         {
             const tmpFail = await mkdtemp(path.join(tmpdir(), 'elaina-fail-'));
@@ -1247,7 +1109,7 @@ async function caseStoreLayout(c) {
                 const s = await store.loadStore();
                 s[KEY_SETTINGS] = JSON.stringify({ model: 'x' });
                 await store.saveStore();
-                // 把 main/ 换成同名**文件**：之后 mkdir/写入必然失败
+                // 把 main/ 换成同名文件：之后 mkdir/写入必然失败
                 await rm(path.join(tmpFail, 'main'), { recursive: true, force: true });
                 await writeFile(path.join(tmpFail, 'main'), 'not a dir', 'utf8');
                 s[KEY_SETTINGS] = JSON.stringify({ model: 'y' });
@@ -1255,7 +1117,6 @@ async function caseStoreLayout(c) {
                 try { await store.saveStore(); } catch { threw = true; }
                 ok(threw, '★ 写盘失败时 saveStore 抛出（调用方据此回 500）');
 
-                // 失败之后队列仍可用：恢复目录后能继续保存
                 await rm(path.join(tmpFail, 'main'), { force: true });
                 await mkdir(path.join(tmpFail, 'main'), { recursive: true });
                 await store.saveStore();
@@ -1266,7 +1127,6 @@ async function caseStoreLayout(c) {
             }
         }
 
-        // ================================================================ 7. zip 导出
         console.log('\n=== 7. zip 备份导出 ===');
         let zipBuf = null;
         {
@@ -1291,15 +1151,12 @@ async function caseStoreLayout(c) {
             ok(typeof manifest.exportedAt === 'string', 'manifest 含导出时间');
             ok(manifest.counts.characters === 2, 'manifest 统计人设卡数', JSON.stringify(manifest.counts));
 
-            // 单卡内容要能在 zip 里直接读到。
-            // 注意：第 6 步（幂等检查）把 old_1 的名字改成了"改过的名字"，
-            // 所以这里断言的是改后的值 —— 顺带证明导出读的是**当前**数据而不是旧快照。
+            // 第 6 步已把 old_1 改名，断言的是改后值 —— 顺带证明导出读的是当前数据而非旧快照
             const cardFile = files.find((f) => f.name === 'data/characters/old_1.json');
             const card = JSON.parse(cardFile.data.toString('utf8'));
             ok(card.name === '改过的名字', 'zip 里单卡内容是最新的', 'got ' + card.name);
         }
 
-        // ================================================================ 8. zip 导入
         console.log('\n=== 8. zip 导入往返 ===');
         {
             const tmp3 = await mkdtemp(path.join(tmpdir(), 'elaina-import-'));
@@ -1317,7 +1174,6 @@ async function caseStoreLayout(c) {
                 ok(existsSync(path.join(tmp3, 'main', 'characters', 'old_1.json')), '导入后落成一卡一文件');
                 ok(existsSync(path.join(tmp3, 'conversations', 'oldconv.json')), '导入后落成一对话一文件');
 
-                // merge 不清掉本机已有的其它键
                 const store2 = createStore({ dataDir: tmp3 });
                 const s2 = await store2.loadStore();
                 s2['custom_key'] = JSON.stringify({ mine: true });
@@ -1330,9 +1186,7 @@ async function caseStoreLayout(c) {
             }
         }
 
-        // ================================================================ 8.5 replace 导入清空备份里没有的旧数据
-        //   P0 回归：replace 曾只删内存里的键，磁盘上 conversations/characters/memory
-        //   的旧文件还在，下一次 loadStore 又拼回来 —— 用户选“替换”以为清空了，实际没清。
+        // 8.5 replace 必须连磁盘上的旧文件一起清，否则下次 loadStore 又拼回来（替换等于没清）
         console.log('\n=== 8.5 replace 导入清空旧数据 ===');
         {
             const tmp6 = await mkdtemp(path.join(tmpdir(), 'elaina-replace-'));
@@ -1374,7 +1228,6 @@ async function caseStoreLayout(c) {
             }
         }
 
-        // ================================================================ 9. 旧 JSON 备份兼容
         console.log('\n=== 9. 兼容 v1 单 JSON 旧备份 ===');
         {
             const tmp4 = await mkdtemp(path.join(tmpdir(), 'elaina-v1-'));
@@ -1399,7 +1252,6 @@ async function caseStoreLayout(c) {
             }
         }
 
-        // ================================================================ 10. 导入边界
         console.log('\n=== 10. 导入边界 ===');
         {
             const tmp5 = await mkdtemp(path.join(tmpdir(), 'elaina-edge-'));
@@ -1424,8 +1276,7 @@ async function caseStoreLayout(c) {
 }
 
 // 5. 多设备实时同步
-// 两个独立浏览器上下文（模拟两台设备）连同一个服务，
-// A 设备改动 → B 设备应当**在几秒内自动看到**，不需要刷新。
+// 两个独立浏览器上下文（模拟两台设备）连同一个服务：A 改动 → B 几秒内自动看到（不刷新）。
 
 async function caseMultiDeviceSync(c) {
     const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-sync-'));
@@ -1442,7 +1293,6 @@ async function caseMultiDeviceSync(c) {
         const up = await waitServerUp(BASE);
         if (!up) throw new Error('服务没起来：\n' + child.out.slice(-800));
 
-        // ============ 设备 A 与设备 B：两个完全独立的浏览器上下文 ============
         const ctxA = await browser.newContext();
         const ctxB = await browser.newContext();
         const pageA = await ctxA.newPage();
@@ -1452,14 +1302,12 @@ async function caseMultiDeviceSync(c) {
         pageB.on('pageerror', (e) => errsB.push(e.message));
 
         await pageA.goto(BASE, { waitUntil: 'domcontentloaded' });
-        // 等"Store 真的可用"这个事实，而不是猜一个固定毫秒数：
-        //   猜短了会随机假红，猜长了每跑一次都白等。
+        // 等"Store 真的可用"这个事实，而不是猜一个固定毫秒数（猜短了随机假红，猜长了白等）
         const readyA = await waitFor(() => pageA.evaluate(() => typeof window.Store !== 'undefined'
             && typeof window.Store?.subscribeRemote === 'function'), { timeoutMs: 15000 });
         await pageB.goto(BASE, { waitUntil: 'domcontentloaded' });
         const readyB = await waitFor(() => pageB.evaluate(() => typeof window.Store !== 'undefined'), { timeoutMs: 15000 });
 
-        // ① 两边都建立了 SSE 订阅？
         const subA = await pageA.evaluate(() => ({
             hasStore: typeof window.Store !== 'undefined',
             hasSubscribe: typeof window.Store?.subscribeRemote === 'function',
@@ -1474,10 +1322,9 @@ async function caseMultiDeviceSync(c) {
         c.ok(subA.clientId && subB.clientId && subA.clientId !== subB.clientId,
             '两个设备有各自的 clientId（服务端据此跳过发起方）');
 
-        // ② A 改主题 → B 应自动看到（不刷新）
         console.log('\n=== A 改主题，B 是否自动同步 ===');
         await pageA.evaluate(() => { Store.setItem('elaina_theme', 'dark'); Store._flush(); });
-        // 同步是异步事件：等 B 真的收到（数据层 + 界面层都到），而不是固定等 2.5s
+        // 同步是异步事件：等 B 真的收到，而不是固定等 2.5s
         await waitFor(async () => (await pageB.evaluate(() => Store.getItem('elaina_theme'))) === 'dark',
             { timeoutMs: 10000, label: 'B 收到主题变化' });
         const themeB = await pageB.evaluate(() => ({
@@ -1488,7 +1335,6 @@ async function caseMultiDeviceSync(c) {
         c.ok(themeB.stored === 'dark', '★ B 的 Store 自动收到了主题变化（无需刷新）', String(themeB.stored));
         c.ok(themeB.domAttr === 'dark', '★ B 的界面真的应用了深色（不只是数据变了）', String(themeB.domAttr));
 
-        // ③ A 改设置 → B 应自动看到
         console.log('\n=== A 改设置，B 是否自动同步 ===');
         await pageA.evaluate(() => {
             state.settings.model = 'SYNC-FROM-DEVICE-A';
@@ -1500,7 +1346,6 @@ async function caseMultiDeviceSync(c) {
         console.log('  B 的 model:', modelB);
         c.ok(modelB === 'SYNC-FROM-DEVICE-A', '★ B 自动收到了设置变化', String(modelB));
 
-        // ④ A 新增一条聊天记录 → B 应自动看到
         console.log('\n=== A 发消息，B 是否自动看到 ===');
         const beforeB = await pageB.evaluate(() => state.conversations.length);
         await pageA.evaluate(() => {
@@ -1524,7 +1369,6 @@ async function caseMultiDeviceSync(c) {
         c.ok(afterB.hasConv, '★ B 自动收到了新对话（数据层）', `${beforeB} → ${afterB.count}`);
         c.ok(afterB.shownInList, '★ B 的侧栏真的显示出来了（界面层）');
 
-        // ⑤ 反向：B 改 → A 也要能收到（不能是单向）
         console.log('\n=== 反向验证：B 改，A 是否同步 ===');
         await pageB.evaluate(() => { Store.setItem('elaina_theme', 'light'); Store._flush(); });
         await waitFor(async () => (await pageA.evaluate(() => Store.getItem('elaina_theme'))) === 'light',
@@ -1532,7 +1376,6 @@ async function caseMultiDeviceSync(c) {
         const themeA = await pageA.evaluate(() => Store.getItem('elaina_theme'));
         c.ok(themeA === 'light', '★ 反向也同步（B 改 A 收到）', String(themeA));
 
-        // ⑥ 发起方自己不该被自己的广播惊动（无回环）
         const loops = await pageA.evaluate(() => window.__syncLoopCount || 0);
         c.ok(loops === 0, '没有自触发回环', String(loops));
 
@@ -1550,17 +1393,8 @@ async function caseMultiDeviceSync(c) {
     }
 }
 
-// 6. zip 解压实现是**单一来源**
-// 背景：合并前有两份几乎相同的实现 ——
-//   · web/serve.mjs 的 unzip（111 行）：体积上限 + 危险类型拦截 + GBK + zip64 回退
-//   · server/zip.mjs 的 readZip（100 行）：体积上限 + GBK + zip64 回退
-// 两者逐段重复。**两份实现意味着安全修复要改两处，漏一处就是个洞** ——
-// 比如危险类型拦截只加在了 unzip 上，readZip 那条路（数据导入）就没有。
-// 现已合并到 server/zip.mjs，serve.mjs 只留一个薄包装（保持 {files, blocked} 语义）。
-// 这段盯住：
-//   ① 实现只有一份（serve.mjs 不该再有完整的 unzip）
-//   ② 三条真实路径都还能正常解压：模型上传 / 数据导入 / mod 安装
-//   ③ 危险类型拦截在**所有**路径上都生效（这是合并的主要收益）
+// 6. zip 解压实现必须是单一来源（server/zip.mjs），serve.mjs 只留薄包装：
+// 防两份实现各修一半；盯实现唯一、三条真实路径可解压、危险类型拦截全路径生效。
 
 async function caseZipMerge(c) {
     const zipSrc = readFileSync(path.join(ROOT, 'server', 'zip.mjs'), 'utf8');
@@ -1568,7 +1402,6 @@ async function caseZipMerge(c) {
 
     console.log('=== 1. 实现只有一份 ===');
     {
-        // serve.mjs 不该再有完整的 unzip 实现（它应该只是薄包装）
         const hasFullUnzip = /^function unzip\(/m.test(serveSrc)
             && /inflateRawSync/.test(serveSrc.slice(serveSrc.indexOf('function unzip('), serveSrc.indexOf('function unzip(') + 3000));
         c.ok(!hasFullUnzip, '★ serve.mjs 不再自带完整解压实现（已合并到 zip.mjs）');
@@ -1576,7 +1409,6 @@ async function caseZipMerge(c) {
             'serve.mjs 保留薄包装（维持 {files, blocked} 语义，不动调用点）');
         c.ok(/from '\.\.\/server\/zip\.mjs'/.test(serveSrc), 'serve.mjs 从 zip.mjs 引入');
         c.ok(/export function readZip/.test(zipSrc), 'zip.mjs 是导出的唯一实现');
-        // serve.mjs 不该再有自己的 GBK/EOCD 实现
         c.ok(!/^function findEocd\(/m.test(serveSrc), '★ serve.mjs 不再自带 findEocd');
         c.ok(!/^function gbkDecode\(/m.test(serveSrc), '★ serve.mjs 不再自带 gbkDecode');
         c.ok(!/const BLOCKED_EXT = new Set/.test(serveSrc), 'BLOCKED_EXT 已移出 serve.mjs');
@@ -1585,7 +1417,6 @@ async function caseZipMerge(c) {
 
     console.log('\n=== 2. 危险类型拦截在实现内部（所有调用方都受保护）===');
     {
-        // 这是合并的主要收益：拦截写在 readZip 里，而不是各调用方自己写
         const fnStart = zipSrc.indexOf('export function readZip');
         const fnBody = zipSrc.slice(fnStart, fnStart + 6000);
         c.ok(/isBlocked\(name\)/.test(fnBody), '★ readZip 内部做危险类型拦截');
@@ -1596,7 +1427,7 @@ async function caseZipMerge(c) {
         c.ok(/allowScripts/.test(fnBody), '有 allowScripts 开关');
         c.ok(/PLUGIN_EXTS/.test(fnBody), '插件类扩展名（脚本 + HTML 面板）被单独识别');
 
-        // 数据导入路径（store.mjs）没有传 allowScripts → 默认受保护
+        // 数据导入路径（store.mjs）没传 allowScripts → 默认受保护
         const storeSrc = readFileSync(path.join(ROOT, 'server', 'store.mjs'), 'utf8');
         c.ok(/readZip\(/.test(storeSrc), 'store.mjs（数据导入）用 readZip');
         c.ok(!/allowScripts/.test(storeSrc), '★ 数据导入没开 allowScripts（默认受危险类型保护）');
@@ -1606,7 +1437,6 @@ async function caseZipMerge(c) {
     {
         const tmp = mkdtempSync(path.join(tmpdir(), 'elaina-zip-'));
         try {
-            // ---- ① 普通解压（数据导入形态）：返回数组 ----
             const plain = createZip([
                 { name: 'manifest.json', data: Buffer.from('{"v":2}') },
                 { name: 'settings.json', data: Buffer.from('{"a":1}') },
@@ -1618,7 +1448,6 @@ async function caseZipMerge(c) {
             c.ok(files.some((f) => f.name === 'characters/card_a.json'), '保留子目录路径');
             c.ok(files.every((f) => Buffer.isBuffer(f.data)), 'data 是 Buffer');
 
-            // ---- ② 需要 blocked 回报（模型上传 / mod 安装形态）----
             const withBad = createZip([
                 { name: 'model.model3.json', data: Buffer.from('{}') },
                 { name: 'evil.html', data: Buffer.from('<script>x</script>') },
@@ -1633,7 +1462,6 @@ async function caseZipMerge(c) {
             c.ok(r.blocked.includes('evil.exe'), '拦了 evil.exe');
             c.ok(r.files.some((f) => f.name === 'model.model3.json'), '合法文件正常解出');
 
-            // ---- ③ mod 安装形态：allowScripts 允许 .js ----
             const modZip = createZip([
                 { name: 'manifest.json', data: Buffer.from('{"id":"x"}') },
                 { name: 'index.js', data: Buffer.from('console.log(1)') },
@@ -1645,7 +1473,6 @@ async function caseZipMerge(c) {
             c.ok(mod.files.some((f) => f.name === 'index.js'), 'index.js 被解出');
             c.ok(mod.blocked.includes('bad.exe'), '★ 即使开了 allowScripts，.exe 仍被拦', 'blocked=' + mod.blocked.join(','));
 
-            // ---- ④ 路径穿越必须仍被拦（合并不能丢这个）----
             const traversal = createZip([
                 { name: 'ok.json', data: Buffer.from('{}') },
                 { name: '../../web/serve.mjs', data: Buffer.from('HACKED') },
@@ -1656,7 +1483,6 @@ async function caseZipMerge(c) {
             c.ok(!tv.files.some((f) => f.name.startsWith('/')), '★ 绝对路径条目被拦');
             c.ok(tv.files.length === 1, '只解出 1 个合法文件', 'count=' + tv.files.length);
 
-            // ---- ⑤ 体积上限 ----
             let threw = false;
             try {
                 readZip(plain, { maxTotal: 5 });

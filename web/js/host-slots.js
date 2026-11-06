@@ -1,34 +1,13 @@
-/* ============================================================================
- * 宿主插槽清单 —— mod 只能往**这个文件里挖好的**插槽注册。
- *
- * 插槽是 mod 系统与宿主界面之间**唯一的契约面**：实现若散在各自的界面代码里，
- * "我能挂在哪"就变成要通读全部前端才能回答的问题。全部插槽集中在这里，
- * 插件作者只看这一个文件就知道边界在哪。
- *
- * 普通插槽：注册时**挂载一次**，spec = { id, ..., render(container, ctx) }。
- * 每项级插槽（`item: true`）：宿主每渲染一项就问一次（注册时还没有消息，挂不了东西）；
- *   必须提供 cleanup(modId) 把**已经画在界面上的**摘掉 —— 不能等下次重渲染，
- *   否则用户关了插件按钮还留着。
- *
- * 加插槽：index.html 里给那处一个稳定 id → 末尾 defineSlot('xxx.yyy', containerSlot(…))。
- * 但**不要**顺手加一个新的宿主 API 方法：插槽机制就是为了避免"每多一种扩展点就多一个 API"。
- * ========================================================================== */
+// 宿主插槽清单：mod 只能往这里挖好的插槽注册；普通插槽注册时挂载一次，spec = { id, ..., render(container, ctx) }。
+// 每项级插槽（item: true）必须提供 cleanup(modId) 把已画上的东西立刻摘掉（否则用户关了插件，按钮还留着）；加插槽用 defineSlot('xxx.yyy', containerSlot(…))，但不要顺手新增 host API 方法。
 
-/** 把 mod id 变成能安全塞进 CSS 选择器的形式（mod id 由插件自己声明，不能直接拼） */
 function modSlotCssEscape(id) {
     const s = String(id || '');
     if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(s);
     return s.replace(/[^\w-]/g, (ch) => '\\' + ch);
 }
 
-/**
- * 跑一段**插件提供的**回调（render / onClick / onOpen…）。
- *
- * 插件是第三方代码：它的异常必须停在插槽边界上，不能让宿主那一次渲染、
- * 那一次点击处理被它中断。统一走 ElainaMods.guard —— 那里除了兜异常，
- * 还会按插件的错误预算决定要不要把它停用（连续出错才停）。
- * 拿不到 guard 时（极端情况）回落到本地 try/catch，隔离不能因此消失。
- */
+// 跑插件提供的回调（render / onClick / onOpen…）：异常必须停在插槽边界，统一走 ElainaMods.guard（那里按插件错误预算决定停用），拿不到 guard 时本地 try/catch 兜底。
 function runModCallback(modId, where, fn, log, fallback) {
     const guard = window.ElainaMods && typeof window.ElainaMods.guard === 'function'
         ? window.ElainaMods.guard : null;
@@ -39,17 +18,11 @@ function runModCallback(modId, where, fn, log, fallback) {
     }
 }
 
-/**
- * 「宿主给个容器、mod 往里画」型插槽的通用实现。
- *
- * 回收方式：记下 mod 渲染**之前**容器里已有的子节点，之后新出现的都算它的，
- * 统一打上 data-mod；停用时只摘这些 —— 不碰其它 mod 与宿主自己的东西。
- * （不用 innerHTML='' 一把清空：同一容器可能挂了多个 mod 的贡献。）
- */
+// 「宿主给个容器、mod 往里画」型插槽的通用实现：只摘渲染后新增的节点（打 data-mod），不碰其它 mod 与宿主自己的东西 —— 不用 innerHTML='' 一把清空，同一容器可能挂了多个 mod。
 function containerSlot(containerId, note) {
     return {
         note,
-        /** 形状由 mod 系统统一校验（见 mods.js 的 validateSlotSpec） */
+        /** 形状由 mod 系统统一校验（见 mods-slots.js 的 validateSlotSpec） */
         spec: { required: ['render'], types: { render: 'function', id: 'string', title: 'string' } },
         mount(spec, ctx) {
             const box = document.getElementById(containerId);
@@ -79,9 +52,7 @@ function containerSlot(containerId, note) {
             const ret = runModCallback(ctx.modId, '插槽 ' + ctx.name + ' 渲染',
                 () => spec.render(box, { modId: ctx.modId }), ctx.log);
             collect();
-            // render 可以是异步的（插件要先取面板 HTML 才能写 DOM）。只收同步那一刻，
-            //   异步追加的节点就没人认领 —— 停用插件时摘不掉，界面上留下点了没反应的按钮。
-            //   等它 settle 再收一次；这期间已被停用的话，收完立刻摘掉。
+            // render 可以是异步的（插件要先取面板 HTML 才能写 DOM）：只收同步那一刻会漏掉异步追加的节点，等它 settle 再收一次，期间已被停用就立刻摘掉。
             if (ret && typeof ret.then === 'function') {
                 const finish = () => {
                     collect();
@@ -105,7 +76,6 @@ function containerSlot(containerId, note) {
 
     if (!window.ElainaMods || typeof window.ElainaMods.defineSlot !== 'function') return;
 
-    // ① settings.tabs —— render 在分栏被点开时才调用（第三方内容不该白占启动时间）
     window.ElainaMods.defineSlot('settings.tabs', {
         note: '设置里的一栏；render 在被点开时才调用',
         // 分栏的三个字段缺一不可：没有 label 的导航项点不到，没有 render 的分栏是空白
@@ -117,8 +87,7 @@ function containerSlot(containerId, note) {
             const nav = document.getElementById('settingsTabNav');
             const content = document.getElementById('settingsContent');
             if (!nav || !content) { ctx.log('error', '找不到设置分栏容器，分栏未注册'); return null; }
-            // 撞名直接拒绝：宿主已有同 id 分栏时若强行占位会把原分栏顶掉，
-            // 用户会以为"设置坏了"，而不是"插件有问题"。
+            // 撞名直接拒绝：强行占位会把宿主原有的同 id 分栏顶掉，用户会以为"设置坏了"而不是"插件有问题"。
             if (document.getElementById(panelId) || nav.querySelector('[data-settings-tab="' + panelId + '"]')) {
                 ctx.log('error', '设置里已经有「' + panelId + '」这个分栏了，本次注册被忽略');
                 return null;
@@ -149,12 +118,10 @@ function containerSlot(containerId, note) {
                 if (ev && ev.detail && ev.detail.name === panelId) renderOnce();
             };
             document.addEventListener('elaina:settings-tab', onTabShown);
-            // 注册时若正停在这一栏（例如停用后又启用），立刻渲染，否则要再点一次才出内容
             if (btn.classList.contains('active')) renderOnce();
 
             const teardown = () => {
-                // 停用时把这一栏整个拆掉（不是藏起来）。若它正被看着，先切回「外观」——
-                // 否则内容区会空着，看起来像"设置面板坏了"。
+                // 停用时把这一栏整个拆掉（不是藏起来）；若它正被看着，先切回「外观」，否则内容区空着像"设置面板坏了"。
                 if (panel.classList.contains('active-panel') && typeof switchSettingsTab === 'function') {
                     switchSettingsTab('tab-appearance');
                 }
@@ -165,16 +132,13 @@ function containerSlot(containerId, note) {
 
             return {
                 el: btn,
-                // deactivate（停用）与 dispose（卸载）在这里是同一件事：拆掉。
-                // 差别在 mod 系统那边 —— 停用**保留 spec**，启用时按 spec 重新挂载。
+                // deactivate（停用）与 dispose（卸载）在这里都是拆掉；差别在 mod 系统那边：停用保留 spec，启用时重新挂载。
                 dispose: teardown,
             };
         },
     });
 
-    // ② settings.modal —— 插件的设置**独立成窗**（不占设置里的分栏）
-    // 插件一多，主设置里就会堆一排偶尔才调一次的分栏。独立成窗后主设置只留宿主自己的分栏，
-    // 插件设置从插件卡片上的齿轮进入。宿主自己的设置用 settings.tabs，插件设置默认走这里。
+    // settings.modal：插件设置独立成窗，从插件卡片上的齿轮进入；宿主自己的设置仍走 settings.tabs。
     window.ElainaMods.defineSlot('settings.modal', {
         note: '插件设置独立成窗；由插件卡片上的齿轮按钮打开',
         spec: { required: ['id', 'render'], types: { label: 'string', title: 'string', render: 'function', onOpen: 'function', onClose: 'function' } },
@@ -190,10 +154,7 @@ function containerSlot(containerId, note) {
             const bodyEl = document.getElementById('modSettingsBody');
             if (!overlay || !bodyEl) { ctx.log('error', '找不到插件设置弹窗容器，未注册'); return null; }
 
-            // 每个插件**各有一个自己的容器**（挂在 bodyEl 里），打开谁显示谁的那块。
-            //   共用一个 #modSettingsBody 会坏：插件首次打开才渲染，渲染第一件事就是
-            //   `container.innerHTML = ''` 清空容器 —— 打开 A、再打开 B 会把 A 清掉，
-            //   再回到 A 时 A 以为自己渲染过而跳过，于是"标题是 A、内容还是 B"。
+            // 每个插件各有一个自己的容器（挂在 bodyEl 里）：共用一个会坏 —— 插件首次打开才渲染，渲染第一件事是清空容器，打开 B 会把 A 清掉。
             let paneEl = null;
             let rendered = false;
 
@@ -206,7 +167,6 @@ function containerSlot(containerId, note) {
                 return paneEl;
             };
 
-            /** 渲染（只做一次）。先捕获 pane，异步渲染也不会写错地方 */
             const renderOnce = () => {
                 if (rendered) return;
                 rendered = true;
@@ -215,10 +175,7 @@ function containerSlot(containerId, note) {
                 runModCallback(ctx.modId, '插件设置窗渲染', () => spec.render(pane), ctx.log);
             };
 
-            /** 只显示自己那块，藏起其它插件的。
-             *  用自有类 mod-settings-pane-off（display:none）而不是 Tailwind 的
-             *    .hidden：pane 是运行期建的元素，不该依赖工具类是否被正确生成；
-             *    且 display:none 才能让 #modSettingsBody 的 space-y-5 不给隐藏块留空隙。 */
+            /** 用自有类 mod-settings-pane-off 而非 Tailwind 的 .hidden：pane 是运行期建的，不该依赖工具类是否被生成，且 display:none 才能让容器不给隐藏块留空隙。 */
             const showOnlyMine = () => {
                 const mine = ensurePane();
                 for (const el of bodyEl.querySelectorAll('[data-mod-settings-pane]')) {
@@ -231,42 +188,32 @@ function containerSlot(containerId, note) {
                 renderOnce();
                 showOnlyMine();
                 if (titleEl) titleEl.textContent = String(spec.title || spec.label || key) + ' · 设置';
-                // 记住当前打开的是哪个插件，供关闭/停用/重开时判断
                 overlay.setAttribute('data-mod-settings-id', key);
-                overlay.classList.remove('hidden');
-                overlay.classList.add('flex');
+                openOverlayPanel(overlay);
                 runModCallback(ctx.modId, '设置窗打开回调',
                     () => { if (typeof spec.onOpen === 'function') spec.onOpen(paneEl); }, ctx.log);
             };
+            // onClose 立刻跑而不是等淡出结束：插件要在里面停计时器/落盘，拖 150ms 等于让它多活一段。
             const close = () => {
-                overlay.classList.add('hidden');
-                overlay.classList.remove('flex');
                 overlay.removeAttribute('data-mod-settings-id');
                 runModCallback(ctx.modId, '设置窗关闭回调',
                     () => { if (typeof spec.onClose === 'function') spec.onClose(); }, ctx.log);
+                closeOverlayPanel(overlay);
             };
 
-            /**
-             * 宿主自己的关闭方式（× / 点遮罩 / Esc）一律走这里。
-             * 各自写一遍隐藏会绕过 close()，spec.onClose 永不触发（插件在 onClose 里保存的设置、
-             *   停掉的计时器就都没发生）；插件没给 close 时回落到纯隐藏，界面不会卡住。
-             */
+            // 宿主自己的关闭方式（× / 点遮罩 / Esc）一律走这里：各自写一遍隐藏会绕过 close()，spec.onClose 永不触发（插件在 onClose 里保存的设置、停掉的计时器就都没发生）。
             const dismiss = () => {
                 const openedId = overlay.getAttribute('data-mod-settings-id');
-                // 只在自己这块正开着时才转交给 close()：`overlay.__modSettingsBound` 让
-                //   这三条监听只绑一次，之后无论切到哪个插件，回调都是**最先注册的那个** ——
-                //   不判 openedId 就会拿 A 的 close 去关 B 的窗口。
+                // 只在自己这块正开着时才转交给 close()：监听只绑一次、回调都是最先注册的那个，不判 openedId 就会拿 A 的 close 去关 B 的窗口。
                 if (openedId === key && window.ElainaMods
                     && typeof window.ElainaMods.closeModSettings === 'function') {
                     window.ElainaMods.closeModSettings(key);   // guardMod 兜住插件异常
                     return;
                 }
-                overlay.classList.add('hidden');
-                overlay.classList.remove('flex');
                 overlay.removeAttribute('data-mod-settings-id');
+                closeOverlayPanel(overlay);
             };
 
-            // 关闭按钮 / 点遮罩 / Esc —— 都绑在**容器**上，只绑一次
             if (!overlay.__modSettingsBound) {
                 overlay.__modSettingsBound = true;
                 document.getElementById('modSettingsClose')?.addEventListener('click', () => dismiss());
@@ -278,9 +225,7 @@ function containerSlot(containerId, note) {
                 });
             }
 
-            // 登记给宿主界面用（插件卡片上的齿轮按 id 打开）：
-            //   走 ElainaMods 的统一入口，不再往 window 上挂私有全局名 ——
-            //   那种名字既无法被检查覆盖，也让"谁在写、谁在读"散落在几个文件里。
+            // 登记给宿主界面用（插件卡片上的齿轮按 id 打开），走 ElainaMods 统一入口，不往 window 挂私有全局名
             window.ElainaMods.registerSettingsOpener(key, { open, close });
 
             return {
@@ -289,10 +234,7 @@ function containerSlot(containerId, note) {
                 close,
                 dispose() {
                     window.ElainaMods.unregisterSettingsOpener(key);
-                    // 若正开着这个插件的设置，关掉 —— 否则停用后弹窗还留着（内容是死的）
                     if (overlay.getAttribute('data-mod-settings-id') === key) close();
-                    // 摘掉本插件那块容器。不摘会以 hidden 状态留在 #modSettingsBody 里，
-                    // 重新启用时再建一块，残留越积越多（看不见，但 DOM 一直在长）。
                     try { if (paneEl && paneEl.isConnected) paneEl.remove(); } catch (e) { /* 忽略 */ }
                     paneEl = null;
                     rendered = false;
@@ -301,10 +243,9 @@ function containerSlot(containerId, note) {
         },
     });
 
-    // ③ header.actions —— 顶部栏一个按钮；样式沿用宿主的 header-memory-btn，看起来就是应用的一部分
+    // header.actions：顶部栏的一个按钮；样式沿用宿主的 header-memory-btn。
     window.ElainaMods.defineSlot('header.actions', {
         note: '顶部栏的一个按钮；spec 里给 label / svg / onClick',
-        // onClick 必填：没有它的按钮点了没反应，比不注册更让人困惑
         spec: { required: ['id', 'onClick'], types: { label: 'string', title: 'string', svg: 'string', onClick: 'function' } },
         mount(spec, ctx) {
             const slot = document.getElementById('headerModSlot');
@@ -316,8 +257,7 @@ function containerSlot(containerId, note) {
             const shortId = String(spec.id || '');
             if (shortId) btn.id = 'mod-header-' + ctx.modId + '-' + shortId;
             if (spec.title) btn.title = String(spec.title);
-            // 图标用 innerHTML：这是 mod 自己的标记，而 mod 本来就能执行任意 JS
-            // （同源注入脚本），所以这里不引入新的信任面。但**文字走 textContent**。
+            // 图标用 innerHTML（mod 本来就能执行任意 JS，不引入新的信任面），但文字走 textContent。
             if (spec.svg) btn.innerHTML = String(spec.svg);
             if (spec.label) {
                 const span = document.createElement('span');
@@ -326,8 +266,7 @@ function containerSlot(containerId, note) {
             }
             if (typeof spec.onClick === 'function') {
                 btn.addEventListener('click', (ev) => {
-                    // 点击处理是插件代码：它抛错不能让宿主的事件分发中断，
-                    //   也不能在控制台留下一条指不回插件的匿名错误。
+                    // 点击处理是插件代码：抛错不能让宿主的事件分发中断。
                     runModCallback(ctx.modId, '顶部按钮点击', () => spec.onClick(ev), ctx.log);
                 });
             }
@@ -337,20 +276,18 @@ function containerSlot(containerId, note) {
         },
     });
 
-    // ③ sidebar.footer —— 侧栏底部（会话列表下方、版本号上方）；自由排布，样式插件自带
     window.ElainaMods.defineSlot('sidebar.footer', containerSlot('sidebarModSlot', '侧栏底部的一块区域'));
 
-    // ④ composer.actions —— 输入框那一行（文本输入与麦克风/发送之间）；容器是 display:contents，插件元素直接参与该行 flex 布局
+    // composer.actions —— 输入框那一行（文本输入与麦克风/发送之间）；容器 display:contents，插件元素直接参与该行 flex 布局
     window.ElainaMods.defineSlot('composer.actions', containerSlot('composerModSlot', '输入框那一行的按钮位'));
 
-    // ⑤ chat.message.actions —— 每条消息的标题行（每项级：注册时挂不了任何东西）
+    // chat.message.actions —— 每条消息的标题行（每项级：注册时挂不了任何东西）
     window.ElainaMods.defineSlot('chat.message.actions', {
         item: true,
         note: '每条消息标题行上的按钮；render(container, { message, conversationId })',
         spec: { required: ['id', 'render'], types: { render: 'function' } },
         cleanup(modId) {
-            // 停用/卸载：把该 mod 已经画上去的按钮摘掉。
-            // 必须**立刻**摘 —— 否则用户关了插件，消息行里还留着点了没反应的按钮。
+            // 停用/卸载：把该 mod 已经画上去的按钮立刻摘掉，否则用户关了插件，消息行里还留着点了没反应的按钮。
             const sel = '.message-slot-actions > [data-mod="' + modSlotCssEscape(modId) + '"]';
             document.querySelectorAll(sel).forEach((el) => { try { el.remove(); } catch (e) { /* 忽略 */ } });
         },
@@ -360,13 +297,7 @@ function containerSlot(containerId, note) {
         },
     });
 
-    /**
-     * 宿主渲染完消息后调用它 —— 把消息行里的插槽容器交给各 mod。
-     * 由宿主"推"而不是让 mod 自己监听：mod 去 MutationObserver 或改写 renderMessage 就会
-     * 绕过宿主的增量渲染，也把"哪个元素属于哪条消息"的知识复制进插件。
-     *
-     * @param {Element|Document} root 渲染范围（单条消息元素，或 document 表示全量补画）
-     */
+    // 宿主渲染完消息后调用它 —— 由宿主"推"而不是让 mod 自己监听：mod 去 MutationObserver 或改写 renderMessage 就会绕过宿主的增量渲染。
     function decorateMessageSlots(root) {
         if (!root || !root.querySelectorAll) return;
         if (!window.ElainaMods || typeof window.ElainaMods.renderItemSlot !== 'function') return;
@@ -374,7 +305,6 @@ function containerSlot(containerId, note) {
         try { boxes = [...root.querySelectorAll('.message-slot-actions')]; } catch (e) { return; }
         if (!boxes.length) return;
 
-        // 找当前会话，供 mod 判断这条消息的上下文（拿不到就传 null，插件自己决定怎么办）
         let conv = null;
         try {
             conv = (state.conversations || []).find((c) => c.id === state.currentConversationId) || null;
@@ -387,8 +317,7 @@ function containerSlot(containerId, note) {
                 : null;
             // 先清空容器：宿主反复调用（重渲染 / 插件启用后的补画）时不能越堆越多
             box.innerHTML = '';
-            // 每个插件的 render 在 renderItemSlot 里已各自隔离；这里兜的是
-            //   "宿主这一侧的准备动作"出错（例如刚被插件清掉的容器）。
+            // 每个插件的 render 在 renderItemSlot 里已各自隔离；这里兜的是宿主这一侧的准备动作出错。
             try {
                 window.ElainaMods.renderItemSlot('chat.message.actions', box, {
                     message,
@@ -400,10 +329,8 @@ function containerSlot(containerId, note) {
         }
     }
 
-    // 供 ui.js 在 renderMessage 之后调用（经典脚本共享全局作用域）
     window.decorateMessageSlots = decorateMessageSlots;
 
-    /** 诊断用：列出宿主挖好的插槽（mod 也可以用 host.slots() 取） */
     window.ElainaHostSlots = {
         names: () => window.ElainaMods.slotNames(),
         decorateMessageSlots,

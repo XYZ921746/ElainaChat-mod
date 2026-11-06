@@ -1,9 +1,4 @@
-/* ============================================================================
- * 插件依赖判定（从 mods.js 拆出）
- *
- * manifestKeyIndex / findMissingDeps / pullUpPrerequisites。
- * 依赖注册表、全局开关与单插件开关（由 mods.js 注入）。
- * ========================================================================== */
+/* 插件依赖判定：manifestKeyIndex / findMissingDeps / pullUpPrerequisites 与三键身份查找。 */
 (function () {
     'use strict';
 
@@ -14,13 +9,8 @@
         const setModEnabled = deps.setModEnabled;
         const getRegistry = deps.getRegistry;
         const getDirByReg = deps.getDirByReg;
-    /**
-     * 清单索引：清单 id / 目录名 / 注册名 → 清单条目。
-     *
-     * 三种键都可能被 `after` 引用（用户改过目录名、manifest 没写 id 时，
-     * 依赖方写的仍是脚本里的注册名）—— 建索引用的地方不止一处，
-     * 各写一份必然漂移，收敛成一个函数。
-     */
+    /* 清单索引：清单 id / 目录名 / 注册名 → 清单条目。`after` 三种键都可能引用，
+     * 建索引的地方不止一处，各写一份必然漂移，收敛成一个函数。 */
     function manifestKeyIndex(manifests) {
         const byKey = new Map();
         for (const m of manifests) {
@@ -32,35 +22,8 @@
         return byKey;
     }
 
-    /**
-     * 找出每个插件**不可用的前置插件**，并说明原因。
-     *
-     * ── 为什么要单独做这件事 ─────────────────────────────────────────────
-     *
-     * `sortByDependency` 对找不到的依赖是 `if (d) visit(...)` —— **静默跳过**。
-     * mod 拆成独立分发后，"只装 galgame 不装 elaina-avatar"是常态，
-     * 那时的表现是"Galgame 打开了但没有立绘"，控制台一声不响。
-     *
-     * ── 装了但**没启用**，等于不可用 ────────────────────────────────────
-     *
-     * 只判断"清单里有没有这个 id"会漏掉启用状态，漏判的典型日志是：
-     *
-     *     [Mod] 加载完成：elaina-avatar=disabled galgame=ready pet=ready
-     *
-     * 前置被禁用了，依赖它的两个插件却照样 ready —— 拿不到立绘而系统认为正常。
-     * 所以判定必须同时看**启用状态**：
-     *   · 前置不在清单里           → 原因：未安装
-     *   · 前置在清单里但被禁用      → 原因：未启用（用户可以在设置里打开）
-     *   · 前置自己被拦（缺它自己的前置）→ 原因：前置本身不可用（级联）
-     * 三种情况给三种不同的提示，用户才知道该做什么。
-     *
-     * 身份判定要同时认**清单 id**、**目录名**、**注册名**：
-     *   用户改了插件目录名、而 manifest 没写 id 时，清单 id 会等于目录名
-     *   （如 `pet-renamed`），而依赖方 after 里写的仍是注册名 `pet`。
-     *   只按清单 id 比会**误报"缺依赖"**，把好好的插件拦下来。
-     *
-     * @returns {Map<string, Array<{id:string, reason:string, fixable:boolean}>>}
-     */
+    /* 找出每个插件**不可用的前置**并说明原因（未安装 / 未启用 / 级联不可用三种，提示各不同）：
+     * sortByDependency 对找不到的依赖静默跳过；身份判定同时认清单 id / 目录名 / 注册名，改名后不误报。 */
     function findMissingDeps(manifests) {
         const byKey = manifestKeyIndex(manifests);
 
@@ -85,9 +48,8 @@
             if (lack.length) missing.set(m.id, lack);
         }
 
-        // 第二轮：级联 —— 前置自己也被拦时，标成"前置本身不可用"。
-        //   一遍不够（A 依赖 B、B 依赖 C），这里迭代到稳定，最多 N 轮。
-        //   不这样做的后果：A 会显示"前置 B 已就绪"，而 B 其实也没起来。
+        // 第二轮：级联 —— 前置自己也被拦时标成"前置本身不可用"；
+        //   一遍不够（A 依赖 B、B 依赖 C），迭代到稳定，否则 A 会显示"前置 B 已就绪"而 B 没起来
         for (let round = 0; round < manifests.length; round++) {
             let changed = false;
             for (const m of manifests) {
@@ -108,18 +70,8 @@
         return missing;
     }
 
-    /**
-     * 把**已启用插件**的前置自动带上（只写开关，不动加载）。
-     *
-     * 为什么放在 loadAll 里：`after` 是"没有它我就残缺"的硬声明，用户打开
-     *   依赖方的那一刻就已经表达过"要完整可用"；前置停在关闭状态时，依赖方
-     *   每次启动都会被拒绝，用户还得自己去猜"还差哪个开关"。
-     *   这里把这种状态自动补齐 —— 加载仍按依赖序在后面统一做，
-     *   顺序保证由 sortByDependency 提供。
-     *
-     * 只动"装了但没启用"的前置；未安装的装不出来（交给加载期按「未安装」
-     *   拒绝并说明）。环依赖用 visiting 挡住（sortByDependency 只报错，不解开环）。
-     */
+    /* 把**已启用插件**的前置自动带上（只写开关，不动加载；顺序由 sortByDependency 提供）：
+     * 未安装的不装（加载期按「未安装」拒绝），环依赖用 visiting 挡住 —— 否则依赖方每次启动都被拒。 */
     function pullUpPrerequisites(manifests) {
         if (!modsGloballyEnabled()) return;   // 总开关关着时一切都不加载，别动开关
         const byKey = manifestKeyIndex(manifests);
@@ -147,8 +99,6 @@
         }
     }
 
-
-    /** 插件状态的**中文说明** —— 日志与设置界面共用一份，避免两处说法不一致 */
     function findByKey(key) {
         const k = String(key || '');
         if (!k) return null;
@@ -161,18 +111,8 @@
         return entry || null;
     }
 
-    /**
-     * 谁正在用这个插件：`after` 指向它、且已启用并加载成功（ready）的插件。
-     *
-     * 给"停用 / 卸载"做闸门用 —— 前置一旦被关掉/删掉，正在运行的依赖方
-     *   下一轮就会以"前置不可用"被拒（界面从"好好的"变成"半残"）。
-     *   所以要在动手**之前**问这里，把"谁会受影响"说给用户听。
-     *
-     * 只算 ready 的依赖方：停用（disabled）/ 被拒（blocked）/ 坏（error）的
-     *   插件本来就没在用它，拦着不让删只会让人莫名其妙。
-     *
-     * @returns {Array<{id:string, name:string}>} 依赖方列表（空 = 没人在用，随便动）
-     */
+    /* 谁正在用这个插件：`after` 指向它、且已启用并加载成功（ready）的依赖方 ——
+     * 停用/卸载前先问它（前置一被关掉，正在跑的依赖方下一轮就会以"前置不可用"被拒）。 */
     function dependentsOf(id) {
         const entry = getRegistry().get(id) || findByKey(id);
         if (!entry) return [];
@@ -188,7 +128,6 @@
         }
         return out;
     }
-
 
         return { manifestKeyIndex, findMissingDeps, pullUpPrerequisites, findByKey, dependentsOf };
     };

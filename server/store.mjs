@@ -1,49 +1,22 @@
-//  数据存储层：把运行时产生的数据分类落到 data/ 下
-//  为什么要有这一层
-//  原来所有跨设备数据都挤在 data/store.json 一个文件里（12 个键、聊天记录占 34%、
-//  人设卡占 55%）。三个问题：
-//    1. 一个文件写坏 = 全部数据一起丢；
-//    2. 人设卡/聊天记录没法单独分享或备份；
-//    3. 用户看不出"哪些文件是我的数据"。
-//  现在按用途分文件，**人设卡与聊天记录都是一条一个文件**；目录分两层：
-//    data/main/  —— 主 data：软件级的所有记录
-//      store.json                设置 / API Key / UI 偏好（小、稳定、几乎不变）
-//      characters/index.json     人设卡顺序 + 当前选中
-//      characters/<id>.json      每张人设卡（可单独拷走分享）
-//      memory/<类目>.json        记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
-//      voice-samples/            音色参考样本
-//    data/conversations/ —— 对话 data：单个对话的所有记录
-//      index.json                对话顺序 + 分类
-//      <id>.json                 每个对话（可单独分享）
-//  布局迁移：旧版本把 store.json / characters/ / memory/ / voice-samples/
-//  直接放在 data/ 顶层 —— migrateIfNeeded 开头会把它们收进 main/（幂等）。
-//  关键设计：前端一行都不用改
-//  前端仍然走"键值同步"（localStorage 包装 → POST /api/store）。
-//  这一层负责把整块键值**拆成文件**（写入时）和**拼回键值**（读取时）。
-//  所以拆分类只影响后端，前端、APK、data-sync.js 全都不动 —— 风险最低。
-//  人设卡与聊天记录在前端都是**完整数组**，这一层把它们拆成一条一文件；
-//  读的时候再拼回数组。对前端而言完全透明。
+//  数据存储层：把运行时数据按用途拆成 data/main/（store.json 设置与密钥、characters/、memory/、voice-samples/）
+//  与 data/conversations/，人设卡与聊天记录都是一条一个文件。前端仍走键值同步（POST /api/store），拆分与拼回只在本层。
 
 import { mkdir, readFile, writeFile, rename, readdir, rm, stat } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createZip, readZip } from './zip.mjs';
 
-//  键 → 归属 的映射表
-//  改这里就能调整"哪个键进哪个文件"。未列出的键一律留在 store.json。
+//  键 → 归属 的映射表；未列出的键一律留在 store.json。
 const CHARACTER_KEYS = {
     list: 'elaina_open_character_cards',   // 人设卡数组（会被拆成一卡一文件）
     current: 'elaina_open_current_card',   // 当前选中的人设 id
-    active: 'elaina_open_character_card',  // 当前生效那套的内容（旧版遗留，与 list 里的重复）
+    active: 'elaina_open_character_card',  // 当前生效那套的内容
 };
 
 const CONVERSATION_KEY = 'elaina_open_conversations';   // 对话数组（会被拆成一对话一文件）
 const MEMORY_KEY = 'elaina_open_memory_core';           // 记忆（会被按类目拆成一类一文件）
 
-/**
- * 归类键：这些键会被拆进 characters/、conversations/、memory/ 的文件里，
- * 因此写 store.json / settings.json 时必须排除，否则同一份数据在磁盘上存两遍。
- */
+/** 归类键：会被拆进 characters/、conversations/、memory/，写 store.json / settings.json 时必须排除，否则同一份数据存两遍 */
 const CLASSIFIED_KEYS = new Set([
     ...Object.values(CHARACTER_KEYS),
     CONVERSATION_KEY,
@@ -51,28 +24,16 @@ const CLASSIFIED_KEYS = new Set([
 ]);
 function isClassifiedKey(key) { return CLASSIFIED_KEYS.has(key); }
 
-/**
- * 记忆的类目 —— 与前端 emptyMemoryCore() 的字段一一对应。
- * 每一类写成 memory/<名字>.json，这样"日记"和"承诺"互不干扰：
- * 日记会越写越长，而承诺/偏好通常很小且很少变，混在一个文件里每次都要整体重写。
- */
+/** 记忆类目：与前端 emptyMemoryCore() 字段一一对应，每类写成 memory/<类目>.json，避免低频类目随日记增长整体重写 */
 const MEMORY_CATEGORIES = ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory'];
 
 const CHARACTERS_DIR = 'characters';
 const CONVERSATIONS_DIR = 'conversations';
 const MEMORY_DIR = 'memory';
-// 主 data 目录：软件级记录（设置/人设/记忆/音色样本）都住这里；
-// conversations/ 是与它平级的"对话 data"，见文件头部的布局图。
+// 主 data 目录：软件级记录（设置/人设/记忆/音色样本）；conversations/ 是与它平级的对话 data。
 const MAIN_DIR = 'main';
 
-// 参考音频：整段 base64 不许再住在 store.json 里。
-// MiMo 音色复刻的参考样本是一整段 base64 data URL，若随 elaina_open_settings
-// 整体落盘，用户换一次样本 store.json 就背上几 MB 与"设置"无关的音频字符串
-// （实测 3.67MB，占整个文件 99.8%）。与"人设卡一卡一文件"同一思路：
-//   data/voice-samples/<槽位>.json   元数据（mime / 字节数）
-//   data/voice-samples/<槽位>.wav    音频原始字节
-// 设置里只留 `file:<槽位>` 引用，读盘时拼回完整 data URL —— 前端看到的
-// 永远是全量（发上来全量、读下去全量），对它完全透明。
+/** 参考音频（整段 base64）不进 store.json：拆成 voice-samples/<槽位>.json 元数据 + 同名音频字节，设置里只留 `file:<槽位>` 引用，读写时拆/拼，对前端透明 */
 const VOICE_SAMPLES_DIR = 'voice-samples';
 /** 设置 JSON 里"音频字段 → 槽位 id"的映射；槽位 id 就是 voice-samples/ 下的文件名 */
 const VOICE_SAMPLE_SLOTS = { mimoTtsCloneSample: 'mimo-clone' };
@@ -83,19 +44,12 @@ const VOICE_SAMPLE_FILE_RE = /^(mimo-clone)\.(wav|mp3|bin|json)$/;
 /** 合法的 id（防止路径穿越：id 直接当文件名用） */
 const SAFE_ID = /^[A-Za-z0-9_-]{1,80}$/;
 
-/** 备份格式标识与版本 */
 export const BACKUP_FORMAT = 'elainachat-backup';
 export const BACKUP_VERSION = 3;   // v1 = 单 JSON；v2 = zip（数据摊在根上）；v3 = zip + data/ 目录
-/**
- * 备份 zip 里数据的顶层目录（插件 mods/ 与技能 skills/ 与它平级）。
- *
- * 只影响**导出时**的写法；导入同时认 v2 的根名（settings.json / characters/ …），
- * 老备份照常能导 —— 升级不该让用户手里的备份变成"打不开的文件"。
- */
+/** 备份 zip 里数据的顶层目录（mods/ 与 skills/ 与它平级）；导入同时认 v2 的根名，老备份照常可导 */
 const DATA_PREFIX = 'data/';
 
 export function createStore({ dataDir, log = () => {} }) {
-    // main/ = 主 data；conversations/ = 对话 data（与 main/ 平级，见文件头布局图）
     const mainDir = path.join(dataDir, MAIN_DIR);
     const STORE_FILE = path.join(mainDir, 'store.json');
     const charsDir = path.join(mainDir, CHARACTERS_DIR);
@@ -105,19 +59,16 @@ export function createStore({ dataDir, log = () => {} }) {
     const memoryDir = path.join(mainDir, MEMORY_DIR);
 
     let cache = null;
-    // 缓存对应的 data/ 目录 mtime（见 loadStore 的说明）。
-    // undefined = 还没建立过缓存；-1 = 那时目录不存在（空状态）
+    // 缓存对应的 data/ 目录 mtime（见 loadStore）。undefined = 还没建立过缓存；-1 = 那时目录不存在
     let cacheStamp;
     let writeQueue = Promise.resolve();
     // 文件路径 → 上次写入内容的 sha1。只用于跳过"内容没变"的重写（见 writeJsonAtomic）。
     const writtenHashes = new Map();
 
-    // ---------------------------------------------------------------- 工具
     /** 原子写：先写 .tmp 再 rename，避免写到一半崩溃留下半截文件 */
     async function writeJsonAtomic(file, obj) {
         const text = JSON.stringify(obj, null, 2);
-        // 内容没变就别重写：一次消息保存会重放整份聊天记录，逐文件写盘是 O(会话数) 的。
-        //   哈希只在内存里，进程重启后的第一次保存仍会全量落盘（那时不知道磁盘是什么状态）。
+        // 内容没变就别重写：一次消息保存会重放整份聊天记录，逐文件写盘是 O(会话数) 的。哈希只在内存里，进程重启后第一次保存仍会全量落盘。
         const hash = createHash('sha1').update(text).digest('hex');
         if (writtenHashes.get(file) === hash) {
             const exists = await stat(file).then(() => true, () => false);
@@ -146,7 +97,6 @@ export function createStore({ dataDir, log = () => {} }) {
         await rename(tmp, file);
     }
 
-    /** 与旧实现一致的收敛：只收字符串值，限制键长与单键体积 */
     function normalize(raw) {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
         const out = {};
@@ -167,14 +117,7 @@ export function createStore({ dataDir, log = () => {} }) {
         return id;
     }
 
-    /**
-     * 通用的"数组 → 一条一文件 + index"写入。
-     * @param raw     数组的 JSON 字符串
-     * @param dir     目标目录
-     * @param prefix  补 id 时的前缀
-     * @param extra   额外写进 index 的字段（如 currentCardId）
-     * @returns 成功与否（内容不是合法 JSON 时返回 false，不动磁盘）
-     */
+    /** 通用的"数组 → 一条一文件 + index"写入：raw 是数组的 JSON 字符串，extra 额外写进 index（如 currentCardId）；非法 JSON 返回 false 不动磁盘 */
     async function writeCollection(raw, dir, prefix, extra = {}) {
         let items = [];
         try {
@@ -224,17 +167,8 @@ export function createStore({ dataDir, log = () => {} }) {
         return out;
     }
 
-    // ---------------------------------------------------- 记忆：按类目拆文件
-    /**
-     * 写：把记忆对象按类目拆成 memory/<类目>.json。
-     *
-     * 为什么按类目拆而不是整个塞一个文件：
-     *   · 日记会越写越长（每条几百字），而承诺/偏好/计划通常很小且很少变；
-     *     混在一起意味着"加一条日记"要把整个记忆重写一遍。
-     *   · 拆开后用户可以单独看/备份/删掉某一类（比如只想清掉日记）。
-     *
-     * 未知类目也会写出去（不丢数据）—— 前端将来加字段时不用同步改这里。
-     */
+    // 记忆：按类目拆文件
+    /** 写：把记忆对象按类目拆成 memory/<类目>.json；日记增长快、承诺/偏好很少变，拆开避免整体重写，也让单类可单独备份或删除，未知类目也写出去（不丢数据） */
     async function writeMemory(raw) {
         let obj = null;
         try {
@@ -282,35 +216,15 @@ export function createStore({ dataDir, log = () => {} }) {
         return Object.keys(obj).length ? JSON.stringify(obj) : null;
     }
 
-    // ------------------------------------------------------------ 读：拼回键值
-    /**
-     * 把 data/ 下的分类文件拼成一个键值对象。
-     * 顺序很重要：先读分类文件，再读 store.json —— 这样迁移期两者都有时，
-     * store.json 里的旧值不会覆盖已经分出去的新值（迁移逻辑会清掉旧键）。
-     *
-     * 缓存必须能感知"磁盘上的数据被删了"。
-     *
-     *   用户报"删除 data/ 后数据还在"。根因就在这里：`if (cache) return cache`
-     *   让缓存**永不失效** —— 删掉整个 data/ 目录后，内存里那份数据照旧返回，
-     *   浏览器一刷新读到旧数据，随后又把它写回磁盘，看起来就是"删了还在"。
-     *
-     *   现在缓存**与磁盘状态绑定**：比较 data/ 目录的 mtime 与缓存记录的时间戳。
-     *   目录被删/重建、或文件被外部改动（用户手工编辑、从备份恢复）都会让
-     *   mtime 变化 → 缓存自动失效 → 重新从磁盘读。
-     *
-     *   为什么用 mtime 而不是"每次都读盘"：invalidate() 已经覆盖了应用自身的
-     *   写入路径，剩下要防的就是**外部改动**（用户删目录 / 手工改文件）。
-     *   这类改动必然touch目录 mtime，一次 stat 就够，比每次重新读全部文件便宜得多。
-     */
+    // 读：拼回键值
+    /** 把 data/ 下的分类文件拼成键值对象。先读分类文件、再读 store.json：过渡期两边都有时 store.json 的值不会覆盖已分出去的新值；缓存与 data/ 目录 mtime 绑定，外部删目录或手工改文件都会让缓存失效（应用自身写入由 invalidate() 覆盖） */
     async function loadStore() {
         if (cache && await isCacheFresh()) return cache;
         const out = {};
 
-        // ① 记忆（按类目拆成一类一文件）
         const mem = await readMemory();
         if (mem) out[MEMORY_KEY] = mem;
 
-        // ② 人设卡
         const chars = await readCollection(charsDir);
         if (chars && chars.json) {
             out[CHARACTER_KEYS.list] = chars.json;
@@ -319,30 +233,23 @@ export function createStore({ dataDir, log = () => {} }) {
             }
         }
 
-        // ③ 聊天记录
         const convs = await readCollection(convDir);
         if (convs && convs.json) out[CONVERSATION_KEY] = convs.json;
 
-        // ④ 兜底：store.json 里的其它键（设置 / 密钥 / UI 偏好）
         const legacy = normalize(await readJson(STORE_FILE));
         for (const [k, v] of Object.entries(legacy)) {
             if (out[k] === undefined) out[k] = v;
         }
 
-        // ⑤ 参考音频：`file:<槽位>` 引用拼回完整 data URL（前端拿到的永远是全量）
         await joinVoiceSamples(out);
 
         cache = out;
-        // 记下"这份缓存对应哪个磁盘状态" —— 目录不存在时记 -1（空目录状态）
         cacheStamp = await dataDirStamp();
         return cache;
     }
 
-    // ---------------------------------------------------- 参考音频：拆出 store.json
-    /**
-     * 取出 obj[SETTINGS_KEY] 里那段设置 JSON 并解析成对象。
-     * 非字符串 / 非法 JSON / 非对象（数组也算非法）一律返回 null —— 调用方原样保留、不碰。
-     */
+    // 参考音频：拆出 store.json
+    /** 解析 obj[SETTINGS_KEY] 那段设置 JSON；非字符串 / 非法 JSON / 非对象（数组也算）一律返回 null，调用方原样保留不碰 */
     function parseSettingsObject(obj) {
         const settings = obj && typeof obj === 'object' ? obj[SETTINGS_KEY] : null;
         if (typeof settings !== 'string') return null;
@@ -352,18 +259,8 @@ export function createStore({ dataDir, log = () => {} }) {
         return parsed;
     }
 
-    /**
-     * 把设置对象里 VOICE_SAMPLE_SLOTS 列出的音频字段落成独立文件，
-     * 设置里替换成 `file:<槽位>` 引用。原地修改传入的 obj。
-     *
-     * 数据来源有两种：
-     *   · data URL（"data:audio/…;base64,…",  "file:mimo-clone"）—— 上面注释已述
-     *   · 裸 base64 —— 老版本前端发过这种，同样收下
-     * 写盘是"先全量清理再写"：设置里没有的字段（用户清除了样本）对应文件也删掉，
-     * 不留幽灵文件占空间。
-     */
+    /** 把设置对象里 VOICE_SAMPLE_SLOTS 列出的音频字段落成独立文件，设置里替换成 `file:<槽位>` 引用（原地改 obj）；接受 data URL 与裸 base64，写盘先全量清理，设置里没有的字段对应文件也删掉 */
     async function splitVoiceSamples(obj) {
-        // 非法 JSON：原样保留，不碰
         const parsed = parseSettingsObject(obj);
         if (!parsed) return;
 
@@ -395,9 +292,9 @@ export function createStore({ dataDir, log = () => {} }) {
             const mime = isDataUrl ? value.slice(5, comma).replace(/;base64$/, '') : 'audio/wav';
             const ext = /mp3/i.test(mime) ? '.mp3' : '.wav';
             await writeJsonAtomic(path.join(sampleDir, slot + '.json'), { version: 1, mime, bytes: bytes.length });
-            // 音频本体用**二进制直写**（不是 JSON）：几 MB 的 base64 转 JSON 会再翻一倍体积
+            // 音频本体用二进制直写（不是 JSON）：几 MB 的 base64 转 JSON 会再翻一倍体积
             await writeFileAtomicBin(path.join(sampleDir, slot + ext), bytes);
-            // 兼容：换格式后旧扩展名文件清掉（比如上次是 .wav 这次转成了 .mp3）
+            // 换格式后清掉另一种扩展名的文件（比如上次 .wav、这次 .mp3）
             for (const other of ['.wav', '.mp3', '.bin']) {
                 if (other !== ext) await rm(path.join(sampleDir, slot + other), { force: true });
             }
@@ -408,10 +305,7 @@ export function createStore({ dataDir, log = () => {} }) {
         if (changed) obj[SETTINGS_KEY] = JSON.stringify(parsed);
     }
 
-    /**
-     * 把 `file:<槽位>` 引用拼回完整 data URL（loadStore 专用）。
-     * 文件丢了/坏了就删掉这个字段 —— 前端会当成"没设置样本"，重新上传即可。
-     */
+    /** 把 `file:<槽位>` 引用拼回完整 data URL（loadStore 专用）；文件丢了/坏了就删字段，前端当成"没设置样本"重新上传即可 */
     async function joinVoiceSamples(obj) {
         const parsed = parseSettingsObject(obj);
         if (!parsed) return;
@@ -444,11 +338,7 @@ export function createStore({ dataDir, log = () => {} }) {
         if (changed) obj[SETTINGS_KEY] = JSON.stringify(parsed);
     }
 
-    /**
-     * data/ 布局的时间戳；目录不存在返回 -1（表示"没有数据"）。
-     * 三个目录一起盯：main/ 与 conversations/ 里的外部改动（手工编辑、
-     * 从备份恢复）不一定 touch data/ 顶层的 mtime，只看顶层会漏。
-     */
+    /** data/ 布局的时间戳，目录不存在返回 -1（表示"没有数据"）；main/ 与 conversations/ 里的外部改动不一定 touch data/ 顶层 mtime，所以三个目录一起盯 */
     async function dataDirStamp() {
         const parts = await Promise.all([dataDir, mainDir, convDir].map(async (d) => {
             try { return (await stat(d)).mtimeMs; } catch { return -1; }
@@ -456,37 +346,25 @@ export function createStore({ dataDir, log = () => {} }) {
         return parts.join(',');
     }
 
-    /**
-     * 缓存是否仍然对应磁盘的当前状态。
-     *
-     * 目录 mtime 变了 → 有人动过数据（删除 / 重建 / 手工编辑）→ 缓存不可信。
-     * 注意必须**每次都在 cacheStamp 之外重新 stat**：只比旧值的话，
-     * 删除目录这种"什么都没写"的操作就检测不到。
-     */
+    /** 缓存是否仍对应磁盘当前状态：目录 mtime 变了说明有人动过数据（删除/重建/手工编辑）；必须每次重新 stat 比对，只比旧值的话"删目录"这种不写盘的操作检测不到 */
     async function isCacheFresh() {
         if (cacheStamp === undefined) return false;
         return (await dataDirStamp()) === cacheStamp;
     }
 
-    // ------------------------------------------------------------ 写：拆成文件
-    /**
-     * 保存：把键值按映射表拆到各自的文件。
-     * 只处理 store 里**存在**的键 —— 不因为"这次没提交"就把已有数据清掉。
-     */
+    // 写：拆成文件
+    /** 保存：按映射表把键值拆到各自文件；只处理 store 里存在的键，不因"这次没提交"就清掉已有数据 */
     async function writeClassifiedStore(store) {
-        // ① 记忆（按类目拆成一类一文件）
         if (typeof store[MEMORY_KEY] === 'string') {
             await writeMemory(store[MEMORY_KEY]);
         }
 
-        // ② 人设卡
         if (typeof store[CHARACTER_KEYS.list] === 'string') {
             await writeCollection(store[CHARACTER_KEYS.list], charsDir, 'card', {
                 currentCardId: typeof store[CHARACTER_KEYS.current] === 'string' ? store[CHARACTER_KEYS.current] : '',
             });
         }
 
-        // ③ 聊天记录
         if (typeof store[CONVERSATION_KEY] === 'string') {
             await writeCollection(store[CONVERSATION_KEY], convDir, 'conv');
         }
@@ -510,12 +388,10 @@ export function createStore({ dataDir, log = () => {} }) {
             const store = cache || {};
             await writeClassifiedStore(store);
             await writeMiscStore(store);
-            // 应用自己写完盘后，把缓存对应的磁盘状态**更新为刚写出来的样子** ——
-            // 否则下一次 loadStore 会因为 mtime 变了而白白重读一遍全部文件。
+            // 应用自己写完盘后把缓存对应的磁盘状态更新为刚写出来的样子，否则下次 loadStore 会因 mtime 变了而白白重读全部文件
             cacheStamp = await dataDirStamp();
         });
-        // 队列本身必须吞错：一次写盘失败不能让后续保存全部卡死。
-        // 但调用方要拿到真实结果 —— 写失败却回 ok，会让用户以为已经落盘。
+        // 队列必须吞错：一次写盘失败不能让后续保存全卡死；但调用方要拿到真实结果，写失败却回 ok 会让用户以为已落盘
         writeQueue = run.catch(() => { });
         try {
             await run;
@@ -525,15 +401,8 @@ export function createStore({ dataDir, log = () => {} }) {
         }
     }
 
-    // ------------------------------------------------------------ 迁移
-    /**
-     * 老 data 的目录布局适配：把还住在 data/ 顶层的软件级记录收进 main/。
-     *
-     * 只在"旧位置存在、新位置不存在"时 rename —— 幂等，迁移过的启动直接跳过；
-     * conversations/ 本来就在顶层（对话 data 与主 data 平级），不动它。
-     * 必须跑在下面的键值迁移**之前**：那一步读的 STORE_FILE 已指向 main/store.json，
-     * 不先搬过去的话老 store.json 里的分类键会被漏掉。
-     */
+    // 迁移
+    /** 把还住在 data/ 顶层的软件级记录收进 main/：只在旧位置存在、新位置不存在时 rename（幂等），conversations/ 本来就在顶层不动它；必须早于下面的键值迁移 —— 那一步读的 STORE_FILE 已指向 main/store.json */
     async function moveIntoMain() {
         const moves = [
             ['store.json', path.join(dataDir, 'store.json'), STORE_FILE],
@@ -557,14 +426,7 @@ export function createStore({ dataDir, log = () => {} }) {
         }
     }
 
-    /**
-     * 从旧的"全部挤在 store.json"迁移到分类文件。
-     *
-     * 只在检测到 store.json 里**还留着分类键**时才动手；迁移完这些键会从
-     * store.json 里消失（saveStore 只写 misc），所以天然幂等，重复启动不会重复迁移。
-     *
-     * @returns 迁移了哪些类目（空数组 = 无需迁移）
-     */
+    /** 把"全部挤在 store.json"的数据迁到分类文件：只在还留着分类键（或遗留单文件）时动手，迁完键会消失（幂等）；@returns 迁移了哪些类目（空数组 = 无需迁移） */
     async function migrateIfNeeded() {
         await moveIntoMain();
         const legacy = normalize(await readJson(STORE_FILE));
@@ -573,17 +435,11 @@ export function createStore({ dataDir, log = () => {} }) {
         const hasMemKey = typeof legacy[MEMORY_KEY] === 'string';
         const hasCharKey = typeof legacy[CHARACTER_KEYS.list] === 'string';
         const hasConvKey = typeof legacy[CONVERSATION_KEY] === 'string';
-        // 早期版本把聊天记录放在单个 conversations.json 里（一对话一文件是不同的键），
-        // 这里读它只为了迁移 — 读到就说明是待迁移的老数据。
+        // 这两个单文件只在这里读一次，用途就是取待迁数据
         const legacySingleConv = await readJson(path.join(dataDir, 'conversations.json'));
-        // 更早的版本把记忆放在单个 memory.json 里（类目文件是不同的键），
-        // 同样只为了迁移而读。
         const legacySingleMem = await readJson(path.join(dataDir, 'memory.json'));
 
-        // 参考音频迁移：store.json 的设置里还带着整段 base64 就拆到 voice-samples/。
-        // 与分类键不同，它**不要求** moved 里出现"voice-samples"才动手 ——
-        // 上面的分类迁移可能早已跑过（moved 为空直接 return），而音频是之后才引入的拆分，
-        // 必须独立判断。放在 return 之前处理完再走原流程。
+        // 参考音频独立判断：分类类目可能早已拆完（moved 为空会直接 return），音频拆分必须在那个 return 之前处理完
         {
             const probe = { [SETTINGS_KEY]: typeof legacy[SETTINGS_KEY] === 'string' ? legacy[SETTINGS_KEY] : null };
             if (probe[SETTINGS_KEY]) {
@@ -606,7 +462,7 @@ export function createStore({ dataDir, log = () => {} }) {
 
         if (!hasMemKey && !hasCharKey && !hasConvKey && !legacySingleConv && !legacySingleMem) return moved;
 
-        // 记忆：两个来源（store.json 里的键 / 旧的单文件 memory.json）
+        // 记忆：两个来源（store.json 里的键 / 单文件 memory.json）
         {
             const existing = await readMemory();
             if (!existing) {
@@ -631,7 +487,7 @@ export function createStore({ dataDir, log = () => {} }) {
             }
         }
 
-        // 聊天记录：两个来源（store.json 里的键 / 旧的单文件 conversations.json）
+        // 聊天记录：两个来源（store.json 里的键 / 单文件 conversations.json）
         {
             const idx = await readJson(convIndex);
             const alreadySplit = idx && Array.isArray(idx.order) && idx.order.length;
@@ -647,7 +503,6 @@ export function createStore({ dataDir, log = () => {} }) {
         }
 
         if (moved.length) {
-            // 让 cache 反映迁移后的状态，并重写 store.json（分类键就此消失）
             cache = null;
             await loadStore();
             if (typeof legacy[MEMORY_KEY] === 'string' && cache[MEMORY_KEY] === undefined) {
@@ -663,14 +518,8 @@ export function createStore({ dataDir, log = () => {} }) {
             log('info', `[store] 已迁移到分类存储: ${moved.join(', ')}`);
         }
 
-        // 清掉旧的单文件。
-        // **这一步必须在 `if (moved.length)` 之外**：上次迁移已把对话拆进
-        // conversations/（所以这次 alreadySplit 为真、moved 为空），但旧的
-        // conversations.json 若没被删掉，它会**永久留在磁盘上** ——
-        // 不被读取（loadStore 只认 conversations/）也不被清理，
-        // 白占空间还让用户困惑"到底哪个才是我的数据"。
-        // 判据：只要新位置有内容（说明数据已经安全落位），旧文件就是冗余的，可以删。
-        // 没内容时**不删** —— 那是唯一的数据来源。
+        // 清掉遗留单文件必须写在 `if (moved.length)` 之外：数据已落位（alreadySplit 为真、moved 为空）时它既不被读取也不被清理，会永久留在磁盘上。
+        // 判据：新位置有内容才删 —— 没内容时它是唯一数据来源。
         if (legacySingleConv) {
             const idx = await readJson(convIndex);
             const newHasData = idx && Array.isArray(idx.order) && idx.order.length > 0;
@@ -690,7 +539,7 @@ export function createStore({ dataDir, log = () => {} }) {
         return moved;
     }
 
-    // ------------------------------------------------------------ 导入导出
+    // 导入导出
     /** manifest.json：给人和程序看的说明与统计。 */
     function buildExportManifest(store, extraCounts) {
         let cardCount = 0;
@@ -724,7 +573,6 @@ export function createStore({ dataDir, log = () => {} }) {
         return { name: DATA_PREFIX + 'settings.json', data: JSON.stringify(settings, null, 2) };
     }
 
-    /** characters/：index + 一卡一文件。 */
     async function buildExportCharacters() {
         const out = [];
         const charsIdx = await readJson(charsIndex);
@@ -779,28 +627,7 @@ export function createStore({ dataDir, log = () => {} }) {
         return out;
     }
 
-    /**
-     * 导出为 **zip**（标准格式，任何解压工具都能打开）。
-     *
-     * 目录结构与**项目根**一一对应，解压后一眼就知道每样东西属于哪一类：
-     *   manifest.json           格式标识 / 版本 / 导出时间 / 统计
-     *   data/settings.json      设置、API Key、UI 偏好
-     *   data/characters/index.json   卡片顺序 + 当前选中
-     *   data/characters/<id>.json    每张人设卡
-     *   data/conversations/index.json
-     *   data/conversations/<id>.json 每个对话
-     *   data/memory/<类目>.json      记忆（日记 / 承诺 / 偏好 / 计划 / 动机 / 关键记忆）
-     *   data/voice-samples/…         音色参考样本
-     *   mods/<目录>/…           已安装插件（原样保留插件自己的目录结构）
-     *   skills/<目录>/…         本地技能（插件随附技能住在 mods/ 里，不重复打包）
-     *
-     * 为什么套一层 data/：没套时 settings.json / characters/ / conversations/ /
-     * memory/ 全挤在 zip 根上，与 mods/、skills/ 混在一起，看目录分不清哪些是
-     * "我的聊天数据"、哪些是"我装的扩展"。套上之后三类各有名字，也能按需只解压一类。
-     * 这样用户解压后能直接看到"我的数据长什么样"，也能单独取出某一张卡/某一个对话。
-     * 插件与技能由调用方收集成 extraEntries 传进来 —— 本层只管 data/ 的键值，
-     * 不该知道安装目录的生命周期（见 server/backup-packages.mjs）。
-     */
+    /** 导出为 zip，条目：manifest.json、data/settings.json、data/characters/、data/conversations/、data/memory/、data/voice-samples/；套一层 data/ 是为了把聊天数据与 mods/、skills/ 分开，插件与技能由调用方收集成 extraEntries 传入（见 server/backup-packages.mjs） */
     async function exportZip(extraEntries = [], extraCounts = {}) {
         const store = await loadStore();
         const entries = [
@@ -818,20 +645,7 @@ export function createStore({ dataDir, log = () => {} }) {
         return createZip(entries);
     }
 
-    /**
-     * 从备份导入。
-     *
-     * 接受两种输入：
-     *   · zip（v2，推荐）—— 按上面的目录结构解析
-     *   · 单个 JSON（v1 旧备份）—— 兼容老用户手里的备份文件
-     *
-     * @param buf     Buffer（zip 或 JSON 文本）
-     * @param mode    'merge'（默认，按键覆盖）| 'replace'（清空后只留备份内容）
-     *
-     * 插件 / 技能目录不在这里恢复：本层只认 data/ 的键值。备份 zip 里的
-     * mods/ 与 skills/ 由 serve.mjs 交给 server/backup-packages.mjs 处理 ——
-     * 那一步需要放行插件脚本（入口是 .js），不能把这条放宽带进数据解析。
-     */
+    /** 从备份导入：输入可以是 zip 或 v1 的单个 JSON，mode 为 'merge'（按键覆盖）或 'replace'（清空后只留备份内容）；插件/技能目录不在这里恢复 —— 那一步要放行 .js 入口，不能把这条放宽带进数据解析（由 serve.mjs 交给 server/backup-packages.mjs） */
     async function importBackup(buf, mode = 'merge') {
         const payload = await parseBackup(buf);
         const incoming = payload.data;
@@ -842,11 +656,8 @@ export function createStore({ dataDir, log = () => {} }) {
         if (mode === 'replace') {
             // 1) 先清内存里的键
             for (const k of Object.keys(store)) delete store[k];
-            // 2) 备份里没有的分类，磁盘上的旧文件也要清掉 —— 否则下一次 loadStore
-            //    会把 conversations/characters/memory 里残留的旧条目重新拼回来，
-            //    用户以为"替换"清空了、实际还在（等于替换模式没生效）。
-            //    写一个空集合即可：writeCollection / writeMemory 会顺带删除不再属于
-            //    该集合的旧文件。
+            // 2) 备份里没有的分类也要写成空集合：writeCollection / writeMemory 会顺带删掉不再属于该集合的文件，
+            //    否则下一次 loadStore 会把残留条目重新拼回来，替换模式等于没生效。
             if (typeof incoming[MEMORY_KEY] !== 'string') await writeMemory('{}');
             if (typeof incoming[CHARACTER_KEYS.list] !== 'string') {
                 await writeCollection('[]', charsDir, 'card', { currentCardId: '' });
@@ -854,8 +665,7 @@ export function createStore({ dataDir, log = () => {} }) {
             if (typeof incoming[CONVERSATION_KEY] !== 'string') {
                 await writeCollection('[]', convDir, 'conv');
             }
-            // 3) 设置里没有参考音频 → 清掉旧音频文件（否则它们在 voice-samples/
-            //    里成为无主文件；splitVoiceSamples 只在有 settings 时才会清理）。
+            // 3) 设置里没有参考音频时清掉 voice-samples/ 下的文件：splitVoiceSamples 只在有 settings 时才清理，不清就成了无主文件
             if (typeof incoming[SETTINGS_KEY] !== 'string') {
                 const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
                 try {
@@ -870,22 +680,13 @@ export function createStore({ dataDir, log = () => {} }) {
         return { ok: true, keys: keys.length, source: payload.source, message: `已导入 ${keys.length} 项数据（${mode === 'replace' ? '替换' : '合并'}模式）` };
     }
 
-    /**
-     * 这份备份里有没有数据部分（settings / 人设卡 / 对话 / 记忆）。
-     *
-     * 只解析、不落盘：导入前用它判断"要不要报没有可导入的数据"。
-     * 判断放在写盘**之前**，坏包就不会先把已有数据清掉再报失败。
-     */
+    /** 这份备份里有没有数据部分（settings / 人设卡 / 对话 / 记忆）；只解析不落盘，判断放在写盘之前，坏包就不会先清掉已有数据 */
     async function hasImportableData(buf) {
         const payload = await parseBackup(buf);
         return Object.keys(payload.data || {}).length > 0;
     }
 
-    /** 把 Buffer 解析成 { source, data:{键:字符串} }；zip 与旧 JSON 都支持 */
-    /**
-     * 从 zip 条目里还原出 { 键: 字符串 }。
-     * 兼容两种布局：新版在 data/ 下，旧版（v2）直接摊在 zip 根上。
-     */
+    /** 从 zip 条目还原 { 键: 字符串 }：v3 在 data/ 下，v2 直接摊在 zip 根上，两种布局都认 */
     function extractZipData(files) {
         const byName = new Map(files.map((f) => [f.name, f.data]));
         const data = {};
@@ -896,7 +697,6 @@ export function createStore({ dataDir, log = () => {} }) {
             return b ? b.toString('utf8') : null;
         };
 
-        // 设置
         const settingsText = readText('settings.json');
         if (settingsText) {
             try {
@@ -928,7 +728,6 @@ export function createStore({ dataDir, log = () => {} }) {
             } catch { /* 忽略 */ }
         }
 
-        // 聊天记录
         const convIdxText = readText('conversations/index.json');
         if (convIdxText) {
             try {
@@ -944,11 +743,7 @@ export function createStore({ dataDir, log = () => {} }) {
             } catch { /* 忽略 */ }
         }
 
-        // 记忆：一类目一文件 → 拼回一个对象。
-        // 同时兼容三种写法：
-        //   · data/memory/<类目>.json （当前格式）
-        //   · memory/<类目>.json      （v2 的根布局）
-        //   · memory.json {value:…}   （v2 中期的单文件形态）
+        // 记忆：一类目一文件拼回对象，兼容 data/memory/<类目>.json、memory/<类目>.json（v2 根布局）与 memory.json {value:…}
         const memObj = {};
         for (const f of files) {
             const m = /^(?:data\/)?memory\/([A-Za-z0-9_-]+)\.json$/.exec(f.name);
@@ -974,10 +769,7 @@ export function createStore({ dataDir, log = () => {} }) {
         return data;
     }
 
-    /**
-     * 备份里的参考音频落回 data 的 voice-samples/ —— 设置里对应的 `file:<槽位>`
-     * 引用才能成立。单个文件失败不挡整包导入。
-     */
+    /** 备份里的参考音频落回 data 的 voice-samples/，设置里对应的 `file:<槽位>` 引用才能成立；单个文件失败不挡整包导入 */
     async function restoreVoiceSamplesFromZip(files) {
         const sampleDir = path.join(mainDir, VOICE_SAMPLES_DIR);
         for (const f of files) {
@@ -992,7 +784,7 @@ export function createStore({ dataDir, log = () => {} }) {
         }
     }
 
-    /** 单 JSON 形式的备份（早期导出就是这个形状，仍需能导入）。 */
+    /** v1 的单 JSON 备份形状，仍需能导入 */
     function parseLegacyJsonBackup(buf) {
         let parsed;
         try {
@@ -1019,13 +811,7 @@ export function createStore({ dataDir, log = () => {} }) {
         return parseLegacyJsonBackup(buf);
     }
 
-    /**
-     * 让调用方丢弃缓存（导入 / 外部改动后强制重读）。
-     *
-     * cacheStamp 也要一起清掉 —— 只清 cache 而留着旧 stamp 的话，
-     * isCacheFresh() 仍可能认为缓存有效（旧 mtime 恰好相同），
-     * 于是重读没发生、拿到的是空缓存。两件事必须成对。
-     */
+    /** 让调用方丢弃缓存（导入/外部改动后强制重读）：cache 与 cacheStamp 必须成对清掉，只清 cache 的话 isCacheFresh() 仍可能凭旧 mtime 判缓存有效 */
     function invalidate() { cache = null; cacheStamp = undefined; }
 
     return {

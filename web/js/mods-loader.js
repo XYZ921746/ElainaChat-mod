@@ -1,14 +1,12 @@
-/* ============================================================================
- * 插件脚本注入器（从 mods.js 拆出）
- *
- * <script> 注入 / 超时 / 瞬时失败重试。只有 loadedScripts 一份共享状态。
- * ========================================================================== */
+/* 插件脚本注入器：<script> 注入 / 超时 / 瞬时失败重试。只有 loadedScripts 一份共享状态。 */
 (function () {
     'use strict';
 
     window.ElainaModsLoader = function (deps) {
         const loadedScripts = deps && deps.loadedScripts ? deps.loadedScripts : new Set();
         const SCRIPT_LOAD_TIMEOUT_MS = 15000;
+    /** 尝试次数（首次 + 2 次重试）：请求失败并不等于插件坏了（文件被系统扫描占用、长连接被对端关掉），
+     *  一次抖动就被 autoDisableBroken 写盘停用会误报「加载失败 · 已自动停用」；有限次后照旧停用并给出原因。 */
     const SCRIPT_LOAD_ATTEMPTS = 3;
     /** 每次重试前的等待（毫秒），逐次加长：给占用文件的进程一点时间松手 */
     const SCRIPT_RETRY_DELAYS = [400, 1200];
@@ -24,9 +22,7 @@
                 ? src + (src.includes('?') ? '&' : '?') + 'retry=' + attempt
                 : src;
             el.setAttribute('data-mod-script', '1');
-            // 超时即失败：服务端/系统把文件占住时，onload/onerror 可能**都不触发**。
-            //   没有这道闸，整轮 loadAll 会永远停在这个 URL 上，后面的插件
-            //   一个都不会加载（表现为"插件系统只加载了一半"）。
+            // 超时即失败：服务端/系统把文件占住时 onload/onerror 可能都不触发，没有这道闸整轮 loadAll 会永远停在这个 URL 上
             let settled = false;
             const timer = setTimeout(() => {
                 if (settled) return;
@@ -58,7 +54,6 @@
             document.head.appendChild(el);
         });
     }
-
 
         return { injectScript, SCRIPT_LOAD_TIMEOUT_MS };
     };

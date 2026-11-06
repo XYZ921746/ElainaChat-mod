@@ -1,24 +1,9 @@
-/* ============================================================================
- * 设置保存 / 自动保存（从 settings.js 拆分）
- *
- * 表单落盘、防抖自动保存、提示词预览与角色卡重置。
- * ========================================================================== */
 'use strict';
 
-/**
- * 把设置表单的当前内容落盘。
- *
- * 设置是「改完即生效」——没有底部「保存设置」按钮，
- *   任何控件一变就自动调这个函数（见 init.js 的自动保存绑定）。
- *   所以它**不能弹提示、不能关面板**，否则用户每改一项都被弹窗打断。
- *
- * @param {{silent?: boolean}} [opts]
- *   silent=true 时：跳过「设置已保存！」提示与面板关闭（自动保存用）。
- *   无论哪种模式，落盘行为完全一致 —— 不存在"自动保存少存了什么"。
- */
+/** 设置改完即生效，故不弹阻断式提示；silent（自动保存）跳过提示与关面板。 */
 async function saveSettings(opts) {
     const silent = Boolean(opts && opts.silent);
-    const asrProvider = document.querySelector('input[name="asrProvider"]:checked')?.value || 'browser';
+    const asrProvider = document.querySelector('input[name="asrProvider"]:checked')?.value || '';
     const ttsLang = document.querySelector('input[name="ttsLang"]:checked')?.value || 'chinese';
     const replyDisplayMode = document.querySelector('input[name="replyDisplayMode"]:checked')?.value || DEFAULT_SETTINGS.replyDisplayMode;
     const providerSettings = readProviderSettingsForm();
@@ -26,18 +11,10 @@ async function saveSettings(opts) {
         if (!silent) showCustomAlert('自定义模式下必须填写 API Base URL。', '设置未保存');
         return;
     }
-    // 切到「完全访问」时，把后果在这里一次性讲清楚。
-    // 为什么放在保存这一步、而不是每次操作都弹：
-    // 完全访问下 AI 每一步都问，用户会从"看清内容再决定"退化成"闭眼点允许"，
-    // 最后那道闸反而等于没有。所以判断前移到这个**一次性**的节点上。
-    // 只在"真的发生切换"时问 —— 已经是 full 又点保存不该再打扰。
+    // 完全访问的后果只在这一处讲清（逐步询问会让人闭眼点允许）；只在真的发生切换时问，已是 full 再点保存不打扰。
     const nextAccess = document.querySelector('input[name="agentAccess"]:checked')?.value || 'strict';
     if (nextAccess === 'full' && currentAgentAccess() !== 'full') {
-        // 自动保存（silent）路径**也要问** —— 这是安全闸门，不能因为
-        //   "弹窗会打断用户"就跳过：设置改完即生效，用户点一下单选钮
-        //   就会落盘，如果这里不问，"完全访问"就被静默开启了。
-        //   拒绝时把单选钮拨回切换前的档，让界面与实际状态一致
-        //   （否则界面显示"完全访问"、实际仍是原档，用户会以为已经开了）。
+        // 自动保存也要问：不问等于静默开启完全访问；拒绝时单选钮拨回切换前的档，界面与实际才一致。
         const agreed = await showCustomConfirm(
             '「完全访问」= AI 可以在这台电脑上做任何事，且**不再询问你**。\n\n'
             + '开启后，AI 可以：\n'
@@ -66,29 +43,24 @@ async function saveSettings(opts) {
         replyDisplayMode,
         asrProvider,
         autoMemory: elements.settingAutoMemory.checked,
-        memoryEvery: Math.max(3, Math.min(50, parseInt(elements.settingMemoryEvery.value, 10) || 6)),
+        memoryEvery: Math.max(3, Math.min(50, parseInt(elements.settingMemoryEvery.value, 10) || 15)),
         agentAccess: nextAccess,
         agentPhoneEnabled: document.getElementById('settingAgentPhoneEnabled')?.checked !== false,
-        // 浏览器：判据是 === true（见 data.js 的说明）—— 控件不在页面上时按关闭处理，
-        //   不能像上面那样用 "!== false" 兜成默认开启。
+        // 判据是 === true：控件不在页面上时按关闭处理，不能用 "!== false" 兜成默认开启。
         agentBrowserEnabled: document.getElementById('settingAgentBrowserEnabled')?.checked === true,
-        // AI 联网搜索。判据同样是 === true：控件缺失时按关闭处理。
         tavilySearchEnabled: document.getElementById('settingTavilyEnabled')?.checked === true,
         searchProvider: SEARCH_PROVIDERS[document.getElementById('settingSearchProvider')?.value]
             ? document.getElementById('settingSearchProvider').value : DEFAULT_SEARCH_PROVIDER,
-        // Key 写进**当前服务商那一格**，不覆盖别家的 —— 用户换家只是想避开超时，
-        //   换回来时原来的 Key 还应该在。
+        // Key 写进当前服务商那一格，不覆盖别家的 —— 换回来时原来的 Key 还在。
         ['searchApiKey_' + (SEARCH_PROVIDERS[document.getElementById('settingSearchProvider')?.value]
             ? document.getElementById('settingSearchProvider').value : DEFAULT_SEARCH_PROVIDER)]:
             document.getElementById('settingTavilyApiKey')?.value.trim() || '',
-        // 条数收敛到**当前服务商**允许的上限内；解析失败回落到 5
-        //   （默认值不能是 0 —— 0 条等于什么都没搜）
+        // 条数收敛到当前服务商的上限内；解析失败回落 5（0 条等于什么都没搜）
         tavilyMaxResults: Math.max(1, Math.min(
             (SEARCH_PROVIDERS[document.getElementById('settingSearchProvider')?.value] || SEARCH_PROVIDERS[DEFAULT_SEARCH_PROVIDER]).maxResultsLimit,
             parseInt(document.getElementById('settingTavilyMaxResults')?.value, 10) || 5
         )),
-        // 自定义搜索源：端点是用户填的，保存时就校验 https（发请求时也校验，
-        //   这里先拦一道是为了让用户在保存那一刻就知道填错了）。
+        // 端点是用户填的，保存时就校验 https，让用户当场知道填错（发请求时也校验）。
         searchCustomEndpoint: (() => {
             const raw = String(document.getElementById('settingSearchCustomEndpoint')?.value || '').trim();
             if (!raw) return '';
@@ -103,24 +75,24 @@ async function saveSettings(opts) {
         searchCustomAuthHeader: String(document.getElementById('settingSearchCustomAuthHeader')?.value || '').trim() || 'Authorization',
         searchCustomBody: String(document.getElementById('settingSearchCustomBody')?.value || '').trim(),
         searchCustomResultsPath: String(document.getElementById('settingSearchCustomResultsPath')?.value || '').trim(),
-        // 深度只认两个合法值，其余一律回落 basic（非法值发给服务商会被拒，不如当场收敛）
+        // 深度只认两个合法值，其余回落 basic：非法值发给服务商也会被拒，不如当场收敛
         tavilySearchDepth: document.getElementById('settingTavilySearchDepth')?.value === 'advanced' ? 'advanced' : 'basic',
         ...readAgentReadToggles(),
-        // 思考：UI 上只有一个"思考强度"四档下拉（off 就是"不思考"）。
-        // `thinkingMode` 由它**派生** —— 请求层与「思考」折叠栏仍读这个布尔量，
-        // 所以两处都要落到同一个来源，绝不能让它和档位脱节（见 core.js 的说明）。
-        // 注意这个控件是"改了立刻生效 + 立刻持久化"的（见 init.js），
-        // 这里再读一次是为了覆盖"用户改了控件但没点保存、又点了保存"的路径。
+        // thinkingMode 由思考强度档**派生**：请求层与折叠栏仍读这个布尔量，两处必须同一来源；这里再读一次以覆盖"改了控件没点保存又点保存"的路径。
         thinkingMode: elements.settingThinkingEffort.value !== 'off'
             && THINKING_EFFORTS.includes(elements.settingThinkingEffort.value),
         thinkingEffort: THINKING_EFFORTS.includes(elements.settingThinkingEffort.value)
             ? elements.settingThinkingEffort.value
             : 'off',
-        // 对话优化：第三人称两段式开关。与上面一样"改了立刻生效 + 立刻持久化"，
-        // 这里再读一次是为了覆盖"改了控件但没点保存、又点了保存"的路径。
         thirdPerson: elements.settingThirdPerson.checked,
-        // 对话模型能否收图片的探测缓存。这两个键不在表单里，必须从旧设置原样带过来 ——
-        //   saveSettings 是整体替换 state.settings，不显式带上就会在保存时丢掉。
+        // 采样参数：关着存 ''（请求不发该字段），开着存滑杆值；范围与解析只认 core-config.js 的 CHAT_SAMPLING_FIELDS 一份。
+        ...Object.fromEntries(CHAT_SAMPLING_FIELDS.map((field) => [
+            field.setting,
+            (elements[field.enableElement] && !elements[field.enableElement].checked)
+                ? ''
+                : normalizeSamplingInput(elements[field.element]?.value, field),
+        ])),
+        // 这两个键不在表单里，必须从 state.settings 带过来：saveSettings 整体替换，不带上就丢。
         chatModelVision: state.settings.chatModelVision === true ? true
             : (state.settings.chatModelVision === false ? false : null),
         chatModelVisionKey: String(state.settings.chatModelVisionKey || '')
@@ -128,37 +100,25 @@ async function saveSettings(opts) {
     try {
         await saveApiSecrets(state.settings);
     } catch (error) {
-        // 密钥存储失败不阻断设置保存（其他设置仍生效；密钥兜底存 localStorage）
+        // 密钥存储失败不阻断设置保存；密钥另有 localStorage 兜底
         console.warn('[BYOK] 密钥存储失败（设置仍已保存，密钥可能下次失效）', error);
     }
     persistSettings();
 
-    // 存回「当前这套人设」，并落盘整个列表 —— 多套之间互不覆盖
+    // 存回当前这套人设，并落盘整个列表 —— 多套之间互不覆盖
     syncFormToCurrentCard();
     state.characterCard = cardContent(currentCard());
     persistCharacterCards();
     saveCharacterCard();
     renderCardSelect();
 
-    // 自动保存（silent）时**不关面板、不弹提示** ——
-    //   用户还在改，弹窗会打断；关面板更荒唐（改一项就被踢出去）。
     if (!silent) {
         closeSettingsPanel();
         showCustomAlert('设置已保存！', '保存成功');
     }
 }
 
-/**
- * 自动保存：设置改成「改完即生效」后的唯一入口。
- *
- * 设计要点：
- *  · **防抖 300ms** —— 文本输入框每敲一个字都会触发 input，
- *    不防抖就会每字符跑一遍 saveApiSecrets（Android 上要过 Keystore，很贵）。
- *  · 只监听 #settingsPanel 内的控件，且排除插件页（#tab-mods）——
- *    插件自己的控件归插件管，宿主不该替它们落盘。
- *  · change 事件覆盖 select / checkbox / radio；input 覆盖文本框与滑杆。
- *    两者都挂，靠防抖合并重复触发。
- */
+/** 防抖 300ms（每敲一字都触发 input，不防抖会反复过 Keystore）；只监听 #settingsPanel 内、排除 #tab-mods 的控件。 */
 let autoSaveTimer = null;
 function scheduleAutoSave() {
     if (autoSaveTimer) clearTimeout(autoSaveTimer);
@@ -170,13 +130,7 @@ function scheduleAutoSave() {
     }, 300);
 }
 
-/**
- * 立刻把待保存的改动落盘（不等防抖）。
- *
- * 为什么必须有：用户改完最后一项**马上点 ✕ 关闭**是很常见的操作 ——
- *   那次 change 只是排了一个 300ms 的定时器，如果关闭时不冲一下，
- *   定时器随后触发（或永远不触发）就会**丢掉最后一次修改**。
- */
+/** 用户改完最后一项马上点 ✕ 时，只排了 300ms 定时器的话最后一次修改会丢。 */
 function flushAutoSave() {
     if (!autoSaveTimer) return;
     clearTimeout(autoSaveTimer);
@@ -186,16 +140,14 @@ function flushAutoSave() {
     });
 }
 
-/** 把自动保存挂到设置面板上（init.js 调用一次） */
 function bindSettingsAutoSave() {
     const panel = document.getElementById('settingsPanel');
     if (!panel) return;
     const onEdit = (ev) => {
         const t = ev.target;
         if (!t || !t.closest) return;
-        // 插件页里的控件不归宿主管
+        // 插件页 #tab-mods 里的控件不归宿主管
         if (t.closest('#tab-mods')) return;
-        // 纯展示控件不触发保存
         if (t.matches('button, [type="button"], [type="submit"], [type="file"]')) return;
         scheduleAutoSave();
     };
@@ -203,9 +155,7 @@ function bindSettingsAutoSave() {
     panel.addEventListener('input', onEdit, true);
 }
 
-// 不提供「恢复默认设置」（restoreDefaultSettings）这个一键回退入口：
-//   设置改完即生效，一键回退会连带把用户自己录的凭据一起清掉。
-//   需要回默认值就在界面上逐项改，或删掉 data/ 目录重来。
+// 不提供「恢复默认设置」：一键回退会连带清掉用户自己录的凭据；要回默认值就逐项改，或删掉 data/ 目录重来。
 
 function previewPrompt() {
     const card = {
@@ -215,8 +165,7 @@ function previewPrompt() {
         characterPrompt: document.getElementById('ccCharacterPrompt').value.trim(),
         greeting: document.getElementById('ccGreeting').value.trim()
     };
-    // 只展示用户可编辑的部分（核心协议 + 世界观 + 角色卡），
-    // 系统注入的 Live2D 表现标签、Agent 操作指令等内部提示不在此展示，避免用户误改。
+    // 只展示用户可编辑的部分（核心协议 + 世界观 + 角色卡），系统注入的内部提示不展示，避免误改。
     const name = card.name;
     const title = card.title;
     const prompt = `${ROLEPLAY_CORE_PROTOCOL}
@@ -240,6 +189,3 @@ function resetCharacterCard() {
     document.getElementById('ccCharacterPrompt').value = DEFAULT_CHARACTER_CARD.characterPrompt;
     document.getElementById('ccGreeting').value = DEFAULT_CHARACTER_CARD.greeting;
 }
-
-
-

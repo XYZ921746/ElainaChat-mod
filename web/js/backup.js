@@ -1,20 +1,13 @@
-/* ============================================================================
- * 我的数据：导出 / 导入 / 位置（从 settings.js 拆出）
- *
- * 备份导出、文档选择器导入、旧 JSON 兼容、数据位置提示。
- * ========================================================================== */
+// 我的数据：备份导出、文档选择器导入、旧 JSON 兼容、数据位置提示。
 'use strict';
 
-// ==================== 我的数据（导出 / 导入 / 位置） ====================
-// 后端把数据分类落在 data/ 下；这里只负责让用户「看得见、能备份、能恢复」—— 换机器和升级前的那道保险。
-// Web：走 /api/data/*；APK：没有本地服务，走 chat-backup.js 直接读写 localStorage。
-// APK 侧**最需要**备份：数据在应用私有目录，卸载即丢，用户连手动拷出来都做不到。两边备份格式同构、可互相导入。
+// 后端把数据分类落在 data/ 下；这里只负责让用户看得见、能备份、能恢复。Web 走 /api/data/，
+// APK 没有本地服务，走 chat-backup.js 直接读写 localStorage（数据在私有目录，卸载即丢，最需要备份）。
 async function refreshDataSettings() {
     const box = document.getElementById('dataStatusBox');
     const section = document.getElementById('dataSettingsSection');
     if (!box) return;
 
-    // ---- APK：本地统计，不发请求 ----
     if (IS_NATIVE_APP && window.ChatBackup) {
         try {
             let cards = 0;
@@ -36,7 +29,6 @@ async function refreshDataSettings() {
         return;
     }
 
-    // ---- Web：走后端 ----
     try {
         const res = await fetch('/api/data/info');
         if (!res.ok) { if (section) section.classList.add('hidden'); return; }
@@ -66,11 +58,8 @@ function setDataHint(text, isError) {
 async function exportDataBackup() {
     setDataHint('导出中…');
 
-    // ---- APK：本地生成 zip 并**写进应用文档目录**（没有后端可用）----
-    // 为什么不用 <a download> + blob URL：**安卓 WebView 不处理 blob: 下载**。
-    // 桌面浏览器会把 blob 交给下载器，WebView 里点下去通常毫无反应
-    //（这也是 Capacitor 社区反复提到的一点）。所以 APK 侧走 Capacitor Filesystem，
-    // 把备份真正写到磁盘上，再把路径告诉用户。
+    // APK 侧本地生成 zip 并写进应用文档目录（没有后端可用）。不用 <a download> + blob URL：
+    // 安卓 WebView 不处理 blob: 下载，点下去通常毫无反应；走 Capacitor Filesystem 把备份真正写到磁盘。
     if (IS_NATIVE_APP && window.ChatBackup) {
         try {
             const fs = nativeFs();
@@ -102,12 +91,10 @@ async function exportDataBackup() {
         return;
     }
 
-    // ---- Web：走后端 ----
     try {
         const res = await fetch('/api/data/export');
         if (!res.ok) {
-            // 插件目录读不到时后端会回 JSON 说明原因；只报 HTTP 状态会让用户
-            // 以为是网络问题，反复重试同一个必然失败的导出。
+            // 插件目录读不到时后端会回 JSON 说明原因；只报 HTTP 状态会让用户以为是网络问题，反复重试。
             let why = '';
             try {
                 const j = await res.json();
@@ -117,10 +104,8 @@ async function exportDataBackup() {
             return;
         }
         const blob = await res.blob();
-        // 空响应要明确报错，而不是静默存下一个 0 字节文件。
-        // 什么时候会空：装了迅雷/FDM 之类下载器的浏览器，其扩展会拦走带
-        // attachment 的响应（后端刻意不发那个头，但代理、中间层或
-        // 别的服务版本仍可能造成空响应）。这种情况用户拿到的文件是坏的，必须说出来。
+        // 空响应要明确报错，而不是静默存下一个 0 字节文件：装了迅雷/FDM 的浏览器，其扩展会拦走
+        // 带 attachment 的响应（代理/中间层也可能），用户拿到的文件是坏的，必须说出来。
         if (!blob.size) {
             setDataHint('导出失败：服务端返回了空内容。若装了迅雷/FDM，请先关掉它的浏览器扩展再试。', true);
             return;
@@ -151,14 +136,8 @@ async function exportDataBackup() {
     }
 }
 
-/**
- * APK 侧导入入口：先看文档目录里有没有导出过的备份，有就让用户选；
- * 一个都没有（或插件不可用）时退回系统文件选择器。
- *
- * 为什么要有这条路径：安卓 WebView 的 <input type="file"> 行为在各厂商 ROM 上
- * 差异很大（有的能选、有的只能选图片）。而"自己导出的备份就在文档目录里"是
- * **最常见的使用场景**（导完想恢复），走 Filesystem 读取最可靠。
- */
+// APK 侧导入入口：先看文档目录里有没有导出过的备份，有就让用户选，一个都没有时退回系统文件选择器。
+// 安卓 WebView 的 <input type="file"> 在各厂商 ROM 上行为差异很大，而"自己导出的备份就在文档目录里"是最常见场景。
 async function importFromDocumentsOrPicker() {
     const fs = nativeFs();
     let names = [];
@@ -216,19 +195,17 @@ async function importFromDocumentsOrPicker() {
 
 async function importDataBackup(file) {
     if (!file) return;
-    // 合并模式：只覆盖备份里有的数据，本机其它数据不动 —— 比"替换"安全得多，
-    // 所以默认用它，且不做二次确认之外的额外询问。
+    // 合并模式：只覆盖备份里有的数据，本机其它数据不动 —— 比"替换"安全得多，所以默认用它。
     const okToGo = await showCustomConfirm(
         '导入备份会覆盖同名的数据（聊天记录 / 人设卡 / 记忆 / 设置 / 插件 / 技能），本机其它数据保留。\n\n'
         + '继续导入吗？', '导入备份');
     if (!okToGo) { setDataHint('已取消'); return; }
     setDataHint('导入中…');
 
-    // ---- APK：本地写回 localStorage（没有后端可用）----
     if (IS_NATIVE_APP && window.ChatBackup) {
         try {
             const r = await window.ChatBackup.applyBackup(file);
-            setDataHint('已导入 ' + r.keys + ' 项数据（' + (r.source === 'zip' ? 'zip' : '旧版 JSON') + '）');
+            setDataHint('已导入 ' + r.keys + ' 项数据（' + (r.source === 'zip' ? 'zip' : 'JSON 备份') + '）');
             await refreshDataSettings();
             showCustomAlert('已导入 ' + r.keys + ' 项数据。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
         } catch (e) {
@@ -237,10 +214,8 @@ async function importDataBackup(file) {
         return;
     }
 
-    // ---- Web：交给后端 ----
     try {
-        // 直接把文件原样发上去：备份是 zip（二进制），不能走 JSON 包装。
-        // 后端两种都认（zip 与 v1 的单 JSON 旧备份），所以这里不用判断类型。
+        // 直接把文件原样发上去：备份是 zip（二进制），不能走 JSON 包装；后端两种都认，这里不用判断类型。
         const res = await fetch('/api/data/import?mode=merge', {
             method: 'POST',
             headers: { 'Content-Type': 'application/octet-stream' },
@@ -256,8 +231,7 @@ async function importDataBackup(file) {
     }
 }
 
-// ==================== 局域网共享（我的数据旁的两个按钮） ====================
-// 与导出 / 导入共用同一份备份：共享开关与拉取都由本机服务端完成。
+// 局域网共享与导出 / 导入共用同一份备份：共享开关与拉取都由本机服务端完成。
 function lanShareFmtSize(bytes) {
     const n = Number(bytes) || 0;
     if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
@@ -304,8 +278,7 @@ async function openLanShare() {
     }
 }
 
-// 局域网接收共享的输入弹窗：IP 与端口一行两个，密码单独一行。
-// 密码就是对方登录用的访问密码 —— 局域网能连上就一定有密码，不再提示"没有就留空"。
+// 局域网接收共享的输入弹窗：IP 与端口一行两个，密码单独一行；密码就是对方登录用的访问密码。
 function openLanReceiveDialog() {
     return new Promise((resolve) => {
         const old = document.getElementById('lanReceiveOverlay');

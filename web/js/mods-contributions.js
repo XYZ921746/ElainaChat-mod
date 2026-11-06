@@ -1,9 +1,4 @@
-/* ============================================================================
- * 插件贡献与生命周期（从 mods.js 拆出）
- *
- * 每个 mod 的可撤销贡献：activate / deactivate / dispose；
- * 以及 host.signal 的 AbortController 生命周期。
- * ========================================================================== */
+/* 插件贡献与生命周期：每个 mod 的可撤销贡献（activate / deactivate / dispose）与 host.signal 的 AbortController 生命周期。 */
 (function () {
     'use strict';
 
@@ -16,11 +11,7 @@
         return contributions.get(modId);
     }
 
-    /**
-     * 登记一项贡献并立即挂上。
-     * @param {string} modId 归属的 mod（停用/卸载时按它整批回收）
-     * @param {{activate?:Function, deactivate?:Function, dispose?:Function}} c
-     */
+    /* 登记一项贡献并立即 activate；modId 是归属，停用/卸载时按它整批回收。 */
     function addContribution(modId, c) {
         contributionSet(modId).add(c);
         try {
@@ -45,16 +36,11 @@
         }
     }
 
-    // ---- 生命周期信号（host.signal）：停用再启用**不能**发 abort（同一个 api 还要继续用，
-    //      插件停了轮询就再没第二次机会恢复）；只有真正卸载/删除（dispose）才 abort ----
+    // 生命周期信号（host.signal）：停用再启用**不能**发 abort（同一个 api 还要继续用，插件停了轮询就再没第二次机会恢复）；
+    // 只有真正卸载/删除（dispose）才 abort
     const lifecycleCtl = new Map();
-    /**
-     * 造一个生命周期信号。
-     *
-     * 优先用 AbortController；环境里没有时给一个**形状相同**的最小实现 ——
-     *   host.signal 是插件依赖的公开契约，不能因为"这个环境没 AbortController"
-     *   就变成 undefined（插件会写 `host.signal.addEventListener(...)`）。
-     */
+    /* 造一个生命周期信号：优先 AbortController，环境里没有时给一个**形状相同**的最小实现 ——
+     * host.signal 是插件依赖的公开契约，不能因为"这个环境没 AbortController"就变成 undefined。 */
     function makeLifecycle() {
         if (typeof AbortController === 'function') {
             const ctl = new AbortController();
@@ -105,7 +91,6 @@
         // 真正卸载：告诉插件停掉长任务（停用/启用不会走到这里）
         abortLifecycle(modId);
     }
-
 
         return {
             contributionSet, addContribution, forEachContribution,

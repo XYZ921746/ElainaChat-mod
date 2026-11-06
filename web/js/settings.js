@@ -1,8 +1,4 @@
-/* ========================================================================
- * 设置与运维：状态机 / 设置 / 悬浮窗 / 副屏监视 / 日志 / 数据 / 密码
- * ======================================================================== */
-
-// ==================== 状态机 UI ====================
+/* 设置面板开合与表单回填，以及语音态驱动的悬浮麦克风对齐。 */
 
 function alignFloatingMicToComposer() {
     if (!elements.floatingMic || elements.floatingMic.classList.contains('hidden')) return;
@@ -25,7 +21,6 @@ let lastVoiceStateDispatch = '';
 function updateUI() {
     const { voiceState } = state;
 
-    // 通知视频通话界面（Live2D）语音状态变化：🎤 说话按钮同步聆听状态
     if (voiceState !== lastVoiceStateDispatch) {
         lastVoiceStateDispatch = voiceState;
         window.dispatchEvent(new CustomEvent('voice-state', { detail: { state: voiceState } }));
@@ -56,26 +51,22 @@ function updateUI() {
     if (dockVisible) requestAnimationFrame(alignFloatingMicToComposer);
 }
 
-
-// ==================== 设置 ====================
-
-// 把 state.settings / state.characterCard 填充到设置表单（打开设置 / 恢复默认后调用）
 function fillSettingsForm() {
-    // 对话模型：多提供商卡 + 默认/回退两个下拉，全部由 renderChatProviderSettings 回填；
-    //   旧的单模型三件套只作迁移源，界面上已没有对应字段。
+    // 二级页不跨开关保留：先把移到 #settingsSubpage 的编辑节点移回卡片。
+    closeSettingsSubpage();
+    // 每次打开都回到一级列表：编辑状态不跨开关保留。
+    resetChatProviderEditing();
     renderChatProviderSettings();
-    // 思考模式：开关 + 强度。用 syncThinkingModeControls() 统一回填，
-    // 不在这里各写一遍 —— 回填逻辑分散就会有一天忘记同步新增的档位。
+    // 回填只走 syncThinkingModeControls 一处 —— 分散写就有一天忘记同步新增档位。
     syncThinkingModeControls();
+    // 采样参数同理：开关 / 滑杆 / 数值文案的同步只走 syncSamplingControls 一处。
+    syncSamplingControls(null, true);
     elements.settingTtsProvider.value = state.settings.ttsProvider || 'mimo';
     document.getElementById('settingMinimaxApiKey').value = state.settings.minimaxApiKey || '';
     document.getElementById('settingMinimaxVoice').value = state.settings.minimaxVoice || '';
     document.getElementById('settingMinimaxModel').value = state.settings.minimaxModel || 'speech-2.8-hd';
     document.getElementById('settingDashscopeTtsModel').value = state.settings.dashscopeTtsModel || 'qwen3-tts-flash';
     document.getElementById('settingDashscopeTtsVoice').value = state.settings.dashscopeTtsVoice || 'Cherry';
-    document.getElementById('settingVisionBaseUrl').value = state.settings.visionBaseUrl || '';
-    document.getElementById('settingVisionApiKey').value = state.settings.visionApiKey || '';
-    document.getElementById('settingVisionModel').value = state.settings.visionModel || '';
     elements.settingTtsSpeed.value = state.settings.ttsSpeed;
     elements.ttsSpeedLabel.textContent = state.settings.ttsSpeed.toFixed(1) + 'x';
     elements.settingTtsVolume.value = Number(state.settings.ttsVolume ?? 1);
@@ -91,25 +82,28 @@ function fillSettingsForm() {
     });
 
     document.querySelectorAll('input[name="asrProvider"]').forEach(r => {
-        r.checked = (r.value === (state.settings.asrProvider || 'browser'));
+        r.checked = (r.value === (state.settings.asrProvider || ''));
     });
     updateAsrProviderUI();
     updateTtsProviderUI();
+    // 模型分栏每次打开都回到入口列表，各分页里的二级页也回到服务商列表。
+    resetModelSectionPage();
+    resetModelProviderPages();
 
     document.getElementById('settingDashscopeApiKey').value = state.settings.dashscopeApiKey || '';
-    // 阿里百炼 ASR 的 Key：独立于语音输出（与 TTS 的 dashscopeApiKey 分开存）
+    // 阿里百炼 ASR 的 Key 与 TTS 的 dashscopeApiKey 分开存
     document.getElementById('settingAsrApiKey').value = state.settings.asrApiKey || '';
     document.getElementById('settingDashscopeAsrBaseUrl').value = state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
     document.getElementById('settingDashscopeAsrModel').value = state.settings.dashscopeAsrModel || 'qwen3-asr-flash';
-    // MiMo TTS 凭据（独立于 ASR）。Key 默认空；接口地址固定在默认值里（界面上已删除该输入框）。
+    // MiMo TTS 凭据独立于 ASR；接口地址固定在默认值里，界面上不提供该输入框。
     document.getElementById('settingMimoTtsApiKey').value = state.settings.mimoTtsApiKey || '';
-    // MiMo ASR 凭据（内部键名仍为 mimoApiKey / mimoBaseUrl：为兼容已存数据不改键名）
+    // MiMo ASR 内部键名仍是 mimoApiKey / mimoBaseUrl：为兼容已存数据不改名
     document.getElementById('settingMimoAsrApiKey').value = state.settings.mimoApiKey || '';
     document.getElementById('settingMimoAsrBaseUrl').value = state.settings.mimoBaseUrl || 'https://api.xiaomimimo.com';
     document.getElementById('settingMimoTtsModel').value = state.settings.mimoTtsModel || 'mimo-v2.5-tts';
     document.getElementById('settingMimoTtsVoice').value = state.settings.mimoTtsVoice || 'mimo_default';
     document.getElementById('settingMimoVoiceDesignPrompt').value = state.settings.mimoTtsVoiceDesignPrompt || '';
-    // 文件框不能程序化回填：清空控件，改用状态里保存的文件名/数据展示已存样本
+    // 文件框不能程序化回填：清空控件，已存样本改用文件名展示
     const cloneInput = document.getElementById('settingMimoTtsCloneSample');
     if (cloneInput) cloneInput.value = '';
     updateMimoTtsCloneSampleStatus();
@@ -120,8 +114,7 @@ function fillSettingsForm() {
     document.getElementById('settingOpenaiTtsVoice').value = state.settings.openaiTtsVoice || 'alloy';
     document.getElementById('settingMimoAsrModel').value = state.settings.mimoAsrModel || 'mimo-v2.5-asr';
     elements.settingAutoMemory.checked = Boolean(state.settings.autoMemory);
-    elements.settingMemoryEvery.value = state.settings.memoryEvery || 6;
-    // 三档 AI 权限
+    elements.settingMemoryEvery.value = state.settings.memoryEvery || 15;
     document.querySelectorAll('input[name="agentAccess"]').forEach(r => {
         r.checked = (r.value === currentAgentAccess());
     });
@@ -130,9 +123,7 @@ function fillSettingsForm() {
     const browserToggle = document.getElementById('settingAgentBrowserEnabled');
     if (browserToggle) browserToggle.checked = state.settings.agentBrowserEnabled === true;
     void refreshBrowserStatus();
-    // AI 联网搜索
     fillTavilySettings();
-    // 图片转述：开关 + 整块控件的显隐（与联网搜索同一套做法）
     fillVisionSettings();
     fillAgentReadToggles();
     renderAgentFolderSummary();
@@ -145,45 +136,42 @@ function fillSettingsForm() {
     renderScheduledTaskList();
     void refreshDataSettings();
     void refreshOverlayStatus();
-    // 日志查看器**不从设置里打开**：它的显示入口是 railLogBtn →
-    //   window.LogViewer.open()（见 init.js）。
-    //   不要在设置里再调 open()：那会让"打开设置"顺带弹出日志页。
+    // 日志查看器不在这里打开（入口是设置分区导航的「日志」项：data-settings-tab="tab-log" 经 shell.js 的 switchSettingsTab 打开）：调了会让"打开设置"顺带弹出日志页。
 }
 
 
 function openSettings() {
     fillSettingsForm();
     void refreshAuthStatus();
-    // 每次打开设置都刷新插件列表：用户可能在服务运行期间往 mods/ 丢了新 zip，
-    // 刷新一次就能看到（而不是要求他重启服务）
+    // 每次打开设置都刷新插件列表：用户可能在服务运行期间往 mods/ 丢了新 zip。
     void refreshModsList();
-    // MCP 与插件同在一页的不同子分栏里，打开设置时一起刷 ——
-    //   状态取自只读接口（不启动进程），所以刷它没有代价。
+    // MCP 状态取自只读接口（不启动进程），与插件页一起刷没有代价。
     if (typeof refreshMcpList === 'function') void refreshMcpList();
-    // 外观主题：同步模板卡片选择态（深色切换已移到顶栏三段开关，
-    // 由 init.js 的 markThemeSeg 自行同步 —— 这里不再碰 #themeDarkMode，
-    // 否则会留下"HTML 里没有的 id"悬空引用）
+    // 深色切换归顶栏三段开关管（见 bindings.js 的 markThemeSeg），这里不碰 #themeDarkMode。
     if (window.ElainaTheme) {
         window.ElainaTheme.renderPicker();
         window.ElainaTheme.markPicker();
-        // 重新落一次深色模式 DOM：让「跟随设备」在打开设置时取到最新的系统状态
+        // 「跟随设备」要取打开设置那一刻的系统状态，所以重新落一次深色 DOM
         window.ElainaTheme.setDarkMode(window.ElainaTheme.darkMode());
     }
-    elements.settingsOverlay.classList.remove('hidden');
-    elements.settingsOverlay.classList.add('flex');
+    openOverlayPanel(elements.settingsOverlay);
     setRailActive('settings');
 }
 
 function closeSettingsPanel() {
-    // 停掉日志轮询：面板一关，日志分栏就不可见了，
-    //   继续每 2 秒拉 /api/logs/tail 是纯自噪音（服务端日志会被它刷屏）。
+    // 二级页的编辑节点先移回卡片，否则下次打开设置会停在别人家的页面上。
+    closeSettingsSubpage();
+    // 面板一关日志分栏就不可见，继续每 2 秒拉 /api/logs/tail 是纯自噪音
     try { if (window.LogViewer) window.LogViewer.close(); } catch (e) { /* 忽略 */ }
-    // 关闭前把待保存的改动冲掉 —— 用户改完最后一项马上点 ✕ 时，
-    //   那次改动还排在 300ms 防抖里，不冲就会丢（见 flushAutoSave 的说明）。
+    // 用户改完最后一项马上点 ✕ 时，那次改动还排在 300ms 防抖里，不冲就会丢
     try { flushAutoSave(); } catch (e) { /* 忽略：关闭不该因为保存失败而卡住 */ }
-    elements.settingsOverlay.classList.add('hidden');
-    elements.settingsOverlay.classList.remove('flex');
-    syncRailActive();
+    // 扩展子分栏是面板内的展开态，关设置时一并收起，下次进来不会停在半展开。
+    try {
+        if (typeof switchExtTab === 'function') {
+            switchExtTab((typeof state !== 'undefined' && state && state._extTab) || 'ext-mod', { forceClose: true });
+        }
+    } catch (e) { /* 扩展模块不在时不挡住关闭 */ }
+    closeOverlayPanel(elements.settingsOverlay, syncRailActive);
 }
 
 function updateSliderFill(slider) {
@@ -195,14 +183,47 @@ function updateSliderFill(slider) {
     slider.style.setProperty('--slider-progress', `${Math.max(0, Math.min(100, percent))}%`);
 }
 
-// ==================== 问候打字机 ====================
+/** 采样参数「开关 / 滑杆 / 数值文案」的同步只此一处（字段表见 core-config.js 的 CHAT_SAMPLING_FIELDS）：开关关着 = 该项不发送，滑杆停在默认值但禁用。 */
+function syncSamplingControls(only, walkState) {
+    for (const field of (only ? [only] : CHAT_SAMPLING_FIELDS)) {
+        const slider = elements[field.element];
+        const toggle = elements[field.enableElement];
+        if (!slider) continue;
+        if (walkState) {
+            const raw = normalizeSamplingInput(state.settings[field.setting], field);
+            const enabled = raw !== '';
+            if (toggle) toggle.checked = enabled;
+            slider.disabled = !enabled;
+            slider.value = String(enabled ? Number(raw) : field.defaultValue);
+            updateSamplingValueLabel(field, enabled ? Number(raw) : null);
+        } else if (toggle) {
+            slider.disabled = !toggle.checked;
+            updateSamplingValueLabel(field, toggle.checked ? Number(slider.value) : null);
+        }
+        updateSliderFill(slider);
+    }
+}
+
+function updateSamplingValueLabel(field, value) {
+    const label = elements[field.valueElement];
+    if (!label) return;
+    label.textContent = value == null
+        ? '服务商默认'
+        : String(Number(Number(value).toFixed(field.decimals)));
+    label.style.opacity = value == null ? '0.55' : '1';
+}
 
 let greetingTyping = false;
 function startGreetingTyping() {
     if (greetingTyping) return;
-    greetingTyping = true;
     const el = document.getElementById('greetingText');
     const text = state.characterCard.greeting || DEFAULT_CHARACTER_CARD.greeting;
+    // reduce-motion 用户不要逐字蹦字：整句直接落定（与主题切换、插件光晕同一口径）。
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        el.textContent = text;
+        return;
+    }
+    greetingTyping = true;
     el.classList.add('typing-cursor');
     let i = 0;
     const timer = setInterval(() => {

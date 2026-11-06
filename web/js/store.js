@@ -1,75 +1,42 @@
 // 统一数据存储层：data/ 是唯一权威存储，localStorage 不保存业务数据。
-// 读永远同步命中内存缓存：初始化（主题、设置、会话）是同步的，改成异步会让
-// 首屏闪默认色、且要串行 await 一大片调用点。写走防抖后落 data/。
-// 两个后端：Web 走 /api/store；APK 走 Capacitor Filesystem 的应用私有目录
-// （那就是 APK 的 data/）。
-// 对外 API 刻意与 localStorage 形似（getItem/setItem/removeItem），替换调用点
-// 时是机械改动。
+// 读同步命中内存缓存（首屏不能等异步），写走防抖落 data/；Web 走 /api/store，APK 走 Capacitor Filesystem。
 (function () {
     'use strict';
 
-    // ── 哪些键算「业务数据」 ──
-    // 只有列在这里的键才会被持久化。UI 临时状态（如侧栏展开）不入库，
-    // 避免把一次性的界面状态写进用户的数据文件里。
+    // 业务数据键白名单：只有列在这里的键才会持久化，UI 临时状态不入库。
     var DATA_KEYS = [
-        'elaina_open_settings',          // 设置（模型/地址/开关等）
+        'elaina_open_settings',
         'elainachat_open_api_secrets',   // API Key（用户选择存进 data/）
-        'elaina_open_conversations',     // 聊天记录
-        'elaina_open_categories',        // 分类
-        'elaina_open_favorites',         // 收藏
+        'elaina_open_conversations',
+        'elaina_open_categories',
+        'elaina_open_favorites',
         'elaina_open_liked_quotes',      // 历史键：点赞已下线，保留只为旧数据仍能备份/同步
         'elaina_open_character_card',    // 当前生效的角色卡（旧格式，保留兼容）
-        'elaina_open_character_cards',   // 角色卡列表
-        'elaina_open_current_card',      // 当前选中的角色卡 id
-        'elaina_open_memory_core',       // 记忆
-        'elaina_open_current_conv',      // 上次打开的对话
-        'elaina_open_tasks',             // 定时任务
-        'elaina_theme_template',         // 主题模板
-        'elaina_theme',                  // 明暗模式
-        'elaina_theme_custom',           // 自定义主题色
-        // 重构版外观偏好（气泡形状 / 背景纹理，见 redesign-extras.js）。
-        // 必须列在这里：不列的话写入只进内存缓存，刷新即丢。
+        'elaina_open_character_cards',
+        'elaina_open_current_card',
+        'elaina_open_memory_core',
+        'elaina_memory_tiers',           // 记忆分层（热/温/冷）容量设置
+        'elaina_open_current_conv',
+        'elaina_open_tasks',
+        'elaina_theme_template',
+        'elaina_theme',
+        'elaina_theme_custom',
         'elaina_rd_bubble',
         'elaina_rd_texture',
-        // 用户资料（称呼 / 头像 / AI 写下的印象，见 data.js 的用户资料段）。
-        // 同上：不入白名单则刷新即丢。
         'elaina_user_profile',
-        'elaina_plugins_enabled',        // 插件系统总开关
-        'live2d.bg',                     // Live2D 背景
-        'live2d.mouseFollow',            // 鼠标跟随开关
-        'live2d.mouseFollowScale',       // 鼠标跟随幅度
-        // 插件页的拖拽顺序（纯 UI 偏好）。
-        // 不加进来会被**静默丢弃**：setItem 只对 isDataKey 为真的键入队推送，
-        //   其余只写内存缓存 —— 表现为"拖完看着生效了，刷新就回去了"。
-        //   它不影响插件加载顺序（那个由 manifest.after 保证），只是列表怎么排。
+        'elaina_plugins_enabled',
+        'live2d.bg',
+        'live2d.mouseFollow',
+        'live2d.mouseFollowScale',
         'elaina_mods_order',
-        // 插件分栏（分组）：分栏清单 + 插件归属（见 settings.js 的 refreshModsList）
         'elaina_mods_groups',
         'elaina_mods_group_of',
-        // 顶层混排顺序（平铺插件与分栏的次序）。
-        //   新增 Store 键必须同步进这份白名单，否则写入只进内存缓存，
-        //   刷新即丢（"拖完看着生效了，刷新就回去了"）。新增键时
-        //   用 scripts/check-frontend.mjs 的「Store 键白名单」用例核对这份清单。
+        // 新增 Store 键必须同步进 DATA_KEYS（否则写入只进内存、刷新即丢）；清单由 check-frontend.mjs 的「Store 键白名单」用例核对。
         'elaina_mods_top_order',
-        // Live2D 模型列表的拖拽顺序（同上，纯 UI 偏好）。
         'elaina_live2d_model_order',
-        // 插件市场：自定义商店源（留空 = 用内置的官方索引地址）。
-        // 同样必须列在这里 —— 不列的话写入只进内存缓存、刷新即丢，
-        //   表现是"改了商店源、刷新后又说回默认"（见上面那条警告）。
         'elaina_market_url',
-        // 成就系统（含生日纪念记录）。
-        // 必须列在这里：不列的话解锁状态只进内存缓存 ——
-        //   表现是"解锁了、刷新又变回未解锁"，而且成就页会看起来一直是空的。
         'elaina_achievements',
-        // 生日状态（今天是否看过彩蛋、选了哪个分支…）**不单独占键** ——
-        //   它住在插件的私有命名空间里，见下面的 elaina_mod_storage。
-        // 插件私有存储（host.storage）：`{ "<插件id>": { … } }` 一坨 JSON。
-        //   必须列在这里，否则插件的持久化写入只进内存缓存、刷新即丢。
-        //   生日模块的状态（今天是否已看过彩蛋、选了哪个分支…）就落在这个键里。
         'elaina_mod_storage',
-        // 远程公告的已读 id（见 data.js 的公告源）。
-        // 同样必须列在这里 —— 不列的话"看过的公告"只进内存缓存，
-        //   刷新后同一条又会弹出来（表现像"公告怎么关不掉"）。
         'elaina_announce_read'
     ];
     var DATA_SET = {};
@@ -78,7 +45,6 @@
     // 插件开关是动态键（elaina_plugin_<id>），单独按前缀放行
     function isDataKey(key) {
         if (DATA_SET[key]) return true;
-        // elaina_plugin_ 后面必须有内容，且不是别的前缀碰巧匹配
         return typeof key === 'string' && /^elaina_plugin_\S+$/.test(key);
     }
 
@@ -89,13 +55,9 @@
     var backendKind = '';   // 'web' | 'native'；bootstrap 时确定，供平台判断用（不能比较对象身份）
     var bootPromise = null;   // 并发调用共享同一个启动 Promise（见 bootstrap）
 
-    // 本客户端的随机标识：用于让服务端在广播时**跳过发起方自己**。
-    // 每个标签页一份（模块级变量），关掉标签页就没了，不需要持久化。
     var clientId = 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-    // 变更订阅者：别的设备改了数据时通知业务层重新渲染（见 subscribeRemote）
     var changeListeners = new Set();
-    // SSE 长连接（多设备实时同步）。只建一次，见 subscribeRemote。
     var eventSource = null;
 
     function notifyLocal(keys, patch) {
@@ -104,16 +66,10 @@
         }
     }
 
-    // ── 后端接口 ────────────────────────────────────────────────────────
-    // loadAll() → Promise<{key: stringValue}>    启动时读全量
-    // save(patch) → Promise<void>                写增量（值 null 表示删除）
-    // Web 后端的 loadAll 是**同步填充**的（内部用同步 XHR），因为
-    // Web 版必须在脚本求值阶段就能读到主题；APK 后端是真异步。
+    // 后端接口：loadAll() → {key: stringValue}；save(patch) → void（值 null 表示删除）。
+    // Web 的 loadAll 同步填充（脚本求值阶段就要读到主题），APK 后端真异步。
 
-    /**
-     * 服务端明确拒绝（写盘失败 / 单键超限）必须让界面知道 ——
-     * 静默吞掉的话，用户会以为"已经保存"，重启后才发现数据没了。
-     */
+    // 服务端拒绝写盘/超限必须让界面知道，静默吞掉会让用户以为已保存。
     function reportSaveFailed(res) {
         return res.json().catch(function () { return {}; }).then(function (info) {
             try {
@@ -125,7 +81,6 @@
         });
     }
 
-    /** 把启动时读到的数据填进内存缓存（只收字符串值，与旧行为一致）。 */
     function mergeLoadedData(data) {
         if (!data) return;
         for (var k in data) {
@@ -135,9 +90,7 @@
 
     function createWebBackend() {
         return {
-            // 同步拉取：用同步 XHR 是**刻意**的 —— 见文件头的说明。
-            // 服务端不可用（如刚启动还没就绪）时不抛错，返回空对象，
-            // 应用照常以默认值启动（下次写入会把本机数据补上去）。
+            // 同步拉取是刻意的（Web 版在脚本求值阶段就要读到主题）；服务端不可用时不抛错，返回空对象，应用以默认值启动。
             loadAllSync: function () {
                 try {
                     var xhr = new XMLHttpRequest();
@@ -153,17 +106,9 @@
             save: function (patch) {
                 var body = JSON.stringify({ data: patch });
                 var headers = { 'Content-Type': 'application/json', 'X-Store-Client': clientId };
-                // ⚠️ sendBeacon 与 fetch(keepalive) 在浏览器里都有**约 64KB 的体积上限**：
-                //    超过时 sendBeacon 返回 false、keepalive fetch 直接抛错（还会被下面的
-                //    .catch 吞掉）→ 写入**静默失败**。端侧 settings 里可能塞着 MiMo 音色复刻的
-                //    参考样本（数 MB 的 base64），照旧用 keepalive 会让整次写入丢失，
-                //    表现就是"刚上传的样本一刷新就没了"（实测复现）。所以大包改走普通 fetch。
+                // sendBeacon / keepalive fetch 约 64KB 上限，超过会静默失败（大 base64 样本会让整次写入丢失），大包改走普通 fetch。
                 var keepaliveOk = body.length <= 60000;
-                // sendBeacon：刚改完设置就关页面/切后台时也能发出去（仅小包走这条）。
-                // ⚠️ sendBeacon **不能设自定义请求头** —— 所以这条路上不带 clientId，
-                //    服务端就会把它广播回来（包括发给自己）。这是刻意的取舍：
-                //    宁可多发一次（客户端按键比对后无变化就不动 UI），
-                //    也不要因为丢最后一次修改而损坏数据。
+                // 小包走 sendBeacon（关页面/切后台也能发出去）；它不能设自定义头，故不带 clientId，自己的改动可能被广播回来。
                 if (keepaliveOk) {
                     try {
                         if (navigator.sendBeacon) {
@@ -186,9 +131,6 @@
     }
 
     function createNativeBackend() {
-        // Capacitor Filesystem：APK 的 "data/" 就是应用私有目录。
-        // 用 Directory.Data 而不是 External —— 无需任何存储权限，
-        // 且卸载时可随应用数据一起清理（与 Web 版删 data/ 的语义一致）。
         var FILE = 'store.json';
         var DIR = 'DATA';
         function fs() {
@@ -203,16 +145,13 @@
                         try { return JSON.parse(String(r && r.data || '{}')) || {}; } catch (e) { return {}; }
                     })
                     .catch(function () {
-                        // 首次运行 / 文件不存在 —— 都是"还没有数据"，不是错误
                         return null;
                     });
             },
             save: function (patch) {
                 var F = fs();
                 if (!F) return Promise.resolve();
-                // 文件是整份覆盖写：先合并进当前缓存再整体落盘。
-                // 不做增量是因为 APK 端只有这一个进程写，不存在并发冲突，
-                // 整份写反而保证文件内容与内存缓存始终一致。
+                // 整份覆盖写：APK 单进程无并发冲突，整份写保证文件与缓存一致。
                 var all = Object.assign({}, cache);
                 for (var k in patch) {
                     if (patch[k] === null) delete all[k];
@@ -228,7 +167,6 @@
         };
     }
 
-    // ── 推送队列（防抖 + pagehide 兜底）──
     function flush() {
         flushTimer = null;
         var keys = Object.keys(pending);
@@ -242,8 +180,6 @@
         pending[key] = value;
         if (!flushTimer) flushTimer = setTimeout(flush, 800);
     }
-
-    // ── 对外 API ────────────────────────────────────────────────────────
 
     /** 同步读。未命中返回 null（与 localStorage.getItem 一致） */
     function getItem(key) {
@@ -276,28 +212,15 @@
                 changed.push(k);
             }
         }
-        // 值没变就不惊动界面（避免自己刚改完又被自己触发的广播重渲染）
         if (changed.length) {
             console.log('[Store] 收到其它设备的改动：' + changed.length + ' 项');
             notifyLocal(changed, patch);
         }
     }
 
-    /**
-     * 订阅**其它设备**的改动（多设备实时同步）。
-     *
-     * 做两件事：
-     *   ① 开一条 SSE 长连接 /api/store/stream，收到服务端广播时把数据合进缓存；
-     *   ② 合并后调用回调，让业务层重新渲染（否则数据变了、界面还是旧的）。
-     *
-     * ⚠️ 只在 Web 上有意义：APK 没有服务端，单设备不存在"别的设备改了"。
-     *    APK 上这个函数直接返回，不建立连接。
-     *
-     * @param {(keys: string[]) => void} onChange 远端改动到达时调用
-     */
+    // 订阅其它设备的改动：开 SSE /api/store/stream，合并后回调让业务层重渲染；只在 Web 有意义，APK 单设备直接返回。
     function subscribeRemote(onChange) {
         if (typeof onChange === 'function') changeListeners.add(onChange);
-        // APK / 无 EventSource 环境：什么都不做
         if (backendKind === 'native' || typeof window.EventSource !== 'function') {
             return function () { changeListeners.delete(onChange); };
         }
@@ -309,15 +232,13 @@
                 var msg;
                 try { msg = JSON.parse(ev.data || '{}'); } catch (e) { return; }
                 if (!msg || msg.type !== 'store-change' || !msg.data) return;
-                // 服务端已按 clientId 跳过发起方，这里再挡一道：
-                // sendBeacon 那条路无法带 clientId，所以自己的改动也可能被推回来。
+                // 服务端已按 clientId 跳过发起方；sendBeacon 那条路带不了 clientId，这里再挡一道。
                 if (msg.from && msg.from === clientId) return;
 
                 applyRemotePatch(msg.data);
             };
             eventSource.onerror = function () {
-                // EventSource 会自己重连，这里只记一行 —— 服务端重启期间刷屏没意义。
-                // （不关掉连接：浏览器原生重连比我们自己写的退避更可靠）
+                // EventSource 会自己重连，这里只记一行
             };
         } catch (e) {
             console.warn('[Store] 实时同步连接失败（不影响本地读写）', e);
@@ -325,42 +246,20 @@
         return function () { changeListeners.delete(onChange); };
     }
 
-    /**
-     * 启动引导：把 data/ 里的数据填进内存缓存。**必须在任何读取之前调用。**
-     *
-     * Web 后端是同步填充的，所以这个 Promise 在 Web 上其实立即就已就绪；
-     * 写成 Promise 是为了兼容 APK（Filesystem 是异步的）。
-     *
-     * 这里**不做** localStorage 自动迁移。
-     *
-     *   为什么**不能**做"把 localStorage 里遗留的数据自动搬进 data/"，
-     *   哪怕出发点是好的（免得升级后看起来数据没了）—— 它会制造一个
-     *   更让人困惑的现象：
-     *
-     *     用户关掉服务 → 删掉 data/ → 重启 → **data/ 又被填满了**
-     *
-     *   因为那台浏览器里 localStorage 还留着数据，迁移标记又只在迁移那回才写入
-     *   —— 对用户来说就是"我明明删了，数据又回来了"。
-     *
-     *   所以原则简单到不需要解释：**data/ 就是全部。删掉它，数据就没了。**
-     *   代价是从 localStorage 时代过来的用户需要手动导入一次（设置 → 我的数据 → 导入备份），
-     *   这个代价换来的是"删了就是删了"这个不需要任何心智模型的保证。
-     */
+    // 启动引导：把 data/ 填进内存缓存，必须在任何读取之前调用；Web 同步完成，Promise 仅为兼容 APK。
+    // 不做 localStorage 自动迁移：否则用户删掉 data/ 重启后，旧数据会从 localStorage 搬回来。
     function bootstrap() {
-        // 并发调用（init.js 与插件加载器都会调）必须等**同一个**启动 Promise。
-        // 只置一个布尔值会让第二个调用立刻 resolve，插件在数据还没读回来时就启动。
+        // 并发调用必须等同一个启动 Promise，否则插件会在数据读回来之前启动。
         if (bootPromise) return bootPromise;
 
         var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
         backendKind = isNative ? 'native' : 'web';
         backend = isNative ? createNativeBackend() : createWebBackend();
 
-        // Web：同步填缓存（零闪烁）
         if (backend.loadAllSync) {
             mergeLoadedData(backend.loadAllSync());
             bootPromise = Promise.resolve();
         } else {
-            // APK：异步读文件
             bootPromise = backend.loadAll().then(mergeLoadedData).catch(function () { /* 读不到就按空数据启动 */ });
         }
         return bootPromise;
@@ -371,8 +270,15 @@
         return Object.assign({}, cache);
     }
 
+    // bootstrap 是否已跑过：主题系统在缓存为空时必须跳过应用，否则会把启动快照回放好的外观拉回默认值。
+    function isBooted() {
+        return bootPromise !== null;
+    }
+
     window.Store = {
         bootstrap: bootstrap,
+        /** 缓存是否已填充（bootstrap 跑过即为真，哪怕读到的空数据） */
+        isBooted: isBooted,
         getItem: getItem,
         setItem: setItem,
         removeItem: removeItem,
@@ -383,13 +289,10 @@
         snapshot: snapshot,
         isDataKey: isDataKey,
         DATA_KEYS: DATA_KEYS,
-        // 供测试与迁移使用
         _flush: flush,
     };
 
-    // 关页面/切后台时把待推送的补丁发出去，避免丢最后一次修改。
-    // 用可选调用：非浏览器环境（单元测试的沙箱）没有 addEventListener，
-    // 不能因为这一句就让整个存储层加载失败。
+    // 关页面/切后台时把待推送的补丁发出去；非浏览器环境没有 addEventListener。
     if (typeof window.addEventListener === 'function') {
         window.addEventListener('pagehide', function () {
             if (flushTimer) { clearTimeout(flushTimer); flush(); }

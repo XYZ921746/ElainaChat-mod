@@ -1,44 +1,10 @@
-// 本地中转 /api/relay —— **电脑端与手机端共用**的这一份实现。
-// 从 web/serve.mjs 抽成独立模块：serve.mjs 太长了，而这段逻辑与路由表无关，
-// 单独成文件才好读、好测。
-//   为什么抽：这台"中转"是把请求搬到 Node 侧发出（Node 没有 CORS 这回事），
-//   而两端**都需要它** —— 电脑版是 BYOK 直连被 CORS 挡住时的唯一出路，
-//   手机版更彻底：WebView 页面在 https://localhost，而内嵌服务在
-//   http://127.0.0.1:<随机端口>，本来就跨源。复制两份实现意味着"同一个 Key、
-//   同一个地址，在电脑上能通、在手机上通不了"这类问题要查两遍。
-//   依赖注入而不是 import 宿主：唯一真正需要注入的是 `traceLine`
-//   （电脑版把追踪日志写进 data/logs/<启动时刻>.trace.log，手机端另有落法），
-//   以及三个**安全判定**（是否本机请求 / 是否回环主机名 / 是否内网地址）。
-//   后三个电脑端定义在 serve.mjs 里（局域网里还有别的设备能打到它），
-//   手机端只绑 127.0.0.1、由内嵌入口自己给出等价实现 —— 见 createRelay 的说明。
-// 为什么需要它（原文保留）：BYOK 的"直连"是让浏览器自己去请求服务商，而浏览器会强制 CORS。
-// 大量中转站（自建 OneAPI、厂商内测网关、Ollama 之类）根本不发 Access-Control-Allow-Origin，
-// 预检 OPTIONS 甚至直接 405 —— 这时 fetch() 只会抛一句 "Failed to fetch"，
-// 看不出任何原因。而 ChatBox / Cherry Studio 这些原生客户端不受 CORS 约束，
-// 于是同一个 Key、同一个地址在它们那儿正常，在网页里就是连不上。
-// Key 只经过本机进程内存，不落盘、不发给任何第三方 —— 与 BYOK 一致。
+// 本地中转 /api/relay —— 电脑端与手机端共用的这一份实现：把请求搬到 Node 侧发出（Node 没有 CORS），是 BYOK 直连被 CORS 挡住时的唯一出路，手机端 WebView 与内嵌服务本来就跨源。
+// 依赖注入而不是 import 宿主：需要注入 traceLine 与三个安全判定（isLocalRequest / isLoopbackHostname / isInternalAddress），缺了它们等于静默关掉 SSRF 防护。Key 只经本机进程内存，不落盘、不发第三方。
 
 import dns from 'node:dns';
 import { jsonResponse, readJsonBody } from './http-util.mjs';
 
-/**
- * 有些网络只对 **TLS 1.3 的 ClientHello 丢包**，对 TLS 1.2 却放行。
- *
- * 实测（同一台机器、同一个 IPv4）：
- *   · TCP 连 api.tavily.com 每秒都能建（250ms）；
- *   · TLS 握手用 1.3 必然卡到超时（8s 无响应），**限制成 1.2 立刻 250ms 完成并拿到 401**；
- *   · 同环境下 api.exa.ai 的 1.3 正常 —— 所以不是"整体被墙"，而是特定路径的中间设备
- *     只处理 1.2（按 SNI / ClientHello 版本分流的老网关很常见）。
- *
- * 表现是 fetch 报 `UND_ERR_CONNECT_TIMEOUT (attempted addresses: …:443)`：看着像"连不上"，
- *   实际 TCP 早通了，卡在握手。只报地址会把排查引向"网络不通"的错判。
- *
- * 为什么不无条件用 1.2：等于让所有上游都降级（1.3 有前向保密、往返更少），
- *   为一个局部网络问题付全站代价不划算。所以只在**握手类失败**时回退一次。
- *
- * 为什么判据要看 err.cause：undici 把底层错误包在 cause 里，顶层只是 "fetch failed"。
- *   业务失败（4xx/5xx）不会抛，压根到不了这里。
- */
+/** 有些网络只对 TLS 1.3 的 ClientHello 丢包、对 1.2 却放行：TCP 能建、握手必然卡到超时，fetch 只报 UND_ERR_CONNECT_TIMEOUT，看着像"连不上"（其实 TCP 早通了）；只在握手类失败时回退一次 —— 无条件降级等于让所有上游都少掉 1.3 的前向保密，undici 把底层错误包在 err.cause 里，业务 4xx/5xx 不会抛到这里 */
 function isTlsHandshakeFailure(err) {
     const c = err && err.cause;
     const code = String((c && c.code) || '');
@@ -85,12 +51,8 @@ const TRACE_BODY_MAX = 64 * 1024;          // 写进追踪日志的单次响应�
 // 出内容 —— 但也不是无上限，图片/语音那种几十 MB 的响应只透传、不记录。
 const TRACE_ACCUM_MAX = 256 * 1024;
 
-// ===== 对话追踪 =====
-// 为什么埋在中转这一层：`/api/relay` 是**所有对外 AI 请求的唯一出口**（三种对话格式、
-// 获取模型、语音、视觉全走它），在这一层埋点就能覆盖全部，前端一行都不用改。
-// 主日志只留一行摘要（提问 / 回复各截一段），完整内容进追踪日志。
-// 旧日志只有「谁在什么时候调了哪个接口」—— 出问题时根本还原不出当时问了什么、答了什么、
-// 上游到底为什么拒，这正是这次要补上的。
+// 追踪埋在中转这一层：/api/relay 是所有对外 AI 请求的唯一出口（三种对话格式、获取模型、语音、视觉全走它），埋在这里就覆盖全部，前端一行都不用改。
+// 主日志只留一行摘要，完整内容进追踪日志 —— 出问题时必须能还原"问了什么、答了什么、上游为什么拒"。
 
 /** 把消息内容拍平成可读文本；图片等二进制只记大小，绝不记 base64（否则日志瞬间膨胀） */
 export function flattenContent(content) {
@@ -200,9 +162,7 @@ export function parseSseReply(rawText) {
 }
 
 /**
- * 流式响应里的报错，状态码常常是 200 —— 错在 `data:` 行里。
- * 这类"看起来成功、其实一个字都没回"的情况不特意挖一下，用户只会看到"AI 不回话"，
- * 而日志里一片祥和，完全无从下手。
+ * 流式响应里的报错，状态码常常是 200 —— 错在 data: 行里，不特意挖一下，用户只看到"AI 不回话"而日志一片祥和。
  */
 export function parseSseError(rawText) {
     for (const line of String(rawText).split('\n')) {
@@ -219,12 +179,7 @@ export function parseSseError(rawText) {
 }
 
 /**
- * 空闲超时 + 客户端断开处理：每收到一块数据就续期，只有真正卡死才 abort。
- *
- * 为什么不是"总时长"超时：长回复（几千字）正常说完就要好几分钟，高思考强度模型的
- *   首字节本身也常超过 120 秒 —— 按总时长砍会表现成"AI 不能正常流式输出"。
- *   同时必须有 RELAY_TIMEOUT_MAX 的总时长硬顶：否则"上游一直发心跳、但永远不说正文"
- *   就能把一个连接永远占住（逐块透传没有上限就是免费长连接）。
+ * 空闲超时 + 客户端断开处理：每收到一块数据就续期，只有真正卡死才 abort。不能按总时长砍（长回复、高思考强度模型的首字节本身就常超 120s），但必须有 RELAY_TIMEOUT_MAX 硬顶，否则"一直发心跳、永远不说正文"能把连接永远占住。
  */
 function createRelayAbort(response, timeoutMs) {
     const controller = new AbortController();
@@ -308,8 +263,7 @@ function writeUpstreamHeaders(upstream, response) {
 }
 
 /**
- * 边透传边攒一份日志用的响应文本。攒到 TRACE_ACCUM_MAX 就停止记录但**继续透传**，
- * 免得一个长回答把内存吃掉；流式正文稍后由 parseSseReply 从 data: 行拼回来。
+ * 边透传边攒一份日志用的响应文本：攒到 TRACE_ACCUM_MAX 就停止记录但继续透传，免得一个长回答把内存吃掉；流式正文稍后由 parseSseReply 从 data: 行拼回来。
  */
 async function forwardUpstreamBody(upstream, response, armIdleTimer, timeoutMs, isAbortedByClient) {
     const traceChunks = [];
@@ -333,33 +287,14 @@ async function forwardUpstreamBody(upstream, response, armIdleTimer, timeoutMs, 
     return traceChunks.length ? Buffer.concat(traceChunks).toString('utf8') : '';
 }
 
-/**
- * 造一个中继处理器。
- *
- * @param {object} deps
- * @param {(text: string) => void} deps.traceLine
- *        写追踪日志。电脑版写进 `<启动时刻>.trace.log`；手机端写进内嵌服务的日志。
- *        不传则退化为只写主日志（会丢掉"问过什么/答了什么"的全文，不推荐）。
- * @param {(request) => boolean} deps.isLocalRequest
- *        这次请求是不是本机发起的。**决定 SSRF 那两道校验是否生效**，必须显式给。
- * @param {(hostname: string) => boolean} deps.isLoopbackHostname
- * @param {(address: string) => boolean} deps.isInternalAddress
- *
- * 后三个刻意**不设默认值**：漏传等于把"非本机请求"一律当成"本机请求"放行，
- *   那不是"少一层可选优化"，而是把 SSRF 防护静默关掉。宁可在构造时就报出来。
- *   手机端只绑回环、这三条分支走不到，也要**显式**写出等价实现（见
- *   web/nodejs/bootstrap.mjs）—— 显式写出来，将来谁改了监听地址就会立刻看见问题。
- */
+/** 造一个中继处理器。deps 需显式给出 traceLine（不传则退化为只写主日志，会丢掉问答全文）与三个安全判定（isLocalRequest / isLoopbackHostname / isInternalAddress）：后三个刻意不设默认值，漏传等于把"非本机请求"一律当本机放行、把 SSRF 防护静默关掉；手机端只绑回环也要显式写等价实现（见 web/nodejs/bootstrap.mjs），将来谁改了监听地址就会立刻看见问题 */
 export function createRelay(deps) {
     const { traceLine = () => { }, isLocalRequest, isLoopbackHostname, isInternalAddress } = deps || {};
     for (const [name, fn] of [['isLocalRequest', isLocalRequest], ['isLoopbackHostname', isLoopbackHostname], ['isInternalAddress', isInternalAddress]]) {
         if (typeof fn !== 'function') throw new Error(`createRelay 缺少依赖 ${name}（它决定 SSRF 防护，不能省）`);
     }
 
-    /**
-     * 校验中转目标地址（协议 / 云元数据 / SSRF）。
-     * 任一检查不通过就直接回错并返回 null；调用方见到 null 立即 return。
-     */
+    /** 校验中转目标地址（协议 / 云元数据 / SSRF）：任一检查不通过就直接回错并返回 null；调用方见到 null 立即 return */
     async function resolveRelayTarget(request, response, payload) {
         let target;
         try { target = new URL(String(payload?.url || '')); }
@@ -386,8 +321,7 @@ export function createRelay(deps) {
             jsonResponse(response, 403, { ok: false, relayError: true, message: '本机地址只能由本机发起中转' });
             return null;
         }
-        // 只拦字面回环主机名还不够：攻击者可以让自己的域名解析到 127.0.0.1（DNS rebinding），
-        // 或直接填局域网地址、或用 ::ffff:127.0.0.1 这类 IPv4-mapped IPv6 写法绕开前缀比较。
+        // 只拦字面回环主机名还不够：攻击者可以让自己的域名解析到 127.0.0.1（DNS rebinding）、直接填局域网地址、或用 ::ffff:127.0.0.1 这类 IPv4-mapped 写法绕开前缀比较。
         // 先解析成 IP 再判一遍 —— 解析不出来就放行（真连不上时 fetch 自己会报错）。
         if (!isLocalRequest(request)) {
             let targetIps = [];
@@ -435,11 +369,8 @@ export function createRelay(deps) {
         traceLine(lines.join('\n'));
         const lastUser = [...summary.messages].reverse().find((m) => m.role === 'user');
         if (lastUser && lastUser.text.trim()) {
-            // 合成消息（桌宠"主动搭话"等 mod 注入的系统提示）不是人打的话 ——
-            //   原样打印会把整段提示词+电脑状态快照灌进主日志，还长得像用户发了
-            //   一句怪话（用户实测困惑："这个日志是你干的吗"）。
-            //   识别特征：mod 们约定的开头「（系统提示：」。此时只记一行来源事实，
-            //   提示词全文仍完整保留在追踪日志（上面逐条已记）。
+            // 合成消息（桌宠"主动搭话"等 mod 注入的系统提示）不是人打的话：原样打印会把整段提示词+电脑状态快照灌进主日志，还长得像用户发了句怪话。
+            // 识别特征：mod 们约定的开头「（系统提示：」；提示词全文仍完整保留在追踪日志（上面逐条已记）。
             if (/^（系统提示：/.test(lastUser.text.trim())) {
                 console.log('[chat] 提问来自自动功能（mod 注入的系统提示，全文见追踪日志）');
             } else {
@@ -450,11 +381,7 @@ export function createRelay(deps) {
     }
 
     /**
-     * 一次中转的完整记录：请求 + 响应。
-     *
-     * 主日志留一行（谁、哪家、什么状态、多久、为什么失败），追踪日志留全文。
-     * 这是这次日志改造的核心 —— 旧日志只有「什么地址在什么时间调用了什么 API」，
-     * 出问题时还原不出当时问了什么、答了什么、上游到底为什么拒。
+     * 一次中转的完整记录：主日志留一行（哪家、什么状态、多久、为什么失败），追踪日志留全文 —— 排查"偶发失败"时这是唯一能还原现场的东西。
      */
     function traceRelayExchange({ method, target, reqJson, reqRaw, status, ms, respJson, respRaw }) {
         const where = `${target.host}${target.pathname}`;
@@ -533,10 +460,8 @@ export function createRelay(deps) {
         try {
             upstream = await fetch(target, fetchOptions);
         } catch (err) {
-            // 有些网络只对 TLS 1.3 的 ClientHello 丢包（TCP 通、握手必卡）。
-            //   这种情况 fetch 报的是 UND_ERR_CONNECT_TIMEOUT，看着像"连不上"。
-            //   用限制到 TLS 1.2 的策略重试一次 —— 实测能把 10s 超时变成 250ms 拿到响应。
-            //   只在**握手类**失败时重试：业务错误（4xx/5xx）根本不抛，不会走到这里。
+            // 有些网络只对 TLS 1.3 的 ClientHello 丢包（TCP 通、握手必卡），fetch 报 UND_ERR_CONNECT_TIMEOUT，看着像"连不上"。
+            // 用限制到 TLS 1.2 的策略重试一次；只在握手类失败时重试 —— 业务错误（4xx/5xx）根本不抛，不会走到这里。
             const retry = (!controller.signal.aborted && isTlsHandshakeFailure(err))
                 ? await retryWithTls12(target, fetchOptions, traceLine)
                 : null;

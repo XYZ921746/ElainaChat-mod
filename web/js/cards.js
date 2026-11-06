@@ -1,15 +1,8 @@
-/* ============================================================================
- * 多人设角色卡（从 data.js 拆分）
- *
- * 角色卡列表 / 当前卡 / 增删改切换 / 表单同步。
- * 依赖数据层 normalizeCharacterCard（data.js）。
- * ========================================================================== */
+// 多人设角色卡：角色卡列表 / 当前卡 / 增删改切换 / 表单同步；依赖数据层 normalizeCharacterCard（data.js）。
 'use strict';
 
-// ===== 多人设 =====
-// 数据结构：characterCards 是列表，每项就是一张角色卡外加一个 id；
-// state.characterCard 始终等于「当前选中那张」的内容 —— 于是提示词拼装、
-// 通知标题、开场白这些地方一行都不用改。
+// characterCards 是列表，每项是一张角色卡外加一个 id；state.characterCard 始终等于「当前选中那张」的内容，
+// 于是提示词拼装、通知标题、开场白这些地方一行都不用改。
 const CARDS_KEY = 'elaina_open_character_cards';
 const CURRENT_CARD_KEY = 'elaina_open_current_card';
 
@@ -33,9 +26,8 @@ function currentCard() {
         || state.characterCards[0] || null;
 }
 
-// ===== 按对话绑定人设卡 =====
-// conv.cardId 为空串/缺失 = 跟随全局当前卡；绑定的 id 找不到（卡被删、
-// 数据同步漂移）时也回退到全局卡，读侧永远拿得到一张可用卡。
+// conv.cardId 为空串/缺失 = 跟随全局当前卡；绑定的 id 找不到（卡被删、数据同步漂移）时也回退到全局卡，
+// 读侧永远拿得到一张可用卡。
 
 /** 这段对话绑定的卡；没绑定或绑定已失效返回 null。 */
 function conversationBoundCard(conv) {
@@ -47,6 +39,26 @@ function conversationBoundCard(conv) {
 /** 这段对话实际生效的卡：绑定优先，否则全局当前卡。缺省取当前对话。 */
 function effectiveCardForConversation(conv = getCurrentConversation()) {
     return conversationBoundCard(conv) || state.characterCard;
+}
+
+/**
+ * 这段对话里 bot 的显示名：会话自定义 > 绑定 / 全局人设卡名。
+ *   「会话人设」里可以给单段对话换名字（见 roleplay.js 的 saveConversationPrompt）。
+ */
+function conversationBotName(conv = getCurrentConversation()) {
+    const override = String((conv && conv.botName) || '').trim();
+    if (override) return override;
+    const card = effectiveCardForConversation(conv);
+    return (card && card.name) || (state.characterCard && state.characterCard.name) || '伊蕾娜';
+}
+
+/**
+ * 这段对话自定义的 bot 头像（dataURL）；没有则空串。
+ *   只认图片 dataURL：这个值会进 <img src> 与 CSS 背景，别的协议没有理由进来。
+ */
+function conversationBotAvatar(conv = getCurrentConversation()) {
+    const raw = String((conv && conv.botAvatar) || '').trim();
+    return /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(raw) ? raw : '';
 }
 
 function normalizeCardList(list) {
@@ -62,17 +74,9 @@ function normalizeCardList(list) {
     return out;
 }
 
-/**
- * 已退役的内置人设 id。
- *
- * 内嵌角色卡的教训：应用曾把一张 DeepSeek 鲸鱼娘角色卡写死在代码里，每次启动
- * 都种回列表（id 固定为 builtin_deepseek_whale），用户删掉下次启动又回来。
- * 现在不再内嵌 —— 但**老版本客户端还在写这份列表**：它一加载就把这张卡推回
- * 服务端，于是服务端数据里又冒出它，新客户端再读回来照样看得到。
- *
- * 所以这里做一次**定向清理**：读到这个固定 id 就丢掉，并随列表一起写回服务端。
- * 只认这个固定 id，**不按内容匹配** —— 否则会误删用户自己新建的同类人设。
- */
+// 已退役的内置人设 id：曾内嵌的 DeepSeek 鲸鱼娘卡（builtin_deepseek_whale）会随老版本客户端
+// 被推回服务端，所以读到这个固定 id 就丢掉并随列表写回。只认这个固定 id，不按内容匹配 ——
+// 否则会误删用户自己新建的同类人设。
 const RETIRED_BUILTIN_CARD_IDS = ['builtin_deepseek_whale'];
 
 function loadCharacterCards() {
@@ -85,8 +89,7 @@ function loadCharacterCards() {
     }
 
     if (!Array.isArray(list) || !list.length) {
-        // 兼容老数据：更早的版本只有一张卡（elaina_open_character_card），
-        // 这里把它变成列表里的第一项，已有设定不会丢。
+        // 兼容老数据：更早的版本只有一张卡（elaina_open_character_card），把它变成列表第一项，已有设定不会丢。
         list = [{ id: newCardId(), ...(state.characterCard || DEFAULT_CHARACTER_CARD) }];
     }
     state.characterCards = normalizeCardList(list);
@@ -108,8 +111,7 @@ function persistCharacterCards() {
     } catch (e) { /* 写入失败等，忽略 */ }
 }
 
-// 把表单上正在编辑的内容写回「当前那套」。切换、保存前都要调，
-// 否则用户改了没保存就切走，改动会静默丢掉。
+// 把表单上正在编辑的内容写回「当前那套」。切换、保存前都要调，否则用户改了没保存就切走，改动会静默丢掉。
 function syncFormToCurrentCard() {
     const card = currentCard();
     if (!card) return;
@@ -211,8 +213,7 @@ async function deleteCard() {
     state.characterCards = state.characterCards.filter((c) => c.id !== card.id);
     state.currentCardId = state.characterCards[0].id;
     state.characterCard = cardContent(currentCard());
-    // 绑定在这张卡上的对话一并解绑：留着失效 id 会被读侧当成"跟随全局"，
-    // 但显式清掉才能把解绑结果落盘，重新启用同名新卡也不会误接上旧绑定。
+    // 绑定在这张卡上的对话一并解绑：留着失效 id 会被读侧当成"跟随全局"，显式清掉才能把解绑结果落盘。
     let rebound = false;
     state.conversations.forEach((conv) => {
         if (conv && conv.cardId === card.id) {
@@ -240,7 +241,6 @@ function loadCharacterCard() {
             console.error(e);
         }
     }
-    // 老键读进 state.characterCard 之后，再据此建/载入多人设列表
     loadCharacterCards();
 }
 

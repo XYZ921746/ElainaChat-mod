@@ -1,11 +1,7 @@
-/* ============================================================================
- * Redesign 视觉层
- *
- * 只覆盖外观，不改业务 DOM：所有规则挂在 html.rd 下，保证高于旧的
- * Tailwind 工具类与内联样式；组件仍通过既有 id / class 与脚本通信。
- * ========================================================================== */
+/* Redesign 视觉层：只覆盖外观，不改业务 DOM。所有规则挂在 html.rd 下，
+   保证高于基础层与内联样式；组件仍通过既有 id / class 与脚本通信。 */
 
-/* ---------- 全局与外壳 ---------- */
+/* 全局与外壳 */
 
 html.rd {
     color-scheme: light;
@@ -69,7 +65,7 @@ html.rd #greetingText {
     letter-spacing: var(--rd-letter);
 }
 
-/* ---------- 通用工具类 → 主题 token ---------- */
+/* 通用工具类 → 主题 token */
 
 html.rd body .text-indigo-950,
 html.rd body .text-indigo-900,
@@ -131,7 +127,7 @@ html.rd .bubble-user .text-amber-500 { color: var(--rd-user-text) !important; }
 html.rd .ai-voice-card,
 html.rd .ai-voice-player { color: var(--rd-text) !important; }
 
-/* ---------- 玻璃面板 / 按钮 / 输入 ---------- */
+/* 玻璃面板 / 按钮 / 输入 */
 
 html.rd .glass-panel {
     background: var(--rd-surface) !important;
@@ -241,7 +237,7 @@ html.rd .modal-label {
     letter-spacing: .01em;
 }
 
-/* ---------- 侧栏：竖向导航 + 对话列表 ---------- */
+/* 侧栏：竖向导航 + 对话列表 */
 
 html.rd #sidebar {
     width: var(--rd-sidebar-w) !important;
@@ -498,10 +494,14 @@ html.rd #sidebarFooter {
     font-size: 10px !important;
 }
 
-/* ---------- 顶栏 ---------- */
+/* 顶栏 */
 
 html.rd #mainContent {
     background: var(--rd-bg) !important;
+    /* 外壳与主区都铺了不透明底色，body::before 的光晕到不了界面；光晕直接铺在主区底色上。 */
+    background-image:
+        radial-gradient(760px 620px at 8% -8%, var(--rd-glow-1), transparent 62%),
+        radial-gradient(720px 620px at 104% 104%, var(--rd-glow-2), transparent 62%) !important;
     margin-left: 0 !important;
 }
 
@@ -597,7 +597,7 @@ html.rd .announce-item b { color: var(--rd-text) !important; }
 html.rd .announce-item p,
 html.rd .announce-item small { color: var(--rd-text-3) !important; }
 
-/* ---------- 对话区 ---------- */
+/* 对话区 */
 
 html.rd #conversationHistory {
     padding: 24px 28px 20px !important;
@@ -646,14 +646,19 @@ html.rd .message-item-ai.is-bound-card::before {
     border: 1px solid var(--rd-avatar-ai-border);
     background: var(--rd-avatar-ai-bg);
 }
+/* 这段对话自定义了 bot 头像：优先级高于绑卡首字，用行内 --rd-ai-avatar 的图片覆盖 */
+html.rd .message-item-ai.has-bot-avatar::before {
+    content: "";
+    border: 0;
+    background: var(--rd-avatar-ai-bg) var(--rd-ai-avatar) center / cover no-repeat;
+}
 
-/* 消息行头像只由上面的伪元素画：行内若再出现 .ai-msg-avatar（旧缓存脚本会插）
-   就是第二个头像 —— 显示层直接摁掉，宁缺勿重。 */
+/* 消息行头像只由上面的伪元素画：行内若再出现 .ai-msg-avatar 就是第二个头像，
+   显示层直接摁掉，宁缺勿重。 */
 html.rd #conversationHistory .message-item-ai .ai-msg-avatar { display: none !important; }
 
-/* ---------- 对话列表行的头像（桌面侧栏与手机首页列表同源） ----------
-   绑卡 = 卡名首字（底色与消息行 AI 头像同源），跟随全局 = 应用图标。
-   手机列表复用 .mmc-avatar 当容器，所以这里只管桌面容器与两种内容的通用样式。 */
+/* 对话列表行的头像（桌面侧栏与手机首页列表同源）：绑卡 = 卡名首字，
+   跟随全局 = 应用图标；手机列表复用 .mmc-avatar 当容器，这里只管桌面容器与通用样式。 */
 html.rd .conv-row-avatar {
     flex: none;
     width: 30px;
@@ -690,9 +695,8 @@ html.rd .message-item > .flex { margin-bottom: 0 !important; }
 html.rd .message-item-user > .flex { flex-direction: row-reverse; }
 html.rd .message-item > .flex > .flex-1 { max-width: min(85%, 900px); }
 html.rd .message-item-user > .flex > .flex-1 { max-width: min(85%, 900px); }
-/* index.html 基础层的 id 选择器规则给用户行写了 justify-content: flex-end
-   （那是普通正向行时代的"靠右"）。行改成 row-reverse 后 flex-end 落到左边，
-   短消息会悬在左侧 —— 用同权重选择器扳回主轴起点（反向行里即靠右）。 */
+/* 基础层给用户行写了 justify-content: flex-end；
+   行改成 row-reverse 后它落到左边、短消息悬在左侧，用同权重选择器扳回主轴起点。 */
 html.rd #conversationHistory > .message-item-user > .flex { justify-content: flex-start; }
 
 html.rd .bubble-ai,
@@ -864,7 +868,7 @@ html.rd .pixso-chat-avatar img {
     display: block;
 }
 
-/* ---------- 初始页 ---------- */
+/* 初始页 */
 
 html.rd #initialState {
     padding: 40px 28px 32px !important;
@@ -984,7 +988,7 @@ html.rd #inputBar .conversation-composer {
 }
 
 html.rd .composer-more-menu {
-    /* 雾蓝/石墨主题的 surface 带透明度，菜单浮在消息上时下面的文字会透出来。
+    /* 雾蓝/石墨主题的 surface 带透明度，菜单浮在消息上时下面的文字会透出来；
        先铺一层 surface 再垫一层实色 bg，保留玻璃感但保证可读。 */
     background: linear-gradient(var(--rd-surface), var(--rd-surface)), var(--rd-bg) !important;
     border: 1px solid var(--rd-border) !important;
@@ -1008,7 +1012,7 @@ html.rd .floating-voice-status { color: var(--rd-text) !important; }
 html.rd .floating-voice-status small { color: var(--rd-text-3) !important; }
 html.rd .floating-dock-btn { background: var(--rd-surface-2) !important; border-color: var(--rd-border) !important; color: var(--rd-text-2) !important; }
 
-/* ---------- 语笺 ---------- */
+/* 语笺 */
 
 html.rd .page-secondary-header {
     flex: 0 0 auto !important;
@@ -1169,7 +1173,7 @@ html.rd #detailTimestamp { color: var(--rd-text-3) !important; }
 html.rd #detailContextSection { border-top-color: var(--rd-border) !important; }
 html.rd #detailConvTitle { color: var(--rd-text-2) !important; }
 
-/* ---------- 旅行日记 ---------- */
+/* 旅行日记 */
 
 html.rd .diary-toolbar { padding: 14px 28px 0 !important; }
 html.rd .diary-count { color: var(--rd-text-3) !important; font-size: 11px !important; }
@@ -1265,7 +1269,7 @@ html.rd .diary-essence {
 }
 html.rd #diaryEmpty { color: var(--rd-text-3) !important; }
 
-/* ---------- 成就 ---------- */
+/* 成就 */
 
 html.rd #achievementsOverlay { z-index: 100001; }
 html.rd #achievementsOverlay .modal-panel { width: min(760px, 100%) !important; max-height: 88dvh !important; }
@@ -1323,7 +1327,7 @@ html.rd .ach-detail {
 }
 html.rd .ach-when { color: var(--rd-text-3) !important; font-size: 10px !important; }
 
-/* ---------- 插件市场 ---------- */
+/* 插件市场 */
 
 html.rd #marketOverlay { z-index: 100001; }
 html.rd #marketOverlay .modal-panel { width: min(760px, 100%) !important; max-height: 88dvh !important; }
@@ -1361,14 +1365,12 @@ html.rd #marketOverlay .text-\[11px\] { color: var(--rd-text-3) !important; }
 html.rd #marketOverlay .btn-secondary { font-size: 10.5px !important; }
 html.rd #marketPrereqToggle { color: var(--rd-text-3) !important; }
 
-/* ---------- 设置 ---------- */
+/* 设置 */
 
 html.rd #settingsOverlay { z-index: 100001; }
 
-/* 情景演绎舞台（galgame）必须盖过上面的整页层：
-   舞台自带 z-index 是 45 / 950，按旧版"弹窗最高 50+"的尺度定的；
-   本设计把设置/成就/市场抬到 100001 后，从「设置 → 插件 → 打开情景演绎」
-   进舞台就成了"设置页挡在舞台前面"。 */
+/* 情景演绎舞台（galgame）必须盖过上面的整页层：舞台自带 z-index 是 45 / 950，
+   而设置/成就/市场已抬到 100001，否则从「设置 → 插件 → 打开情景演绎」进舞台会变成"设置页挡在前面"。 */
 html.rd #galgameLayer,
 html.rd #live2d-call-host { z-index: 100012; }
 
@@ -1488,13 +1490,10 @@ html.rd #settingsContent .settings-tab-panel > div.mb-4:hover { box-shadow: var(
 html.rd #settingsContent .modal-label { color: var(--rd-text) !important; font-size: 13px !important; font-weight: 600 !important; }
 html.rd #settingsContent .modal-label span:first-child { color: var(--rd-accent) !important; }
 
-/* ---------- 扩展页：三个子面板不带外框 ----------
- * 插件 / 技能 / MCP 各自就是"这一页"，外面再套一层卡片等于把内容装进套娃：
- *   一屏只放得下半个列表，而框本身不传达任何信息。
- * 保留框的是**用户自己注册的条目**（.mod-card：插件 / 技能 / MCP 服务器）——
- *   那里的框表示"这是一条可操作的东西"，与"这是一页"不是同一件事。
- * 页头（标题行）改用一条细线分隔，既划出范围又不吃高度。
- */
+/* 扩展页：三个子面板（插件 / 技能 / MCP）不带外框 —— 它们各自就是"这一页"，
+   外面再套一层卡片等于装进套娃，一屏只放得下半个列表。
+   保留框的是用户自己注册的条目（.mod-card：插件 / 技能 / MCP 服务器），
+   那里的框表示"这是一条可操作的东西"。页头改用一条细线分隔，既划出范围又不吃高度。 */
 html.rd #tab-mods .ext-panel {
     border: 0 !important;
     background: transparent !important;
@@ -1581,7 +1580,7 @@ html.rd #settingsContent .mod-card {
     border-radius: var(--rd-radius-md) !important;
 }
 
-/* ---------- 其他浮层 ---------- */
+/* 其他浮层 */
 
 html.rd #notesOverlay .modal-panel,
 html.rd #categoriesModalOverlay .modal-panel,
@@ -1608,7 +1607,7 @@ html.rd #categoriesModalOverlay .glass-panel {
 
 html.rd #screenWatchPanel .bg-slate-900\/95 { background: #0b0d12 !important; }
 
-/* ---------- 主题特化 ---------- */
+/* 主题特化 */
 
 html.rd[data-theme-template="majo"] .sidebar-rail-logo {
     background: linear-gradient(135deg, #e0c789, #ad8a43) !important;
@@ -1657,7 +1656,7 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
     border-color: var(--rd-ai-border) !important;
 }
 
-/* ---------- 响应式 ---------- */
+/* 响应式 */
 
 @media (max-width: 1240px) {
     html.rd #notesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
@@ -1827,7 +1826,6 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
     html.rd .theme-tpl-card { width: calc(50% - 5px); }
     html.rd #inputBar { padding: 0 10px 8px !important; }
     html.rd .initial-composer-shell { min-height: 50px !important; }
-    html.rd .composer-hint { display: none !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1840,8 +1838,7 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
     }
 }
 
-/* ---------- 圆形主题切换（View Transitions） ----------
-   新主题从最近一次点击处圆形铺开盖住旧主题；
+/* 圆形主题切换（View Transitions）：新主题从最近一次点击处圆形铺开；
    不支持该 API、启动时刻与"减少动态效果"下由 JS 侧直接走瞬时切换。 */
 ::view-transition-old(root),
 ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
@@ -1854,17 +1851,15 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
     ::view-transition-new(root) { animation: none; }
 }
 
-/* ---------- 插件开关反馈 ----------
-   光晕从被拨动的开关中心散开，由 settings.js 运行时生成（WAAPI），
-   不走这里的 keyframes —— 卡片自身的 box-shadow/背景被 #tab-mods 的
-   !important 规则压死，挂在上面的阴影动画一概出不来。
+/* 插件开关反馈：光晕从被拨动的开关中心散开，由 settings.js 运行时生成（WAAPI），
+   不走这里的 keyframes —— 卡片自身的 box-shadow/背景被 #tab-mods 的 !important 规则压死。
    这里只保留减少动态效果时的静态描边。 */
 html.rd .mod-card.rd-ripple-static {
     outline: 3px solid rgba(211, 179, 106, .65);
     outline: 3px solid color-mix(in srgb, var(--color-primary) 65%, transparent);
 }
 
-/* ---------- 用户资料面板（data.js 动态建：左下角头像点开） ---------- */
+/* 用户资料面板（data.js 动态建：左下角头像点开） */
 
 html.rd .profile-avatar-btn {
     width: 64px;
@@ -1897,14 +1892,10 @@ html.rd .profile-impression-box {
 html.rd .profile-impression-text { color: var(--rd-text) !important; }
 html.rd .profile-impression-text.is-empty { color: var(--rd-text-3) !important; }
 
-/*
- * 保存失败提示条（见 ui.js 的 showStoreSaveAlert）。
- *
- * 为什么是底部横条而不是弹窗：它只报告"数据还在内存、没落盘"，不该挡住用户
- *   去点「导出备份」。底部居中不压输入框，手机上也够得着；同时它是"坏消息"，
- *   所以用提示色而不是主题强调色 —— 默认主题下强调色是橄榄绿，看起来像成功。
- * 遮罩层 z-index 之上、但 pointer-events 关掉，永不拦截点击。
- */
+/* 保存失败提示条（见 ui.js 的 showStoreSaveAlert）：
+   底部横条而不是弹窗 —— 它只报告"数据还在内存、没落盘"，不该挡住用户去点「导出备份」，
+   底部居中不压输入框、手机上也够得着；它是"坏消息"，所以用提示色而不是主题强调色
+   （默认主题强调色是橄榄绿，看起来像成功）。层级在遮罩层之上、但 pointer-events 关掉，永不拦截点击。 */
 html.rd .store-save-alert {
     position: fixed;
     left: 50%;

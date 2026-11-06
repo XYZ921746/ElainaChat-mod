@@ -1,25 +1,6 @@
-/* ============================================================================
- * 局域网共享数据（宿主内嵌，配套「高级 → 我的数据」）
- *
- * 两个动作：
- *   ① 开启局域网共享：把本机标记为"可被局域网设备拉取备份"，并给出本机
- *      IP / 端口；标记默认 30 分钟后自动失效。
- *   ② 从局域网接收：本机服务先登录对方（拿 Set-Cookie），再取对方的
- *      /api/data/lan/export，回传给前端交给现有 /api/data/import 合并导入。
- *
- * 为什么不让浏览器直接跨源去拉：
- *   浏览器跨源会撞 CORS，且访问密码产生的会话是 SameSite=Strict，跨站
- *   请求带不过去；由服务端代发才能走通。
- *
- * 为什么"开启共享"要单独一个开关：
- *   /api/data/lan/export 只有在开关打开时才返回备份。这样"开启"不是一句
- *   提示，而是真的决定对方能不能取到数据。
- *
- * 安全：
- *   · 只有本机设置过访问密码后才允许开启共享 —— 未设置时 serve.mjs 直接关闭局域网接口
- *     （非回环连接在进入 HTTP 前就被销毁），这里再拒绝一次开启。
- *   · 接收端只允许私网 / 回环地址（域名解析后逐个校验，挡 SSRF）。
- * ========================================================================== */
+// 局域网共享数据（宿主内嵌，配套「高级 → 我的数据」）：① 开启共享 —— 本机标记为"可被局域网设备拉取备份"并给出 IP/端口，30 分钟后自动失效；② 从局域网接收 —— 服务端先登录对方拿 Set-Cookie，再取对方的 /api/data/lan/export 交给现有导入流程。
+// 不让浏览器直接跨源去拉：会撞 CORS，且访问密码产生的会话是 SameSite=Strict，跨站请求带不过去。"开启共享"单独一个开关，是因为 /api/data/lan/export 只在开关打开时才返回备份 —— 开启不是一句提示，而是真的决定对方能不能取到数据。
+// 安全：只有本机设置过访问密码后才允许开启共享（未设置时 serve.mjs 直接关闭局域网接口，这里再拒绝一次）；接收端只允许私网 / 回环地址（域名解析后逐个校验，挡 SSRF）。
 import os from 'node:os';
 import net from 'node:net';
 import dns from 'node:dns/promises';
@@ -89,11 +70,7 @@ export function createLanShare({ collectBackup, maxUpload, isPasswordSet = () =>
     }
 
     /**
-     * 只允许私网/回环地址。
-     *
-     * 这个接口是"由服务端代发请求"，不设边界就会变成任意 SSRF 跳板：已登录的
-     * 用户可以让服务端去访问公网、甚至云厂商元数据地址。局域网共享只需要内网
-     * 可达地址，所以这里把范围收死；域名要解析后**每个**地址都在内网才放行。
+     * 只允许私网 / 回环地址：这个接口由服务端代发请求，不设边界就会变成任意 SSRF 跳板（能去打公网、甚至云厂商元数据地址）；域名要解析后每个地址都在内网才放行。
      */
     function isPrivateAddress(raw) {
         let ip = String(raw || '').trim().toLowerCase();
@@ -155,8 +132,6 @@ export function createLanShare({ collectBackup, maxUpload, isPasswordSet = () =>
         const t = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
         return 'elainachat-backup-' + t + '.zip';
     }
-
-    // ── 接口 ──────────────────────────────────────────────────────────────
 
     async function handleEnable(req, res) {
         if (!isPasswordSet()) {
@@ -257,10 +232,7 @@ export function createLanShare({ collectBackup, maxUpload, isPasswordSet = () =>
         }
     }
 
-    /**
-     * 分发一条局域网共享接口。返回 true 表示已处理（响应已写出）。
-     * 调用位置：宿主 /api/data/* 路由段内，早于插件路由与静态文件。
-     */
+    /** 分发一条局域网共享接口，返回 true 表示已处理（响应已写出）；调用位置在宿主 /api/data/* 路由段内，早于插件路由与静态文件 */
     async function handle(request, response, info) {
         const pathname = info && info.pathname;
         if (pathname === LAN_SHARE_PREFIX + '/enable' && request.method === 'POST') { await handleEnable(request, response); return true; }

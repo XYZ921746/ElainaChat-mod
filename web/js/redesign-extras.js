@@ -16,8 +16,12 @@
 
     function currentModel() {
         try {
-            // 多提供商后真正生效的是「默认模型」那张卡的模型名（state.settings.model
-            //   只是迁移源，不再跟随用户切换）。
+            // 这段对话在「当前会话设定」里绑定了模型时，胶囊显示会话自己的；否则显示
+            //   「默认模型」那张卡的模型名（state.settings.model 只是迁移源，不再跟随用户切换）。
+            if (typeof effectiveConversationModel === 'function') {
+                const convModel = String(effectiveConversationModel() || '');
+                if (convModel) return convModel;
+            }
             if (typeof activeChatSettings === 'function') {
                 return String(activeChatSettings().model || '');
             }
@@ -247,6 +251,8 @@
         document.querySelectorAll('[data-rd-bubble]').forEach(function (button) {
             button.classList.toggle('active', button.dataset.rdBubble === bubble);
         });
+        const previewMode = document.getElementById('bubblePreviewMode');
+        if (previewMode) previewMode.textContent = bubble === 'compact' ? '紧凑' : '圆润';
         const toggle = document.querySelector('[data-rd-texture]');
         if (toggle) toggle.classList.toggle('on', texture !== 'off');
     }
@@ -269,88 +275,16 @@
 
     applyVisualPrefs();
 
-    // 底部导航只是窄屏的另一个入口：点击复用竖栏按钮，高亮跟着当前页面/弹层走。
-    const bottomNav = document.querySelector('.rd-bottom-nav');
-    if (bottomNav) {
-        const items = Array.prototype.slice.call(bottomNav.querySelectorAll('[data-rd-nav]'));
-        const railIds = {
-            chat: 'railChatBtn',
-            notes: 'railNotesBtn',
-            diary: 'railDiaryBtn',
-            achievements: 'railCategoriesBtn',
-            memory: 'railMemoryBtn'
-        };
-        const isOpen = function (id) {
-            const el = byId(id);
-            return !!(el && !el.classList.contains('hidden'));
-        };
-        const syncBottomNav = function () {
-            let active = 'chat';
-            try {
-                if (typeof state !== 'undefined' && state) {
-                    if (state.memoryPageMode) active = 'memory';
-                    else if (state.diaryMode) active = 'diary';
-                    else if (state.notesMode) active = 'notes';
-                }
-            } catch (e) { /* 忽略 */ }
-            // 设置是顶栏打开的整页覆盖层，底部导航里已经没有对应格子：
-            //   覆盖层开着时底部保持"无选中"，比错亮某一格更诚实。
-            if (isOpen('marketOverlay')) active = '';
-            else if (isOpen('achievementsOverlay')) active = 'achievements';
+    // 求值阶段 Store 缓存可能还是空的（与 theme.js 同一处境），暴露出来让 init 在
+    // Store.bootstrap() 之后重放一次；多设备同步改到气泡/光晕时也要靠它重放。
+    window.ElainaRdVisual = { apply: applyVisualPrefs };
 
-            items.forEach(function (btn) {
-                const on = btn.dataset.rdNav === active;
-                btn.classList.toggle('active', on);
-                if (on) btn.setAttribute('aria-current', 'page');
-                else btn.removeAttribute('aria-current');
-            });
-
-            // 公告、确认框、分类管理等真正的弹窗出现时，底部导航让位。
-            const pageOverlays = ['settingsOverlay', 'achievementsOverlay', 'marketOverlay'];
-            const modalOpen = Array.prototype.some.call(
-                document.querySelectorAll('.modal-overlay'),
-                function (el) {
-                    return !el.classList.contains('hidden') && pageOverlays.indexOf(el.id) < 0;
-                }
-            );
-            bottomNav.classList.toggle('rd-nav-suppressed', modalOpen);
-            syncHeaderCopy();
-        };
-
-        const closePageOverlays = function (except) {
-            if (except !== 'settings' && isOpen('settingsOverlay')) {
-                const close = byId('closeSettings');
-                if (close) close.click();
-            }
-            if (except !== 'achievements' && isOpen('achievementsOverlay')) {
-                try { window.ElainaAchievements.close(); } catch (e) { /* 忽略 */ }
-            }
-            if (isOpen('marketOverlay')) {
-                const close = byId('marketClose');
-                if (close) close.click();
-            }
-        };
-
-        items.forEach(function (btn) {
-            btn.addEventListener('click', function () {
-                const nav = btn.dataset.rdNav;
-                closePageOverlays(nav);
-                const target = byId(railIds[nav]);
-                if (target) target.click();
-                window.setTimeout(syncBottomNav, 60);
-            });
-        });
-
-        const navObserver = new MutationObserver(syncBottomNav);
-        Object.keys(railIds).forEach(function (key) {
-            const el = byId(railIds[key]);
-            if (el) navObserver.observe(el, { attributes: true, attributeFilter: ['class'] });
-        });
-        document.querySelectorAll('.modal-overlay').forEach(function (el) {
-            navObserver.observe(el, { attributes: true, attributeFilter: ['class'] });
-        });
-        syncBottomNav();
-    }
+    // 系统深浅色自动翻转只改 html[data-theme]，不经过任何点击路径；不观察它，
+    // 设置页三段高亮会停在翻转前的档位（顶栏三段已有同样的观察者）。
+    try {
+        new MutationObserver(function () { syncDisplayControls(); }).observe(
+            document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    } catch (e) { /* 忽略 */ }
 
     // 手机用户没有 Enter 键，输入框提示里保留键盘快捷键只会挤占文案。
     function syncComposerPlaceholder() {

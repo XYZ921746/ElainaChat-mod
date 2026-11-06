@@ -1,21 +1,9 @@
-/* ============================================================================
- * AI 用浏览器（从 agent.js 拆出）
- *
- * 打开网页 / 看页面 / 点击 / 填写 / 回车 / 关闭；请求由服务端 /api/agent/browser 执行。
- * 依赖 agent.js 的运行时与结果回灌函数（运行时才调用）。
- * ========================================================================== */
+// AI 用浏览器：打开网页/看页面/点击/填写/回车/关闭；请求由服务端 /api/agent/browser 执行。
 'use strict';
 
-// ===== AI 用浏览器：打开网页、看页面、点按钮、填表单 =====
-// 与「电脑命令」的分工（用户要的就是这个区别）：命令通道是**文本进、文本出**，
-//   AI 看不到页面，只能靠 curl 猜，遇到要登录 / 要 JS 渲染 / 要点开菜单的站点就无能为力。
-//   这条通道是**看页面 → 决定 → 真点一下**。
-// 为什么请求落在服务端（/api/agent/browser）而不是前端：
-//   · 浏览器进程由服务端起，页面在服务端那台机器上 —— 前端只负责传指令；
-//   · 调试端口能读全部 cookie，这个能力必须只对本机开放（见 serve.mjs 的 browserDenyReason）。
-//     放在前端就等于把它交给任何一个能打开页面的人。
-
-
+// 与「电脑命令」的分工：命令通道文本进文本出，AI 看不到页面；这条通道是看页面 → 决定 → 真点一下。
+// 请求落在服务端：浏览器进程在服务端那台机器上，且调试端口能读全部 cookie，
+// 只可对本机开放（见 serve.mjs 的 browserDenyReason），放前端等于交给任何能打开页面的人。
 
 /** 动作名 → 过程行标题（用户看的是"做了什么"，不是"调了什么工具"） */
 const BROWSER_ACTION_LABEL = {
@@ -30,16 +18,9 @@ const BROWSER_ACTION_LABEL = {
 
 
 
-/**
- * 执行一次浏览器操作，并把结果按**当前通道**送达。
- *
- * 两条通道的送达方式必须分开（与 doAgentFile / doAgentCommand 同一条理由）：
- *   · 工具通道 —— runToolCalls 会把返回值以 role:'tool' 回灌，这里再插消息就是同一件事说两遍；
- *   · 标签通道 —— 没有外层调用者，结果只能自己放进对话，并排下一次续跑。
- *
- * 失败一律返回 {ok:false,text}，让模型自己看到原因（网址不合法、页面变了、没装浏览器），
- *   而不是抛异常变成一句"操作失败"—— 它需要那句话才能换个做法。
- */
+// 两条通道送达方式必须分开（同 doAgentFile / doAgentCommand）：工具通道由 runToolCalls 以 role:'tool'
+// 回灌，再插消息会说两遍；标签通道没有外层调用者，结果只能自己放进对话并排下一次续跑。
+// 失败一律返回 {ok:false,text}，让模型看到原因（网址不合法、页面变了、没装浏览器）而不是一句"操作失败"。
 async function runAgentBrowserOperation(args, traceItem) {
     const rt = window.agentRuntime;
     const action = String(args && args.action || '').trim();
@@ -66,15 +47,13 @@ async function runAgentBrowserOperation(args, traceItem) {
         updateTurnTool(traceItem, { state: 'stopped', result: AGENT_DISABLED_NOTE });
         return { ok: false, text: AGENT_DISABLED_NOTE };
     }
-    // 注册表的 available() 只影响**工具清单**，标签通道仍可能直接派发到这里 ——
-    //   所以开关要在执行器里再判一次，否则"关掉浏览器"之后写标签仍然能开出来。
+    // 注册表 available() 只影响工具清单，标签通道仍会派发到这里，开关必须在执行器里再判一次。
     if (state.settings.agentBrowserEnabled !== true) {
         const m = '浏览器功能没有打开。需要的话请在「设置 → 能力 → 浏览器」里打开「允许 AI 用浏览器」。';
         updateTurnTool(traceItem, { state: 'stopped', result: m });
         return { ok: false, text: m };
     }
-    // 打开浏览器会在这台电脑上**弹出一个窗口** —— 那是用户看得见的状态变化，
-    //   所以 strict 档问一次。之后的导航与点击发生在这个已经批准的窗口里，不再逐条打扰。
+    // 打开浏览器会弹出用户看得见的窗口，strict 档问一次；之后在这个已批准的窗口内导航与点击不再逐条打扰。
     if (action === 'open' && rt) {
         const allowed = await rt.requestApproval(
             '浏览器',

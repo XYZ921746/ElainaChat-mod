@@ -1,20 +1,14 @@
-//  数据备份：导出 / 导入（APK 侧）
-//  APK 没有 Node 后端，/api/data/* 不存在，但用户数据存在应用私有目录，
-//  卸载即丢失、手动也拷不出来，所以 APK 侧比 Web 侧更需要备份。
-//  备份格式与 Web 版完全一致（同一套 zip 结构），两端可互相导入。
-//  清单直接复用 Store.DATA_KEYS，不再抄第二份：加键只需改 store.js 一处。
-//  zip 用零依赖的最小实现（store 模式，不压缩）：浏览器里没有 node:zlib，
-//  引第三方库会破坏零依赖；对话记录体积不大，不值得为此加依赖。
+// 数据备份：导出 / 导入（APK 侧）。APK 没有 Node 后端、/api/data/ 不存在，但数据在应用私有目录，
+// 卸载即丢、手动也拷不出来，所以比 Web 侧更需要备份；备份格式与 Web 版一致，两端可互相导入。
+// 清单复用 Store.DATA_KEYS（加键只改 store.js 一处）；zip 用零依赖 store 模式实现（浏览器没有 node:zlib）。
 
 (function () {
     'use strict';
 
-    // 备份哪些键：直接取 Store 的权威清单（含动态的插件开关键）。
-    // 排除 UI 临时状态由 store.js 的 DATA_KEYS 决定，这里不再重复判断。
+    // 备份哪些键：直接取 Store 的权威清单（含动态的插件开关键）；排除 UI 临时状态由 store.js 的 DATA_KEYS 决定。
     function backupKeys() {
         const keys = (window.Store && window.Store.DATA_KEYS) ? window.Store.DATA_KEYS.slice() : [];
-        // 插件开关是动态键（elaina_plugin_<id>）：枚举出来一起备份，
-        // 否则换机后插件的启停状态全丢。Store 不提供枚举，这里从缓存快照取。
+        // 插件开关是动态键（elaina_plugin_<id>）：枚举出来一起备份，否则换机后插件启停状态全丢。
         try {
             const snap = window.Store ? window.Store.snapshot() : {};
             for (const k of Object.keys(snap)) {
@@ -26,11 +20,9 @@
 
     const FORMAT = 'elainachat-backup';
     const VERSION = 3;   // 与后端一致：v3 = zip + data/ 目录（v2 仍可导入）
-    // 聊天数据的顶层目录：与电脑版一致，解压后 data/ 与（电脑版的）mods/、skills/ 平级。
-    // 手机端没有 skills/，插件也不进本机备份（只能从市场重装），所以 APK 包里只有 data/。
+    // 聊天数据的顶层目录：与电脑版一致（data/ 与 mods/、skills/ 平级）；手机端没有 skills/，包里只有 data/。
     const DATA_PREFIX = 'data/';
 
-    // ------------------------------------------------------------------ CRC32
     // zip 要求每个条目带 CRC32。浏览器没有内置实现，这里用标准查表法（约 15 行）。
     let crcTable = null;
     function makeCrcTable() {
@@ -49,12 +41,7 @@
         return (c ^ 0xFFFFFFFF) >>> 0;
     }
 
-    // ------------------------------------------------------------------ 写 zip
-    /**
-     * 打包成 zip（只用 store 模式，不压缩）。
-     * @param entries [{ name: string, text: string }]
-     * @returns Blob
-     */
+    // 打包成 zip（只用 store 模式，不压缩）。@param entries [{ name, text }] @returns Blob
     function buildZip(entries) {
         const enc = new TextEncoder();
         const parts = [];
@@ -130,18 +117,12 @@
         return out;
     }
 
-    // ------------------------------------------------------------------ 读 zip
-    /**
-     * 解出 zip 里的所有条目。
-     * @param bytes Uint8Array
-     * @returns [{ name, text }]
-     */
+    // 解出 zip 里的所有条目。@param bytes Uint8Array @returns [{ name, text }]
     function readZip(bytes) {
         const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
         if (bytes.length < 22 || dv.getUint32(0, true) !== 0x04034b50) {
             throw new Error('不是有效的 zip 文件');
         }
-        // 从尾部找 EOCD
         let eocd = -1;
         const min = Math.max(0, bytes.length - 22 - 0xFFFF);
         for (let i = bytes.length - 22; i >= min; i--) {
@@ -194,7 +175,6 @@
         return await new Response(stream).text();
     }
 
-    // ------------------------------------------------------------------ 导出
     /** 收集当前属于备份范围的键 */
     function collectLocalData() {
         const data = {};
@@ -207,10 +187,6 @@
         return data;
     }
 
-    /**
-     * 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
-     * 好处：用户能解压开直接看，也能拿去 Web 版导入。
-     */
     /** manifest.json：格式号、导出时间、来源与条数。 */
     function buildManifestEntry(cards, convs) {
         return {
@@ -269,11 +245,8 @@
         return out;
     }
 
-    /**
-     * memory/：与后端同构 —— 按类目拆成一类一文件。
-     * 记忆在前端是一个对象 { diary, promise, preference, plan, motivation, pivotal_memory }，
-     * 这里逐类目写出去（未知类目也写，不丢数据）。
-     */
+    // memory/：与后端同构，按类目拆成一类一文件。前端是一个对象（diary/promise/preference/plan/
+    // motivation/pivotal_memory），逐类目写出去（未知类目也写，不丢数据）。
     function buildMemoryEntries(data) {
         if (typeof data['elaina_open_memory_core'] !== 'string') return [];
         const out = [];
@@ -292,10 +265,8 @@
         return out;
     }
 
-    /**
-     * 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
-     * 好处：用户能解压开直接看，也能拿去 Web 版导入。
-     */
+    // 生成备份 zip（与 Web 版同构：manifest / data/settings / data/characters / data/conversations / data/memory）。
+    // 好处：用户能解压开直接看，也能拿去 Web 版导入。
     async function buildBackupBlob() {
         const data = collectLocalData();
         // 人设卡 / 对话 / 记忆拆出来（与后端 store.mjs 的目录结构对齐）
@@ -314,10 +285,7 @@
         return buildZip(entries);
     }
 
-    // ------------------------------------------------------------------ 导入
-    /**
-     * 解析备份（zip 或 v1 单 JSON），返回 { source, data }。
-     */
+    // 解析备份（zip 或 v1 单 JSON），返回 { source, data }。
     async function parseBackup(file) {
         const buf = new Uint8Array(await file.arrayBuffer());
         const isZip = buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4B && buf[2] === 0x03 && buf[3] === 0x04;
@@ -387,9 +355,8 @@
             } catch { /* 忽略 */ }
         }
 
-        // memory/：一类目一文件 → 拼回一个对象。
-        // 同时兼容 v3 的 data/memory/、v2 的根 memory/，以及 v2 中期的单文件
-        // memory.json（{value:…}），老备份照样能导。
+        // memory/：一类目一文件 → 拼回一个对象。同时兼容 v3 的 data/memory/、v2 的根 memory/，
+        // 以及 v2 中期的单文件 memory.json（{value:…}），老备份照样能导。
         const memObj = {};
         for (const e of raw) {
             const m = /^(?:data\/)?memory\/([A-Za-z0-9_-]+)\.json$/.exec(e.name);
@@ -416,10 +383,8 @@
         return { source: 'zip', data };
     }
 
-    /**
-     * 导入：把备份写回 Store（合并模式）→ 落进 data/（Web 落 data/store.json，APK 落应用私有目录）
-     * @returns { keys, source }
-     */
+    // 导入：把备份写回 Store（合并模式）→ 落进 data/（Web 落 data/store.json，APK 落应用私有目录）
+    // @returns { keys, source }
     async function applyBackup(file) {
         const { source, data } = await parseBackup(file);
         const keys = Object.keys(data);
@@ -436,8 +401,7 @@
     }
 
     window.ChatBackup = {
-        // 清单是**动态**的（含插件开关），用函数而不是数组属性，
-        // 避免调用方在启动早期把清单快照下来后永远看不到新增的键。
+        // 清单是动态的（含插件开关），用函数而不是数组属性，避免调用方在启动早期把清单快照下来后看不到新增的键。
         keys: backupKeys,
         buildBackupBlob,
         parseBackup,

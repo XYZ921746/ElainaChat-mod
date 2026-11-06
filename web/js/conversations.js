@@ -1,12 +1,5 @@
-/* ============================================================================
- * 会话管理（从 ui.js 拆分）
- *
- * 新建 / 命名 / 重命名 / 删除 / 置顶 / 分类 / 切换会话。
- * 依赖 Store、消息渲染与状态机（运行时才调用）。
- * ========================================================================== */
+// 会话管理：新建 / 命名 / 重命名 / 删除 / 置顶 / 分类 / 切换会话；依赖 Store、消息渲染与状态机。
 'use strict';
-
-// ==================== 会话管理 ====================
 
 function createConversation(categoryId) {
     const conv = {
@@ -18,6 +11,7 @@ function createConversation(categoryId) {
         worldSetting: '',
         characterPrompt: '',
         cardId: '',
+        modelPair: null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
         messages: []
@@ -32,12 +26,8 @@ function createConversation(categoryId) {
     return conv;
 }
 
-/**
- * 这些话不承载话题信息，拿来当标题等于"没取名"。
- *
- * 为什么需要这个判据：标题只取第一条用户消息时，"你好"开头的对话会全部叫"你好"，
- *   而用户翻侧栏找的是"这段在聊什么" —— 十条一模一样的"你好"等于没有标题。
- */
+// 这些话不承载话题信息，拿来当标题等于"没取名"：标题只取第一条用户消息时，"你好"开头的对话
+// 会全部叫"你好"，而用户翻侧栏找的是"这段在聊什么"。
 const TRIVIAL_CONVERSATION_TEXT = /^(你好|您好|hi|hello|嗨|嗨喽|在吗|在不在|喂|测试|test|ok|好的|行|嗯+|哦+|啊+|哈+|早|早安|午安|晚安|拜拜|再见)[\s!！。.?？~～、,，]*$/i;
 
 /** 这段文本值不值得当标题（太短或纯招呼语都不值得） */
@@ -52,9 +42,7 @@ function isTrivialConversationText(text) {
 function autoNameConversation(messages) {
     const users = (Array.isArray(messages) ? messages : []).filter(m => m && m.role === 'user');
     if (!users.length) return '新对话';
-    // 只挑**有内容**的那条：跳过"你好""在吗"这类招呼语。
-    //   一条都没有就保持"新对话" —— 拿招呼语当标题会让侧栏堆满一模一样的"你好"，
-    //   那和"没取名"没有区别（用户看到的正是这个）。
+    // 只挑有内容的那条：跳过"你好""在吗"这类招呼语，一条都没有就保持"新对话"。
     const first = users.find(m => !isTrivialConversationText(m.text));
     if (!first) {
         const hasImage = users.some(m => m.imageDataUrl);
@@ -64,18 +52,9 @@ function autoNameConversation(messages) {
     return text.length > 12 ? text.substring(0, 12) + '...' : text;
 }
 
-/**
- * 收到新消息后，若标题**仍是自动取的**就重新取一次。
- *
- * 判据是"当前标题 == 把最后一条消息去掉后自动算出来的名字"：
- *   相等说明没人改过它（还是自动的），可以覆盖；不等说明用户手动起过名，
- *   哪怕他起的就是"你好"也不动 —— 用户的意思优先于猜。
- *
- * 为什么必须**逐条**重算而不是"只在第一条时取"：首条常常是"你好"，
- *   真正的话题在第二条才出现。写成一次性，标题就永久停在招呼语上（用户实测）。
- *
- * @returns {boolean} 标题是否变了（调用方据此决定要不要重渲染侧栏）
- */
+// 收到新消息后，若标题仍是自动取的就重新取一次。判据是"当前标题 == 去掉最后一条消息后
+// 自动算出的名字"：相等说明没人改过，可以覆盖；不等说明用户手动起过名，哪怕起的就是"你好"也不动。
+// 必须逐条重算：首条常常是"你好"，真正的话题在第二条才出现。@returns {boolean} 标题是否变了
 function refreshAutoConversationTitle(conversation) {
     if (!conversation) return false;
     const msgs = Array.isArray(conversation.messages) ? conversation.messages : [];
@@ -101,30 +80,15 @@ async function renameConversation(convId) {
     }
 }
 
-/**
- * 删除对话时，把"依附于这段对话的数据"一并清掉。
- *
- * ── 为什么要抽成一个函数──────────────────────────────────────
- *
- *   用户报："删除对话时会删除日记但是不会删除收藏的句子"。
- *   实际查下来是**两处删除入口各自只做了一半**：
- *     · deleteConversation()  删了收藏，**没删日记**
- *     · catDeleteSelected()   删了收藏，**也没删日记**
- *   于是"日记属于哪段对话"全靠 conversationId —— 对话没了，
- *   那些日记就成了没人认领的孤儿，在日记页里挂着一个删不掉的
- *   「已删除的对话」分组（用户看到的就是这个）。
- *
- *   抽成一处之后，将来再加"依附数据"（比如某段对话的定时任务）
- *   只需要改这里一个地方，不会再出现"某个入口漏了一种"。
- *
- * @param {Set<string>|Array<string>} ids 被删除的对话 id
- * @returns {{diary:number, favorites:number}} 各清掉多少条（供提示/调试）
- */
+// 删除对话时把"依附于这段对话的数据"一并清掉（日记 + 收藏）：两个删除入口各自只做一半时，
+// 漏删的日记会成为没人认领的孤儿，在日记页里挂着一个删不掉的「已删除的对话」分组。
+// 抽成一处后，将来再加依附数据（比如某段对话的定时任务）只需改这里。
+// @param {Set<string>|Array<string>} ids 被删除的对话 id
+// @returns {{diary:number, favorites:number}} 各清掉多少条（供提示/调试）
 function purgeConversationDependents(ids) {
     const set = ids instanceof Set ? ids : new Set(ids || []);
     if (!set.size) return { diary: 0, favorites: 0 };
 
-    // ---- 日记 ----
     let diaryRemoved = 0;
     try {
         const mc = state.memoryCore;
@@ -140,7 +104,6 @@ function purgeConversationDependents(ids) {
         }
     } catch (e) { /* 记忆不可用时不该挡住删除对话 */ }
 
-    // ---- 收藏（"语笺"里的句子）----
     let favRemoved = 0;
     try {
         if (Array.isArray(state.favorites)) {
@@ -173,8 +136,7 @@ async function deleteConversation(convId) {
         elements.currentConversationTitle.textContent = '伊蕾娜';
     }
     renderFolderList();
-    // 正开着日记页时也要跟着刷新 —— 否则被删掉的那组还留在屏幕上，
-    //   点进去是一片空（用户会以为删除没生效）。
+    // 正开着日记页时也要跟着刷新，否则被删掉的那组还留在屏幕上，点进去一片空（用户会以为删除没生效）。
     if (state.diaryMode) renderDiaryPage();
     if (state.memoryPageMode) renderMemoryPage();
 }
@@ -215,15 +177,9 @@ function closeConversationContextMenu() {
     window.setTimeout(() => menu.remove(), 170);
 }
 
-/**
- * 长按会话弹出的操作菜单。
- *
- * @param {string} convId
- * @param {HTMLElement} anchor 贴着它摆
- * @param {{ onMultiSelect?: (convId: string) => void }} [opts]
- *   onMultiSelect 只有在"这个列表支持多选"时才传（首页那份列表）。抽屉那份不传，
- *   菜单里就不会出现它按不动的「多选」——勾选框只长在首页的行上。
- */
+// 长按会话弹出的操作菜单。@param anchor 贴着它摆
+// @param {{ onMultiSelect?: (convId: string) => void }} [opts] onMultiSelect 只在"这个列表支持多选"时
+// 才传（首页那份）；抽屉那份不传，菜单里就不会出现它按不动的「多选」。
 function openConversationContextMenu(convId, anchor, opts) {
     if (!isMobileConversationLayout()) return;
     const conv = state.conversations.find(c => c.id === convId);
@@ -301,11 +257,8 @@ function placeMobileMenu(menu, anchor) {
     menu.style.top = `${top}px`;
 }
 
-/**
- * 文件夹（分类）的长按菜单：重命名 / 删除。
- * 复用对话那套弹层节点与关闭逻辑（conversationContextMenu），
- * 于是"点外面 / 滚动 / 转屏就收起"这些行为不用再写一遍。
- */
+// 文件夹（分类）的长按菜单：重命名 / 删除。复用对话那套弹层节点与关闭逻辑，
+// 于是"点外面 / 滚动 / 转屏就收起"这些行为不用再写一遍。
 function openCategoryContextMenu(categoryId, anchor) {
     if (!isMobileConversationLayout()) return;
     const cat = state.categories.find(c => c.id === categoryId);
@@ -439,30 +392,12 @@ function moveConversationToCategory(convId, categoryId) {
     renderFolderList();
 }
 
-/**
- * 「新建分类」：建一个文件夹，并把这段对话直接放进去。
- *
- * 为什么顺手放进去：这个动作是从**某段对话**的菜单里发起的，建完空着的话
- * 用户还得再拖一次；从对话出发的"移动至一个新分类"本来就该一步到位。
- * 想要空文件夹，到抽屉里那颗「＋」新建即可。
- */
-// ==================== 会话长按：直接出菜单 ====================
-// 拖拽那套已经下线（用户：算了不搞拖动了）。移动文件夹改走菜单里的「分类」：
-//   长按只做一件事 —— 出菜单，不再"先拿起、松手才弹"，按下去的手感更直给。
-
 const CONV_PICK_MS = 520;
 const CONV_PICK_SLOP = 9;
 
-/**
- * 长按 520ms（或右键）弹出会话菜单。
- *
- * @param {HTMLElement} div 行节点
- * @param {object} conv 对话
- * @param {{ onMultiSelect?: (convId: string) => void }} [menuOptions]
- *   直接转给 openConversationContextMenu：只有首页那份列表传，菜单里才会多出「多选」。
- *   手势本身（520ms / 9px 容差 / 右键）两处必须一致，所以只分岔"菜单里多一项什么"，
- *   而不是让两个列表各写一份计时器。
- */
+// 长按 520ms（或右键）弹出会话菜单。@param div 行节点 @param conv 对话
+// @param {{ onMultiSelect?: (convId: string) => void }} [menuOptions] 直接转给 openConversationContextMenu：
+// 只有首页那份列表传；手势本身（520ms / 9px 容差 / 右键）两处必须一致，只分岔"菜单里多一项什么"。
 function bindConversationPick(div, conv, menuOptions) {
     let timer = null;
     let startX = 0;
@@ -545,18 +480,17 @@ function loadConversation(conversationId) {
 
     elements.conversationHistory.innerHTML = '';
     conv.messages.forEach(message => {
-        // hidden 的消息不进可见渲染：工具通道的结果、以及"只调工具、一个字没说"的空回复。
-        //   它们只为**下一次请求**存在（协议要求 assistant 的调用后面紧跟结果），
-        //   渲染出来就是聊天记录里多出一段用户没写过、AI 也没说过的文本。
+        // hidden 的消息不进可见渲染：工具通道的结果、以及"只调工具、一个字没说"的空回复 ——
+        // 它们只为下一次请求存在（协议要求 assistant 的调用后面紧跟结果），渲染出来会多出一段用户没写过的文本。
         if (message && message.hidden === true) return;
-        renderMessage(message);
-        // 这一轮当年的思考/工具记录：过程区是临时 DOM，容器已被清空，
-        //   必须按消息上存的数据重新插回去 —— 否则"聊了几轮之后，
-        //   之前的思考记录就不见了"（切会话、刷新页面都会触发）。
+        renderMessage(message, false);
+        // 这一轮当年的思考/工具记录：过程区是临时 DOM，容器已被清空，必须按消息上存的数据重新插回去，
+        // 否则切会话、刷新页面后之前的思考记录就不见了。
         restoreTurnProcessFor(message);
     });
     renderFolderList();
     syncRailActive();
+    refreshHeaderModelPill();
     if (elements.conversationHistory) {
         elements.conversationHistory.scrollTop = elements.conversationHistory.scrollHeight;
     }

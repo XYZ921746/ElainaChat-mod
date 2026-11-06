@@ -1,26 +1,5 @@
-// mod 的**服务端半边**：按 manifest.json 里的 `server` 声明装载路由与"上传目录"。
-// ── 为什么需要这一层（也给 Live2D 搬迁铺路）────────────────────────────────
-// Live2D 有四个接口（/api/live2d/upload、/models、/models/:name、/rename）现在硬编码在
-// serve.mjs 里。它们要跟着 Live2D 一起搬进 mod，可 mod 系统此前**没有服务端注册机制** ——
-// 插件只能加前端代码，服务端能力只能改宿主。
-// ── 安全：这是 mod 系统最大的风险面 ───────────────────────────────────────
-// mod 的宿主半边是**在服务端进程里执行第三方 JS**。这比前端那半边严重得多：
-// 前端最多同源 XSS（用户自己那台机器上的浏览器），服务端是**文件系统 + 命令执行 + 局域网**。
-// 所以这里刻意**不开"注册任意路由"的口子**，而是：
-//   ① 能力必须**在 manifest.json 里声明**（routes / uploads），宿主据此决定放行什么。
-//      mod 代码里**不能**临时注册一个没声明过的前缀 —— 声明与实现分离，
-//      用户（和人）看清单就知道这个插件要占哪些地址、碰哪些目录。
-//   ② 路由前缀必须是 `/api/<段>` 形式，且**逐段白名单字符**（它是 URL，要能安全拼接）。
-//   ③ 与宿主已有前缀**撞名直接拒绝**：宿主的路由先分发，撞名的 mod 路由永远收不到请求 ——
-//      静默失效正是本项目最忌讳的那类 bug，宁可在装载期报出来。
-//   ④ mod 之间撞名也拒绝（先到先得并记录），避免"装了两个插件，另一个悄悄不工作"。
-//   ⑤ 上传目录必须落在插件自己的目录内（`..`/绝对路径/符号链接一律拒绝）。
-//   ⑥ 单个 mod 装载失败**只标记它自己**（与前端的失败隔离一致）—— 一个坏 mod
-//      不能让服务起不来，否则用户连"去设置里关掉它"都做不到。
-// ── 与前端清单的关系 ──────────────────────────────────────────────────────
-// 前端那套（mods.js）读的是同一份 manifest.json。`server` 段是**宿主半边**的声明，
-// 前端加载器不解释它（也不会因为它而认为插件有问题）。这与 DSH 的
-// `dsh.bundle.patch`（宿主半边）+ `dsh.client`（浏览器半边）是同一个分层思路。
+// mod 的服务端半边：按 manifest.server 声明装载路由、上传目录与静态映射；插件不能注册未声明的前缀，声明与实现分离。
+// 风险面：宿主半边是在服务端进程里执行第三方 JS（文件系统 / 命令执行 / 局域网），所以能力必须先在 manifest 里声明、取用即校验、装载失败只标记该插件。
 
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -30,21 +9,11 @@ import { stat } from 'node:fs/promises';
 const MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /**
- * 允许注册的路由前缀形状：`/api/<段>`，可再跟若干段。
- *
- * 为什么不允许裸 `/api`：那等于把整个接口层交给一个插件（它能吃掉
- *   /api/store、/api/agent/exec 这些）。前缀必须至少落到第二段。
- * 为什么字符收到 `[A-Za-z0-9._-]`：这个串会被拼进 URL 与比较，
- *   允许 `?` `#` `%` 之类会造成"看起来一样、匹配结果不同"的歧义。
+ * 允许注册的路由前缀：`/api/<段>`，可再跟若干段。不允许裸 `/api`（等于把整个接口层交给一个插件，它能吃掉 /api/store），字符收到 [A-Za-z0-9._-]（这个串会被拼进 URL 与比较，`?` `#` `%` 会造成歧义）。
  */
 const ROUTE_PREFIX_RE = /^\/api\/[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/;
 
-/**
- * 服务端插件可声明的能力名（`manifest.server.capabilities`）。
- *
- * 每个名字对应 `ctx` 上一组真实可用的东西 —— 没声明的能力，`ctx` 不会给。
- * 加能力时**必须同时**在这里登记、在 `ctx` 里加对应的守卫（见 buildCtx）。
- */
+/** 服务端插件可声明的能力名（manifest.server.capabilities）：每个名字对应 ctx 上一组真实可用的东西，没声明的能力 ctx 不给；加能力时必须在这里登记并在 ctx 里加对应的 need() 守卫（见 createModContext） */
 const CAPABILITY_NAMES = new Set([
     'route-register',   // 注册 /api 路由（需同时声明 server.routes）
     'upload-write',     // 读写 server.uploads 声明的目录
@@ -73,16 +42,7 @@ function prefixesOverlap(a, b) {
     return a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
 }
 
-/**
- * 给一个 Promise 加超时。
- *
- * 为什么需要：插件的服务端代码是第三方 JS，它可能 await 一个永不 resolve 的
- *   Promise（例如 register 里先去拉一次网络）。没有这道闸，一个坏插件会让
- *   **服务启动整个卡住**，用户连"去设置里关掉它"都做不到。
- *
- * 局限要说清：它只能让**调用方**放弃等待，不能终止已经跑起来的代码。
- *   所以这是"不让它拖住启动"，不是沙箱 —— 真正的隔离要靠独立进程。
- */
+/** 给 Promise 加超时：第三方代码可能 await 一个永不 resolve 的 Promise（例如 register 里先去拉一次网络），没有这道闸一个坏插件会让服务启动整个卡住；局限是只能让调用方放弃等待，不能终止已跑起来的代码 —— 这不是沙箱，真正的隔离要靠独立进程 */
 function withTimeout(promise, ms, label) {
     let timer = null;
     const timeout = new Promise((_, reject) => {
@@ -95,25 +55,15 @@ function withTimeout(promise, ms, label) {
     });
 }
 
-/**
- * @param {object} opts
- * @param {string} opts.modsDir  插件根目录
- * @param {string[]} opts.hostRoutePrefixes 宿主自己已占用的 /api 前缀（撞名拒绝用）
- * @param {Function} opts.jsonResponse  宿主统一的 JSON 回包（签名同 serve.mjs 的）
- * @param {Function} opts.readJsonBody  宿主统一的 JSON 请求体解析
- * @param {Function} [opts.log]
- */
+/** hostRoutePrefixes / hostStaticPrefixes 是宿主自己已占用的前缀（撞名拒绝用），jsonResponse / readJsonBody 是宿主的统一实现 */
 export function createModServer({
     modsDir,
     hostRoutePrefixes = [],
     hostStaticPrefixes = [],
     jsonResponse,
     readJsonBody,
-    // 宿主提供的共享工具。为什么走这里而不是让 mod 自己 import：
-    //   · 解压是**安全敏感代码**（路径穿越 / zip bomb / 危险扩展名），项目一贯要求
-    //     "实现只有一份"（见 server/zip.mjs 的合并说明）。让每个 mod 各引一份，
-    //     等于安全修复要改 N 处，漏一处就是个洞。
-    //   · mod 目录与 server/ 的相对位置也不该被 mod 作者操心。
+    // 宿主共享工具走这里而不是让 mod 自己 import：解压是安全敏感代码（路径穿越 / zip bomb / 危险扩展名），项目要求实现只有一份（见 server/zip.mjs），
+    // 否则安全修复要改 N 处，漏一处就是个洞；mod 也不必操心与 server/ 的相对位置。
     hostUtils = {},
     log = () => {},
 }) {
@@ -156,21 +106,12 @@ export function createModServer({
     }
 
     function readStaticMappings(rawStatic) {
-        // static：把**非 /api** 的 URL 前缀映射到自己目录里的某个子目录
-        //   例：{ "/live2d/models": "models" } —— 用户上传的模型仍能从
-        //   `/live2d/models/<名字>/…` 取到，但文件其实落在 mod 自己的目录里。
-        // 为什么需要它：Live2D 的模型 URL 是 `/live2d/models/<名>/`，而磁盘位置要从
-        //   `web/live2d/models/` 搬到 `web/mods/live2d/models/`。URL 不变、磁盘变，
-        //   于是要有这层映射；顺带把"用户上传内容"与"宿主代码目录"在物理上分开
-        //   （前者天然不该和 index.html 住在一起）。
+        // static：把非 /api 的 URL 前缀映射到插件目录下的子目录（例：{ "/live2d/models": "models" }），URL 不变、磁盘落在插件自己的目录里。
+        // 顺带把"用户上传内容"与"宿主代码目录"在物理上分开（前者天然不该和 index.html 住在一起）。
         const staticRaw = rawStatic == null ? [] : rawStatic;
         const statics = [];
         if (Array.isArray(staticRaw)) {
-            // 数组形式收两种写法，因为它们各自解决一件事：
-            //   [["/live2d/models", "models"], …]                  ← 紧凑，适合没有额外选项时
-            //   [{ url, dir, mime: 'auto' }, …]                    ← 能表达 mime，适合引擎目录
-            // 只实现前者的话，manifest 里写后者的插件会"声明看着没问题、
-            // 运行时整个 static 被拒"，表现为资源全部 404。
+            // 数组形式收两种写法：[前缀, 目录] 与 { url, dir, mime }；只实现前者的话，写后者的插件会整个 static 被拒，表现为资源全部 404
             for (const item of staticRaw) {
                 if (Array.isArray(item)) {
                     if (item.length !== 2) return { error: 'server.static 的两元组必须是 [前缀, 目录]' };
@@ -213,9 +154,7 @@ export function createModServer({
         const statics = readStaticMappings(raw.static);
         if (statics.error) return { error: statics.error };
 
-        // 能力声明单独校验：它的错误必须和别的声明错误一样**整份驳回**，
-        // 而不是悄悄带一个 error 字段进去（那样 caps 会是空集，插件跑起来才发现
-        // 什么都用不了，报错点离声明很远）。
+        // 能力声明的错误也要整份驳回，而不是带个 error 字段进去 —— 那样 caps 是空集，插件跑起来才发现什么都用不了，报错点离声明很远
         const caps = readCapabilities(raw, routes.prefixes, uploads.uploads, statics.statics);
         if (caps.error) return { error: caps.error };
 
@@ -228,22 +167,7 @@ export function createModServer({
         };
     }
 
-    /**
-     * 归一化 `server.capabilities`。
-     *
-     * 为什么要有这份声明：`routes` / `uploads` / `static` 说的是"插件要占哪些地址、
-     *   碰哪些目录"，但插件真正能做的事比这更宽 —— 它可以借宿主注入的 utils 读写文件、
-     *   发网络请求、执行命令。地址声明得再细，也说不清"这个插件会不会动我的磁盘"。
-     *   所以能力必须**单独声明**，并成为宿主放行 utils 的依据。
-     *
-     * 设计取向：
-     *   · **默认最小**：不声明 = 一个能力都没有（除只读的日志）。要什么写什么，
-     *     与 routes/uploads 的"声明与实现分离"同一条思路。
-     *   · **未知能力直接驳回整份声明**，而不是静默忽略 —— 静默忽略会让插件作者
-     *     以为自己申请到了，运行到那一步才发现拿不到，且报错点离声明很远。
-     *   · 不是"权限系统"：它没有运行时弹窗，也不是沙箱。它是**声明与审计**：
-     *     用户看清单就知道这个插件要什么，出问题时能一眼定位是哪个插件。
-     */
+    /** 归一化 server.capabilities：routes / uploads / static 只说了占哪些地址、碰哪些目录，说不清"这个插件会不会动我的磁盘"，所以能力必须单独声明并成为宿主放行 utils 的依据；默认最小（不声明 = 一个能力都没有），未知能力整份驳回；它是声明与审计，不是权限系统（无运行时弹窗、不是沙箱） */
     function readCapabilities(raw, routes, uploads, statics) {
         const listRaw = raw.capabilities == null ? [] : raw.capabilities;
         if (!Array.isArray(listRaw)) {
@@ -276,10 +200,7 @@ export function createModServer({
 
     /** 校验一条 static 映射（URL 前缀 + 目录 + MIME 策略），返回错误字符串或 null */
     function checkStaticPair(urlPrefix, dir, acc) {
-        // 允许三种写法：
-        //   "/live2d/models": "models"                                   ← 默认二进制
-        //   ["/live2d/models", "models"]                                 ← 同上
-        //   { url: "/live2d/vendor", dir: "vendor", mime: "auto" }       ← 需要真实 MIME 时
+        // 三种写法：{ url, dir, mime }、[前缀, 目录]、以及展开的 { "前缀": "目录" }
         let p; let d; let mime = 'binary';
         if (urlPrefix && typeof urlPrefix === 'object' && !Array.isArray(urlPrefix)) {
             p = String(urlPrefix.url || '').trim();
@@ -289,9 +210,7 @@ export function createModServer({
             p = String(urlPrefix || '').trim();
             d = String(dir || '').trim().replace(/\\/g, '/');
         }
-        // mime 只认这两个值。写错时必须**报错而不是回落** ——
-        // 回落成 binary 会让引擎脚本因 MIME 错误被浏览器拒绝执行，
-        // 而报错信息会明确指向声明本身（"脚本加载失败"那种现象根本联想不到声明写错）。
+        // mime 只认这两个值，写错必须报错而不是回落：回落成 binary 会让引擎脚本因 MIME 错误被浏览器拒绝执行，而报错信息能直接指向声明本身
         if (mime !== 'binary' && mime !== 'auto') {
             return 'server.static 的 mime 只能是 "binary"（默认，用户上传内容）或 "auto"（mod 自带代码），'
                 + '收到的是「' + mime + '」';
@@ -344,10 +263,7 @@ export function createModServer({
     }
 
     /**
-     * 构造交给插件 register(ctx) 的上下文。
-     *
-     * 每个有副作用的成员都先经 need() 校验能力声明：manifest 里没写，
-     * 取用时当场报错，而不是给一个静默的空实现。
+     * 构造交给插件 register(ctx) 的上下文：每个有副作用的成员都先经 need() 校验能力声明，manifest 里没写就当场报错，而不是给一个静默的空实现。
      */
     function createModContext({ modId, dir, decl, caps, need, added }) {
         return {
@@ -359,29 +275,15 @@ export function createModServer({
             /** 本插件声明的能力清单（只读，供插件自查与日志） */
             capabilities: () => [...caps],
             hasCapability: (cap) => caps.has(String(cap || '')),
-            /**
-             * 宿主提供的共享工具（解压 / 危险类型判定 / 读请求体）。
-             *
-             * 这些**故意**不让 mod 自己 import：解压是安全敏感代码，
-             *   项目一贯要求实现只有一份（见 server/zip.mjs 的合并说明）。
-             *   mod 拿到的就是宿主那套已加固的实现，安全修复自动对每个 mod 生效。
-             *
-             * 需要 host-utils 能力：解压能写任意文件，不能白给。
-             */
+            /** 宿主提供的共享工具（解压 / 危险类型判定 / 读请求体）：故意不让 mod 自己 import —— 解压是安全敏感代码，实现只有一份（见 server/zip.mjs）；需要 host-utils 能力，解压能写任意文件，不能白给 */
             get utils() {
                 need('host-utils', 'ctx.utils（宿主共享工具，含解压）');
                 return hostUtils;
             },
             /**
              * 注册一个路由处理函数。
-             *
-             * @param {string} method 'GET' / 'POST' / 'DELETE' …，'*' 表示任意方法
-             * @param {string} path 具体端点（如 /api/live2d/upload）—— **必须落在**
-             *        manifest.server.routes 声明的某个前缀**之内**（相等或子路径）。
-             *        声明与实现是两层：声明说"我占这块地址空间"（用户看清单就知道
-             *        插件会碰哪些地址），实现才是具体端点。这样校验既严格又不碍事。
-             * @param {Function} handler (request, response, info) => boolean|void
-             *        info = { pathname, url, rest, modId }；返回 false 表示"我不处理这条"
+             * @param {string} path 具体端点（如 /api/live2d/upload），必须落在 manifest.server.routes 声明的某个前缀之内（相等或子路径）—— 声明说"我占这块地址空间"，实现才是具体端点。
+             * @param {Function} handler (request, response, info) => boolean|void，info = { pathname, url, rest, modId }；返回 false 表示"我不处理这条"
              */
             route(method, path, handler) {
                 need('route-register', 'ctx.route（注册 /api 路由）');
@@ -403,12 +305,7 @@ export function createModServer({
                     if (i >= 0) routes.splice(i, 1);
                 };
             },
-            /**
-             * 声明一个"用户上传内容会落进来"的目录。
-             * 这些目录里的文件由宿主按 application/octet-stream 返回 —— 用户上传的
-             * zip 里若混入 .html/.svg，被同源渲染就等于给了对方一个 XSS 执行点。
-             * @returns {string} 该目录的绝对路径
-             */
+            /** 声明"用户上传内容会落进来"的目录：这些目录里的文件由宿主按 application/octet-stream 返回 —— 混入的 .html/.svg 被同源渲染就等于给了对方一个 XSS 执行点；@returns 该目录的绝对路径 */
             uploadDir(rel) {
                 need('upload-write', 'ctx.uploadDir（读写上传目录）');
                 const r = String(rel || '').trim().replace(/\\/g, '/');
@@ -424,20 +321,7 @@ export function createModServer({
                 added.push({ kind: 'upload', abs });
                 return abs;
             },
-            /**
-             * 声明一条「URL 前缀 → 本插件目录下的子目录」的静态映射。
-             *
-             * @param {string} url 形如 `/live2d/models`，**必须**在 manifest.server.static 里声明过
-             * @returns {string} 该目录的绝对路径
-             *
-             * 用法（Live2D 模型 mod 就是这么做）：
-             *   const dir = ctx.staticDir('/live2d/models');
-             *   // 之后往 dir 里读写文件，用户仍从 /live2d/models/<名>/… 取到
-             *
-             * 为什么目录要落在插件自己名下：模型是**用户上传的内容**，
-             *   不该和 index.html / serve.mjs 住在一起。物理分开之后，
-             *   "用户能写的目录"与"宿主代码目录"之间就没有交集了。
-             */
+            /** 声明一条「URL 前缀 → 本插件目录下的子目录」的静态映射（url 必须先在 manifest.server.static 里声明过），返回该目录的绝对路径；目录要落在插件自己名下 —— 模型是用户上传的内容，不该和 index.html / serve.mjs 住在一起，物理分开后"用户能写的目录"与"宿主代码目录"就没有交集 */
             staticDir(url) {
                 need('static-read', 'ctx.staticDir（读静态目录）');
                 const u = String(url || '').trim();
@@ -459,12 +343,7 @@ export function createModServer({
         };
     }
 
-    /**
-     * 装载一个 mod 的服务端半边。
-     *
-     * 装载失败只记录、不抛出 —— 一个坏 mod 不该让服务起不来（前端那半边的
-     * 失败隔离是同一个理由，见 mods.js 的说明）。
-     */
+    /** 装载一个 mod 的服务端半边；失败只记录、不抛出 —— 一个坏 mod 不该让服务起不来，也不能连带废掉其它插件 */
     async function loadOne(manifest) {
         const modId = manifest.id;
         const dir = path.join(modsDir, manifest.dir || modId);
@@ -513,12 +392,8 @@ export function createModServer({
         const ctx = createModContext({ modId, dir, decl, caps, need, added });
 
         try {
-            // 超时保护：第三方代码可能同步死循环、可能 await 一个永不 resolve 的
-            // Promise（例如在 register 里先去拉一次网络）。没有超时的话，一个坏插件
-            // 会让**服务启动整个卡住** —— 用户看到的是"双击启动.bat 之后什么都没有"，
-            // 连设置界面都进不去，也就没法把那个插件关掉。
-            // 注意 Promise.race 只能让**调用方**放弃等待，无法真正终止已经跑起来的
-            // 代码。所以这只是"不让它拖住启动"，不是沙箱 —— 真正的隔离要靠进程。
+            // 超时保护：第三方代码可能同步死循环、可能 await 永不 resolve 的 Promise，没有超时一个坏插件会让服务启动整个卡住，用户连设置界面都进不去。
+            // Promise.race 只能让调用方放弃等待，无法真正终止已经跑起来的代码 —— 这不是沙箱，真正的隔离要靠进程。
             const mod = await withTimeout(
                 import(pathToFileURL(entryPath).href),
                 MOD_IMPORT_TIMEOUT_MS,
@@ -546,8 +421,7 @@ export function createModServer({
                 + (decl.uploads.length ? '；上传目录 ' + decl.uploads.join('、') : ''));
             return loaded.get(modId);
         } catch (e) {
-            // 回滚本次登记：半个装载（注册了 1 个路由、第 2 个抛错）比完全没装载
-            //   更难理解 —— 接口一半能用一半 404，而清单上写着"已装载"。
+            // 回滚本次登记：半个装载（注册了 1 个路由、第 2 个抛错）比完全没装载更难理解 —— 接口一半能用一半 404，而清单上写着"已装载"
             for (const a of added) {
                 if (a.kind === 'route') {
                     const i = routes.indexOf(a.rec);
@@ -567,27 +441,10 @@ export function createModServer({
     }
 
     /**
-     * 装载全部已安装插件的服务端半边。
-     *
-     * 什么时候调用：**服务启动时一次**。原因见 status().needsRestart —— 路由是
-     * 常驻注册表，装完插件不重启就注册上会让"哪些接口存在"随运行状态漂移，
-     * 排查时无法复现。宁可明确告诉用户"重启后生效"。
-     *
-     * **只看已启用的插件**。
-     *
-     *   不看 `elaina_plugin_<id>` 这个开关的后果是"停用了插件，它的服务端接口
-     *   照样活着"：用户到设置里把 Live2D 关掉，前端界面确实消失了，
-     *   可 `/api/live2d/*` 仍然在响应 —— 这与"停用要真的停用"直接矛盾
-     *   （前端那半边是对的：见 mods.js 的注册项回收）。
-     *
-     *   实现方式：把启用状态作为**参数**传进来，而不是在这个模块里读 localStorage ——
-     *   它是服务端，读不到浏览器的 localStorage，也不该长着"配置存在哪"的知识。
-     *   调用方（serve.mjs）用同一个 store 读出 `elaina_plugins_enabled` 与
-     *   `elaina_plugin_<id>`，与前端 Store 是同一份数据，两边判定不会分叉。
-     *
+     * 装载全部已安装插件的服务端半边，只在服务启动时调用一次：路由是常驻注册表，装完不重启就注册会让"哪些接口存在"随运行状态漂移，排查时无法复现。
+     * 只看已启用的插件（否则停用了插件，它的 /api 接口照样活着）；启用状态由调用方传入 —— 服务端读不到浏览器的 localStorage，也不该长着"配置存在哪"的知识。
      * @param {Array<{id:string, dir:string}>} installed scanAndSync() 给出的清单
-     * @param {(id:string, manifest:object)=>boolean} [isEnabled]
-     *        该插件是否已启用；缺省视为全部启用（保持旧行为，便于单测与兼容）
+     * @param {(id:string, manifest:object)=>boolean} [isEnabled] 缺省视为全部启用（便于单测与兼容）
      */
     async function loadAll(installed, isEnabled) {
         loadedAt = Date.now();
@@ -606,11 +463,7 @@ export function createModServer({
     }
 
     /**
-     * 当前状态：装载了什么、哪些装了但**要重启才生效**。
-     *
-     * needsRestart 与 ready/disabled/blocked/error 是**不同维度**的状态：
-     *   服务端路由与 vendor 库都属于"改了必须重启"的东西，
-     *   "静默不生效"看起来和"装了等于没装"一模一样，所以必须单独报出来。
+     * 当前状态：装载了什么、哪些装了但要重启才生效。needsRestart 与 ready/disabled/blocked/error 是不同维度 —— "静默不生效"看起来和"装了等于没装"一样，必须单独报出来。
      */
     function status(installed) {
         const mods = [...loaded.values()];
@@ -622,16 +475,13 @@ export function createModServer({
                 if (!decl || decl.error) continue;         // 没声明/声明坏了：由"声明错误"那条路报，不算重启问题
                 const cur = loaded.get(m.id);
                 if (!cur) {
-                    // 启动时还没有它 → 服务端接口要重启才生效。**这不是错误**，
-                    // 是加载时机使然，所以与 failed 分开报（用户要做的动作完全不同）。
+                    // 启动时还没有它 → 服务端接口要重启才生效；这不是错误（用户要做的动作与 failed 完全不同），所以分开报
                     needsRestart.push({ id: m.id, why: '服务启动时还没有这个插件，重启服务后它的服务端接口才会生效' });
                     continue;
                 }
                 if (cur.ok === false && cur.enabled === false) continue;   // 未启用：不是问题，无需重启
                 if (!cur.ok) { failed.push({ id: m.id, error: cur.error }); continue; }
-                // 必须与 loadOne 记录 signature 时**同一形状**（loadOne 存的是 JSON.stringify(decl)，
-                // 含 capabilities）。只挑 entry/routes/uploads/statics 比会因键集不同而永远不相等，
-                // 于是每个装载成功的插件都被误报"声明变了，需重启"。
+                // signature 必须与 loadOne 记录时同一形状（JSON.stringify(decl)，含 capabilities）：只挑几个键比会因键集不同而永远不相等，每个插件都被误报"声明变了"
                 const sig = JSON.stringify(decl);
                 if (cur.signature !== sig) {
                     needsRestart.push({ id: m.id, why: '该插件的服务端声明变了，重启服务后生效' });
@@ -642,10 +492,7 @@ export function createModServer({
     }
 
     /**
-     * 分发一条 mod 路由。**返回 true 表示这条请求已被处理**（响应也已写出）。
-     *
-     * 调用位置很重要：必须排在宿主所有路由**之后**、静态文件之前。
-     * 排后面是为了让宿主永远优先（撞名在装载期已拒绝，这里是第二道保险）。
+     * 分发一条 mod 路由，返回 true 表示这条请求已处理（响应也已写出）。必须排在宿主所有路由之后、静态文件之前 —— 宿主永远优先（撞名在装载期已拒绝，这里是第二道保险）。
      */
     async function handle(request, response, info) {
         const pathname = info.pathname;
@@ -675,15 +522,8 @@ export function createModServer({
     }
 
     /**
-     * 把一条 URL 路径解析成插件静态目录里的真实文件。
-     *
-     * 返回 `{ abs, modId }` 或 null（没有匹配的前缀 / 路径穿越 / 不是普通文件）。
-     *
-     * 安全要点：这是"用户可控路径 → 磁盘文件"的入口，所以
-     *   ① 前缀必须**段边界**匹配（`/live2d/models-x` 不该命中 `/live2d/models`）
-     *   ② 解析后的绝对路径必须仍在那个映射目录内（挡 `..`、绝对路径、编码绕过）
-     *   ③ 交给调用方之前先 decodeURIComponent 再解析 —— 否则 `%2e%2e` 能绕过第 ② 步
-     *
+     * 把一条 URL 路径解析成插件静态目录里的真实文件，返回 { abs, modId } 或 null。这是"用户可控路径 → 磁盘文件"的入口：
+     * 前缀必须段边界匹配（/live2d/models-x 不该命中 /live2d/models）；必须先 decodeURIComponent 再解析（否则 %2e%2e 能绕过路径检查）；解析后的绝对路径必须仍在映射目录内。
      * @param {string} pathname 已解码的 URL 路径
      * @param {Function} [isFile] 判断是否普通文件（由调用方注入 lstat，避免这里再引 fs）
      */

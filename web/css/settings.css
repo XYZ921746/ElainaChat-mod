@@ -1,0 +1,1211 @@
+/* 设置页的版式与控件语汇：左侧分区导航 + 右侧单栏阅读，窄屏改为整页单列。
+   所有取值都来自主题变量，这样四套配色与深色模式不用各写一份。 */
+
+html.rd #settingsOverlay {
+    inset: var(--rd-header-h) 0 0 var(--rd-sidebar-w) !important;
+    padding: 0 !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    background: var(--rd-bg) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+html.rd #settingsOverlay #settingsPanel {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100% !important;
+    max-height: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background:
+        radial-gradient(720px 520px at 88% -8%, var(--rd-accent-soft), transparent 62%),
+        var(--rd-bg) !important;
+    display: grid !important;
+    grid-template-columns: 264px minmax(0, 1fr) !important;
+    grid-template-rows: minmax(0, 1fr) !important;
+    overflow: hidden;
+}
+
+/* ---------- 左侧：品牌 + 分区导航 ---------- */
+
+html.rd #settingsOverlay #settingsTopBar {
+    grid-column: 1;
+    grid-row: 1;
+    position: relative !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+    width: 100% !important;
+    height: 100%;
+    min-height: 0;
+    margin: 0 !important;
+    padding: 22px 14px 16px !important;
+    border: 0 !important;
+    border-right: 1px solid var(--rd-border) !important;
+    background:
+        linear-gradient(180deg, var(--rd-surface-2), transparent 28%),
+        var(--rd-surface) !important;
+    overflow: hidden !important;
+}
+
+html.rd #settingsOverlay #settingsTopBar::before { content: none !important; display: none !important; }
+
+html.rd #settingsOverlay .settings-brand {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+    padding: 0 8px 20px;
+    flex: none;
+}
+
+html.rd #settingsOverlay .settings-brand-mark {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    flex: none;
+    border: 1px solid var(--rd-accent-border);
+    border-radius: 11px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-size: 15px;
+}
+
+html.rd #settingsOverlay .settings-brand-copy { display: flex; flex-direction: column; min-width: 0; }
+html.rd #settingsOverlay .settings-brand-copy b {
+    font-family: var(--rd-font-display);
+    font-size: 19px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: var(--rd-text);
+    letter-spacing: .02em;
+}
+html.rd #settingsOverlay .settings-brand-copy i {
+    margin-top: 2px;
+    font-style: normal;
+    font-size: 10px;
+    letter-spacing: .12em;
+    color: var(--rd-text-3);
+}
+
+html.rd #settingsOverlay #closeSettings {
+    position: absolute !important;
+    top: 22px;
+    right: 14px;
+    width: 30px !important;
+    height: 30px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    display: grid !important;
+    place-items: center;
+    border: 1px solid transparent !important;
+    border-radius: 9px !important;
+    background: transparent !important;
+    color: var(--rd-text-3) !important;
+}
+html.rd #settingsOverlay #closeSettings:hover {
+    border-color: var(--rd-border) !important;
+    background: var(--rd-hover) !important;
+    color: var(--rd-text) !important;
+}
+html.rd #settingsOverlay #closeSettings svg { width: 15px; height: 15px; color: inherit !important; }
+html.rd #settingsOverlay .settings-close-label { display: none; }
+html.rd #settingsOverlay .settings-close-mobile { display: none !important; }
+
+html.rd #settingsOverlay #settingsTabNav {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 2px 12px !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    min-height: 0;
+    flex: 1 1 auto;
+    scrollbar-width: thin;
+}
+
+html.rd #settingsOverlay .settings-nav-group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 0 10px;
+}
+
+html.rd #settingsOverlay .settings-nav-label {
+    display: block;
+    padding: 10px 10px 6px;
+    color: var(--rd-text-3);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    line-height: 1;
+    text-transform: uppercase;
+}
+
+html.rd #settingsOverlay #settingsTabNav .settings-tab-btn {
+    position: relative;
+    display: grid !important;
+    grid-template-columns: 20px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    width: 100% !important;
+    min-height: 46px;
+    margin: 0 !important;
+    padding: 7px 10px !important;
+    border: 1px solid transparent !important;
+    border-radius: 12px !important;
+    background: transparent !important;
+    color: var(--rd-text-2) !important;
+    text-align: left;
+    font-family: var(--rd-font-ui);
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    opacity: 1 !important;
+    transition: background .15s, border-color .15s, color .15s;
+}
+html.rd #settingsOverlay #settingsTabNav .settings-tab-btn::before { content: none !important; }
+/* 插件注册的分栏只有 label，没有宿主的分组与说明；单独排成一条，别被两列网格挤成一字一行。 */
+html.rd #settingsOverlay #settingsTabNav > .settings-tab-btn {
+    display: flex !important;
+    grid-template-columns: none !important;
+    align-items: center;
+    min-height: 42px;
+    margin-top: 6px !important;
+    padding: 8px 10px 8px 12px !important;
+    border-top: 1px solid var(--rd-border) !important;
+    border-radius: 0 0 10px 10px !important;
+    font-size: 12.5px !important;
+}
+html.rd #settingsOverlay #settingsTabNav .settings-tab-btn:hover {
+    background: var(--rd-hover) !important;
+    color: var(--rd-text) !important;
+}
+html.rd #settingsOverlay #settingsTabNav .settings-tab-btn.active {
+    background: var(--rd-surface) !important;
+    border-color: var(--rd-border) !important;
+    color: var(--rd-text) !important;
+    box-shadow: inset 2px 0 0 var(--rd-accent), 0 1px 2px rgba(0, 0, 0, .04);
+}
+html.rd #settingsOverlay #settingsTabNav .settings-tab-btn.active .settings-nav-copy b { color: var(--rd-accent); }
+
+html.rd #settingsOverlay .settings-nav-ic {
+    width: 19px;
+    height: 19px;
+    display: block;
+    background: currentColor;
+    opacity: .78;
+    -webkit-mask: var(--set-icon, none) center / 19px 19px no-repeat;
+    mask: var(--set-icon, none) center / 19px 19px no-repeat;
+}
+html.rd #settingsOverlay .settings-tab-btn.active .settings-nav-ic { opacity: 1; color: var(--rd-accent); }
+
+html.rd #settingsOverlay .settings-nav-copy { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+html.rd #settingsOverlay .settings-nav-copy b {
+    color: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    white-space: nowrap;
+}
+html.rd #settingsOverlay .settings-nav-copy i {
+    color: var(--rd-text-3);
+    font-style: normal;
+    font-size: 10px;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-appearance"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='8'/%3E%3Cpath d='M12 4a8 8 0 000 16z' fill='black' stroke='none'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-character"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='12' cy='9' r='3.4'/%3E%3Cpath d='M5.5 20c.6-3.5 3.1-5.6 6.5-5.6s5.9 2.1 6.5 5.6'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-model"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M12 3l3 3-3 3-3-3zM5 10l3 3-3 3-3-3zM19 10l3 3-3 3-3-3zM12 15l3 3-3 3-3-3z'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-capability"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linejoin='round'%3E%3Cpath d='M12 3l2.2 5.4L20 10l-5.8 1.6L12 17l-2.2-5.4L4 10l5.8-1.6z'/%3E%3Cpath d='M18.5 16.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-mods"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M10 4h4v3a2 2 0 104 0h2v4h-3a2 2 0 100 4h3v4h-4v-3a2 2 0 10-4 0v3H8v-4H5a2 2 0 100-4h3V8H4V4h6z'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-advanced"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Crect x='5' y='10' width='14' height='10' rx='3'/%3E%3Cpath d='M8 10V7a4 4 0 018 0v3'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-log"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M5 6h14M5 12h14M5 18h9'/%3E%3C/svg%3E"); }
+
+html.rd #settingsOverlay .settings-rail-foot {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 14px 10px 2px;
+    border-top: 1px solid var(--rd-border);
+    color: var(--rd-text-3);
+    font-size: 10.5px;
+    letter-spacing: .03em;
+}
+html.rd #settingsOverlay .settings-save-dot {
+    width: 6px;
+    height: 6px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--rd-ok);
+    box-shadow: 0 0 0 3px var(--rd-ok-soft);
+}
+
+/* 扩展的子分栏：宽屏在导航里展开（max-height 过渡），窄屏是浮层（由既有脚本挂到 #settingsPanel 下）。
+   展开态只认 #settingsExtNav.is-open，主分栏切换与再次点「扩展」都能把它收回去。 */
+html.rd #settingsOverlay #settingsExtNav { display: flex !important; flex-direction: column !important; align-items: stretch !important; gap: 2px; width: 100% !important; margin: 0 !important; padding: 0 !important; border: 0 !important; }
+html.rd #settingsOverlay #settingsExtNav .settings-tab-btn { width: 100% !important; padding-right: 26px !important; }
+html.rd #settingsOverlay #settingsExtNav > .settings-tab-btn::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    right: 12px;
+    width: 7px;
+    height: 7px;
+    margin-top: -5px;
+    border-right: 1.5px solid var(--rd-text-3);
+    border-bottom: 1.5px solid var(--rd-text-3);
+    transform: rotate(45deg);
+    transition: transform .2s ease, border-color .15s;
+}
+html.rd #settingsOverlay #settingsExtNav.is-open > .settings-tab-btn::after {
+    margin-top: -2px;
+    transform: rotate(225deg);
+    border-color: var(--rd-accent);
+}
+html.rd #settingsOverlay #settingsExtNav .ext-nav-children {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    width: 100% !important;
+    gap: 2px !important;
+    max-height: 0;
+    opacity: 0;
+    visibility: hidden;
+    overflow: hidden;
+    margin: 0 !important;
+    padding: 0 0 0 12px !important;
+    border: 0 !important;
+    transition:
+        max-height .24s cubic-bezier(.22, .7, .25, 1),
+        opacity .16s ease,
+        margin .24s cubic-bezier(.22, .7, .25, 1),
+        visibility 0s linear .24s;
+}
+html.rd #settingsOverlay #settingsExtNav.is-open .ext-nav-children {
+    max-height: 160px;
+    opacity: 1;
+    visibility: visible;
+    margin: 4px 0 2px !important;
+    transition:
+        max-height .24s cubic-bezier(.22, .7, .25, 1),
+        opacity .16s ease,
+        margin .24s cubic-bezier(.22, .7, .25, 1),
+        visibility 0s;
+}
+html.rd #settingsOverlay #settingsExtNav .ext-nav-children .ext-nav-btn { padding-left: 12px !important; }
+html.rd #settingsOverlay .ext-nav-btn {
+    width: 100% !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    padding: 6px 8px !important;
+    border: 0 !important;
+    border-radius: 8px !important;
+    background: transparent !important;
+    color: var(--rd-text-3) !important;
+    font-family: var(--rd-font-ui);
+    font-size: 11.5px !important;
+}
+html.rd #settingsOverlay .ext-nav-btn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
+html.rd #settingsOverlay .ext-nav-btn.is-active { color: var(--rd-accent) !important; font-weight: 600; }
+
+/* ---------- 右侧：内容区 ---------- */
+
+html.rd #settingsOverlay #settingsContent {
+    grid-column: 2;
+    grid-row: 1;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 38px 46px 64px !important;
+    overflow-y: auto !important;
+    background: transparent !important;
+    scrollbar-width: thin;
+    scroll-behavior: smooth;
+}
+
+html.rd #settingsOverlay #settingsContent > .settings-tab-panel,
+html.rd #settingsOverlay #settingsSubpage {
+    width: 100%;
+    max-width: 880px;
+    margin: 0 auto;
+}
+
+html.rd #settingsOverlay #settingsContent > .settings-tab-panel {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch !important;
+    align-content: stretch !important;
+    gap: 0 !important;
+    min-width: 0;
+}
+html.rd #settingsOverlay #settingsContent > .settings-tab-panel:not(.active-panel) { display: none !important; }
+html.rd #settingsOverlay #settingsContent > .settings-tab-panel.active-panel { display: flex !important; }
+html.rd #settingsOverlay #settingsContent.subpage-open > .settings-tab-panel { display: none !important; }
+html.rd #settingsOverlay #settingsContent.subpage-open > #settingsSubpage { display: block !important; }
+
+/* 页头 */
+html.rd #settingsOverlay .settings-page-head {
+    flex: none;
+    padding: 2px 2px 24px;
+    margin: 0 0 22px;
+    border-bottom: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay .settings-page-eyebrow {
+    margin: 0 0 8px;
+    color: var(--rd-accent);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: .26em;
+    text-transform: uppercase;
+}
+html.rd #settingsOverlay .settings-page-head h1 {
+    margin: 0;
+    color: var(--rd-text);
+    font-family: var(--rd-font-display);
+    font-size: 32px;
+    font-weight: 600;
+    line-height: 1.18;
+    letter-spacing: .01em;
+}
+html.rd #settingsOverlay .settings-page-head > p:last-child {
+    max-width: 64ch;
+    margin: 9px 0 0;
+    color: var(--rd-text-2);
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+
+/* 卡片与分区标题 */
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > section,
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > div.mb-4,
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > .settings-card,
+html.rd #settingsOverlay #settingsSubpage > section,
+html.rd #settingsOverlay #settingsSubpage > .settings-card {
+    flex: none;
+    margin: 0 0 16px !important;
+    padding: 22px 24px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 18px !important;
+    background: var(--rd-surface) !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .03), 0 14px 34px rgba(0, 0, 0, .035) !important;
+}
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > section:hover,
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > div.mb-4:hover,
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > .settings-card:hover { border-color: var(--rd-border) !important; transform: none !important; }
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > section:last-child,
+html.rd #settingsOverlay #settingsContent .settings-tab-panel > div.mb-4:last-child { margin-bottom: 0 !important; }
+
+html.rd #settingsOverlay #settingsContent .modal-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 15px !important;
+    padding: 0 0 12px !important;
+    border-bottom: 1px solid var(--rd-border) !important;
+    color: var(--rd-text) !important;
+    font-family: var(--rd-font-display);
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    line-height: 1.4;
+    letter-spacing: .02em;
+}
+html.rd #settingsOverlay #settingsContent .modal-label > span:first-child {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex: none;
+    border-radius: 7px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent) !important;
+    font-size: 10px !important;
+}
+html.rd #settingsOverlay #settingsContent .modal-label .badge {
+    margin-left: auto;
+    border: 1px solid var(--rd-accent-border);
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-family: var(--rd-font-ui);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+}
+
+html.rd #settingsOverlay #settingsContent .rd-field-hint,
+html.rd #settingsOverlay #settingsContent .text-\[11px\],
+html.rd #settingsOverlay #settingsContent .text-indigo-300,
+html.rd #settingsOverlay #settingsContent .text-indigo-400 { color: var(--rd-text-3) !important; }
+html.rd #settingsOverlay #settingsContent .rd-field-hint { margin: 0 0 14px; font-size: 11.5px !important; line-height: 1.65; }
+html.rd #settingsOverlay #settingsContent p,
+html.rd #settingsOverlay #settingsContent li { line-height: 1.65; }
+html.rd #settingsOverlay #settingsContent code {
+    padding: 1px 5px;
+    border: 1px solid var(--rd-border);
+    border-radius: 5px;
+    background: var(--rd-surface-2);
+    color: var(--rd-text-2);
+    font-size: .92em;
+}
+
+/* 表单 */
+html.rd #settingsOverlay #settingsContent label.block {
+    margin-bottom: 6px !important;
+    color: var(--rd-text-3) !important;
+    font-size: 11.5px !important;
+    font-weight: 600 !important;
+    letter-spacing: .02em;
+}
+html.rd #settingsOverlay #settingsContent input[type="text"],
+html.rd #settingsOverlay #settingsContent input[type="url"],
+html.rd #settingsOverlay #settingsContent input[type="password"],
+html.rd #settingsOverlay #settingsContent input[type="number"],
+html.rd #settingsOverlay #settingsContent input[type="search"],
+html.rd #settingsOverlay #settingsContent textarea,
+html.rd #settingsOverlay #settingsContent select.modal-input,
+html.rd #settingsOverlay #settingsContent .modal-input,
+html.rd #settingsOverlay #settingsContent .modal-textarea {
+    width: 100%;
+    min-height: 42px;
+    padding: 9px 13px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 11px !important;
+    background: var(--rd-input) !important;
+    box-shadow: none !important;
+    color: var(--rd-text) !important;
+    font-family: var(--rd-font-ui);
+    font-size: 12.5px !important;
+    line-height: 1.55;
+    outline: none;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+}
+html.rd #settingsOverlay #settingsContent textarea,
+html.rd #settingsOverlay #settingsContent .modal-textarea { min-height: 120px; padding: 11px 13px !important; resize: vertical; }
+html.rd #settingsOverlay #settingsContent input::placeholder,
+html.rd #settingsOverlay #settingsContent textarea::placeholder { color: var(--rd-text-3) !important; opacity: .85; }
+html.rd #settingsOverlay #settingsContent input:focus,
+html.rd #settingsOverlay #settingsContent textarea:focus,
+html.rd #settingsOverlay #settingsContent select:focus {
+    border-color: var(--rd-accent) !important;
+    box-shadow: 0 0 0 3px var(--rd-accent-soft) !important;
+}
+html.rd #settingsOverlay #settingsContent input:disabled,
+html.rd #settingsOverlay #settingsContent select:disabled { opacity: .5; }
+
+/* 下拉箭头用内联 SVG：原生箭头在深色下不跟随，appearance:none 后又需要自己画。
+   「当前会话设定」弹窗的两个下拉同规则 —— redesign.css 的 .modal-input 背景带 !important，箭头必须同级才能活下来。 */
+html.rd #settingsPanel select.modal-input,
+html.rd #settingsOverlay #settingsContent select,
+html.rd #conversationPromptOverlay select.modal-input {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    padding-right: 34px !important;
+    height: 42px;
+    background-color: var(--rd-input) !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237f7767' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 13px center !important;
+    background-size: 14px 14px !important;
+}
+html[data-theme="dark"] #settingsOverlay #settingsContent select,
+html.rd[data-theme="dark"] #settingsPanel select.modal-input,
+html.rd[data-theme="dark"] #conversationPromptOverlay select.modal-input {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b6ac98' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+
+/* 开关（两套标记：设置页的 .mod-switch 与外观卡的 .switch） */
+html.rd #settingsOverlay #settingsContent .mod-switch,
+html.rd #settingsOverlay #settingsContent .rd-display-card .switch {
+    width: 44px !important;
+    height: 26px !important;
+    flex: none;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 999px !important;
+    background: var(--rd-surface-3) !important;
+    box-shadow: none !important;
+}
+html.rd #settingsOverlay #settingsContent .mod-switch .track {
+    inset: 0 !important;
+    border: 0 !important;
+    border-radius: 999px !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+html.rd #settingsOverlay #settingsContent .mod-switch input:checked ~ .track { background: var(--rd-accent) !important; }
+html.rd #settingsOverlay #settingsContent .mod-switch .knob {
+    top: 3px !important;
+    left: 3px !important;
+    width: 18px !important;
+    height: 18px !important;
+    background: var(--rd-text-3) !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .2) !important;
+}
+html.rd #settingsOverlay #settingsContent .mod-switch input:checked ~ .knob {
+    transform: translateX(18px) !important;
+    background: var(--rd-accent-contrast) !important;
+}
+html.rd #settingsOverlay #settingsContent .rd-display-card .switch::after {
+    left: 3px !important;
+    top: 3px !important;
+    width: 18px !important;
+    height: 18px !important;
+    background: var(--rd-text-3) !important;
+}
+html.rd #settingsOverlay #settingsContent .rd-display-card .switch.on {
+    background: var(--rd-accent) !important;
+    border-color: var(--rd-accent) !important;
+}
+html.rd #settingsOverlay #settingsContent .rd-display-card .switch.on::after {
+    left: 21px !important;
+    background: var(--rd-accent-contrast) !important;
+}
+
+/* 分段控件 */
+html.rd #settingsOverlay #settingsContent .segmented {
+    display: inline-flex !important;
+    gap: 2px !important;
+    padding: 3px !important;
+    flex: none;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 10px !important;
+    background: var(--rd-surface-2) !important;
+}
+html.rd #settingsOverlay #settingsContent .segmented button {
+    min-height: 30px;
+    padding: 0 12px !important;
+    border: 0 !important;
+    border-radius: 7px !important;
+    background: transparent !important;
+    color: var(--rd-text-3) !important;
+    font-family: var(--rd-font-ui);
+    font-size: 11.5px !important;
+    font-weight: 600;
+}
+html.rd #settingsOverlay #settingsContent .segmented button:hover { color: var(--rd-text) !important; }
+html.rd #settingsOverlay #settingsContent .segmented button.active {
+    background: var(--rd-accent) !important;
+    color: var(--rd-accent-contrast) !important;
+    box-shadow: var(--rd-btn-shadow) !important;
+}
+
+/* 按钮 */
+html.rd #settingsOverlay #settingsContent .btn-secondary,
+html.rd #settingsOverlay #settingsContent .btn-primary,
+html.rd #settingsOverlay #settingsSubpage .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0 13px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 10px !important;
+    background: var(--rd-surface-2) !important;
+    color: var(--rd-text) !important;
+    box-shadow: none !important;
+    font-family: var(--rd-font-ui);
+    font-size: 12px !important;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: border-color .15s, background .15s, color .15s;
+}
+html.rd #settingsOverlay #settingsContent .btn-secondary:hover,
+html.rd #settingsOverlay #settingsSubpage .btn-secondary:hover {
+    border-color: var(--rd-accent-border) !important;
+    background: var(--rd-accent-soft) !important;
+    color: var(--rd-accent) !important;
+}
+html.rd #settingsOverlay #settingsContent .btn-primary {
+    border-color: var(--rd-accent) !important;
+    background: var(--rd-accent) !important;
+    color: var(--rd-accent-contrast) !important;
+}
+html.rd #settingsOverlay #settingsContent button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* 显示卡里的实时气泡预览：直接复用 .bubble-ai / .bubble-user，切换形状与主题时跟着变。 */
+html.rd #settingsOverlay .bubble-preview {
+    margin: 0 0 14px;
+    padding: 12px;
+    border: 1px solid var(--rd-border);
+    border-radius: 14px;
+    background: var(--rd-bg);
+}
+html.rd #settingsOverlay .bubble-preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+    color: var(--rd-text-3);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .14em;
+}
+html.rd #settingsOverlay #bubblePreviewMode {
+    padding: 3px 8px;
+    border: 1px solid var(--rd-accent-border);
+    border-radius: 999px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0;
+}
+html.rd #settingsOverlay .bubble-preview-stage {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding: 12px;
+    border-radius: 12px;
+    background: var(--rd-surface-2);
+    overflow: hidden;
+}
+html.rd #settingsOverlay .bubble-preview-stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        radial-gradient(160px 90px at 88% 0%, var(--rd-accent-soft), transparent 70%),
+        radial-gradient(140px 100px at 0% 100%, var(--rd-accent-2-soft), transparent 72%);
+    pointer-events: none;
+}
+html.rd[data-texture="off"] #settingsOverlay .bubble-preview-stage::before { display: none; }
+html.rd #settingsOverlay .bubble-preview-line { position: relative; z-index: 1; display: flex; }
+html.rd #settingsOverlay .bubble-preview-line.is-user { justify-content: flex-end; }
+html.rd #settingsOverlay .bubble-preview-bubble {
+    width: fit-content;
+    max-width: 82%;
+    margin: 0 !important;
+    font-size: 16px;
+    line-height: 1.5;
+}
+
+/* 显示卡的行 */
+html.rd #settingsOverlay .rd-display-card .set-row {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 13px 0 !important;
+    border-top: 0 !important;
+}
+html.rd #settingsOverlay .rd-display-card .set-row:first-of-type { padding-top: 0 !important; }
+html.rd #settingsOverlay .rd-display-card .set-row + .set-row { padding-top: 15px !important; }
+html.rd #settingsOverlay .rd-display-card .copy { flex: 1; min-width: 0; }
+html.rd #settingsOverlay .rd-display-card .copy b { display: block; color: var(--rd-text); font-size: 13px; font-weight: 600; }
+html.rd #settingsOverlay .rd-display-card .copy span { display: block; margin-top: 2px; color: var(--rd-text-3); font-size: 11px; line-height: 1.55; }
+
+/* 主题选择：预览在左、名字在右，四张卡压成两行 */
+html.rd #settingsOverlay #themePickerBox {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+    margin: 0 !important;
+}
+html.rd #settingsOverlay .theme-tpl-card {
+    display: grid !important;
+    grid-template-columns: 62px minmax(0, 1fr);
+    align-items: center;
+    gap: 11px;
+    width: auto !important;
+    padding: 10px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 13px !important;
+    background: var(--rd-surface-2) !important;
+    text-align: left;
+    box-shadow: none !important;
+    transition: border-color .15s, background .15s;
+}
+html.rd #settingsOverlay .theme-tpl-card:hover { border-color: var(--rd-border-strong) !important; background: var(--rd-hover) !important; transform: none !important; }
+html.rd #settingsOverlay .theme-tpl-card.is-active {
+    border-color: var(--rd-accent) !important;
+    background: var(--rd-accent-soft) !important;
+    box-shadow: inset 0 0 0 1px var(--rd-accent-border) !important;
+}
+html.rd #settingsOverlay .theme-tpl-preview {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    align-self: center;
+    display: flex !important;
+    gap: 0 !important;
+    width: 62px !important;
+    height: 44px !important;
+    padding: 0 !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 7px !important;
+    background: var(--pv-bg, var(--rd-surface)) !important;
+    overflow: hidden !important;
+}
+html.rd #settingsOverlay .theme-tpl-preview .rd-tpl-rail { width: 17%; background: var(--pv-rail, var(--pv-accent)); }
+html.rd #settingsOverlay .theme-tpl-preview .rd-tpl-list { width: 28%; background: var(--pv-list, var(--rd-surface-2)); border-right: 1px solid rgba(0, 0, 0, .06); }
+html.rd #settingsOverlay .theme-tpl-preview .rd-tpl-main { flex: 1; display: flex; flex-direction: column; gap: 3px; padding: 6px; min-width: 0; }
+html.rd #settingsOverlay .theme-tpl-preview .rd-tpl-main i { display: block; width: 76%; height: 5px; border-radius: 2px; background: var(--pv-line, var(--rd-border)); }
+html.rd #settingsOverlay .theme-tpl-preview .rd-tpl-main i:nth-child(2) { width: 54%; }
+html.rd #settingsOverlay .theme-tpl-preview .rd-tpl-main i:nth-child(3) { width: 64%; margin-top: auto; background: var(--pv-accent, var(--rd-accent)); }
+html.rd #settingsOverlay .theme-tpl-name {
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+    display: block;
+    margin: 0 !important;
+    color: var(--rd-text) !important;
+    font-size: 12px;
+    font-weight: 600;
+}
+html.rd #settingsOverlay .theme-tpl-desc {
+    grid-column: 2;
+    grid-row: 2;
+    align-self: start;
+    display: block;
+    margin: 2px 0 0;
+    color: var(--rd-text-3);
+    font-size: 9.5px;
+    line-height: 1.4;
+}
+html.rd #settingsOverlay #themeSettingsSection > .text-\[11px\] { color: var(--rd-text-3) !important; }
+
+@media (min-width: 1500px) {
+    html.rd #settingsOverlay #themePickerBox { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+}
+
+/* 对话模型卡片里的附赠能力分区（图片转述） */
+html.rd #settingsOverlay #settingsContent .model-subsection {
+    margin-top: 20px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay .model-subsection-head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+html.rd #settingsOverlay .model-subsection-copy { flex: 1; min-width: 0; }
+html.rd #settingsOverlay .model-subsection-copy b {
+    display: block;
+    color: var(--rd-text);
+    font-size: 13px;
+    font-weight: 600;
+}
+html.rd #settingsOverlay .model-subsection-copy span {
+    display: block;
+    margin-top: 3px;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    line-height: 1.55;
+}
+html.rd #settingsOverlay .model-subsection .set-note { margin: 12px 0 14px; }
+
+/* 模型入口列表 */
+html.rd #settingsOverlay .settings-hub-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    margin: 0 0 14px;
+    padding: 0 2px 13px;
+    border-bottom: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay .settings-hub-head > span { color: var(--rd-text-3); font-size: 10px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+html.rd #settingsOverlay .settings-hub-head > p { margin: 0; color: var(--rd-text-3); font-size: 11px; }
+
+/* 服务商 / 入口行 */
+html.rd #settingsOverlay #settingsContent .prov-list { display: flex; flex-direction: column; gap: 8px; }
+html.rd #settingsOverlay #settingsContent .prov-row {
+    display: grid !important;
+    grid-template-columns: 34px minmax(0, 1fr) 16px;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 60px;
+    padding: 10px 14px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 13px !important;
+    background: var(--rd-surface-2) !important;
+    color: var(--rd-text) !important;
+    box-shadow: none !important;
+    text-align: left;
+    transition: border-color .15s, background .15s;
+}
+html.rd #settingsOverlay #settingsContent .prov-row:hover { border-color: var(--rd-accent-border) !important; background: var(--rd-hover) !important; transform: none !important; }
+html.rd #settingsOverlay #settingsContent .prov-row.is-active { border-color: var(--rd-accent) !important; background: var(--rd-accent-soft) !important; }
+html.rd #settingsOverlay #settingsContent .prov-row.is-new { border-style: dashed !important; background: transparent !important; color: var(--rd-accent) !important; }
+html.rd #settingsOverlay #settingsContent .prov-icon {
+    width: 34px !important;
+    height: 34px !important;
+    display: grid !important;
+    place-items: center;
+    flex: none;
+    border: 0 !important;
+    border-radius: 10px !important;
+    background: var(--rd-accent-soft) !important;
+    color: var(--rd-accent) !important;
+    font-size: 13px !important;
+    font-weight: 700;
+}
+html.rd #settingsOverlay #settingsContent .prov-icon.tone-a,
+html.rd #settingsOverlay #settingsContent .prov-icon.tone-b,
+html.rd #settingsOverlay #settingsContent .prov-icon.tone-c,
+html.rd #settingsOverlay #settingsContent .prov-icon.tone-d,
+html.rd #settingsOverlay #settingsContent .prov-icon.tone-e,
+html.rd #settingsOverlay #settingsContent .prov-icon.tone-f { background: var(--rd-accent-soft) !important; color: var(--rd-accent) !important; }
+html.rd #settingsOverlay #settingsContent .prov-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+html.rd #settingsOverlay #settingsContent .prov-name {
+    flex: none !important;
+    color: var(--rd-text) !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+html.rd #settingsOverlay #settingsContent .prov-desc { color: var(--rd-text-3); font-size: 10.5px; line-height: 1.4; }
+html.rd #settingsOverlay #settingsContent .prov-chev { display: grid; place-items: center; color: var(--rd-text-3) !important; font-size: 17px; line-height: 1; }
+html.rd #settingsOverlay #settingsContent .settings-hub-list .prov-row { min-height: 64px; }
+
+/* 详情页 */
+html.rd #settingsOverlay #settingsContent .prov-detail-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 16px;
+}
+html.rd #settingsOverlay #settingsContent .prov-back,
+html.rd #settingsOverlay #settingsContent .model-page-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 0 11px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 999px !important;
+    background: var(--rd-surface) !important;
+    color: var(--rd-text-2) !important;
+    font-family: var(--rd-font-ui);
+    font-size: 11px !important;
+    font-weight: 600;
+}
+html.rd #settingsOverlay #settingsContent .prov-back:hover { border-color: var(--rd-accent-border) !important; color: var(--rd-accent) !important; }
+html.rd #settingsOverlay #settingsContent .prov-detail-title { color: var(--rd-text-3) !important; font-size: 11px; }
+html.rd #settingsOverlay #settingsContent .prov-section { margin: 0; }
+html.rd #settingsOverlay #settingsContent .prov-detail { padding: 0 !important; }
+
+/* 提供商的编辑卡 */
+html.rd #settingsOverlay #settingsContent .chat-provider-card {
+    padding: 14px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 13px !important;
+    background: var(--rd-surface-2) !important;
+}
+html.rd #settingsOverlay #settingsContent .cpc-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px !important; }
+html.rd #settingsOverlay #settingsContent .fbc-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--rd-border);
+    border-radius: 10px;
+    background: var(--rd-surface-2);
+}
+html.rd #settingsOverlay #settingsContent .fbc-order { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 6px; background: var(--rd-accent-soft); color: var(--rd-accent); font-size: 10px; font-weight: 700; }
+html.rd #settingsOverlay #settingsContent .fbc-copy { flex: 1; min-width: 0; color: var(--rd-text-2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.rd #settingsOverlay #settingsContent .fbc-row .btn-secondary { min-height: 28px; padding: 0 8px !important; font-size: 10px !important; }
+
+
+/* 能力 / 高级里的说明块 */
+html.rd #settingsOverlay #settingsContent .set-note {
+    padding: 12px 14px !important;
+    margin: 0 0 10px;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 12px !important;
+    background: var(--rd-surface-2) !important;
+    color: var(--rd-text-2);
+    font-size: 11.5px !important;
+    line-height: 1.65;
+}
+html.rd #settingsOverlay #settingsContent .set-choice { cursor: pointer; transition: border-color .15s, background .15s; }
+html.rd #settingsOverlay #settingsContent .set-choice:hover { border-color: var(--rd-accent-border) !important; }
+html.rd #settingsOverlay #settingsContent .set-note-warn {
+    border-color: var(--rd-warn-border) !important;
+    background: var(--rd-warn-bg) !important;
+}
+html.rd #settingsOverlay #settingsContent .set-warn-text { color: var(--rd-warn-strong) !important; }
+html.rd #settingsOverlay #settingsContent .set-warn-body { color: var(--rd-text-2) !important; }
+html.rd #settingsOverlay #settingsContent .set-note ul { margin: 6px 0 0; padding-left: 0; list-style: none; }
+html.rd #settingsOverlay #settingsContent .set-note li { margin-top: 4px; }
+html.rd #settingsOverlay #settingsContent .set-note b { color: var(--rd-text); }
+html.rd #settingsOverlay #settingsContent .set-note-warn li,
+html.rd #settingsOverlay #settingsContent .set-note-warn p { color: var(--rd-text-2); }
+
+/* 记忆 */
+html.rd #settingsOverlay #settingsContent .memory-every-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 14px 0 0;
+    color: var(--rd-text-2);
+    font-size: 12px;
+}
+html.rd #settingsOverlay #settingsContent .memory-stepper {
+    display: inline-flex;
+    align-items: center;
+    overflow: hidden;
+    border: 1px solid var(--rd-border);
+    border-radius: 10px;
+    background: var(--rd-input);
+}
+html.rd #settingsOverlay #settingsContent .memory-step-btn {
+    width: 32px;
+    height: 34px;
+    border: 0;
+    background: transparent;
+    color: var(--rd-text-2);
+    font-size: 15px;
+}
+html.rd #settingsOverlay #settingsContent .memory-step-btn:hover { background: var(--rd-hover); color: var(--rd-accent); }
+html.rd #settingsOverlay #settingsContent .memory-step-input {
+    width: 48px;
+    height: 34px;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    text-align: center;
+    font-size: 12.5px !important;
+}
+html.rd #settingsOverlay #settingsContent .memory-now-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    min-height: 40px;
+    margin-top: 14px;
+    border: 1px solid var(--rd-accent-border);
+    border-radius: 11px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-family: var(--rd-font-ui);
+    font-size: 12px;
+    font-weight: 600;
+}
+html.rd #settingsOverlay #settingsContent .memory-now-btn:hover { background: var(--rd-accent); color: var(--rd-accent-contrast); }
+html.rd #settingsOverlay #settingsContent .memory-now-btn svg { width: 15px; height: 15px; }
+
+/* 权限徽章 */
+html.rd #settingsOverlay #settingsContent .agent-perm-badge {
+    flex: none;
+    padding: 3px 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px;
+    background: var(--rd-surface-2);
+    color: var(--rd-text-3);
+    font-size: 10px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-ok,
+html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-granted { border-color: var(--rd-ok); color: var(--rd-ok); background: var(--rd-ok-soft); }
+html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-actionable { cursor: pointer; border-color: var(--rd-accent-border); color: var(--rd-accent); background: var(--rd-accent-soft); }
+
+/* 分区内的分隔线不要再画一遍 */
+html.rd #settingsOverlay #settingsContent section > .mt-6.pt-4,
+html.rd #settingsOverlay #settingsContent section > .mt-3.pt-3 { margin-top: 0 !important; padding-top: 0 !important; border-top: 0 !important; }
+
+/* 数据/安全/更新 */
+html.rd #settingsOverlay #settingsContent #authNewPwd,
+html.rd #settingsOverlay #settingsContent #authNewPwd2 { width: auto !important; flex: 1 1 180px; }
+html.rd #settingsOverlay #settingsContent #appUpdateResult {
+    padding: 14px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 12px !important;
+    background: var(--rd-surface-2) !important;
+}
+
+/* 日志：工具条与终端都收进同一张卡片 */
+html.rd #settingsOverlay #tab-log .log-tab-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    padding: 16px !important;
+    border: 1px solid var(--rd-border);
+    border-radius: 18px;
+    background: var(--rd-surface);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .03), 0 14px 34px rgba(0, 0, 0, .035);
+}
+html.rd #settingsOverlay #tab-log .log-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+html.rd #settingsOverlay #tab-log .log-level-pills { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border: 1px solid var(--rd-border); border-radius: 10px; background: var(--rd-surface-2); }
+html.rd #settingsOverlay #tab-log .log-pill { min-height: 26px; padding: 0 9px; border: 0; border-radius: 7px; background: transparent; color: var(--rd-text-3); font-size: 9.5px; font-weight: 700; letter-spacing: .06em; }
+html.rd #settingsOverlay #tab-log .log-pill[aria-pressed="true"] { background: var(--rd-accent-soft); color: var(--rd-accent); }
+html.rd #settingsOverlay #tab-log .log-toolbar-right { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+html.rd #settingsOverlay #tab-log .log-select,
+html.rd #settingsOverlay #tab-log .log-search { height: 34px; padding: 0 10px; border: 1px solid var(--rd-border); border-radius: 9px; background: var(--rd-input); color: var(--rd-text); font-size: 11px; }
+html.rd #settingsOverlay #tab-log .log-terminal { min-height: 360px; max-height: none; border-radius: 12px; border: 1px solid var(--rd-border); }
+html.rd #settingsOverlay #tab-log .log-meta { color: var(--rd-text-3); font-size: 10px; }
+
+/* 扩展页内的卡片保持原样，但页头与分段标题统一 */
+html.rd #settingsOverlay .ext-mobile-tabs { display: none; }
+
+html.rd #settingsOverlay #tab-mods .ext-page-head { display: none; }
+html.rd #settingsOverlay #tab-mods .ext-head { margin: 0 0 12px !important; padding: 0 0 12px !important; border-bottom: 1px solid var(--rd-border) !important; }
+html.rd #settingsOverlay #tab-mods .ext-head .modal-label { margin: 0 !important; padding: 0 !important; border: 0 !important; }
+html.rd #settingsOverlay #tab-mods .ext-panel { flex: none; }
+
+/* 聊天主体字号略提一档，避免整页都是 11px 的碎字 */
+html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
+
+/* ---------- 窄屏：整页单列 ---------- */
+
+@media (max-width: 980px) {
+    html.rd #settingsOverlay,
+    html.rd #settingsOverlay #settingsPanel {
+        inset: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        max-height: none !important;
+        border-radius: 0 !important;
+        grid-template-columns: minmax(0, 1fr) !important;
+        grid-template-rows: auto minmax(0, 1fr) !important;
+        background: var(--rd-bg) !important;
+    }
+
+    html.rd #settingsOverlay #settingsTopBar {
+        grid-column: 1;
+        grid-row: 1;
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 10px !important;
+        height: auto;
+        min-height: 56px;
+        padding: 8px 12px !important;
+        border-right: 0 !important;
+        border-bottom: 1px solid var(--rd-border) !important;
+        background: var(--rd-topbar-bg) !important;
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+    }
+    html.rd #settingsOverlay .settings-brand,
+    html.rd #settingsOverlay .settings-rail-foot,
+    html.rd #settingsOverlay #settingsTabNav { display: none !important; }
+    html.rd #settingsOverlay #closeSettings {
+        position: static !important;
+        width: 34px !important;
+        height: 34px !important;
+        flex: none;
+        border: 1px solid var(--rd-border) !important;
+        border-radius: 10px !important;
+        background: var(--rd-surface-2) !important;
+        color: var(--rd-text-2) !important;
+    }
+    html.rd #settingsOverlay .settings-close-desktop { display: none !important; }
+    html.rd #settingsOverlay .settings-close-mobile { display: block !important; width: 18px; height: 18px; }
+    html.rd #settingsOverlay #mobileSettingsTitle {
+        display: block;
+        flex: 1;
+        min-width: 0;
+        font-family: var(--rd-font-display);
+        font-size: 17px;
+        font-weight: 600;
+        color: var(--rd-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    html.rd #settingsOverlay #settingsContent {
+        grid-column: 1;
+        grid-row: 2;
+        padding: 16px 14px calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+    }
+    html.rd #settingsOverlay #settingsContent > .settings-tab-panel,
+    html.rd #settingsOverlay #settingsSubpage { max-width: none; }
+
+    html.rd #settingsOverlay .settings-page-head {
+        padding: 2px 2px 12px;
+        margin-bottom: 14px;
+        border-bottom: 0;
+    }
+    html.rd #settingsOverlay .settings-page-eyebrow,
+    html.rd #settingsOverlay .settings-page-head h1 { display: none !important; }
+    html.rd #settingsOverlay .settings-page-head > p:last-child { margin-top: 0; font-size: 11.5px; color: var(--rd-text-3); }
+
+    html.rd #settingsOverlay #settingsContent .settings-tab-panel > section,
+    html.rd #settingsOverlay #settingsContent .settings-tab-panel > div.mb-4,
+    html.rd #settingsOverlay #settingsContent .settings-tab-panel > .settings-card,
+    html.rd #settingsOverlay #settingsSubpage > section,
+    html.rd #settingsOverlay #settingsSubpage > .settings-card {
+        margin-bottom: 12px !important;
+        padding: 16px !important;
+        border-radius: 16px !important;
+        box-shadow: none !important;
+    }
+    html.rd #settingsOverlay #settingsContent .modal-label {
+        margin-bottom: 12px !important;
+        padding-bottom: 10px !important;
+        font-size: 14px !important;
+    }
+
+    html.rd #settingsOverlay #settingsContent input[type="text"],
+    html.rd #settingsOverlay #settingsContent input[type="url"],
+    html.rd #settingsOverlay #settingsContent input[type="password"],
+    html.rd #settingsOverlay #settingsContent input[type="number"],
+    html.rd #settingsOverlay #settingsContent input[type="search"],
+    html.rd #settingsOverlay #settingsContent .modal-input,
+    html.rd #settingsOverlay #settingsContent select { min-height: 44px; height: 44px; font-size: 13px !important; }
+    html.rd #settingsOverlay #settingsContent textarea,
+    html.rd #settingsOverlay #settingsContent .modal-textarea { min-height: 132px; font-size: 13px !important; }
+
+    html.rd #settingsOverlay #themePickerBox { gap: 8px !important; }
+    html.rd #settingsOverlay .theme-tpl-card {
+        grid-template-columns: 48px minmax(0, 1fr);
+        gap: 9px;
+        padding: 8px !important;
+        border-radius: 12px !important;
+    }
+    html.rd #settingsOverlay .theme-tpl-preview { width: 48px !important; height: 38px !important; }
+    html.rd #settingsOverlay .theme-tpl-name { font-size: 11px; }
+    html.rd #settingsOverlay .theme-tpl-desc { font-size: 8.5px; }
+
+    html.rd #settingsOverlay .bubble-preview { padding: 10px; margin-bottom: 12px; }
+    html.rd #settingsOverlay .bubble-preview-stage { padding: 10px; gap: 8px; }
+    html.rd #settingsOverlay .rd-display-card .set-row { gap: 12px; padding: 13px 0 !important; }
+    html.rd #settingsOverlay .rd-display-card .copy b { font-size: 12.5px; }
+    html.rd #settingsOverlay .rd-display-card .segmented button { padding: 0 9px !important; font-size: 11px !important; }
+
+    html.rd #settingsOverlay .model-subsection-head { gap: 12px; }
+    html.rd #settingsOverlay #settingsContent .cpc-grid { grid-template-columns: minmax(0, 1fr) !important; }
+    html.rd #settingsOverlay #settingsContent .chat-provider-card { padding: 12px !important; }
+    html.rd #settingsOverlay #settingsContent .prov-row { min-height: 58px; padding: 9px 12px !important; }
+    html.rd #settingsOverlay #settingsContent .prov-icon { width: 32px !important; height: 32px !important; }
+    html.rd #settingsOverlay .ext-mobile-tabs {
+        display: flex;
+        gap: 3px;
+        margin: 0 0 12px;
+        padding: 3px;
+        border: 1px solid var(--rd-border);
+        border-radius: 12px;
+        background: var(--rd-surface);
+    }
+}
+
+/* 宽屏分栏面板的轻入场：switchSettingsTab 只在宽屏挂 .settings-panel-in；
+   窄屏由 mobile-shell 的观察者走 mm-slide-in-right，两边各一套不叠加。 */
+@keyframes settings-panel-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+}
+html.rd .settings-tab-panel.settings-panel-in { animation: settings-panel-in var(--motion-base) var(--ease-out-soft) both; }

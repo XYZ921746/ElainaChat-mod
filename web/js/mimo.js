@@ -1,26 +1,9 @@
-/* ============================================================================
- * MiMo TTS 参考音频样本（从 settings.js 拆出）
- *
- * 内置样本加载 / 上传转码 / 状态展示 / 旧样本修复 / 清除。
- * ========================================================================== */
+/* MiMo TTS 参考音频样本：内置样本加载 / 上传转码 / 状态展示 / 已存样本修复 / 清除。 */
 "use strict";
 
 const MIMO_TTS_CLONE_SAMPLE_MAX_BYTES = 5 * 1024 * 1024;
 
-// ===== 内置参考音频样本=====
-// 软件自带一段伊蕾娜的日语样本：`web/audio/mimo-elaina-jp.m4a`（随应用一起分发，
-// APK 同步 web/ 时也会带上）。选到 voiceclone 模型而手上还没有样本时，自动把它
-// **转码成 wav 并填入** —— 走的是与"用户自己上传"完全同一条路径
-// （transcodeAudioBufferToWavDataUrl → data URL → 也是服务端拆到 data/voice-samples
-// 的那套），所以没有任何特例分支。
-// 别信这个样本文件的扩展名：它**真实字节是 m4a（ftypisom）容器**，
-//   手机或工具常把它错误命名成 .mp3（所以这里有"按文件头嗅探格式"的注释）。
-//   这里落地成 .m4a 是对的名字；反正前端一律先解码再转 wav，
-//   扩展名不影响可用性，但别再让下一个人误以为它是 mp3。
-// 为什么不做"每次启动都塞一遍"：转码后的 wav 有数 MB，写进 data/ 是实打实的体积；
-//   而且用户一旦自己上传或主动清除，就该尊重他的选择。所以：
-//     · 只在"当前是 voiceclone 且没有样本"时补，且**每个页面会话最多补一次**
-//     · 用户点过「清除样本」后本会话不再自动补（要恢复就点「内置样本」按钮）
+// 内置样本随应用一起分发（真实字节是 m4a 容器，别信扩展名）：选到 voiceclone 且还没有样本时自动转码成 wav 填入，走与"用户自己上传"完全同一条路径；只在无样本时补、每会话最多一次，用户清除后不再补。
 const BUILTIN_MIMO_CLONE_SAMPLE_URL = '/audio/mimo-elaina-jp.m4a';
 const BUILTIN_MIMO_CLONE_SAMPLE_NAME = '伊蕾娜·日语参考（内置）';
 let builtinCloneLoading = null;
@@ -61,14 +44,11 @@ function ensureBuiltinMimoCloneSample() {
     return loadBuiltinMimoCloneSample();
 }
 
-// 展示已保存样本的文件名（文件框无法回填，只能靠状态里的文件名）；传 message 则临时覆盖文案。
-// 拆成两个：Display 只渲染（转码完成的回调也用它，避免与 repair 相互触发）。
+// 展示已保存样本的文件名（文件框无法回填，只能靠状态里的文件名）；传 message 则临时覆盖文案。Display 只渲染、repair 单独走，避免两者相互触发。
 function updateMimoTtsCloneSampleStatusDisplay(message, isError) {
     const el = document.getElementById('mimoTtsCloneSampleStatus');
     if (!el) return;
-    // 用 .tts-sample-status 这套类（颜色走主题变量，见 index.html），
-    //   不要写死 Tailwind 色（text-emerald-400 / text-red-400 / text-indigo-300）——
-    //   写死的颜色不会随主题和深色模式变化。
+    // 用 .tts-sample-status 这套类（颜色走主题变量，见 index.html），不要写死 Tailwind 色 —— 写死的颜色不会随主题和深色模式变化。
     if (message) {
         el.textContent = message;
         el.className = 'tts-sample-status ' + (isError ? 'is-error' : 'is-ok');
@@ -90,17 +70,9 @@ function updateMimoTtsCloneSampleStatus(message, isError) {
     updateMimoTtsCloneSampleStatusDisplay(message, isError);
 }
 
-// MiMo 音色复刻的参考样本。
-// 官方 API 文档写明：voiceclone 的样本（audio.voice 的 base64）**仅支持 mp3 和 wav**。
-//   而手机录音常是 m4a/aac，还被系统或工具错误地命名成 .mp3 —— 实测用户的样本文件名是
-//   "202610131732.mp3"，真实字节却是 `ftypisom`（m4a 容器），服务端直接以
-//   「invalid audio format」400 拒绝。**光改 data URL 前缀救不了**：字节本身就不是它认的格式。
-// 因此这里**一律转码成 16-bit PCM WAV** —— 浏览器自带的 Web Audio 能解码 m4a/aac/flac/ogg，
-//   于是无论用户丢进来什么，最终都变成服务端最稳的 wav，用户不必自己去外部工具转码。
-// 已存的老样本也会被自动转一次（见 repairMimoTtsCloneSamplePrefix）。
+// 官方 API 写明 voiceclone 的样本仅支持 mp3 和 wav，而手机录音常是 m4a/aac 且可能被错命名成 .mp3 —— 光改 data URL 前缀救不了（字节本身就不是它认的格式），故一律转码成 16-bit PCM WAV，已存样本也会自动转一次。
 const MIMO_TTS_CLONE_WAV_PREFIX = 'data:audio/wav;base64,';
 
-// 嗅探容器格式（仅用于日志与排查，不影响处理流程）
 function mimoSampleFormatFromHead(head) {
     const b = head || new Uint8Array(0);
     const at = (i, s) => s.split('').every((c, k) => b[i + k] === c.charCodeAt(0));
@@ -121,8 +93,7 @@ function arrayBufferToBase64(buf) {
     }
     return btoa(bin);
 }
-// 编成**单声道** 16-bit PCM WAV：参考样本只为复刻音色，声道数不携带音色信息，
-// 单声道能省一半体积（设置文件里存的是 base64，体积直接翻倍）。
+// 编成**单声道** 16-bit PCM WAV：参考样本只为复刻音色，声道数不携带音色信息，单声道能省一半体积（设置文件里存 base64，体积翻倍）。
 function encodeMono16Wav(audioBuffer) {
     const n = audioBuffer.length;
     const out = new ArrayBuffer(44 + n * 2);
@@ -145,7 +116,6 @@ function encodeMono16Wav(audioBuffer) {
     }
     return out;
 }
-// 任意可解码音频 → WAV data URL；浏览器解不了会 reject
 async function transcodeAudioBufferToWavDataUrl(arrayBuffer) {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) throw new Error('当前浏览器不支持音频转码');
@@ -220,8 +190,7 @@ async function handleMimoTtsCloneSampleFileChange(event) {
 function clearMimoTtsCloneSample() {
     state.settings.mimoTtsCloneSample = '';
     state.settings.mimoTtsCloneSampleName = '';
-    // 清掉之后本会话别再自动补内置样本 —— 用户是主动清的，
-    //   不该马上又被塞回来。想恢复就点旁边的「内置样本」按钮。
+    // 清掉之后本会话别再自动补内置样本 —— 用户是主动清的，不该马上又被塞回来；想恢复就点旁边的「内置样本」按钮。
     builtinCloneTriedThisSession = true;
     const input = document.getElementById('settingMimoTtsCloneSample');
     if (input) input.value = '';
@@ -229,6 +198,4 @@ function clearMimoTtsCloneSample() {
     updateMimoTtsCloneSampleStatus();
 }
 
-// 只负责"刷新提示文案 + 占位符"，**不改写 Base URL 的值、也不锁成只读**。
-// 按「请求模式」把输入框锁成只读并强行覆盖成预设地址的话，
-// 用户想用自建中转时根本没地方改 —— 所以没有"请求模式"这个下拉。
+// 只负责"刷新提示文案 + 占位符"，**不改写 Base URL 的值、也不锁成只读**：锁成只读并强行覆盖成预设地址的话，用户想用自建中转时根本没地方改 —— 所以没有"请求模式"这个下拉。

@@ -1,13 +1,6 @@
 // 单文件 exe 打包（dist/Windows/scripts/pack-exe.mjs + dist/Windows/launcher/launcher.cjs）的回归检查。
-// 打包这层的失败几乎都**不在构建期暴露**，而在用户双击那一刻：
-//   · 内嵌资源取出来的类型不对（getRawAsset 给 ArrayBuffer，writeFileSync 不收）
-//   · 入口用了 ESM（SEA 只支持 CJS）
-//   · 用 process.execPath 起子进程（SEA 里那是 exe 自己，会无限套娃）
-//   · 把 data/ 也内嵌，于是每次启动覆盖用户的聊天记录
-// 所以这里既做静态断言（形状），也**真跑一次 exe**：没有这一步，"打出来了"
-// 与"打得能用"是两件事。
-// 真跑那一项会解出 4 MB 程序文件到一个临时目录 —— 用 mkdtemp 隔离、finally 删干净，
-// 不碰项目 data/ 与用户的 mods/。
+// 打包的失败都在用户双击那刻才暴露（资源类型 / ESM 入口 / execPath 套娃 / 内嵌 data/），
+// 所以静态断言之外还要真跑一次 exe；真跑用 mkdtemp 隔离、finally 删干净，不碰项目 data/ 与 mods/。
 // 用法：node scripts/check-exe.mjs           跑全部
 //       node scripts/check-exe.mjs 启动器     只跑名字含该子串的用例
 
@@ -17,8 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runChecks, ROOT, wait } from './check-harness.mjs';
 
-// 打包工具住在 dist/Windows/（与 Android 打包工具分列在 dist/ 下）。
-// dist/ 是本地产物区、不入库，本用例在工具缺失时按"环境性"跳过。
+// 打包工具在 dist/Windows/（本地产物区、不入库），缺失时按环境性跳过
 const LAUNCHER = path.join(ROOT, 'dist', 'Windows', 'launcher', 'launcher.cjs');
 const PACKER = path.join(ROOT, 'dist', 'Windows', 'scripts', 'pack-exe.mjs');
 const DIST = path.join(ROOT, 'dist');
@@ -63,8 +55,7 @@ runChecks({
                 }
                 const src = readFileSync(LAUNCHER, 'utf8');
 
-                // SEA 只接受 CommonJS 入口。写成 ESM 会在运行时 import 语法处崩，
-                // 而构建阶段完全看不出问题。
+                // SEA 只接受 CommonJS 入口：写成 ESM 在运行时才崩，构建期看不出
                 c.ok(/require\(/.test(src), '启动器用 CommonJS（require）');
                 c.ok(!/^\s*import\s+.*\sfrom\s+['"]/m.test(src), '启动器没有顶层 ESM import');
 
@@ -72,11 +63,9 @@ runChecks({
                 c.ok(!/spawn\(process\.execPath/.test(src), '没有 spawn(process.execPath)（会无限套娃）');
                 c.ok(/await import\(/.test(src), '用 await import() 在本进程内跑 serve.mjs');
 
-                // getRawAsset 返回 ArrayBuffer，必须包成 Buffer 才能写盘
                 c.ok(/Buffer\.from\(\s*sea\.getRawAsset/.test(src),
                     'getRawAsset 的结果包成 Buffer 再落盘');
 
-                // data/ 是用户内容，绝不能内嵌并覆盖
                 c.ok(!/PROGRAM_DIRS\s*=\s*\[[^\]]*'data'/.test(src), 'data/ 不在内嵌程序目录里');
                 c.ok(!/PROGRAM_DIRS\s*=\s*\[[^\]]*'mods'/.test(src), 'mods/ 不在内嵌程序目录里');
                 c.ok(/PROGRAM_DIRS\s*=\s*\[[^\]]*'web'[^\]]*'server'/.test(src), "内嵌 web/ 与 server/");
@@ -85,7 +74,6 @@ runChecks({
                 c.ok(/\.version/.test(src), '用版本号做解包缓存标记');
                 c.ok(/rmSync\(runtimeDir/.test(src), '版本变化时整体重解（不留下混杂的旧文件）');
 
-                // 双击启动必须开浏览器，否则用户看不到界面
                 c.ok(/OPEN_BROWSER\s*=\s*'1'/.test(src), "默认置 OPEN_BROWSER='1'（双击即出界面）");
             },
         },
@@ -99,7 +87,6 @@ runChecks({
                 }
                 const src = readFileSync(PACKER, 'utf8');
 
-                // 产物命名带版本号，且落在 dist/
                 c.ok(/ElainaChat-mod-\$\{version\}-x64\.exe/.test(src), '产物名带版本号与架构');
                 c.ok(/'dist'/.test(src), '产物默认落在 dist/');
 
@@ -121,14 +108,13 @@ runChecks({
             fn: async (c) => {
                 const exe = findBuiltExe();
                 if (!exe) {
-                    // 还没打过包是**环境性**跳过：CI 不必为了这个检查先打一个 94 MB 的包
+                    // 还没打过包是环境性跳过：CI 不必为这个检查先打一个 94 MB 的包
                     console.log('  SKIP  dist/ 里没有当前版本的 exe（先跑 npm run pack:exe）');
                     c.ok(true, '尚未打包，跳过（环境性）');
                     return;
                 }
                 const size = statSync(exe).size;
                 c.ok(size > 50 * 1024 * 1024, `exe 体积合理（${(size / 1024 / 1024).toFixed(1)} MB，含 Node 运行时)`);
-                // 只应有 exe 本身，不该再要求旁边放 node_modules 之类
                 const siblings = readdirSync(DIST).filter((n) => n === path.basename(exe));
                 c.ok(siblings.length === 1, '产物是单个 exe（无需伴随文件）');
             },
@@ -143,18 +129,13 @@ runChecks({
                     return;
                 }
 
-                // 拷到临时目录跑：exe 会往自己所在目录解 runtime/ 与 data/，
-                // 直接在 dist/ 里跑会污染仓库。
+                // 拷到临时目录跑：exe 会往所在目录解 runtime/ 与 data/，直接在 dist/ 跑会污染仓库
                 const dir = mkdtempSync(path.join(os.tmpdir(), 'elainachat-exe-'));
                 const copy = path.join(dir, path.basename(exe));
                 try {
                     spawnSync('cmd', ['/c', 'copy', '/Y', exe, copy], { stdio: 'pipe' });
 
-                    /**
-                     * 把 PATH 收窄到只有系统目录 —— 这一步才是"不依赖 Node"的实证。
-                     * 不这么做的话，exe 能跑可能只是因为机器上恰好装着 Node，
-                     * 而对方机器没有。
-                     */
+                    /** PATH 收窄到系统目录才是"不依赖 Node"的实证（否则可能只是本机装了 Node） */
                     const env = {
                         ...process.env,
                         PATH: 'C:\\Windows\\system32;C:\\Windows;C:\\Windows\\System32\\Wbem',
@@ -163,7 +144,6 @@ runChecks({
                         PORT: '',
                     };
                     delete env.PORT;
-                    // 数据一律落临时目录，绝不碰用户真实 data/
                     env.DATA_DIR = path.join(dir, 'data');
                     env.LOG_DIR = path.join(dir, 'logs');
                     env.MODS_DIR = path.join(dir, 'mods');
@@ -177,7 +157,6 @@ runChecks({
                     child.stderr.on('data', (d) => { out += d; });
 
                     try {
-                        // 等它报出就绪端口
                         let port = null;
                         const deadline = Date.now() + 45000;
                         while (Date.now() < deadline && !port) {
@@ -204,13 +183,12 @@ runChecks({
                             c.ok(js, '内嵌的前端脚本能取到（解包目录结构正确）');
                         }
 
-                        // 解包确实发生了，且 data/ 落在 exe 旁边而不是 runtime/ 里
+                        // data/ 要落在 exe 旁边而不是 runtime/ 里
                         c.ok(existsSync(path.join(dir, 'runtime', 'web', 'serve.mjs')),
                             'runtime/ 里解出了 serve.mjs');
                         c.ok(!existsSync(path.join(dir, 'runtime', 'data')),
                             'data/ 不在 runtime/ 里（不会随版本升级被清掉）');
 
-                        // 二次启动复用：不该再出现"首次运行，已解出"
                         c.ok(/首次运行，已解出 \d+ 个程序文件/.test(out), '首次启动打出了解包提示');
                     } finally {
                         try { child.kill('SIGKILL'); } catch { /* 已经退出 */ }

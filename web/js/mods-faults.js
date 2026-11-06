@@ -1,9 +1,4 @@
-/* ============================================================================
- * 插件错误隔离与失败记录（从 mods.js 拆出）
- *
- * reportModFault / guardMod / guardModAsync / autoDisableBroken /
- * readModFailure / clearModFailure。统一错误预算与落盘失败原因。
- * ========================================================================== */
+/* 插件错误隔离与失败记录：统一错误预算（reportModFault / guardMod / guardModAsync）与落盘的失败原因。 */
 (function () {
     'use strict';
 
@@ -55,16 +50,13 @@
         }
     }
 
-
-
     function autoDisableBroken(id, entry) {
         try { setModEnabled(id, false); } catch (e) { /* 写盘失败也要继续收回注册项 */ }
         try { deactivateContributions(id); } catch (e) { /* 同上 */ }
         if (entry) {
             entry.autoDisabled = true;      // 供设置界面区分「用户关的」与「坏了自己关的」
             entry.enabledBefore = true;     // 它本来是要启用的，只是失败了
-            // 原因单独存一个键（不塞进 enabled 那个键里：那是开关语义，
-            // 混进原因会让"0/1"的解析变得脆弱）
+            // 原因单独存一个键，不塞进 enabled 那个键（那是开关语义，混进原因会让"0/1"的解析变得脆弱）
             try {
                 Store.setItem(MOD_FAILED_KEY_PREFIX + id, JSON.stringify({
                     at: Date.now(),
@@ -84,11 +76,10 @@
         } catch (e) { return null; }
     }
 
-    /** 清掉失败记录（用户手动重新启用时调用：他想再试一次，就别再顶着旧错误） */
+    /** 清掉失败记录（用户手动重新启用时调用：他想再试一次，就不该再顶着上次的错误） */
     function clearModFailure(id) {
         try { Store.removeItem(MOD_FAILED_KEY_PREFIX + id); } catch (e) { /* 忽略 */ }
     }
-
 
         return { reportModFault, guardMod, guardModAsync, autoDisableBroken, readModFailure, clearModFailure };
     };

@@ -1,10 +1,5 @@
-/* ============================================================================
- * 主题变量层
- *
- * 四套主题共用同一套结构，只换 token；旧组件继续通过 --pixso-* 取色，
- * 所以这里同时维护两套名字：--rd-* 给新结构，--pixso-* 给既有规则。
- * 变量全部由 html 继承，切换 data-theme-template / data-theme 即时生效。
- * ========================================================================== */
+/* 主题变量层：四套主题共用同一套结构，只换 token。新结构用 --rd-*，
+   既有规则仍按 --pixso-* 取色，两套名字须同时维护；变量由 html 继承。 */
 
 html.rd {
     --rd-sidebar-w: 380px;
@@ -85,7 +80,7 @@ html.rd {
     --lg-shadow: var(--rd-shadow-2);
 }
 
-/* ==================== 1 · 暗夜魔女书房（默认 · 浅色） ==================== */
+/* 1 · 暗夜魔女书房（默认 · 浅色） */
 html.rd {
     --rd-bg: #f4eee1;
     --rd-body-bg:
@@ -244,7 +239,7 @@ html.rd[data-theme="dark"] {
     --rd-letter: .012em;
 }
 
-/* ==================== 2 · 暖米绿（原版本色） ==================== */
+/* 2 · 暖米绿 */
 html.rd[data-theme-template="olive"] {
     --rd-bg: #f8f5f2;
     --rd-body-bg:
@@ -392,7 +387,7 @@ html.rd[data-theme-template="olive"][data-theme="dark"] {
     --rd-avatar-user-border: transparent;
 }
 
-/* ==================== 3 · 雾蓝日系 ==================== */
+/* 3 · 雾蓝日系 */
 html.rd[data-theme-template="mist"] {
     --rd-bg: #eef5fa;
     --rd-body-bg:
@@ -542,7 +537,7 @@ html.rd[data-theme-template="mist"][data-theme="dark"] {
     --rd-avatar-user-border: transparent;
 }
 
-/* ==================== 4 · 石墨玻璃 ==================== */
+/* 4 · 石墨玻璃 */
 html.rd[data-theme-template="glass"] {
     --rd-bg: #eef1f7;
     --rd-body-bg:

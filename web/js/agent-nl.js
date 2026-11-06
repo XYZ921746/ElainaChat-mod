@@ -1,12 +1,6 @@
-/* ============================================================================
- * Agent 自然语言表情与记忆整理（从 agent.js 拆出）
- *
- * maybeAutoExpression / NL_EXPRESSION_MAP / runManualMemorySummary。
- * 依赖宿主 callAI / 消息与存储函数（运行时才调用）。
- * ========================================================================== */
+// Agent 自然语言表情与记忆整理；依赖宿主 callAI / 消息与存储函数（运行时才调用）。
 'use strict';
 
-// ===== 自然语言触发表情 =====
 // 用户说「做出XX表情」时直接驱动 Live2D 表情（不依赖 AI 输出标签）。
 const NL_EXPRESSION_MAP = {
     '星星眼': '星星眼', '星星眼表情': '星星眼',
@@ -20,15 +14,12 @@ const NL_EXPRESSION_MAP = {
 };
 function maybeAutoExpression(text) {
     const s = String(text || '');
-    // 直接说特征表情名（星星眼等）或带"表情/脸"字样都算
     const featureHit = Object.keys(NL_EXPRESSION_MAP).find(k => s.includes(k));
     if (!/(表情|脸)/.test(s) && !featureHit) return false;
-    // "做出/做个/表演/展示/来一个/露出 + 表情名 + (的)表情/脸"
     const m = s.match(/(?:做出|做|表演|展示|摆出|来一个|来个|露出|弄个?|换)\s*(?:一个|个|一下)?\s*([\u4e00-\u9fff]{2,4}?)(?:的)?(?:表情|脸)/);
     let name = m ? m[1] : '';
     if (!name) name = featureHit || '';
     if (!name) return false;
-    // 去掉尾部可能带上的"的"
     name = name.replace(/的$/, '');
     const target = NL_EXPRESSION_MAP[name] || name;
     const l2d = live2dService();
@@ -41,13 +32,11 @@ function maybeAutoExpression(text) {
 }
 
 
-// ===== 自然语言触发文件写入（不提供）=====
-// 文件写入一律走 AI 输出 [操作:保存文件 …]：前端用正则解析用户消息会绕过 AI、正则容易误伤、与授权流程脱节。
-// 也别加回「待写入 AI 留言」这类中间状态：它唯一的写入者是一个前端正则，留着就是「看起来能用、实际永不可达」的陷阱代码。
+// 自然语言触发文件写入不提供：写入一律走 AI 输出 [操作:保存文件 …]，前端正则解析会绕过 AI、误伤且与授权流程脱节。
+// 也不要引入「待写入 AI 留言」这类中间状态：唯一的写入者会是前端正则，等于「看起来能用、实际永不可达」的陷阱代码。
 
 async function runManualMemorySummary() {
-    // 返回值是**给工具通道用的**：这条函数经 ElainaOps.invoke → runToolCalls 调用，
-    //   没有返回值就会被读成「没有返回结果」，模型分不清"整理好了"和"整理失败"。
+    // 返回值给工具通道用：没有返回值会被读成「没有返回结果」，模型分不清"整理好了"和"整理失败"。
     if (state.memorySummaryRunning) {
         showCustomAlert('记忆整理正在进行中，请稍候。', '记忆整理');
         return { ok: false, text: '记忆整理正在进行中' };

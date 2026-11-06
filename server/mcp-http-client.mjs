@@ -1,28 +1,9 @@
-// MCP（Model Context Protocol）**远程传输**客户端：走 Streamable HTTP。
-// ── 为什么需要它 ────────────────────────────────────────────────────
-// stdio 传输（见 mcp-client.mjs）要求本机启动一个子进程，前提是装了 Node / Python。
-// 而很多 MCP 服务是**托管在公网**的：给一个 https 地址就能用，不需要装任何东西。
-// 用户遇到的"别人都是 https 的"指的就是这一类。
-// ── Streamable HTTP 的要点（2025-03-26 起取代旧的 HTTP+SSE）──────────
-//   · 所有请求都是 **POST** 到同一个 endpoint；
-//   · 请求体是单条 JSON-RPC 消息（或一个批次数组）；
-//   · 响应可能是 `application/json`（一次返回）或 `text/event-stream`（SSE 流，
-//     每条 data: 是一段 JSON-RPC）—— 两种都必须支持，服务端可自选；
-//   · 服务端可能在响应头里给 **Mcp-Session-Id**，后续请求必须带回；
-//   · 客户端要在 `MCP-Protocol-Version` 头里声明协议版本；
-//   · 关闭会话是 DELETE 同一 endpoint。
-// ── 为什么同时兼容旧的 HTTP+SSE ─────────────────────────────────────
-// 2024-11-05 那版是"先 GET 建一条长连接收消息，再 POST 到另一个地址发消息"。
-// 很多**已经部署出去**的服务还是这套，只支持新协议等于用不了它们。
-// 两者的入口地址不同（老的是 .../sse，新的是 .../mcp），所以按用户填的地址
-// 形态自动判断，不需要用户去理解"我用的是哪一代协议"。
+// MCP 远程传输客户端：走 Streamable HTTP（所有请求 POST 到同一 endpoint，响应可能是 application/json 或 text/event-stream，会话 id 走 Mcp-Session-Id 头）—— 公网托管的 MCP 服务给个 https 地址就能用，不要求本机装 Node/Python（那是 stdio 的前提）。
+// 同时兼容 HTTP+SSE：两者入口地址不同（.../sse 与 .../mcp），按用户填的地址形态自动判断，不需要用户理解"我用的是哪一代协议"。
 
 import { buildInitializeParams, flattenToolResult } from './mcp-shared.mjs';
 
-/** 握手超时：远程服务可能要冷启动容器，给宽一点。 */
-// 握手预算给宽：远程服务要冷启动容器，而连接失败时还要走 3 次重试
-//   （每次的连接超时是 8 秒 —— 见下面的 defaultAgent），8×3 + 退避 ≈ 26 秒，
-//   原本 30 秒的预算会被重试吃光，表现为"30 秒内没有回应 initialize"（实测）。
+// 握手预算给宽：远程服务要冷启动容器，而连接失败时还要走 3 次重试（每次连接超时 8 秒，见 defaultAgent），8×3 + 退避 ≈ 26 秒，30 秒的预算会被重试吃光。
 const INIT_TIMEOUT_MS = 45000;
 const LIST_TIMEOUT_MS = 20000;
 const CALL_TIMEOUT_MS = 120000;
@@ -30,24 +11,15 @@ const CALL_TIMEOUT_MS = 120000;
 const PROTOCOL_VERSION = '2025-06-18';
 /** 单条响应上限：防止失控的服务端把内存吃光。 */
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
-/** 旧版 SSE 长连接的心跳容忍时间：超过这么久没收到任何字节就认为断了。 */
+/** HTTP+SSE 长连接的心跳容忍时间：超过这么久没收到任何字节就认为断了 */
 const SSE_IDLE_MS = 120000;
 
-/**
- * 从 Content-Type 判断响应格式。
- * 有些服务端给 `text/event-stream; charset=utf-8`，所以要按前缀匹配。
- */
+/** 从 Content-Type 判断响应格式：有些服务端给 text/event-stream; charset=utf-8，所以按前缀匹配 */
 function isEventStream(contentType) {
     return /^\s*text\/event-stream/i.test(String(contentType || ''));
 }
 
-/**
- * 把 SSE 文本切成一条条 data 负载。
- *
- * SSE 的格式是「字段: 值」，事件之间用空行分隔；同一条消息的 data 可以分多行，
- * 按规范要用 \n 拼起来。只取 data 字段 —— id / event / retry 对 JSON-RPC 没有意义
- * （MCP 只用 data 承载消息）。
- */
+/** 把 SSE 文本切成一条条 data 负载：事件之间用空行分隔，同一条消息的 data 可多行（按规范用 \n 拼）；只取 data 字段 —— id / event / retry 对 JSON-RPC 没有意义（MCP 只用 data 承载消息） */
 export function parseSseChunk(text) {
     const out = [];
     // 事件之间以空行分隔；末尾不完整的部分留给下一次调用（由调用方缓存）
@@ -63,11 +35,7 @@ export function parseSseChunk(text) {
 }
 
 /**
- * 把用户填的地址归一成"请求入口"。
- *
- * 为什么要归一：用户可能贴的是带尾斜杠、带查询串、或者网页版的地址；
- *   不同来源的 MCP 服务给出的地址形态差别很大，直接拼 `/mcp` 会得到
- *   `https://x/mcp/mcp` 这种错误路径。
+ * 把用户填的地址归一成"请求入口"：贴过来的可能是带尾斜杠、带查询串或网页版的地址，直接拼 `/mcp` 会得到 `https://x/mcp/mcp` 这种错误路径。
  */
 export function normalizeMcpUrl(raw) {
     let u;
@@ -77,14 +45,7 @@ export function normalizeMcpUrl(raw) {
     return u;
 }
 
-/**
- * 判定"连接阶段的失败"——值得重试、也值得降级到 TLS 1.2 的那一类。
- *
- * 为什么单独判：undici 把底层错误包在 err.cause 里，顶层只有一句 "fetch failed"，
- *   不拆开就看不出是网络不通、DNS 失败还是 TLS 握手被掐断。
- * 判据与 server/relay.mjs 的 isTlsHandshakeFailure 保持一致 —— 同一台机器
- *   对同一批域名会同时影响中转和 MCP，两处判据分叉就会出现"中转好了 MCP 还坏"。
- */
+/** 判定"连接阶段的失败"——值得重试、也值得降级到 TLS 1.2 的那一类：undici 把底层错误包在 err.cause 里，顶层只有一句 "fetch failed"，不拆开看不出是网络不通、DNS 失败还是握手被掐；判据与 server/relay.mjs 的 isTlsHandshakeFailure 保持一致，两处分叉就会出现"中转好了 MCP 还坏" */
 export function isConnectFailure(err) {
     const c = err && err.cause;
     const code = String((c && c.code) || '');
@@ -110,15 +71,7 @@ export function describeConnectError(err) {
     return String((c && c.message) || (err && err.message) || err || '未知错误');
 }
 
-/**
- * 带 TLS 1.2 回退的 fetch。
- *
- * 为什么要这一步：某些网络环境会**掐掉 TLS 1.3 的 ClientHello**（实测本机连
- *   mcp.tavily.com 时 5 次里坏 1 次，报 UND_ERR_CONNECT_TIMEOUT，10 秒超时）。
- *   这不是配置错，用户无论怎么填都连不上，而错误只说 "fetch failed"，没法排查。
- *   做法与 server/relay.mjs 一致：只在**连接类失败**时降级重试一次，不无条件降级
- *   （TLS 1.3 有前向保密、往返更少，为局部网络问题付全站代价不划算）。
- */
+/** 带 TLS 1.2 回退的 fetch：某些网络会掐掉 TLS 1.3 的 ClientHello，用户无论怎么填都连不上而错误只说 "fetch failed"；做法与 server/relay.mjs 一致，只在连接类失败时降级重试一次（1.3 有前向保密、往返更少，不该为局部网络问题付全站代价） */
 /** 普通尝试用的 agent：连接超时压到 8 秒，好让 3 次重试能塞进总预算。 */
 function getDefaultAgent() {
     if (fetchWithFallback._defaultAgent !== undefined) return fetchWithFallback._defaultAgent;
@@ -133,9 +86,8 @@ async function fetchWithFallback(target, options) {
     // 拿到默认 agent（8 秒连接超时）；拿不到就退回裸 fetch（用 undici 默认的 10 秒）
     const defaultAgent = await getDefaultAgent();
     const withDefault = (opts) => (defaultAgent ? { ...opts, dispatcher: defaultAgent } : opts);
-    // 连接类失败是**偶发**的（实测同一地址 10 次里坏 1 次），单次重试不够。
-    // 最多 3 次：① 普通 TLS → ② 降级 TLS 1.2 → ③ 普通 TLS（隔一会儿再试）。
-    //   只对连接阶段失败重试：请求已经发出去之后的失败重发可能造成重复副作用。
+    // 连接类失败是偶发的，单次重试不够，最多 3 次：① 普通 TLS → ② 降级 TLS 1.2 → ③ 普通 TLS（隔一会儿再试）。
+    // 只对连接阶段失败重试：请求已经发出去之后的失败重发可能造成重复副作用。
     let lastErr = null;
     for (let attempt = 0; attempt < 3; attempt++) {
         // 调用方的 signal 已经 abort（整体超时）：再试也不会成功，直接放弃
@@ -160,10 +112,7 @@ async function fetchWithFallback(target, options) {
             if (!isConnectFailure(err)) throw err;   // 业务失败不重试
             lastErr = lastErr || err;                // 保留第一次的错误用于报告
             if (attempt < 2) {
-                // 短暂退避：立刻重连往往还落在同一个坏窗口里。
-                //   ⚠️ 这个 setTimeout **不能** unref：退避期间没有其它待处理句柄，
-                //   unref 后事件循环会判定"无事可做"直接退出，表现为
-                //   "Detected unsettled top-level await"（实测踩到）。
+                // 短暂退避：立刻重连往往还落在同一个坏窗口里。这个 setTimeout 不能 unref —— 退避期间没有其它待处理句柄，unref 后事件循环会判定"无事可做"直接退出。
                 await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
             }
         }
@@ -171,12 +120,7 @@ async function fetchWithFallback(target, options) {
     throw lastErr || new Error('连接失败');
 }
 
-/**
- * 一个远程 MCP 服务器连接。
- *
- * @param {object} def  { id, name, url, headers }
- * @param {object} opts { log, version }
- */
+/** 一个远程 MCP 服务器连接。def = { id, name, url, headers }，opts = { log, version } */
 export function createMcpHttpClient(def, opts = {}) {
     const log = typeof opts.log === 'function' ? opts.log : () => {};
     const id = String(def.id || '');
@@ -189,7 +133,7 @@ export function createMcpHttpClient(def, opts = {}) {
     let sessionId = null;
     /** 协商到的协议版本；服务端可能返回它支持的另一版。 */
     let negotiatedVersion = PROTOCOL_VERSION;
-    /** 旧版 SSE：长连接里收到的一条条消息会推到这里，按 id 配对。 */
+    /** HTTP+SSE 长连接里收到的一条条消息会推到这里，按 id 配对。 */
     const sseInbox = new Map();
     let sseController = null;
     let degraded = null;   // 连接失败原因；下次调用会重试
@@ -221,9 +165,7 @@ export function createMcpHttpClient(def, opts = {}) {
     }
 
     /**
-     * 把请求阶段的失败归类成用户能据此行动的错误。
-     * "fetch failed" 对用户没有任何信息量，连接类失败必须翻成具体原因，
-     *   否则用户只能看着四个字猜是地址错、网络问题还是服务器挂了。
+     * 把请求阶段的失败归类成用户能据此行动的错误："fetch failed" 对用户没有任何信息量，连接类失败必须翻成具体原因，否则用户只能猜是地址错、网络问题还是服务器挂了。
      */
     function translateRequestError(err, timeoutMs, method) {
         if (err && err.name === 'AbortError') {
@@ -236,12 +178,7 @@ export function createMcpHttpClient(def, opts = {}) {
     }
 
     /**
-     * 发一条 JSON-RPC 请求等回应。
-     *
-     * 关键难点：响应可能是 JSON 也可能是 SSE 流。SSE 是**流式**的，
-     *   一条流里可能先来一个 notification、再来我们要的 result，
-     *   所以要边读边配对，拿到对应 id 就立刻返回（不等到流结束 ——
-     *   有的服务端会保持连接不关，等到结束等于永远不返回）。
+     * 发一条 JSON-RPC 请求等回应。响应可能是 JSON 也可能是 SSE 流：一条流里可能先来 notification、再来我们要的 result，所以要边读边配对，拿到对应 id 就立刻返回（有的服务端保持连接不关，等到流结束等于永远不返回）。
      */
     async function request(method, params, timeoutMs) {
         if (closed) throw new Error('MCP 服务器「' + id + '」已关闭');
@@ -288,10 +225,7 @@ export function createMcpHttpClient(def, opts = {}) {
         }
     }
 
-    /**
-     * 处理流里的一条 JSON-RPC 消息。
-     * 命中本次请求的 result/error 时把解包结果返回；其余情况返回 undefined。
-     */
+    /** 处理流里的一条 JSON-RPC 消息；命中本次请求的 result/error 时返回解包结果，其余情况返回 undefined */
     function handleSseMessage(msg, reqId) {
         // 服务端主动发来的通知 / 请求：不实现，按规范忽略或回错
         if (msg && msg.method && msg.id === undefined) return undefined;
@@ -376,8 +310,7 @@ export function createMcpHttpClient(def, opts = {}) {
     }
 
     /**
-     * 协商版本：服务端可能只回它自己支持的版本，就用它继续，后续请求的版本头也跟着改。
-     * 版本不同不拒绝 —— 1.x 的工具语义没有破坏性变化，硬拒等于"能用却不让用"。
+     * 协商版本：服务端可能只回它自己支持的版本，就用它继续，后续请求的版本头也跟着改。版本不同不拒绝 —— 1.x 的工具语义没有破坏性变化，硬拒等于"能用却不让用"。
      */
     function applyNegotiatedVersion(result) {
         const got = String(result?.protocolVersion || '');
@@ -447,10 +380,7 @@ export function createMcpHttpClient(def, opts = {}) {
 }
 
 /**
- * 判断一个配置该走哪种传输。
- *
- * 判据是"有没有 http(s) 地址"：填了 url 就是远程，否则看 command。
- *   不用显式的 transport 字段 —— 老配置里没有这个字段，加字段等于要求用户重填。
+ * 判断一个配置该走哪种传输：填了 http(s) url 就是远程，否则看 command。不用显式的 transport 字段 —— 老配置里没有它，加字段等于要求用户重填。
  */
 export function resolveMcpTransport(def) {
     const url = String(def?.url || '').trim();

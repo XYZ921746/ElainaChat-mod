@@ -1,34 +1,19 @@
-/* ============================================================================
- * 原生（Capacitor APK）Live2D 模型存储适配（从 core.js 拆出）
- *
- * 这里只放页面内的原生文件系统实现；IS_NATIVE_APP / IS_MOBILE_DEVICE 仍由 core.js
- * 提供（经典脚本共享全局词法环境）。加载顺序：core-native.js → core.js。
- * ========================================================================== */
+// 原生（Capacitor APK）Live2D 模型存储适配：只放页面内的原生文件系统实现；
+// IS_NATIVE_APP / IS_MOBILE_DEVICE 仍由 core.js 提供（经典脚本共享全局词法环境），加载顺序 core-native.js → core.js。
 'use strict';
 
 let nativeModelRootReady = false;
-/**
- * 模型数据根（相对 Directory.Data 的路径）。
- *
- * 由内嵌服务回报的 modStatic 决定（播种目标与它同一份判据）：
- *   · 已启用的 live2d-models 声明了 /live2d/models → 插件目录（mods/<目录名>/models，
- *     与桌面版同一布局，node 侧的迁移也把存量模型挪到这里）；
- *   · 插件没装 / 没启用 / node 起不来 → 旧位置 live2d/models（原生兜底复刻只认它）。
- *
- * **所有**读写模型数据目录的地方（播种 / 列表 / 上传 / 删除）都走这一个变量 ——
- * 列表接口读哪、资源 base 指哪、上传写哪，三处必须同一处，否则"列表里有、
- * 加载 404"这种分叉只是时间问题。
- */
+// 模型数据根（相对 Directory.Data 的路径），由内嵌服务回报的 modStatic 决定：已启用的 live2d-models 声明了
+// /live2d/models 时用插件目录（与桌面版同一布局），插件没装/没启用/node 起不来时用旧位置 live2d/models。
+// 所有读写模型数据目录的地方（播种 / 列表 / 上传 / 删除）都走这一个变量，否则会出现"列表里有、加载 404"。
 let nativeModelRelRoot = 'live2d/models';
 
 function nativeFs() {
     return window.Capacitor?.Plugins?.Filesystem || null;
 }
 
-// 初始化本地模型目录并暴露 WebView 可访问的 base URL。
-// 播种目标由内嵌服务回报的 modStatic 决定（见 nativeModelRelRoot 的说明），
-// 所以这里要先等 __nodeReadyPromise —— node 起不来时它很快失败，
-// __nodeModStatic 保持 undefined → 按旧位置走，兜底链路照常。
+// 初始化本地模型目录并暴露 WebView 可访问的 base URL。播种目标由 modStatic 决定（见 nativeModelRelRoot），
+// 所以要先等 __nodeReadyPromise —— node 起不来时它很快失败，__nodeModStatic 保持 undefined，兜底链路照常。
 async function initNativeLive2dStorage() {
     if (!IS_NATIVE_APP) return;
     try {
@@ -62,11 +47,9 @@ async function initNativeLive2dStorage() {
     }
 }
 
-// 内置模型：随 APK 一起打包的只读副本（www/live2d/models/）。
-// APK 里没有服务端，模型只能从本地取；这里在启动时按 manifest.json 把内置模型
-// 复制进应用数据目录，之后列表扫描与资源寻址跟用户上传的模型完全同路，无需另做适配。
-// 只补"缺的 / 大小对不上的"文件，已完整的模型一律不动 —— 既不覆盖用户自己传的同名模型，
-// 又能在上次播种中途失败时自愈（见下面的逐项核对）。
+// 内置模型：随 APK 一起打包的只读副本（www/live2d/models/）。APK 里没有服务端，模型只能从本地取，
+// 这里启动时按 manifest.json 把内置模型复制进应用数据目录，之后列表扫描与资源寻址跟用户上传的模型完全同路。
+// 只补"缺的 / 大小对不上的"文件，已完整的模型一律不动 —— 既不覆盖用户自己传的同名模型，又能在播种中途失败时自愈。
 async function seedBundledLive2dModels() {
     if (!IS_NATIVE_APP || !nativeModelRootReady) return;
     const fs = nativeFs();
@@ -88,10 +71,9 @@ async function seedBundledLive2dModels() {
         const files = Array.isArray(entry && entry.files) ? entry.files : [];
         if (!name || !files.length) continue;
         const sizes = (entry && entry.sizes && typeof entry.sizes === 'object') ? entry.sizes : null;
-        // 数据目录里已有的文件（相对路径 → 字节数）。
-        // 判断"要不要种"不能只看目录非空：上一次播种中途失败（写入报错、进程被杀、
-        // 存储写满）会留下半套文件，目录非空但模型是坏的 —— 只判非空的话这种坏状态
-        // 永远修不回来。所以按清单逐项核对：缺的、以及字节数对不上的，都补种。
+        // 数据目录里已有的文件（相对路径 → 字节数）。不能只判目录非空：播种中途失败（写入报错、进程被杀、
+        // 存储写满）会留下半套文件，目录非空但模型是坏的，只判非空这种坏状态永远修不回来。
+        // 所以按清单逐项核对：缺的、以及字节数对不上的都补种。
         const existing = new Map();
         for (const f of await nativeCollectModelFiles(fs, dir, nativeModelRelRoot + '/' + name)) {
             existing.set(f.rel, f.size);
@@ -152,11 +134,9 @@ async function nativeWriteFile(path, directory, data) {
     }
 }
 
-// 递归列出模型目录下的文件，返回 [{ rel, size }]（rel 是相对模型根目录的路径，正斜杠分隔）。
-// 与服务端 collectModelFiles 保持同一套语义：表情/动作不保证放在固定子目录里，
-// Cubism 只规定 *.exp3.json / *.motion3.json 的文件格式，放哪由模型作者决定。
-// 内置的 deepseek 就把 44 个 *.exp3.json 堆在模型根目录、动作放在 motions/，
-// 早期"只扫 exp/ 子目录"的写法因此一个都列不出来。深度设上限防病态目录树。
+// 递归列出模型目录下的文件，返回 [{ rel, size }]（rel 相对模型根目录、正斜杠分隔）。
+// 与服务端 collectModelFiles 同一套语义：Cubism 只规定 *.exp3.json / *.motion3.json 的格式，放哪由模型作者决定，
+// 所以不能只扫固定子目录（deepseek 就把 44 个表情堆在根目录、动作放在 motions/）。深度设上限防病态目录树。
 // 顺带带出 size：readdir 本来就返回它，播种时用它校验已种文件是否完整，不额外多一次调用。
 async function nativeCollectModelFiles(fs, dir, basePath, relPath = '', depth = 0) {
     if (depth > 3) return [];
@@ -218,19 +198,12 @@ async function unzipBrowser(buf) {
     return files;
 }
 
-// 原生模式下 /api/live2d/* 的本地实现
-/**
- * 从**随 APK 打包的** manifest.json 直接列出内置模型。
- *
- * <p>为什么需要这条兜底：正常路径是"先把内置模型播种到应用数据目录，再从那个目录列出来"。
- * 但播种依赖 Capacitor 的 Filesystem 插件 —— 一旦它不可用（插件没注册成功、权限被拒、
- * 存储写满、ROM 限制），`nativeFs()` 返回 null，播种整段被跳过，**列表就是空的**，
- * 用户看到「（未上传模型）」，而模型其实明明就在 APK 里（assets 里有完整副本）。
- *
- * <p>打包进 APK 的模型本来就能通过 `/live2d/models/...` 直接读到（它是 WebView 的静态资源，
- * 不需要任何原生插件）。所以这里按 manifest 把清单直接拼成模型列表 —— 不碰文件系统。
- * 这是"至少让内置模型能用"的保证：上传功能可能坏，内置的不该跟着一起坏。
- */
+// 原生模式下 /api/live2d/ 的本地实现
+// 从随 APK 打包的 manifest.json 直接列出内置模型。正常路径是"先播种到应用数据目录再从那里列出来"，
+// 但播种依赖 Capacitor Filesystem 插件 —— 插件不可用（没注册成功、权限被拒、存储写满、ROM 限制）时
+// nativeFs() 返回 null，播种整段被跳过，列表就是空的，而模型其实明明就在 APK 里。
+// 打包进 APK 的模型本来就能通过 /live2d/models/... 直接读到（WebView 静态资源，不需要原生插件），
+// 所以这里按 manifest 把清单拼成模型列表 —— 上传功能可能坏，内置的不该跟着一起坏。
 async function bundledManifestModels() {
     try {
         const res = await fetch('/live2d/models/manifest.json', { cache: 'no-store' });
@@ -272,11 +245,9 @@ async function nativeLive2dFetch(url, options) {
     const dir = (fs && fs.Directory && fs.Directory.Data) ? fs.Directory.Data : 'DATA';
 
     // 假 Response。**必须同时有 json() 和 text()** ——
-    // 调用方不只用 json()：设置面板走的是 readJsonSafe()，它第一行就是 `await res.text()`
-    // （为了在服务端返回非 JSON 时给出能看懂的报错）。早期这里只实现了 json()，
-    // 于是设置里的模型列表**静默为空**（TypeError 被 catch 吞掉，显示「未上传模型」），
-    // 而模型其实好好地躺在 APK 里。视频通话那条路只用 json()，所以它当时是好的 ——
-    // 这也是为什么这个 bug 特别难发现：同一个接口，两条调用路径，只有一条炸。
+    // 调用方不只用 json()：设置面板走 readJsonSafe()，它第一行就是 await res.text()（为了在服务端返回
+    // 非 JSON 时给出能看懂的报错）。只实现 json() 会让设置里的模型列表静默为空（TypeError 被 catch 吞掉），
+    // 而视频通话那条路只用 json() 所以是好的 —— 同一个接口、两条调用路径，只有一条炸。
     const makeRes = (status, obj) => ({
         ok: status >= 200 && status < 300,
         status,
@@ -306,15 +277,10 @@ async function nativeLive2dFetch(url, options) {
                 } catch (e) { /* 跳过坏目录 */ }
             }
 
-            // 合并**打包进 APK 的**内置模型。
-            // 正常情况（播种成功）下，数据目录里已经有这些模型了，按名字去重后不会有变化。
-            // 但播种一旦失败（Filesystem 插件不可用、权限被拒、存储写满、ROM 限制），
-            // 数据目录是空的 —— 此时内置模型不该跟着一起消失：它们就在 assets 里，
-            // 不依赖任何原生插件。宁可只能看内置模型，也不要让用户对着
-            // 一句「（未上传模型）」以为 APK 里没带模型。
-            // 用合并而不是"空了才兜底"：否则用户一旦自己上传了模型（目录非空），
-            // 内置的那两个就会从列表里消失 —— 那是个更奇怪的 bug。
-            // 同名时以数据目录里的为准（用户可能改过 / 重命名过，资产也从数据目录取）。
+            // 合并打包进 APK 的内置模型：播种成功时数据目录里已有，按名字去重后无变化；播种失败（插件不可用、
+            // 权限被拒、存储写满、ROM 限制）时数据目录是空的，此时内置模型不该跟着消失 —— 它们就在 assets 里，
+            // 不依赖原生插件。用合并而不是"空了才兜底"：否则用户自己上传模型后内置的那两个会从列表里消失；
+            // 同名时以数据目录里的为准（用户可能改过 / 重命名过）。
             try {
                 const have = new Set(models.map((m) => m.name));
                 const bundled = await bundledManifestModels();

@@ -4,14 +4,6 @@
     <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>ElainaChat Mod · 伊蕾娜</title>
-    <!-- ==================== 安装成桌面应用（PWA）====================
-         manifest + 图标是浏览器判定「可安装」的另一半（另一半是 sw.js 的 fetch 处理器）。
-         theme_color 取主题里的 --pixso-canvas（#9fb0c7）：装成独立窗口后，
-           标题栏与启动画面用它，与页面底色一致，切换时不会闪一下白。
-         display: standalone —— 装好后是**独立窗口、无地址栏**，这就是「跟 app 差不多」
-           的来源；它不是 Electron/WebView2 壳，不引入任何原生依赖。
-         ⚠️ 安装入口只在**安全上下文**出现：http://127.0.0.1 可以，http://192.168.x.x 不行。
-            所以手机/平板用局域网地址访问时不会看到安装按钮 —— 这是浏览器的规矩，绕不过。 -->
     <link rel="manifest" href="/manifest.webmanifest">
     <meta name="theme-color" content="#9fb0c7">
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
@@ -19,53 +11,38 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="ElainaChat">
+    <script>
+        // 启动主题回放：把 theme.js 存的快照（sessionStorage['elaina_theme_boot']）在首帧渲染前套到 <html> 上，
+        // 消除刷新时的默认色首帧。快照只含算好的结果（属性 + 自定义变量文本），主题推导逻辑都在 theme.js 里，
+        // 这里机械回放、不做任何推导。整体 try/catch：快照缺失或损坏时走默认主题，绝不阻塞启动。
+        (function () {
+            try {
+                var snap = JSON.parse(sessionStorage.getItem('elaina_theme_boot') || 'null');
+                if (!snap) return;
+                var root = document.documentElement;
+                if (snap.template) root.setAttribute('data-theme-template', snap.template);
+                else root.removeAttribute('data-theme-template');
+                if (snap.dark) root.setAttribute('data-theme', snap.dark);
+                else root.removeAttribute('data-theme');
+                if (snap.colorScheme) root.style.colorScheme = snap.colorScheme;
+                if (snap.css) {
+                    var st = document.createElement('style');
+                    st.id = 'elainaCustomTheme';   // 与 theme.js 的 applyCustomTheme 同 id：它晚到时会原地替换内容
+                    st.textContent = snap.css;
+                    document.head.appendChild(st);
+                }
+            } catch (e) { /* 快照损坏按无快照处理 */ }
+        })();
+    </script>
     <script src="/vendor/tailwind.js"></script>
-    <!-- Markdown + LaTeX 渲染（离线，随仓库分发，无网络依赖）。
-         消息里的 **加粗**、列表、代码块、表格与 $公式$ 靠它们渲染。
-         两者任一缺失时 renderMessageText 会静默回落成纯文本，不会报错。 -->
     <link rel="stylesheet" href="/vendor/katex/katex.min.css">
     <script src="/vendor/katex/katex.min.js"></script>
-    <!-- ★ Live2D 引擎（live2dcubismcore + pixi-6 + pixi-live2d-display，合计 787KB）
-         已**移出宿主**，改由 mods/live2d-models/ 按需注入：
-           · 引擎与模型都住那个资源 mod 里（引擎是能力、模型是数据，都被视频通话复用）
-           · 只在真正打开视频通话时才加载 —— 不装 Live2D 的用户不再为这 787KB 付代价
-           · 注入顺序由插件保证（core → pixi → display），见它的 ensureEngine()
-         入口是 window.ElainaLive2DModels.ensureEngine()；调用方是 mods/live2d/index.js
-         （视频通话的实现也搬进了插件，宿主已没有 live2d-video.js）。 -->
-    <!-- 对话 API 格式适配器（三种协议的实现 + 分发表）。
-         必须放在主脚本**之前**：主脚本会挂 window.ChatDeps 供它取依赖，
-         并在 callChatAPI 里调 window.ChatProviders.forFormat()。
-         注意：它只在"被调用时"才读 ChatDeps，所以真正的顺序要求是
-         「本文件先加载」——先加载只定义、不执行，最稳。 -->
-    <!-- ==================== 统一数据存储层 ====================
-         **必须排在最前面**（所有业务脚本之前）：它提供 window.Store，
-         业务代码用它读写数据。data/ 是唯一权威存储 ——
-         Web 走 /api/store（落 data/store.json + 分类文件），
-         APK 走 Capacitor Filesystem（应用私有目录，即 APK 的 "data/"）。
-
-         同一套业务代码两条后端，业务层一行平台判断都不写。
-         历史坑：以前 localStorage 是主存储、data/ 只是副本，删掉 data/ 后
-         数据会被 localStorage 反向推回去（"删了还在"）。详见 store.js。 -->
+    <!-- 加载顺序（defer 脚本按书写顺序执行）：store.js 必须最先（提供 window.Store —— data/ 是唯一权威存储，Web 走 /api/store、APK 走 Capacitor Filesystem，业务层一行平台判断都不写）；chat-providers.js 在主脚本之前（主脚本会挂 window.ChatDeps 供它取依赖）；katex / readme-view 缺失时 renderMessageText 静默回落纯文本；字体样式表必须非阻塞（media="print" + onload 切回 all），否则整页打不开。 -->
     <script defer src="/js/store.js"></script>
     <script defer src="/js/chat-providers.js"></script>
-    <!-- 数据备份（APK 侧）：安卓版没有本地服务，/api/data/* 不存在，
-         所以由这个模块生成/还原备份（数据源是 Store，与 Web 版同构）。
-         格式与 Web 版同构（同一套 zip 结构），两边可以互相导入。 -->
     <script defer src="/js/chat-backup.js"></script>
     <script defer src="/js/data-sync.js"></script>
     <script defer src="/js/frontend-log.js"></script>
-    <!-- pixi-live2d-display 已随引擎搬进 mods/live2d-models/vendor/，
-         它求值前需要 window.Live2D 占位 —— 这一点也由那个插件的 ensureEngine() 负责。 -->
-    <!-- Web 字体（Outfit + Noto Sans SC）：★ 必须**非阻塞**加载，否则整页打不开。
-         字体不走 @import：它会同时挡住**渲染**与
-         DOMContentLoaded，而字体源是 jsdelivr CDN —— 本机实测该 CDN 每次都返回
-         502（每次约 3 秒才失败），于是页面要等十几到几十秒才出来
-         （实测 domcontentloaded 12.5s / 46.9s，而同一页面的本地资源全部 ≤72ms）。
-         换成普通 <link rel=stylesheet> 一样会阻塞，所以用 media="print" + onload
-         切回 all 的写法：先当打印样式表放着（不阻塞绘制），下载完再转成常规样式表。
-         CDN 不通时唯一后果是**落回系统字体** —— font-family 里本来就有
-         PingFang SC / 微软雅黑 兜底，中文显示不受影响。
-         顺序仍与原 @import 等价：字体在前、应用自身的样式在其后，后者照常覆盖。 -->
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/outfit@5.2.8/index.css">
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-400.css">
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-500.css">
@@ -94,13 +71,10 @@
         })();
     </script>
     <div id="appShell" class="flex h-full w-full">
-        <!-- ==================== 侧边栏==================== -->
         <aside id="sidebar" class="glass-panel fixed left-4 top-4 bottom-4 w-[280px] rounded-2xl z-40 flex flex-col overflow-hidden animate-slide-in-left" style="isolation:isolate">
             <div class="sidebar-rail" aria-label="主导航">
                 <div class="sidebar-rail-logo" aria-hidden="true">
-                    <!-- 应用图标（与 manifest.webmanifest / PWA 安装同一份素材）：
-                         图片整体盖住底色，底色只在图片加载间隙可见 -->
-                    <img src="/icons/icon-192.png" alt="" draggable="false">
+                                        <img src="/icons/icon-192.png" alt="" draggable="false">
                 </div>
                 <button id="railChatBtn" class="sidebar-rail-btn active" type="button" title="对话" aria-label="对话" data-rail-action="chat">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M5 6.5h14v9H9l-4 3v-12z"/><path stroke-linecap="round" d="M8 10h8M8 13h5"/></svg>
@@ -109,30 +83,16 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6 4.5h12v15l-6-3-6 3v-15z"/><path stroke-linecap="round" d="M9 8.5h6M9 11.5h4"/></svg>
                     <span id="notesBadge" class="rail-badge hidden"></span>
                 </button>
-                <!-- ★ 2026-10：这个位置原来是「管理分类」（点开分类弹窗）。
-                     用户要求改成**成就系统**，生日纪念记录也收进成就里。
-                     ★ 分类弹窗的常规入口随「管理分类」按钮一并撤掉；
-                       openCategoriesModal 实现保留，只在成就模块不可用时的
-                       兜底路径里打开（manageCategoriesBtn 的绑定处见 init.js）。 -->
-                <button id="railCategoriesBtn" class="sidebar-rail-btn" type="button" title="成就" aria-label="成就" data-rail-action="achievements">
+                                <button id="railCategoriesBtn" class="sidebar-rail-btn" type="button" title="成就" aria-label="成就" data-rail-action="achievements">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M8 4h8v4.5a4 4 0 11-8 0V4z"/><path stroke-linecap="round" stroke-linejoin="round" d="M8 5.5H5.5v1.2A3.3 3.3 0 008.8 10M16 5.5h2.5v1.2A3.3 3.3 0 0115.2 10M12 12.5V16M8.5 19.5h7"/></svg>
                 </button>
-                <button id="railDiaryBtn" class="sidebar-rail-btn" type="button" title="日记" aria-label="日记" data-rail-action="diary">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M6 4.5h9.5L18 7v12.5H6z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15.5 4.5V7H18M9 11h6M9 14.5h4"/></svg>
-                </button>
-                <!-- 记忆页入口：跟「日记 / 成就」排在同一组内容页里 ——
-                     记忆是用户要**看**的页面，不是应用配置，所以不沉到分隔线下面。
-                     手机底部导航也复用这个按钮（窄屏竖栏在抽屉里，DOM 只有一份）。 -->
                 <button id="railMemoryBtn" class="sidebar-rail-btn" type="button" title="记忆" aria-label="记忆" data-rail-action="memory">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5.5" width="16" height="13" rx="2.5"/><path d="M8 10h8M8 13.5h5"/></svg>
                 </button>
                 <div class="sidebar-rail-spacer" aria-hidden="true"></div>
-                <!-- 设置入口：宽屏用竖栏这一颗；窄屏隐藏它、改用顶栏的 #headerSettingsBtn，
-                     同一台设备上因此只有一个「设置」（见 layout-full.css 的两条媒体查询）。 -->
                 <button id="railSettingsBtn" class="sidebar-rail-btn" type="button" title="设置" aria-label="设置" data-rail-action="settings">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
-                <!-- 左下角头像 = 用户资料入口（名称 / 头像用户自填；AI 印象由 AI 写，见 data.js 用户资料段） -->
                 <button id="railProfileBtn" class="rd-rail-avatar" type="button" title="我的资料" aria-label="我的资料">旅</button>
             </div>
             <div id="sidebarBrand" class="flex items-center gap-3 px-5 h-16 flex-shrink-0 border-b border-white/50">
@@ -172,25 +132,18 @@
                 <div id="folderList" class="scroll-soft h-full overflow-y-auto px-3 pb-2 space-y-1"></div>
             </div>
 
-            <!-- 侧栏底部插槽：mod 通过 host.slot('sidebar.footer', …) 注册的内容插在这里 -->
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div id="sidebarFooter" class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <!-- 版本号的本地来源：APK 里没有 package.json，页脚是随包同步的那一份。
-                     data-version 供「版本与更新」精确读取（不解析显示文本），
-                     与 package.json 的 version 由 scripts/check-update.mjs 断言同步。 -->
                 <div id="appVersionFooter" data-version="2.0.1" class="text-center text-[10px] text-indigo-200 select-none">v2.0.1 · 魔女之旅</div>
             </div>
         </aside>
 
-        <!-- 移动端遮罩-->
-        <div id="sidebarOverlay" class="hidden fixed inset-0 bg-black/20 z-30"></div>
+                <div id="sidebarOverlay" class="hidden fixed inset-0 bg-black/20 z-30"></div>
 
-        <!-- ==================== 主区 ==================== -->
         <div id="mainContent" class="flex-1 flex flex-col min-w-0 ml-[320px]">
 
-            <!-- 顶栏 -->
-            <header id="chatHeader" class="glass-panel h-16 mx-4 mt-4 rounded-2xl flex items-center px-4 gap-3 flex-shrink-0 z-10 relative">
+                        <header id="chatHeader" class="glass-panel h-16 mx-4 mt-4 rounded-2xl flex items-center px-4 gap-3 flex-shrink-0 z-10 relative">
                 <button id="showSidebar" class="hidden p-2 rounded-xl hover:bg-white/50 transition-colors" title="打开侧边栏">
                     <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
                 </button>
@@ -211,10 +164,6 @@
                         </div>
                     </div>
                 </div>
-                <!-- 顶部按钮插槽挂载点：Live2D 的「视频通话」等插件按钮
-                     排在「整理记忆」「外观模式」之前 —— 用户要求视频按钮在按钮组最左边。
-                     display:contents 让按钮直接参与 header 的 flex 布局（gap-3 照常生效），
-                     空着时不占任何空间。 -->
                 <span id="headerModSlot" style="display:contents"></span>
                 <button id="rdModelPill" class="rd-model-pill" type="button" title="模型与会话人设">
                     <span class="rd-model-dot"></span><span id="rdModelLabel" class="rd-model-label">BYOK 模型</span>
@@ -225,34 +174,19 @@
                     <span>整理记忆</span>
                     <span id="memoryStatusDot" class="hidden w-2 h-2 rounded-full bg-current animate-pulse"></span>
                 </button>
-                <!-- 公告入口：和「整理记忆」同款按钮 —— 桌面显示「图标+文字」，
-                     手机由媒体查询自动收成 38px 圆图标；有未读公告时带红点。点开下面那块面板。
-                     ★ 为什么单独做一个按钮、而不是并进顶栏那个金句胶囊：胶囊在 ≤980px 是被
-                     **刻意隐藏**的（见手机媒体查询），公告并进去等于手机端没有入口。 -->
-                <button id="headerAnnounceBtn" class="header-memory-btn" type="button" title="公告">
+                                <button id="headerAnnounceBtn" class="header-memory-btn" type="button" title="公告">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
                     <span>公告</span>
                     <span id="announceStatusDot" class="announce-dot hidden w-2 h-2 rounded-full flex-shrink-0"></span>
                 </button>
-                <!-- 「安装到桌面」入口（PWA）。
-                     ★ 默认 hidden，**只在浏览器真的给出 beforeinstallprompt 之后**才显形
-                     （见 web/js/pwa.js）。不支持 / 已安装 / 用局域网 IP 打开时它一直藏着 ——
-                     所以"这里该不该出现安装入口"没有第二个判据。
-                     沿用 .header-memory-btn：桌面是「图标+文字」，手机由媒体查询自动收成圆图标，
-                     与「整理记忆」「公告」同一套观感，不新增样式。 -->
                 <button id="headerInstallBtn" class="header-memory-btn hidden" type="button" title="安装到桌面（独立窗口打开）">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0l-3.5-3.5M12 14l3.5-3.5"/><path d="M4 16.5V19a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0020 19v-2.5"/></svg>
                     <span>安装</span>
                 </button>
-                <!-- 设置入口（手机端）：窄屏的底部导航不留设置格，那一格给记忆页；
-                     宽屏隐藏这颗，仍用竖栏里的 #railSettingsBtn（见 layout-full.css）。
-                     沿用 .header-memory-btn —— 手机自动收成圆图标，不新增样式。 -->
                 <button id="headerSettingsBtn" class="header-memory-btn" type="button" title="设置">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
                     <span>设置</span>
                 </button>
-                <!-- 公告面板（点上面的按钮展开；条目由 data.js 的 renderAnnounceList 生成，
-                     内容一律 textContent 渲染。绝对定位锚在 header 上 —— header 已加 relative。） -->
                 <div id="announcePanel" class="hidden absolute right-4 top-full mt-2">
                     <div class="announce-panel-head">
                         <div class="rd-announce-copy">
@@ -263,9 +197,6 @@
                     </div>
                     <div id="announceList" class="announce-list"></div>
                 </div>
-                <!-- 外观模式开关（★ 2026-10：从「外观 → 深色模式」下拉搬来，并按用户给的
-                     截图改成**三段连体胶囊**）：跟随设备 / 浅色 / 深色，选中的那段是
-                     填充圆底 + 白图标。★「跟随设备」就是原来的「跟随系统」。 -->
                 <div id="headerThemeBtn" class="header-theme-switch" role="group" aria-label="外观模式">
                     <button type="button" class="theme-seg" data-mode="system" title="跟随设备（跟随系统深浅色自动切换）" aria-label="跟随设备">
                         <svg class="icon-device" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2.5" y="4" width="19" height="12.5" rx="2"/><path d="M8 20h8M12 16.5V20"/></svg>
@@ -279,7 +210,6 @@
                 </div>
             </header>
 
-            <!-- 初始状态-->
             <div id="initialState" class="flex-1 flex flex-col items-center justify-center px-6">
                 <h1 id="greetingText" class="text-2xl md:text-3xl font-bold text-center text-indigo-950 min-h-[42px]"></h1>
                 <p class="greeting-subtitle">与伊蕾娜聊天吧</p>
@@ -328,7 +258,6 @@
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
                         </button>
                         <button id="initialSendBtn" onclick="handleComposerButtonClick()" class="composer-send-transition is-hidden btn-primary flex items-center gap-1 text-xs px-4 py-2 flex-shrink-0">
-                            <!-- DSH 式二态：同一位置一个图标，回复中整键变暂停 -->
                             <span class="send-label">发送</span>
                             <svg class="composer-state-icon w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"></svg>
                         </button>
@@ -336,11 +265,9 @@
                 </div>
             </div>
 
-            <!-- 聊天历史 -->
-            <div id="conversationHistory" class="hidden flex-1 overflow-y-auto scroll-soft px-6 pt-4"></div>
+                        <div id="conversationHistory" class="hidden flex-1 overflow-y-auto scroll-soft px-6 pt-4"></div>
 
-            <!-- 语笺页-->
-            <div id="notesPage" class="hidden flex-1 flex flex-col min-h-0">
+                        <div id="notesPage" class="hidden flex-1 flex flex-col min-h-0">
                 <div class="page-secondary-header flex-shrink-0">
                     <div class="page-secondary-copy">
                         <div class="page-secondary-title">语笺</div>
@@ -373,8 +300,7 @@
                     <div id="notesGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
                 </div>
 
-                <!-- 收藏详情浮层 -->
-                <div id="notesOverlay" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay">
+                                <div id="notesOverlay" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay">
                     <div id="favoriteDetail" class="hidden">
                         <div id="favoriteDetailCard" class="modal-panel w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
                             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
@@ -401,8 +327,7 @@
                 </div>
             </div>
 
-            <!-- 日记页：按记忆发生时间展示对话摘要 -->
-            <div id="diaryPage" class="hidden flex-1 flex flex-col min-h-0">
+                        <div id="diaryPage" class="hidden flex-1 flex flex-col min-h-0">
                 <div class="page-secondary-header flex-shrink-0">
                     <div class="page-secondary-copy">
                         <div class="page-secondary-title">旅行日记</div>
@@ -425,8 +350,6 @@
                 </div>
             </div>
 
-            <!-- 记忆页：把长期记忆按类目摊开（日记 / 关键时刻 / 约定 / 偏好 / 在意的事 / 计划）。
-                 与日记页同款次级页外壳，窄屏自动对齐；类目顺序与命名见 memory-page.js。 -->
             <div id="memoryPage" class="hidden flex-1 flex flex-col min-h-0">
                 <div class="page-secondary-header flex-shrink-0">
                     <div class="page-secondary-copy">
@@ -440,6 +363,14 @@
                 </div>
                 <div class="memory-toolbar flex-shrink-0">
                     <span id="memoryCount" class="diary-count"></span>
+                    <button id="memoryTierSettingsBtn" class="memory-tier-settings-btn" type="button" title="记忆分层设置" aria-label="记忆分层设置">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path stroke-linecap="round" stroke-linejoin="round" d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <span>分层设置</span>
+                    </button>
+                </div>
+                <div class="memory-view-tabs flex-shrink-0" role="tablist" aria-label="记忆视图">
+                    <button id="memoryViewTiers" class="memory-view-tab is-active" type="button" role="tab" aria-selected="true">🧠 分层记忆</button>
+                    <button id="memoryViewDiary" class="memory-view-tab" type="button" role="tab" aria-selected="false">📖 日记</button>
                 </div>
                 <div class="flex-1 min-h-0 overflow-y-auto scroll-soft">
                     <div id="memoryEmpty" class="diary-empty hidden">
@@ -450,7 +381,6 @@
                 </div>
             </div>
 
-            <!-- 底部输入栏-->
             <div id="inputBar" class="hidden flex-shrink-0">
                 <div class="conversation-composer glass-panel mx-auto flex items-center">
                     <div class="composer-tools">
@@ -491,14 +421,11 @@
                     </div>
                     <div id="composerImagePreview" class="composer-image-preview hidden"></div>
                     <input id="textInput" autocomplete="off" type="text" readonly onfocus="this.removeAttribute('readonly')" placeholder="和伊蕾娜说点什么...（Enter 发送）" class="flex-1 text-sm" onkeydown="if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229)handleTextSubmit()">
-                    <!-- 输入框插槽：mod 通过 host.slot('composer.actions', …) 注册的按钮插在这里
-                         （display:contents 让按钮直接参与这一行的 flex 布局，空着时不占位） -->
                     <span id="composerModSlot" style="display:contents"></span>
                     <button onclick="handleMicClick()" class="conversation-mic-btn mic-btn rounded-full flex items-center justify-center" title="语音输入" aria-label="语音输入">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
                     </button>
                     <button id="conversationSendBtn" onclick="handleComposerButtonClick()" class="composer-send-transition is-hidden conversation-send-btn btn-primary flex items-center text-xs flex-shrink-0" type="button" title="发送" aria-label="发送">
-                        <!-- DSH 式二态：同一位置只有一个图标。回复中整键换成暂停方块（见 swapStopIcons） -->
                         <svg class="composer-state-icon w-3.5 h-3.5" viewBox="0 0 24 24" aria-hidden="true"></svg>
                     </button>
                 </div>
@@ -508,17 +435,10 @@
 
     <input id="composerImageInput" type="file" accept="image/*" class="hidden" aria-hidden="true">
 
-    <!-- ==================== 副屏监视窗 ====================
-         用途：AI 用「模块」后端操作手机时，它在**独立虚拟副屏**上跑 ——
-         物理主屏看不到。这个窗口把副屏画面实时搬进应用，让你知道 AI 在点什么。
-
-         为什么不做成 iframe 套模块的 3070 网页面板：那样等于把浏览器塞进应用，
-         风格割裂、还多一层滚动与缩放问题。这里是应用自己的原生 UI，
-         只从模块取「画面 + 状态」两样数据。 -->
     <div id="screenWatchPanel" class="hidden fixed inset-0 flex items-center justify-center modal-overlay">
-        <div class="modal-panel w-full max-w-md max-h-[92vh] flex flex-col overflow-hidden">
+        <div class="modal-panel w-full max-w-md max-h-[92vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-3.5 border-b border-white/60 flex-shrink-0">
-                <span class="w-2 h-2 rounded-full flex-none" id="screenWatchDot" style="background:#94a3b8"></span>
+                <span class="w-2 h-2 rounded-full flex-none" id="screenWatchDot" style="background:var(--rd-text-3)"></span>
                 <div class="text-sm font-bold text-indigo-950">副屏监视</div>
                 <span id="screenWatchMeta" class="text-[11px] text-indigo-400 ml-1">检测中…</span>
                 <button id="closeScreenWatch" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
@@ -527,7 +447,6 @@
             </div>
 
             <div class="px-5 py-4 overflow-y-auto flex-1">
-                <!-- 画面区：按副屏比例显示，黑边留白而不是拉伸变形 -->
                 <div class="rounded-xl overflow-hidden bg-slate-900/95 flex items-center justify-center"
                      style="min-height:220px;max-height:52vh">
                     <img id="screenWatchImg" alt="副屏画面" class="hidden max-w-full max-h-[52vh] object-contain" style="image-rendering:auto">
@@ -539,8 +458,7 @@
                     </div>
                 </div>
 
-                <!-- 最近动作：让用户知道 AI 刚才干了什么 -->
-                <div class="mt-3">
+                                <div class="mt-3">
                     <div class="text-[11px] text-indigo-500 font-semibold mb-1">AI 最近的动作</div>
                     <div id="screenWatchLog" class="text-[11px] text-indigo-600 leading-relaxed rounded-lg bg-white/60 px-3 py-2"
                          style="max-height:96px;overflow-y:auto">（还没有动作）</div>
@@ -555,8 +473,7 @@
         </div>
     </div>
 
-    <!-- 悬浮麦克风dock -->
-    <div id="floatingMic" class="hidden fixed left-1/2 -translate-x-1/2 bottom-24 z-40">
+        <div id="floatingMic" class="hidden fixed left-1/2 -translate-x-1/2 bottom-24 z-40">
         <div class="floating-mic-surface glass-panel flex items-center gap-3">
             <button id="floatingCancelBtn" class="floating-dock-btn w-10 h-10 rounded-full bg-white/50 text-indigo-400 flex items-center justify-center" title="取消">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -581,90 +498,91 @@
         </div>
     </div>
 
-    <!-- ==================== 设置（全屏页） ====================
-         没有标题行：分栏名已由导航高亮，再写一遍标题只占高度。
-         关闭按钮是 #settingsTopBar 的第一项 —— 宽屏是左侧竖排导航的顶端一项；
-         窄屏是左上角的返回键（箭头由 CSS 切换，见 mobile-shell.css），类名标题跟在它右边。 -->
     <div id="settingsOverlay" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay">
         <div id="settingsPanel" class="modal-panel w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden animate-modal-pop">
-            <!-- 设置分栏导航 + 关闭按钮（同一行）
-                 ★ id 是给插件系统用的：mod 通过 host.slot('settings.tabs', …) 注册的
-                   分栏按钮由 mods.js 插进这个容器。点击**不在这里逐个绑定**，见
-                   init.js 的事件委托说明。 -->
-            <!-- ★ class 里原来有 `border-b border-white/50`（导航下面那条横线）——
-                 用户要求"彻底没有分割"，直接**从元素上删掉这两个类**，
-                 而不是靠 CSS 的 !important 去压：类还在的话，任何一处
-                 忘了写 !important 就会让线又冒出来（这类"幽灵边框"踩过）。
-                 另外 pt-3 pb-1 也去掉了 —— 高度交给 CSS 的 min-height 统一控制。 -->
             <div id="settingsTopBar" class="flex items-center gap-2 px-4 flex-shrink-0">
+                <div class="settings-brand">
+                    <span class="settings-brand-mark" aria-hidden="true">✦</span>
+                    <span class="settings-brand-copy"><b>设置</b><i>偏好 · 连接 · 扩展</i></span>
+                </div>
                 <button id="closeSettings" class="flex-none p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭设置" aria-label="关闭设置">
                     <svg class="settings-close-desktop w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                     <svg class="settings-close-mobile" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6"/></svg>
                     <span class="settings-close-label">关闭</span>
                 </button>
-                <!-- ★★ 2026-10：class 里**去掉了 `flex-1`**。
-                     它是"导航按钮组贴左边、不居中"的直接原因：
-                     `flex-1` = `flex: 1 1 0%`，在 flex 父容器里会把本元素撑满整行，
-                     于是 CSS 里的 `width: max-content` + `margin: 0 auto` 全部失效
-                     （实测 1440px 视口下按钮组中心偏离视口中心 317px）。
-                     居中改由 CSS 的 `flex: 0 1 auto` 负责（见基础导航规则那段注释）。 -->
                 <div id="settingsTabNav" class="flex gap-1 min-w-0 overflow-x-auto">
-                    <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance">外观</button>
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-character">角色</button>
-                    <!-- ★★ 2026-10 用户要求：「对话 / 语音 / 视觉」三个分栏合并成「模型」。
-                         理由：这三栏装的其实是**同一类东西** —— 都是"用哪个模型/服务"：
-                           对话栏 = 主模型（LLM）、语音栏 = TTS 与 ASR 模型、视觉栏 = 转述模型。
-                         拆三栏的代价是导航要放 9 个分栏（手机上一屏放不下、要横向滚动），
-                         而收益只是"少往下滚一点"。合并后导航 7 个，一屏能看全。
-                         ★ 三个 id 已统一为 tab-model；旧 id 不再存在，别照着旧代码找。 -->
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-model">模型</button>
-                    <!-- Live2D 分栏已改由插件通过 settings.tabs 插槽渲染（见 mods/live2d/）。
-                         这里不能留同名按钮 —— 插槽的撞名检查会因此拒绝插件注册，
-                         表现为"设置里能看到 Live2D，但点开是空的"。 -->
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability">能力</button>
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced">高级</button>
-                    <!-- 日志：独立分栏。
-                         ★ 为什么给它一个分栏而不是塞进「高级」：塞进去时它是高级的最后一项，
-                           而高级那一栏比屏幕还高（920px > 842px 视口），入口被挤到**屏幕外**，
-                           用户根本看不见（实测：按钮 top=895，视口高 900）。
-                           给它自己的分栏就永远在导航上、一眼可见。
-                         ★ 也不要放回主界面 rail —— 那是每天用的功能位，日志是排查用的。 -->
-                    <button type="button" class="settings-tab-btn" data-settings-tab="tab-log">日志</button>
-
-                    <!-- 扩展 + 它的三个分栏（**二次分栏**）========================
-                         用户要求把"插件 / 技能 / MCP"从页内按钮搬到**导航栏里**做二次分栏：
-                           · 桌面端：一条导航里读成「… 日志 | 扩展 › 插件 技能 MCP |」，
-                             层级一眼看得出，也不必进页面再点一次；
-                           · 手机端：同一条导航，靠已有的横向滚动 ——
-                             不新做一套交互，所以手机上不会多出一行按钮或抽屉。
-
-                         为什么要包一层分组：三个子项必须能看出"属于扩展"，
-                         否则导航里会冒出三个和「外观 / 角色 / 模型」平级的按钮，
-                         谁也说不清它们从哪来。分组容器负责"挂靠"与那条竖分隔。
-
-                         切换仍然走 switchSettingsTab（点父项回到第一个子项），
-                         子项用 data-ext-tab，由 switchExtTab 处理 —— 两者都激活
-                         同一个 #tab-mods 面板，只是里面的子面板不同。 -->
-                    <div id="settingsExtNav" class="ext-nav-group">
-                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-mods">扩展</button>
-                        <div class="ext-nav-children" role="group" aria-label="扩展分类">
-                            <button type="button" class="ext-nav-btn is-active" data-ext-tab="ext-mod"><span class="ext-nav-label">插件</span></button>
-                            <button type="button" class="ext-nav-btn" data-ext-tab="ext-skill"><span class="ext-nav-label">技能</span></button>
-                            <button type="button" class="ext-nav-btn" data-ext-tab="ext-mcp"><span class="ext-nav-label">MCP</span></button>
+                    <div class="settings-nav-group">
+                        <span class="settings-nav-label">个性化</span>
+                        <button type="button" class="settings-tab-btn active" data-settings-tab="tab-appearance" data-title="外观">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>外观</b><i>主题、气泡与背景</i></span>
+                        </button>
+                    </div>
+                    <div class="settings-nav-group">
+                        <span class="settings-nav-label">角色</span>
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-character" data-title="角色">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>角色</b><i>人设与世界观</i></span>
+                        </button>
+                    </div>
+                    <div class="settings-nav-group">
+                        <span class="settings-nav-label">智能</span>
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-model" data-title="模型与语音">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>模型</b><i>对话、语音与视觉</i></span>
+                        </button>
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability" data-title="能力">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>能力</b><i>记忆、权限与浏览器</i></span>
+                        </button>
+                    </div>
+                    <div class="settings-nav-group">
+                        <span class="settings-nav-label">扩展</span>
+                        <div id="settingsExtNav" class="ext-nav-group">
+                            <button type="button" class="settings-tab-btn" data-settings-tab="tab-mods" data-title="扩展">
+                                <span class="settings-nav-ic" aria-hidden="true"></span>
+                                <span class="settings-nav-copy"><b>扩展</b><i>插件、技能与 MCP</i></span>
+                            </button>
+                            <div class="ext-nav-children" role="group" aria-label="扩展分类">
+                                <button type="button" class="ext-nav-btn is-active" data-ext-tab="ext-mod"><span class="ext-nav-label">插件</span></button>
+                                <button type="button" class="ext-nav-btn" data-ext-tab="ext-skill"><span class="ext-nav-label">技能</span></button>
+                                <button type="button" class="ext-nav-btn" data-ext-tab="ext-mcp"><span class="ext-nav-label">MCP</span></button>
+                            </div>
                         </div>
                     </div>
+                    <div class="settings-nav-group">
+                        <span class="settings-nav-label">系统</span>
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced" data-title="数据与安全">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>数据与安全</b><i>备份、密码与更新</i></span>
+                        </button>
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-log" data-title="日志">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>日志</b><i>运行记录与排查</i></span>
+                        </button>
+                    </div>
+                </div>
+                <div class="settings-rail-foot">
+                    <span class="settings-save-dot" aria-hidden="true"></span>
+                    <span>更改即时保存</span>
                 </div>
             </div>
 
             <div id="settingsContent" class="flex-1 overflow-y-auto scroll-soft px-6 py-5 space-y-7">
+                <!-- 设置二级页：供应商配置等整块替换分栏内容，返回时移回原处。 -->
+                <div id="settingsSubpage" class="settings-card hidden">
+                    <div id="settingsSubpageHead" class="prov-detail-head hidden">
+                        <button id="settingsSubpageBack" type="button" class="prov-back">← 返回</button>
+                        <span id="settingsSubpageTitle" class="prov-detail-title"></span>
+                    </div>
+                </div>
 
-<!-- ==================== 外观（主题 / 深色） ====================
-                     独立分栏，对齐上游的做法（上游顶部导航里就有「外观」一项）。
-                     之前它埋在「高级」里，要翻两层才能找到 —— 而这是最常改的设置之一。 -->
                 <div id="tab-appearance" class="settings-tab-panel active-panel">
-<!-- ==================== 外观主题 ====================
-                           模板卡片由 theme.js 渲染 —— 模板清单是那份 JS 里的数据，
-                           写死在 HTML 会出现"改了清单但界面没变"的情况。 -->
+                      <header class="settings-page-head">
+                          <p class="settings-page-eyebrow">Appearance</p>
+                          <h1>外观</h1>
+                          <p>挑一套读起来舒服的配色，再决定气泡与背景的分寸。所有改动即时生效。</p>
+                      </header>
                       <div class="mb-4" id="themeSettingsSection">
                           <div class="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-2">
                               <span><span class="text-pink-500">✦</span> 外观主题</span>
@@ -675,6 +593,20 @@
                       </div>
                       <section class="rd-display-card settings-span-2">
                           <div class="modal-label"><span class="text-pink-500">✦</span> 显示</div>
+                          <div class="bubble-preview" id="bubblePreview">
+                              <div class="bubble-preview-head">
+                                  <span>对话预览</span>
+                                  <span id="bubblePreviewMode">圆润</span>
+                              </div>
+                              <div class="bubble-preview-stage" aria-hidden="true">
+                                  <div class="bubble-preview-line is-ai">
+                                      <div class="bubble-ai bubble-preview-bubble">今天天气不错，适合出门。</div>
+                                  </div>
+                                  <div class="bubble-preview-line is-user">
+                                      <div class="bubble-user bubble-preview-bubble">那我们出发吧。</div>
+                                  </div>
+                              </div>
+                          </div>
                           <div class="set-row">
                               <div class="copy"><b>外观模式</b><span>跟随设备、浅色或深色；与顶栏开关同步</span></div>
                               <div class="segmented rd-mode-seg">
@@ -684,7 +616,7 @@
                               </div>
                           </div>
                           <div class="set-row">
-                              <div class="copy"><b>气泡形状</b><span>圆润适合阅读，紧凑适合长对话</span></div>
+                              <div class="copy"><b>气泡形状</b><span>圆润适合阅读，紧凑适合长对话；设置页会同步收紧</span></div>
                               <div class="segmented rd-bubble-seg">
                                   <button type="button" data-rd-bubble="round">圆润</button>
                                   <button type="button" data-rd-bubble="compact">紧凑</button>
@@ -695,9 +627,14 @@
                               <button class="switch on" data-rd-texture type="button" aria-label="背景光晕"></button>
                           </div>
                       </section>
-                </div><!-- /tab-appearance -->
+                </div>
 
                 <div id="tab-character" class="settings-tab-panel">
+                <header class="settings-page-head">
+                    <p class="settings-page-eyebrow">Character</p>
+                    <h1>角色</h1>
+                    <p>她是谁、如何看待这个世界，都写在这两张卡里。改动会进入下一次对话。</p>
+                </header>
                 <section id="characterSettingsSection">
                     <div class="mb-4 pb-3 border-b border-indigo-100">
                         <div class="modal-label flex items-center gap-2 mb-2">
@@ -737,8 +674,6 @@
                     </div>
                 </section>
 
-                <!-- ★ 世界观卡：从「角色设定卡」里拆出来的**独立模块**（与上方「人设」分开）。
-                     #ccWorldSetting 仍按 id 被 data.js / settings.js 读写，位置变动无影响。 -->
                 <section id="worldSettingsSection" class="mt-6 pt-4 border-t border-indigo-100">
                     <div class="modal-label flex items-center gap-2 mb-2">
                         <span class="text-pink-500">✦</span> 世界观卡
@@ -748,60 +683,83 @@
                         <textarea id="ccWorldSetting" rows="6" class="modal-textarea text-sm resize-y" placeholder="描述世界规则、时代背景，以及角色与用户为何能够面对面交流"></textarea>
                     </div>
                 </section>
-                </div><!-- /tab-character -->
+                </div>
 
-                <!-- ============ 模型：主模型 / 语音 / 视觉 ============
-                     ★★ 2026-10 合并（原 tab-chat + tab-voice + tab-vision 三栏）。
-                     三栏装的都是"用哪个模型/服务"，合成一栏后按**对话 → 语音 → 视觉**
-                     的顺序排；每块仍是独立 `<section>` 卡片（卡片样式与分隔由
-                     #settingsContent 的规则统一处理，不需要额外 class）。 -->
                 <div id="tab-model" class="settings-tab-panel">
-                <section>
+                <header class="settings-page-head">
+                    <p class="settings-page-eyebrow">Models &amp; Voice</p>
+                    <h1>模型与语音</h1>
+                    <p>对话、朗读与识别各自连接哪家服务；图片转述并进对话模型，主模型能识图时不必再开。</p>
+                </header>
+                <section id="modelHomeSection" class="settings-hub">
+                    <div class="settings-hub-head">
+                        <span id="modelEntryCount">4 个分类</span>
+                        <p>选一个部分开始；返回时会回到这里。</p>
+                    </div>
+                    <div id="modelEntryList" class="prov-list settings-hub-list"></div>
+                </section>
+                <section id="modelChatPage" class="hidden">
                     <div class="modal-label flex items-center gap-2"><span class="text-violet-500">✦</span> 对话模型</div>
-                    <div class="space-y-3">
-                        <!-- 默认模型：两张下拉的选项都由 providers.js 按配置卡生成（名称 · 调用模型）。
-                             id 保留 settingChatModel：手机端「我的 → 对话模型」按它滚动定位。 -->
+                    <div id="chatProviderHome" class="space-y-3">
                         <div id="settingChatModel">
                             <label class="text-xs text-indigo-500 mb-1 block">默认模型</label>
                             <div class="flex items-center gap-2">
-                                <select id="defaultChatProviderSelect" class="modal-input text-sm flex-1 min-w-0"></select>
-                                <button id="addChatProviderBtn" type="button" class="btn-secondary text-xs flex-none" title="新增一套模型配置（名称 / 地址 / Key / 模型列表）">＋ 新增</button>
+                                <select id="defaultChatModelSelect" class="modal-input text-sm flex-1 min-w-0"></select>
+                                <button id="editChatProvidersBtn" type="button" class="btn-secondary text-xs flex-none" title="管理提供商与模型（添加提供商、勾选模型）">编辑</button>
                             </div>
                             <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">聊天、记忆整理、Agent 等全部请求都走默认模型。</p>
                         </div>
                         <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">失败回退模型</label>
-                            <select id="fallbackChatProviderSelect" class="modal-input text-sm"></select>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">默认模型请求失败（限流 / Key 失效 / 网络等）时，自动换它再试一次。</p>
+                            <label class="text-xs text-indigo-500 mb-1 block">失败回退模型（按顺序）</label>
+                            <div id="fallbackChainList" class="space-y-1.5"></div>
+                            <div class="flex items-center gap-2 mt-1.5">
+                                <select id="fallbackAddSelect" class="modal-input text-sm flex-1 min-w-0"></select>
+                                <button id="fallbackAddBtn" type="button" class="btn-secondary text-xs flex-none">添加</button>
+                            </div>
+                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">默认模型请求失败（限流 / Key 失效 / 网络等）时，按此顺序逐个尝试。</p>
                         </div>
-                        <!-- 提供商配置卡：providers.js 按设置动态生成，每张卡自带格式 / 地址 / Key / 调用模型 / 获取模型 / 测试 / 删除 -->
-                        <div id="chatProviderList" class="space-y-3"></div>
                         <div class="flex flex-wrap gap-2 mt-1">
                             <button id="clearApiKeysBtn" type="button" class="btn-secondary text-xs">清除全部 API Key</button>
                         </div>
                         <p class="text-[11px] text-indigo-300 leading-relaxed">请求由本机直接发往各服务商，不经过作者服务器；Key 只保存本机（Android 走系统 Keystore）。</p>
                     </div>
+                    <div id="visionSettingsSection" class="model-subsection">
+                        <div class="model-subsection-head">
+                            <div class="model-subsection-copy">
+                                <b>图片转述（可选）</b>
+                                <span>默认模型本身能识图时不要打开；只有纯文本模型才需要一个视觉模型替它看。</span>
+                            </div>
+                            <label class="mod-switch" title="开启 / 关闭图片转述">
+                                <input type="checkbox" id="settingVisionEnabled" aria-label="图片转述（视觉模型）">
+                                <span class="track"></span><span class="knob"></span>
+                            </label>
+                        </div>
+                        <p id="visionMainModelHint" class="set-note">💡 主模型本来就支持查看图片（多模态）时，<b>建议不要打开这个开关</b> —— 图片直接交给它，细节更全、速度更快。只有主模型是纯文本时，才需要在这里接一个视觉模型替它看。</p>
+                        <div id="visionFields" class="space-y-3">
+                            <div>
+                                <label class="text-xs text-[var(--text-muted)] mb-1 block">视觉模型（从「对话模型」的提供商里选）</label>
+                                <select id="settingVisionModelPair" class="modal-input text-sm"></select>
+                                <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1">图片转述就用这里选中的模型；它的 API 地址与 Key 直接取该提供商在「对话模型」里配好的那一份，不用另填。</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="chatProviderEditor" class="hidden"></div>
                 </section>
 
 
-                <section>
+                <section id="modelTtsPage" class="hidden">
                     <div class="modal-label flex items-center gap-2"><span class="text-rose-500">✦</span> 语音输出（多服务商）</div>
                     <div class="space-y-3">
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">语音服务商</label>
-                            <select id="settingTtsProvider" class="modal-input text-sm">
-                                <option value="mimo">MiMo TTS（小米）</option>
-                                <option value="minimax">MiniMax（克隆音色）</option>
-                                <option value="dashscope">阿里千问 Qwen-TTS</option>
-                                <option value="openai-tts">通用 OpenAI TTS</option>
-                            </select>
+                        <div id="ttsProviderHome" class="prov-section">
+                            <div id="ttsProviderList" class="prov-list"></div>
                         </div>
-                        <!-- MiMo TTS：小米，走 OpenAI 兼容的 /v1/chat/completions。
-                             要朗读的文本放在 assistant 消息里，响应 choices[0].message.audio.data
-                             带回 base64 的 wav 音频。它是**付费 API Key** 服务商，没有 Key 不能用。
-                             API Key / 接口地址为 TTS 专用，与「语音输入 → 小米 MiMo」各自独立。-->
+                        <div id="ttsProviderDetail" class="prov-detail hidden">
+                            <div class="prov-detail-head">
+                                <button id="ttsProviderBack" type="button" class="prov-back">← 返回</button>
+                                <span id="ttsProviderDetailTitle" class="prov-detail-title"></span>
+                            </div>
+                            <div class="prov-detail-body">
                         <div id="mimoTtsFields" class="space-y-3">
-                            <!-- 第 1 行：[API Key | 模型] 两列并排（接口地址已移除，运行时固定用小米官方地址） -->
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="text-xs text-indigo-500 mb-1 block">MiMo TTS API Key</label>
@@ -816,26 +774,17 @@
                                     </select>
                                 </div>
                             </div>
-                            <!-- 以下三个子组**互斥**，随模型下拉在同一个垂直位置切换，排版彼此一致：
-                                 音色（预置音色）/ 音色描述（voicedesign）/ 参考音频样本（voiceclone）。 -->
                             <div id="mimoTtsVoiceFields">
                                 <label class="text-xs text-indigo-500 mb-1 block">音色</label>
                                 <input id="settingMimoTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" value="" placeholder="mimo_default">
                             </div>
-                            <!-- 音色设计：仅 mimo-v2.5-tts-voicedesign，音色描述放在 user 消息里（必填） -->
                             <div id="mimoTtsVoiceDesignFields" class="hidden">
                                 <label class="text-xs text-indigo-500 mb-1 block">音色描述（voicedesign 模型必填）</label>
                                 <textarea id="settingMimoVoiceDesignPrompt" rows="2" class="modal-input text-sm" placeholder="例如：年轻男性，嗓音低沉略带沙哑，语速偏慢，语气沉稳"></textarea>
                                 <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">必填，1-4 句：性别与年龄、音色质感、情绪语气、语速节奏。越具体越贴近预期，避免相互矛盾或加混响 / EQ 类描述。</p>
                             </div>
-                            <!-- 音色复刻：仅 mimo-v2.5-tts-voiceclone，参考音频样本以 base64 放进 audio.voice（必填）。
-                                 字段排版与「音色」一致（label + 整行控件），清除按钮与状态挪到控件下方。 -->
                             <div id="mimoTtsVoiceCloneFields" class="hidden">
                                 <label class="text-xs text-indigo-500 mb-1 block">参考音频样本（voiceclone 模型必填）</label>
-                                <!-- ★ 2026-10 改良：原生 file 控件各浏览器的长相不同、还带"未选择任何文件"
-                                     这类本地化文案，跟主题格格不入 —— 藏起来，改用一个主题化的按钮去触发它。
-                                     ★ id 必须保留：init.js 的 change 监听、settings.js 的
-                                     读取与清空都还认这个 id。 -->
                                 <input id="settingMimoTtsCloneSample" autocomplete="off" type="file" accept="audio/*" class="tts-sample-input">
                                 <div class="tts-sample-row">
                                     <button type="button" id="mimoTtsCloneSamplePick" class="tts-sample-pick">
@@ -849,7 +798,7 @@
                                 <details class="rd-more">
                                     <summary>样本要求</summary>
                                     <p>官方只接受 <code class="text-indigo-500">mp3 / flac / m4a / wav / ogg</code>，<b>数秒</b>即可复刻，样本以 base64 放进请求的 <code class="text-indigo-500">audio.voice</code>。本应用把上限设为 <b>5&nbsp;MB</b> 以免设置文件膨胀。</p>
-                                    <p style="color:#b45309">免费克隆目前只有日语样本：日语输出可用，用它做「日语转中文」不行。手上有中文样本的话欢迎通过 PR 或联系作者加进项目。</p>
+                                    <p class="set-warn-text">免费克隆目前只有日语样本：日语输出可用，用它做「日语转中文」不行。手上有中文样本的话欢迎通过 PR 或联系作者加进项目。</p>
                                 </details>
                             </div>
                             <details class="rd-more">
@@ -858,7 +807,6 @@
                             </details>
                         </div>
                         <div id="openaiTtsFields" class="space-y-3 hidden">
-                            <!-- 接口地址与 API Key 同一行（与 MiMo TTS 一致的排版） -->
                             <div class="grid grid-cols-2 gap-3">
                                 <div>
                                     <label class="text-xs text-indigo-500 mb-1 block">接口地址</label>
@@ -913,13 +861,19 @@
                                     <input id="settingDashscopeTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="Cherry / Ethan / Serena">
                                 </div>
                             </div>
-                            <!-- ★ 阿里千问 TTS 的 Key 放在本组内：ASR 的 Key 已独立，选其它 TTS 服务商时
-                                 这里不该再出现"阿里云 Key"（见 updateTtsProviderUI 的显隐切换）。 -->
                             <div>
                                 <label class="text-xs text-indigo-500 mb-1 block">DashScope API Key（阿里千问 Qwen-TTS）</label>
                                 <input id="settingDashscopeApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="sk-...">
                             </div>
                         </div>
+                            </div>
+                        </div>
+                        <select id="settingTtsProvider" class="hidden" aria-hidden="true" tabindex="-1">
+                            <option value="mimo">MiMo TTS（小米）</option>
+                            <option value="minimax">MiniMax（克隆音色）</option>
+                            <option value="dashscope">阿里千问 Qwen-TTS</option>
+                            <option value="openai-tts">通用 OpenAI TTS</option>
+                        </select>
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">语音语言（朗读文本的语言）</label>
                             <div class="flex gap-4">
@@ -965,12 +919,12 @@
                     </div>
                 </section>
 
-                <section>
+                <section id="modelAsrPage" class="hidden">
                     <div class="modal-label flex items-center gap-2"><span class="text-rose-500">✦</span> 语音输入</div>
-                    <div class="flex flex-wrap gap-4 mb-3">
-                        <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                            <input type="radio" name="asrProvider" value="browser" class="accent-pink-500" checked> 浏览器内置识别<span class="text-red-400 ml-1">（已停用）</span>
-                        </label>
+                    <div id="asrProviderHome" class="prov-section">
+                        <div id="asrProviderList" class="prov-list"></div>
+                    </div>
+                    <div class="hidden" aria-hidden="true">
                         <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
                             <input type="radio" name="asrProvider" value="aliyun" class="accent-pink-500"> 阿里百炼
                         </label>
@@ -978,7 +932,12 @@
                             <input type="radio" name="asrProvider" value="mimo" class="accent-pink-500"> 小米 MiMo
                         </label>
                     </div>
-                    <div id="asrBrowserWarn" class="hidden text-[11px] text-red-400 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-2">此选项已停用：Chrome 内置识别要访问 Google 语音服务，国内连不通，<b>失败会把整个浏览器进程带崩</b>。请改选「阿里百炼」或「小米 MiMo」。</div>
+                    <div id="asrProviderDetail" class="prov-detail hidden">
+                        <div class="prov-detail-head">
+                            <button id="asrProviderBack" type="button" class="prov-back">← 返回</button>
+                            <span id="asrProviderDetailTitle" class="prov-detail-title"></span>
+                        </div>
+                        <div class="prov-detail-body">
                     <div id="dashscopeAsrFields" class="space-y-3 hidden">
                         <div>
                             <label class="text-xs text-indigo-500 mb-1 block">DashScope ASR API Key（阿里百炼，独立于语音输出）</label>
@@ -1020,35 +979,13 @@
                             <span id="settingMimoAsrTestStatus" class="text-[11px] text-indigo-300"></span>
                         </div>
                     </div>
+                        </div>
+                    </div>
                 </section>
 
-                <!-- ============ 对话优化（思考强度 / 第三人称 / 联网搜索 / 图片转述）============
-                     从「对话工具」菜单移过来的（原来在输入框旁边的 ⊕ 里）。
-                     移过来的原因：它是**模型参数**，不是"这一次对话的工具"——
-                     和模型名、输出上限是同一类东西，用户找它时会去设置里找，
-                     而不是去输入框旁边的加号里翻。
-
-                     ★ 2026-10 改版：**思考开关合并进档位**。
-                       原来是"让模型先思考再回答"勾选框 + 低/中/高 三档下拉，
-                       现在收敛成**一个四档下拉**：
-                         off（不思考，直接回答，默认） / low / high / max。
-                       "off" 本身已表达"关掉思考"，再单留一个开关只会出现
-                       "开关关着、档位却是 max"这种自相矛盾的状态。
-                       底层仍保留 thinkingMode 布尔（由档位派生，见 loadSettings
-                       与 init.js 的 change 监听），请求层与「思考」折叠栏
-                       的判据不变。
-
-                     ★ 第三人称：换成与全站一致的 iOS 风格开关（复用 .mod-switch，
-                       见 index.html 里的插件卡片开关样式）—— 不再用原生 checkbox，
-                       同一屏里两种控件混着很难看。
-                       开启后一轮对话走**两段式生成** ——
-                       先让模型以 GM 讲述者视角推进剧情（不展示），
-                       再把 GM 文本交给"第一人称转换器"改写成主角口吻展示给用户。
-                       见 data.js 的 generateThirdPersonReply。 -->
-                <section class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
+                <section id="modelOptimizePage" class="hidden">
                     <div class="modal-label flex items-center gap-2"><span class="text-amber-500">✦</span> 对话优化</div>
 
-                    <!-- 思考强度：一个下拉同时表达"开关 + 档位"（off = 不思考） -->
                     <div class="mb-4">
                         <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingThinkingEffort">思考强度</label>
                         <select id="settingThinkingEffort" class="modal-input text-sm">
@@ -1060,11 +997,39 @@
                         <p id="thinkingModeHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
                     </div>
 
-                    <!-- AI 联网搜索。
-                         放在「对话优化」里是用户的要求：它和"思考强度""第三人称"同属
-                         "怎么让这一轮答得更好"的一组，而不是"给 AI 开一个操作系统能力"。
-                         Key 是按服务商分开存的独立凭据（不进 elaina_open_settings，
-                         见 core.js 的 SEARCH_PROVIDERS 与 API_SECRET_NAMES）。 -->
+                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
+                        <div class="text-xs text-[var(--pixso-brown)]">采样参数</div>
+                        <div class="mt-2 space-y-3">
+                            <div>
+                                <div class="flex items-center justify-between gap-3">
+                                    <label class="text-xs text-[var(--text-muted)]" for="settingOptTemperature">温度</label>
+                                    <div class="flex items-center gap-2">
+                                        <span id="settingOptTemperatureValue" class="text-[11px] font-medium text-[var(--pixso-brown)] tabular-nums">服务商默认</span>
+                                        <label class="mod-switch" title="开启 / 关闭自定义温度">
+                                            <input type="checkbox" id="settingOptTemperatureOn" aria-label="自定义温度">
+                                            <span class="track"></span><span class="knob"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <input id="settingOptTemperature" type="range" min="0" max="2" step="0.1" value="1" class="custom-slider mt-2" aria-label="温度" disabled>
+                            </div>
+                            <div>
+                                <div class="flex items-center justify-between gap-3">
+                                    <label class="text-xs text-[var(--text-muted)]" for="settingOptTopP">Top P</label>
+                                    <div class="flex items-center gap-2">
+                                        <span id="settingOptTopPValue" class="text-[11px] font-medium text-[var(--pixso-brown)] tabular-nums">服务商默认</span>
+                                        <label class="mod-switch" title="开启 / 关闭自定义 Top P">
+                                            <input type="checkbox" id="settingOptTopPOn" aria-label="自定义 Top P">
+                                            <span class="track"></span><span class="knob"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <input id="settingOptTopP" type="range" min="0" max="1" step="0.05" value="1" class="custom-slider mt-2" aria-label="Top P" disabled>
+                            </div>
+                        </div>
+                        <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">开关关着 = 这一项不发送，由服务商决定默认值。温度越高输出越发散，越低越稳定；Top P 收窄候选词的取值范围。开思考时部分服务商不支持自定义采样参数（会忽略或自动省略）。</p>
+                    </div>
+
                     <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
                         <div class="flex items-center justify-between gap-3">
                             <div class="min-w-0">
@@ -1091,8 +1056,6 @@
                                 </div>
                                 <p id="searchKeyHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
                             </div>
-                            <!-- 自定义搜索源的额外参数。只在选了「自定义」时显示 —— -->
-                            <!-- 内置源用不到这些，摆出来只会让人以为要填。 -->
                             <div id="searchCustomFields" class="hidden space-y-3">
                                 <div>
                                     <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomEndpoint">搜索接口地址（必须 https）</label>
@@ -1141,7 +1104,6 @@
                         </div>
                     </div>
 
-                    <!-- 第三人称：与全站一致的 iOS 风格开关（复用 .mod-switch 样式） -->
                     <div class="flex items-center justify-between gap-3">
                         <div class="min-w-0">
                             <div class="text-xs text-[var(--pixso-brown)]">第三人称（两段式生成）</div>
@@ -1153,89 +1115,29 @@
                         </label>
                     </div>
 
-                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-3">开思考时部分服务商不支持自定义温度，会自动省略该参数。</p>
-                    <!-- 图片转述。**不是**"给 AI 开一个能力"，而是"这一轮怎么答"的一部分 ——
-                         图片先由它转述成文字再交给主模型，所以放在「对话优化」里。
-                         ⚠️ 生效判据是**这个开关**，不是"有没有填地址"（见 data.js 的 hasVision）：
-                         只判填没填的话，关掉开关后图片仍会被送去做转述，开关就成了摆设。
-                         主模型自己就能看图时不该打开它 —— 那条提示就写在下面。 -->
-                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
-                        <div class="flex items-center justify-between gap-3">
-                            <div class="min-w-0">
-                                <div class="text-xs text-[var(--pixso-brown)]">图片转述（视觉模型）</div>
-                                <div class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-0.5">用一个额外的多模态模型先把图片转述成文字，再交给主模型回答。</div>
-                            </div>
-                            <label class="mod-switch" title="开启 / 关闭图片转述">
-                                <input type="checkbox" id="settingVisionEnabled" aria-label="图片转述（视觉模型）">
-                                <span class="track"></span><span class="knob"></span>
-                            </label>
-                        </div>
-                        <div id="visionFields" class="mt-3 space-y-3">
-                        <!-- 这条提示是用户明确要求加的：主模型自己就能看图时，
-                             多绕一次转述只会丢细节、多花一次请求、还多一份 Key 要保管。 -->
-                        <div class="rounded-2xl border px-3 py-2.5" style="border-color:#dbeafe;background:rgba(239,246,255,.7)">
-                            <p class="text-[11px] leading-relaxed text-indigo-600">
-                                💡 主模型<b>本来就支持查看图片</b>（多模态）时，<b>建议不要打开这个开关</b> —— 图片直接交给它，细节更全、速度更快。
-                                只有主模型是纯文本时，才需要在这里接一个视觉模型替它看。
-                            </p>
-                        </div>
-                        <div>
-                            <label class="text-xs text-[var(--text-muted)] mb-1 block">视觉模型 API 地址（OpenAI 兼容）</label>
-                            <input id="settingVisionBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.siliconflow.cn/v1 等">
-                        </div>
-                        <div>
-                            <label class="text-xs text-[var(--text-muted)] mb-1 block">视觉模型 API Key</label>
-                            <input id="settingVisionApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="sk-...">
-                        </div>
-                        <div>
-                            <label class="text-xs text-[var(--text-muted)] mb-1 block">视觉模型名</label>
-                            <div class="flex items-center gap-2">
-                                <div class="model-combo flex-1 min-w-0">
-                                    <div class="model-combo-row">
-                                        <input id="settingVisionModel" autocomplete="off" type="text" class="modal-input text-sm model-combo-input" placeholder="Qwen/Qwen2.5-VL-72B-Instruct 等">
-                                        <button id="visionModelsToggle" type="button" class="model-combo-toggle"
-                                            aria-label="展开模型列表" aria-expanded="false"
-                                            title="展开/收起模型列表（先点「获取模型」拉取）">
-                                            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg>
-                                        </button>
-                                    </div>
-                                    <select id="visionModelsSelect" class="hidden" aria-hidden="true" tabindex="-1"></select>
-                                    <div id="visionModelsList" class="model-combo-list hidden" role="listbox"></div>
-                                </div>
-                                <button id="fetchVisionModelsBtn" class="btn-secondary text-xs flex-none" type="button" title="从当前 API 地址拉取可用模型列表">获取模型</button>
-                            </div>
-                        </div>
-                        </div>
-                    </div>
                 </section>
-                </div><!-- /tab-model -->
 
-                <!-- Live2D 设置面板已搬进 mods/live2d/（由 settings.tabs 插槽渲染）。
-                     见那个插件的 panel.html 与 settings-panel.js。 -->
+                </div>
 
-                <!-- ============ 能力：AI 能做什么 ============
-                     这三组都是"给 AI 开多大权限"，放在一起比散在「高级」里好找。
-                     从「高级」移过来时**保持原有 id 与结构不变**，所以所有 JS 引用
-                     （elements.settingAutoMemory、#scheduledTaskList、#agentPermissionSection、
-                      radio[name=agentPermission]）都不用改。 -->
                 <div id="tab-capability" class="settings-tab-panel">
+                <header class="settings-page-head">
+                    <p class="settings-page-eyebrow">Capabilities</p>
+                    <h1>能力</h1>
+                    <p>记忆怎么形成、任务何时送达，以及 AI 能碰到这台设备的哪些部分。</p>
+                </header>
                 <section id="memorySettingsSection">
                     <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 记忆</div>
 
-                    <!-- 自动写日记：开关沿用全站统一的 iOS 风格 .mod-switch
-                         （与「第三人称」那个开关同款），不再用裸 checkbox。 -->
                     <div class="flex items-center justify-between gap-3">
                         <div class="min-w-0">
-                            <div class="text-xs text-[var(--pixso-brown)]">自动写日记</div>
+                            <div class="text-xs text-[var(--pixso-brown)]">记忆日记</div>
                         </div>
-                        <label class="mod-switch" title="开启 / 关闭自动写日记">
-                            <input type="checkbox" id="settingAutoMemory" aria-label="自动写日记">
+                        <label class="mod-switch" title="开启 / 关闭记忆日记">
+                            <input type="checkbox" id="settingAutoMemory" aria-label="记忆日记">
                             <span class="track"></span><span class="knob"></span>
                         </label>
                     </div>
 
-                    <!-- 多久写一次：− / ＋ 步进器。值仍是同一个 #settingMemoryEvery，
-                         所以读写设置的代码一行都不用改。 -->
                     <div class="memory-every-row">
                         <span class="memory-every-text">每</span>
                         <div class="memory-stepper">
@@ -1246,7 +1148,7 @@
                         <span class="memory-every-text">轮写一次日记</span>
                     </div>
 
-                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-3">每过这么多轮，她就写一篇日记；之后聊天时会记得这些事。想立刻写就点下面的按钮。</p>
+                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-3">每过这么多轮，她会把近期的对话整理成一篇记忆日记。这个数字越高，单篇保留的细节越少；数字越低，细节保留得更多，但日记篇数变多，温记忆也更容易进入冷记忆区。想立刻写就点下面的按钮。</p>
 
                     <button type="button" id="memoryNowBtn" class="memory-now-btn">
                         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/><path stroke-linecap="round" d="M17 17h3m-1.5-1.5v3"/></svg>
@@ -1266,12 +1168,8 @@
                         <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> AI 权限</div>
                         <div class="rd-field-hint mb-2">控制 AI 通过 <code>[操作:…]</code> 标签能做什么。前三档<b>同时管电脑与手机</b>；<b>「关闭」只关电脑侧</b>（手机侧另有开关）。</div>
 
-                        <!-- ★★ 2026-10 权限模型重构：旧的「app / computer」两档
-                             （把"能碰哪里"和"要不要问"捆在一起）改成三档，
-                             三档**都能访问任意路径**，区别只在"要不要问"与"能不能删"。
-                             此后又新增 `off`（关闭）档 —— 前四档里最严的"能力不存在"。 -->
                         <div class="space-y-2 mb-3">
-                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
                                 <input type="radio" name="agentAccess" value="off" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
                                     <span class="text-xs font-semibold text-indigo-700">🚫 关闭（AI 不能碰这台电脑）</span>
@@ -1280,7 +1178,7 @@
                                     </span>
                                 </span>
                             </label>
-                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
                                 <input type="radio" name="agentAccess" value="strict" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
                                     <span class="text-xs font-semibold text-indigo-700">逐条确认</span>
@@ -1289,7 +1187,7 @@
                                     </span>
                                 </span>
                             </label>
-                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                            <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
                                 <input type="radio" name="agentAccess" value="auto" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
                                     <span class="text-xs font-semibold text-indigo-700">自动通过（禁止删除）</span>
@@ -1298,24 +1196,20 @@
                                     </span>
                                 </span>
                             </label>
-                            <label class="flex items-start gap-2 cursor-pointer rounded-2xl border px-3 py-2.5" style="border-color:#fed7aa;background:rgba(255,247,237,.75)">
+                            <label class="flex items-start gap-2 cursor-pointer set-note set-note-warn">
                                 <input type="radio" name="agentAccess" value="full" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold" style="color:#b45309">完全访问（含删除）</span>
-                                    <span class="block text-[11px] leading-relaxed mt-0.5" style="color:#9a3412">
+                                    <span class="text-xs font-semibold set-warn-text">完全访问（含删除）</span>
+                                    <span class="block text-[11px] leading-relaxed mt-0.5 set-warn-body">
                                         所有操作直接执行，<b>包括删除文件与目录</b>。
                                     </span>
                                 </span>
                             </label>
                         </div>
 
-                        <!-- 全权限模式的后果说明。
-                             为什么要把后果摆在这里、而不是靠每次操作弹窗：
-                             全权限下 AI 每一步都问，用户会从"看清再决定"退化成"闭眼点允许"，
-                             最后那道闸等于没有。所以把判断前移到"要不要开这个模式"这一个点上。 -->
-                        <div class="rounded-2xl border px-3 py-2.5" style="border-color:#fed7aa;background:rgba(255,247,237,.75)">
-                            <div class="text-[11px] font-semibold mb-1" style="color:#b45309">⚠️ 开启「完全访问」意味着</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1" style="color:#9a3412">
+                        <div class=" set-note set-note-warn">
+                            <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 开启「完全访问」意味着</div>
+                            <ul class="text-[11px] leading-relaxed space-y-1 set-warn-body">
                                 <li>· AI 能读写<b>任意路径</b>的文件，并能执行 <code>PowerShell</code> / <code>cmd</code> 命令。</li>
                                 <li>· AI <b>能删除文件与目录</b>（<code>del</code> / <code>Remove-Item</code> 等），<b>不进回收站、无法恢复</b>；也能改注册表、关机、下载并执行网上的脚本。</li>
                                 <li>· AI <b>能覆盖已有文件</b>，原内容不会自动备份。</li>
@@ -1324,9 +1218,7 @@
                             </ul>
                         </div>
 
-                        <!-- 三档共有的一个事实，必须说出来（否则用户会以为"读取也受管控"）：
-                             读取在任何档位下都不询问，所以 AI 可以无声地读走敏感文件。 -->
-                        <div class="rounded-2xl border px-3 py-2.5 mt-2" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                        <div class="mt-2 set-note">
                             <div class="text-[11px] font-semibold mb-1 text-indigo-700">ℹ️ 三档共有的说明</div>
                             <ul class="text-[11px] leading-relaxed space-y-1 text-indigo-500">
                                 <li>· 三档都能访问<b>任意路径</b>；<b>读取任何档位下都不会询问</b> —— 包括 <code>data/store.json</code>（含 API Key 明文）。</li>
@@ -1335,22 +1227,16 @@
                         </div>
                     </section>
 
-                    <!-- 手机操作也从「高级」移到这里 —— 它同样属于"给 AI 开权限"，
-                         而且原本就排在电脑操作权限后面。id 保持不变。 -->
                     <section id="agentPhoneSection" class="settings-span-2">
                         <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 手机操作</div>
                         <div class="rd-field-hint mb-2">允许 AI 点击、滑动、输入文字、读取界面与截图。需要安卓版 App（浏览器没有这个能力）。</div>
 
-                        <!-- 实现方式：原本挂在侧边栏，但手机上侧边栏收起后就进不去了，
-                             所以放进「手机操作」里 —— 它本来就是这组设置的前提。 -->
-                        <div class="rounded-2xl border px-3 py-3 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                        <div class="mb-3 set-note">
                             <div class="flex items-center gap-2">
                                 <span class="text-[11px] text-indigo-600 font-semibold">实现方式</span>
                                 <span id="settingBackendBadge" class="ml-auto"></span>
                             </div>
-                            <p id="settingBackendSummary" class="text-[11px] mt-1 leading-relaxed" style="color:#b45309">还没有选择实现方式，AI 现在不能操作手机。</p>
-                            <!-- 诊断用：一眼看出「检测不到」是"原生层没接上"还是"还没授权"，
-                                 免得用户以为功能坏了 -->
+                            <p id="settingBackendSummary" class="text-[11px] mt-1 leading-relaxed set-warn-text">还没有选择实现方式，AI 现在不能操作手机。</p>
                             <p id="settingBackendBridge" class="text-[11px] mt-1 leading-relaxed text-indigo-300">原生设备层：检测中…</p>
                             <div class="flex items-center gap-2 mt-2">
                                 <button id="settingBackendChooseBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">选择实现方式</button>
@@ -1358,11 +1244,7 @@
                             </div>
                         </div>
 
-                        <!-- ★ 2026-10：换成全站统一的 iOS 风格开关（复用 .mod-switch，
-                             与「第三人称」「自动写日记」同款）。原来这里是裸 checkbox
-                             （accent-pink-500），在这片主题化控件里显得突兀。
-                             id 一个都没改 —— saveSettings 里那句 `?.checked !== false` 照旧可用。 -->
-                        <div class="flex items-center justify-between gap-3 mb-3">
+<div class="flex items-center justify-between gap-3 mb-3">
                             <div class="text-xs text-indigo-700">允许 AI 操作手机</div>
                             <label class="mod-switch" title="开启 / 关闭 AI 操作手机">
                                 <input type="checkbox" id="settingAgentPhoneEnabled" aria-label="允许 AI 操作手机">
@@ -1370,31 +1252,21 @@
                             </label>
                         </div>
 
-                        <!-- ★★ 2026-10：手机端的「敏感操作确认」四档（once/run/always/off）已删除。
-                             用户的决定是"手机不做确认，全部放行"（理由：无障碍方式破坏力有限），
-                             档位统一由上面的「AI 权限」三档决定。这里只说明实际行为。 -->
-                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                        <div class="mb-3 set-note">
                             <div class="text-[11px] font-semibold text-indigo-700 mb-1">确认策略</div>
                             <p class="text-[11px] text-indigo-400 leading-relaxed">
                                 手机操作<b>不做逐步确认</b>：读取界面、点击、滑动、输入、按键、打开应用都直接执行，发现问题点悬浮窗上的「停止」。
                             </p>
-                            <p class="text-[11px] leading-relaxed mt-2" style="color:#b45309">
+                            <p class="text-[11px] leading-relaxed mt-2 set-warn-text">
                                 ⚠️ <b>模块后端就是 KernelSU（root）</b>：它的「手机命令」能执行任意系统命令且<b>不会询问你</b>，破坏力与电脑的「完全访问」档同级。无障碍方式只能点按界面，风险有限。
                             </p>
                         </div>
 
-                    <!-- ★★ 2026-10 新增：读取信息的隐私开关。
-                             用户要求"加个提示如果不想让ai知道太多信息请关闭对应权限"。 -->
-                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                        <div class="mb-3 set-note">
                             <div class="text-[11px] font-semibold text-indigo-700 mb-1">读取信息（隐私）</div>
                             <p class="text-[11px] text-indigo-400 leading-relaxed mb-2">
                                 下面这些<b>隐私数据</b>会进入对话上下文，用来了解你当下的处境。<b>关掉某项开关后 AI 连读取标签都看不到</b>（不是"读了不说"，是根本没这个能力）。
                             </p>
-                            <!-- ★ 2026-10：六个开关与上面的总开关一起换成全站统一的
-                                 iOS 风格 .mod-switch（原来都是裸 checkbox + accent-pink-500，
-                                 在这片主题化控件里很突兀 —— 用户原话"太丑了"）。
-                                 id 一个都没动：fillAgentReadToggles / readAgentReadToggles
-                                 读的仍是这些 id 的 .checked，设置读写代码不用改。 -->
                             <div class="space-y-2">
                                 <div class="flex items-center gap-3">
                                     <div class="text-xs text-indigo-700 flex-1 min-w-0">
@@ -1412,8 +1284,6 @@
                                         通知内容
                                         <span class="text-[11px] text-indigo-300">（哪个应用发来什么消息 —— <b>最敏感的一项</b>）</span>
                                     </div>
-                                    <!-- 可点的徽标：短信/通讯录/日历 → 弹系统授权框；
-                                         通知读取 → 跳系统的「通知使用权」页。纯展示的那两个（应用列表/设备）不加。 -->
                                     <span id="agentPermBadgeNotifications" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里打开系统的「通知使用权」设置">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭通知内容">
                                         <input type="checkbox" id="settingAgentReadNotifications" aria-label="通知内容">
@@ -1468,21 +1338,12 @@
                             <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
                                 右侧标记是它<b>现在在系统里的状态</b>，<b>点一下</b>可直接去申请权限（通知读取、短信、通讯录、日历都要系统允许）。没有权限时 AI 会如实读到"没有权限"，不会假装有内容。
                             </p>
-                            <!-- ★★ 2026-10（用户要求）：这块**只显示状态**，不再放申请按钮。
-                                 原来这里有一行汇总（#agentReadPermStatus）+ 两个按钮
-                                 （「申请短信 / 通讯录 / 日历权限」「开启通知读取」），现已删除。
-                                 入口改由**徽标本身**承担（B 方案，见上面四个带 is-actionable 的）：
-                                 点一下即申请 / 跳系统设置页 —— 观感仍是状态标记，不多一排按钮。
-                                 状态与点击逻辑在 agent.js 的 renderAgentPermBadges /
-                                 handleAgentPermBadgeAction；那两个按钮的监听已删
-                                 （否则 check-dom-refs 会因为 id 不存在而报错）。 -->
-                            <p class="text-[11px] leading-relaxed mt-1.5" style="color:#b45309">
+                            <p class="text-[11px] leading-relaxed mt-1.5 set-warn-text">
                                 ⚠️ <b>不想让 AI 读到某件信息？</b>到系统里关掉对应权限即可：短信 / 通讯录 / 日历在「设置 → 应用 → ElainaChat Open → 权限」，通知读取在「设置 → 通知 → 通知使用权」。（应用列表是安装期授权、设备状态不需权限，这两项没法单独关。）
                             </p>
                         </div>
 
-                        <!-- ★★ 2026-10 新增：Agent 工作区文件访问 -->
-                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                                                <div class="mb-3 set-note">
                             <div class="text-[11px] font-semibold text-indigo-700 mb-1">文件访问（Agent 工作区）</div>
                             <p class="text-[11px] text-indigo-400 leading-relaxed mb-2">
                                 AI 可在 <b>Agent 工作区</b>（应用私有目录的 <code>agent-workspace/</code>，无需系统权限）里读写文件；也可以再授权<b>一个自己的文件夹</b>（比如「下载」）给它用。
@@ -1494,7 +1355,6 @@
                             </div>
                         </div>
 
-                        <!-- 悬浮窗：AI 操作别的 App 时，用户不该被迫切回本应用 -->
                         <div class="mt-3 pt-3 border-t border-indigo-100">
                             <div class="flex items-center gap-2 mb-1">
                                 <span id="overlayStatusDot" class="w-2 h-2 rounded-full bg-slate-300 flex-none"></span>
@@ -1511,9 +1371,6 @@
                         </div>
                     </section>
 
-                        <!-- 浏览器：AI 真的开一个浏览器窗口看页面、点东西。
-                         与「手机操作」同一组理由 —— 都是"给 AI 开一个能力"，
-                         所以放在同一片设置里，不另开一页。 -->
                     <section id="agentBrowserSection" class="settings-span-2">
                         <div class="modal-label flex items-center gap-2"><span class="text-sky-500">🌐</span> 浏览器</div>
                         <div class="rd-field-hint mb-2">让 AI 打开网页查资料、点按钮、填表单。它用独立窗口与临时配置，不碰你平时那个浏览器的书签与登录状态，关掉后痕迹一并清掉。</div>
@@ -1526,13 +1383,13 @@
                             </label>
                         </div>
 
-                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                        <div class="mb-3 set-note">
                             <div class="text-[11px] font-semibold mb-1 text-indigo-700">当前状态</div>
                             <p id="settingBrowserStatus" class="text-[11px] text-indigo-400 leading-relaxed">检测中…</p>
                             <button id="settingBrowserRefreshBtn" type="button" class="btn-secondary text-[11px] mt-2" style="padding:3px 10px">重新检测</button>
                         </div>
 
-                        <div class="rounded-2xl border px-3 py-2.5 mb-3" style="border-color:#e4e4f7;background:rgba(249,249,255,.8)">
+                        <div class="mb-3 set-note">
                             <div class="text-[11px] font-semibold mb-1 text-indigo-700">它能看到什么、能做什么</div>
                             <ul class="text-[11px] leading-relaxed space-y-1 text-indigo-400">
                                 <li>· 能：打开 http / https 网址、读页面文字、点按钮和链接、往输入框打字、按回车。</li>
@@ -1542,23 +1399,22 @@
                             </ul>
                         </div>
 
-                        <div class="rounded-2xl border px-3 py-2.5" style="border-color:#fde8c8;background:rgba(255,251,240,.8)">
-                            <div class="text-[11px] font-semibold mb-1" style="color:#b45309">⚠️ 请知道这一点</div>
-                            <p class="text-[11px] leading-relaxed" style="color:#b45309">
+                        <div class=" set-note set-note-warn">
+                            <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 请知道这一点</div>
+                            <p class="text-[11px] leading-relaxed set-warn-text">
                                 AI 在这个窗口里做的事<b>是以你的身份发生的</b>（提交表单、下单、发帖都一样）。重要操作前请看着它做，或先关掉这个开关。
                             </p>
                         </div>
                     </section>
-                </div><!-- /tab-capability -->
+                </div>
 
-                <!-- ============ 高级：程序本身的设置 ============
-                     这里放的是"应用怎么跑"，不是"AI 能做什么"（后者在「能力」）。
-                     日志 / 我的数据 / 访问密码都属于这一层。 -->
                 <div id="tab-advanced" class="settings-tab-panel">
+                    <header class="settings-page-head">
+                        <p class="settings-page-eyebrow">Data &amp; Security</p>
+                        <h1>数据与安全</h1>
+                        <p>备份整份旅途、管理访问密码，或检查是否有新版本。</p>
+                    </header>
                     <section id="dataSettingsSection">
-                    <!-- 「高级」里没有日志设置：级别回默认（环境变量 LOG_LEVEL / LOG_CONSOLE 仍优先），
-                         追踪日志固定开启（LOG_CHAT=0 才能关）。日志本身是**独立分栏**（#tab-log），
-                         在顶部导航上与外观/角色/对话并列 —— 不用滚动就能看到。 -->
 
                         <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 我的数据</div>
                         <div class="rd-field-hint mb-2">
@@ -1590,13 +1446,9 @@
                             未设密码时只有本机（127.0.0.1）可用；设了密码后<b>本机与局域网设备都要输入密码</b>。忘记密码只能删掉数据目录下的 <code>auth.json</code> 再重启（登录页的「忘记密码？」会显示实际路径）。
                         </p>
 
-                        <!-- 密码强度与防爆破说明。
-                             为什么必须把这段放在这里：本轮把「操作电脑」的权限给了
-                             已登录的局域网设备（含执行命令），**密码从此就是唯一那道门**。
-                             用户需要知道这个性质，才会认真对待自己设的密码。 -->
-                        <div class="rounded-2xl border px-3 py-2.5 mt-2" style="border-color:#fed7aa;background:rgba(255,247,237,.75)">
-                            <div class="text-[11px] font-semibold mb-1" style="color:#b45309">⚠️ 关于这个密码的分量</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1" style="color:#9a3412">
+                        <div class="mt-2 set-note set-note-warn">
+                            <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 关于这个密码的分量</div>
+                            <ul class="text-[11px] leading-relaxed space-y-1 set-warn-body">
                                 <li>· 登录后的设备<b>与本机同等能力</b>（读写任意文件、执行 PowerShell / cmd），所以这个密码是<b>整台电脑的钥匙</b>。</li>
                                 <li>· 强度要求：<b>≥8 位且同时含数字、小写、大写</b>；弱口令、键盘顺子（<code>qwerty</code>）、"弱口令 + 数字尾巴"都会被拒。</li>
                                 <li>· 已内置防爆破与全局限流：密码错会<b>逐次延长锁定</b>（30 秒起翻倍，最长 1 小时，失败次数只在登录成功后清零）；换 IP 持续攻击会让<b>全部登录临时冻结</b>。</li>
@@ -1611,10 +1463,6 @@
                             <button id="appUpdateCheckBtn" class="btn-secondary text-xs" type="button">检查更新</button>
                             <span id="appUpdateHint" class="text-[11px] text-indigo-300" aria-live="polite"></span>
                         </div>
-                        <!-- 结果块：标题 / 元信息 / 下载入口 / 更新说明 / 发布页。
-                             更新说明是 Release 正文里的 Markdown，与插件 README 走同一个渲染器
-                             （web/js/readme-view.js）：它把输入一律当纯文本先转义再拼标签，
-                             原始 HTML 只会以字面量出现，不会成为可执行的节点。 -->
                         <div id="appUpdateResult" class="hidden mt-3 rounded-2xl border px-3 py-2.5" style="border-color: var(--pixso-line)">
                             <div id="appUpdateTitle" class="text-[12px] font-semibold mb-1"></div>
                             <div id="appUpdateMeta" class="text-[11px] text-indigo-400 mb-2"></div>
@@ -1631,46 +1479,17 @@
                         </p>
                     </section>
 
-                    <!-- 日志已从这里搬走：它现在是**独立分栏**（#tab-log，见下方）。
-                         ★ 搬走的实测原因：塞在这里时它是高级的最后一项，而高级那一栏
-                           高 920px、内容区视口只有 842px —— 入口被挤到**屏幕外**
-                           （按钮 top=895，视口高 900），用户反馈"设置里我没看见日志界面"。
-                           分栏化之后它永远在顶部导航上，不用滚动。 -->
-                </div><!-- /tab-advanced -->
+                                    </div>
 
-                <!-- ==================== 日志（独立分栏） ====================
-                     ★ 2026-10 用户要求：日志**单独成一个分栏**（与外观/角色/对话并列），
-                       不再塞在「高级」的最后。
-                     ★ 为什么必须独立（实测数据）：塞在高级里时，高级那一栏高 920px、
-                       而内容区视口只有 842px —— 日志入口被挤到**屏幕外**
-                       （按钮 top=895，视口高 900），用户反馈"设置里我没看见日志界面"。
-                       独立分栏后它在顶部导航上，永远可见、一点就到。
-
-                     界面照 AstrBot 的「数据与日志 → 日志」页：
-                       ① 级别药丸（DEBUG/INFO/WARNING/ERROR/CRITICAL）—— 多选，点掉即隐藏该类
-                       ② 工具栏（模块 / 关键词 / 排除用户对话 / 自动滚动 / 刷新 / 清屏）
-                       ③ 终端式日志区（等宽、深色、旧在上、新在下）
-                       ④ 状态栏（缓冲条数 / 当前显示 / 日志文件位置）
-
-                     数据源：GET /api/logs/tail（服务端内存缓冲，**全量**、不受落盘级别约束）。
-                     级别 / 模块 / 关键词过滤在服务端做；"排除用户对话"在前端做
-                     （它是按正文特征排除，服务端没有这个概念）。 -->
                 <div id="tab-log" class="settings-tab-panel">
-                    <!-- 这一栏**不用卡片包裹**：日志区要占满高度，包一层卡片
-                         会让它上下都多出一圈 padding（见 .log-tab-body 的说明）。 -->
+                    <header class="settings-page-head">
+                        <p class="settings-page-eyebrow">Logs</p>
+                        <h1>日志</h1>
+                        <p>按级别与模块查看运行记录；排查完可直接导出这一段。</p>
+                    </header>
                     <div class="log-tab-body">
-                        <!-- 工具栏：级别药丸 + 开关 + 动作 -->
                         <div class="log-toolbar">
                             <div id="logLevelPills" class="log-level-pills" role="group" aria-label="按级别过滤">
-                                <!-- ★ DEBUG 默认**关**（aria-pressed="false"）。
-                                     这不是随手定的默认值，而是刻意对齐 bat 面板 / AstrBot：
-                                     成功的 HTTP 请求全部记在 DEBUG 上（见 serve.mjs 的级别纪律），
-                                     一次页面加载就是十几行
-                                     `127.0.0.1  GET /api/store  200  7ms` ——
-                                     对"看程序在做什么"是纯噪音，而且**不是给人读的句子**。
-                                     把它们默认放出来，用户第一眼看到的就是一屏看不懂的请求行
-                                     （2026-10 用户实测反馈："我的日志为什么会出现这种看不懂的消息"）。
-                                     DEBUG 没有被丢掉：点一下这个药丸就全回来了（排查请求细节时用）。 -->
                                 <button type="button" class="log-pill" data-level="DEBUG" aria-pressed="false">DEBUG</button>
                                 <button type="button" class="log-pill" data-level="INFO" aria-pressed="true">INFO</button>
                                 <button type="button" class="log-pill" data-level="WARN" aria-pressed="true">WARNING</button>
@@ -1678,8 +1497,6 @@
                                 <button type="button" class="log-pill" data-level="CRITICAL" aria-pressed="true">CRITICAL</button>
                             </div>
                             <div class="log-toolbar-right">
-                                <!-- 模块与关键词过滤：参考图里没有，但本项目的日志有十几个模块，
-                                     没有它就只能靠肉眼在几百行里找 —— 保留（默认不填 = 不过滤） -->
                                 <select id="logTagSelect" class="log-select" aria-label="按模块过滤">
                                     <option value="">全部模块</option>
                                 </select>
@@ -1706,49 +1523,24 @@
                             </div>
                         </div>
 
-                        <!-- 日志区：终端式。旧在上、新在下（与 bat 面板一致） -->
                         <div id="logPageBox" class="log-terminal" role="log" aria-live="polite" aria-label="运行日志"></div>
 
-                        <!-- 状态栏 -->
                         <div id="logPageMeta" class="log-meta"></div>
                     </div>
-                </div><!-- /tab-log -->
+                </div>
 
-                <!-- ==================== 扩展（插件 / 技能 / MCP） ====================
-                     三种东西都是"往应用里加东西"，但性质完全不同，所以这里是**三个子分栏**
-                     （不是同一页画三条线）：
-
-                       · 插件（Mod）—— 扩展应用本身：插槽、接口、资源，是**代码**。
-                         它在页面同源环境里运行，装它等于信任它。
-                       · 技能（Skill）—— 给 AI 的**指令与知识**：一个含 SKILL.md 的目录，
-                         纯文本、不注册进应用、不参与运行。
-                       · MCP —— 外部 **MCP 服务器**：本应用当客户端去连它，把它的工具
-                         并进 AI 的工具清单。它是**另一个进程**，不在页面里跑。
-
-                     为什么拆成子分栏而不是挤在一页：三者各有自己的安装方式、卸载方式、
-                     以及失败时该看哪里。挤在一页时用户要在同一个标题下找三样东西，
-                     页面还长得要滚三屏（插件卡片本身就高）。分栏后每栏只装一件事，
-                     一屏放得下。
-
-                     实现：外层仍是 #tab-mods（导航里的「扩展」），里面一组
-                     .ext-subtab 按钮切换三个 .ext-panel 子面板。所有既有 id 都不改，
-                     所以 refreshModsList / #modsList / #skillsList / 拖拽分组的代码
-                     一行都不用动。 -->
-                <!-- ==================== 扩展 ====================
-     三个子面板（插件 / 技能 / MCP）**不再各套一张卡片**：它们本身就是"设置页的那块内容区"，
-     再加一层边框 + 圆角 + 阴影，等于把内容装进一个套娃里 —— 一屏只放得下半个插件列表，
-     而用户要的是"这块区域就是插件页"。所以这里只保留一张**无框**的列表底，
-     有框的是用户自己注册的条目（.mod-card）。
-
-     切换按钮仍不在页面里：宽屏在导航栏（#settingsExtNav 的展开子项），
-     窄屏是「扩展」按钮弹出的下拉。所有既有 id 不变，
-     refreshModsList / #modsList / #skillsList / refreshMcpList 一行都不用动。 -->
                 <div id="tab-mods" class="settings-tab-panel ext-page">
-                    <!-- 不再有「扩展 / EXTENSIONS」页头：这一页的内容已经在左侧导航里分成
-                         插件 / 技能 / MCP 三项，页头只是把「扩展」二字再说一遍，白占一屏高度。
-                         每个子面板自己的标题行（.ext-head）就是它唯一的标题。 -->
+                    <header class="settings-page-head">
+                        <p class="settings-page-eyebrow">Extensions</p>
+                        <h1>扩展</h1>
+                        <p>宿主只保留对话本体。插件、技能与 MCP 服务按需装卸，失败时只影响它自己。</p>
+                    </header>
+                    <div class="ext-mobile-tabs" role="tablist" aria-label="扩展分类">
+                        <button type="button" class="ext-nav-btn is-active" data-ext-tab="ext-mod" role="tab"><span class="ext-nav-label">插件</span></button>
+                        <button type="button" class="ext-nav-btn" data-ext-tab="ext-skill" role="tab"><span class="ext-nav-label">技能</span></button>
+                        <button type="button" class="ext-nav-btn" data-ext-tab="ext-mcp" role="tab"><span class="ext-nav-label">MCP</span></button>
+                    </div>
 
-                    <!-- 1. 插件：标题行（左标题 / 右市场与上传）＋ 工具栏 ＋ 列表 -->
                     <div id="ext-mod" class="ext-panel active-panel" role="tabpanel">
                         <div class="ext-head">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
@@ -1757,28 +1549,20 @@
                             <button type="button" id="modsMarketBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="到插件市场下载并安装扩展包">✦ 插件市场</button>
                             <button type="button" id="modsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个插件 zip 安装">上传安装</button>
                         </div>
-                        <!-- 平台说明由 settings.js 的 applyModsPlatformHint() 填：
-                             电脑版是"丢进 mods/ 即自动装"，APK 只能"上传安装" —— 写死一句会在另一边误导。 -->
                         <p id="modsPlatformHint" class="text-[11px] text-indigo-400 leading-relaxed mb-3">
                             可选功能的开关。<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
                             拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。
                         </p>
-                        <!-- 分栏管理：添加分栏 + 浏览目录（结果写进 #modsHint） -->
                         <div class="flex items-center gap-2 mb-2">
                             <button type="button" id="modsAddGroupBtn" class="btn-secondary text-xs" style="padding:4px 10px" title="新建一个分栏，把插件拖进去归类">＋ 添加分栏</button>
-                            <!-- 系统文件管理器唤不起来时的兜底：把 mods/ 里的文件夹名列出来。
-                                 不在 #modsList 里 —— 那个容器每次刷新都会整块重建，按钮会连监听器一起丢。 -->
                             <button type="button" id="modsBrowseBtn" class="btn-secondary text-xs" style="padding:4px 10px" title="在这里列出 mods/ 里的文件夹（系统的文件管理器打不开时用）">浏览目录</button>
                             <span id="modsHint" class="text-[11px] text-indigo-400"></span>
                         </div>
-                        <!-- 浏览结果单独一块、可换行：塞进上面那个不换行的 span，路径一长就被挤出去 -->
                         <div id="modsBrowseResult" class="hidden mb-2 rounded-md border border-indigo-100 bg-indigo-50/50 px-2.5 py-2"></div>
                         <div id="modsList"></div>
                         <input type="file" id="modsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
                     </div>
 
-                    <!-- 2. 技能：与插件是**两回事**，条目用同一套 .mod-card，
-                         但绝不混进 #modsList（卸载方式不同：本地技能可卸，随附技能随插件删） -->
                     <div id="ext-skill" class="ext-panel" role="tabpanel">
                         <div class="ext-head">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
@@ -1794,8 +1578,6 @@
                         <input type="file" id="skillsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
                     </div>
 
-                    <!-- 3. MCP：与前两块的根本区别 —— 它在**另一个进程**里跑，
-                         所以这一栏多一行"连上了吗"的状态（条目由 refreshMcpList 填） -->
                     <div id="ext-mcp" class="ext-panel" role="tabpanel">
                         <div class="ext-head">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
@@ -1810,18 +1592,12 @@
                         </p>
                         <div id="mcpList"></div>
                     </div>
-                </div><!-- /tab-mods -->
+                </div>
             </div>
 
-            <!-- ★ 2026-10 用户要求：底部的「恢复默认设置 / 取消 / 保存设置」
-                 三个按钮**已删除** —— 改成"改什么就是什么"：任何控件一变
-                 就立刻落盘（见 init.js 的自动保存），关闭设置直接点 ✕。
-                 「恢复默认设置」后来也按要求彻底删掉了（含函数与绑定），
-                 不再提供任何一键回退入口。 -->
         </div>
     </div>
 
-    <!-- ==================== 管理分类弹窗 ==================== -->
     <div id="categoriesModalOverlay" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">
@@ -1844,9 +1620,8 @@
         </div>
     </div>
 
-    <!-- 会话移动弹窗：独立于侧边栏层级，确保移动端长按操作始终显示在最上层 -->
     <div id="conversationMoveOverlay" class="fixed inset-0 z-[1000] hidden items-center justify-center p-4 modal-overlay">
-        <div class="conversation-move-panel modal-panel overflow-hidden">
+        <div class="conversation-move-panel modal-panel overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60">
                 <div id="conversationMoveTitle" class="text-base font-bold text-indigo-950">分类</div>
                 <button id="conversationMoveClose" type="button" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" aria-label="关闭移动弹窗">
@@ -1860,8 +1635,6 @@
         </div>
     </div>
 
-    <!-- ==================== 自定义Modal ==================== -->
-    <!-- 开源 BYOK 使用引导（提示到设置配置密钥，不再要求当场填写） -->
     <div id="announcementOverlay" class="fixed inset-0 hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel guide-modal-panel animate-modal-pop">
             <div class="guide-modal-scroll scroll-soft">
@@ -1875,8 +1648,6 @@
         </div>
     </div>
 
-    <!-- 公告（远端 announcements.json / 10.17 本地兜底）：
-         内容只当纯文本渲染（data.js 用 textContent 赋值，绝不用 innerHTML）。 -->
     <div id="serverAnnounceOverlay" class="fixed inset-0 hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel guide-modal-panel animate-modal-pop">
             <div class="guide-modal-scroll scroll-soft">
@@ -1891,7 +1662,6 @@
         </div>
     </div>
 
-    <!-- 当前会话独立世界观 / 人设卡 -->
     <div id="conversationPromptOverlay" class="fixed inset-0 hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel guide-modal-panel animate-modal-pop">
             <div class="guide-modal-scroll scroll-soft">
@@ -1899,9 +1669,24 @@
                 <h2 class="guide-title font-bold">当前会话设定</h2>
                 <p class="guide-field-hint mt-2">先选这段对话演谁，再按需补充世界观与人设。不会影响其他对话。</p>
                 <div class="mt-4">
-                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block">本对话绑定的人设卡</label>
-                    <div id="conversationCardOptions" class="conversation-card-options" role="radiogroup" aria-label="本对话绑定的人设卡"></div>
+                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block" for="conversationCardSelect">对话人设</label>
+                    <select id="conversationCardSelect" class="modal-input text-sm w-full" aria-label="对话人设"></select>
                 </div>
+                <div class="mt-4">
+                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block" for="conversationModelSelect">本对话使用的模型</label>
+                    <select id="conversationModelSelect" class="modal-input text-sm w-full" aria-label="本对话使用的模型"></select>
+                    <p class="guide-field-hint">选项来自设置 → 对话模型；选「跟随默认模型」则与其它对话一致。</p>
+                </div>
+                <div class="mt-4">
+                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block" for="conversationBotNameInput">这段对话里的 bot</label>
+                    <div class="conversation-bot-row">
+                        <button id="conversationBotAvatarBtn" type="button" class="conversation-bot-avatar" title="更换 bot 头像" aria-label="更换 bot 头像"></button>
+                        <input id="conversationBotNameInput" type="text" maxlength="24" class="modal-input text-sm flex-1 min-w-0" placeholder="名字（留空跟随人设卡）" autocomplete="off">
+                        <button id="conversationBotAvatarClear" type="button" class="btn-secondary text-xs flex-shrink-0">清除头像</button>
+                    </div>
+                    <p class="guide-field-hint">只影响这段对话消息头上的头像与名字；名字留空、不选图片即跟随人设卡。</p>
+                </div>
+                <input id="conversationBotAvatarInput" type="file" accept="image/*" class="hidden" aria-hidden="true">
                 <div class="conversation-prompt-grid mt-4">
                     <div>
                         <label for="conversationWorldInput" class="text-xs font-bold text-indigo-800 mb-1.5 block">独立世界观</label>
@@ -1925,25 +1710,13 @@
         </div>
     </div>
 
-    <!-- ==================== 多主题覆盖层 ====================
-         必须放在**所有样式之后**：它要在同权重下靠"后加载"胜出，
-         并且要晚于 Tailwind 运行时注入的那份（Tailwind 是运行时 JIT，
-         会扫 DOM 生成样式插进 head 末尾，所以这里的规则一律用 !important）。
-
-         全部规则都在 html[data-theme-template="..."] 之下 ——
-         不设该属性时一条都不生效，默认（暖米绿）外观与改动前逐像素一致。 -->
     <link rel="stylesheet" href="/css/themes.css">
-    <!-- 成就系统的样式（宿主功能：成就面板）。
-         ★ 2026-10 从 birthday.css 里拆出来 —— 生日模块变成插件（mods/birthday）
-           之后，彩蛋/生日面板那部分样式随插件走，成就这部分留在宿主。 -->
     <link rel="stylesheet" href="/css/achievements.css">
     <link rel="stylesheet" href="/css/redesign.css">
     <link rel="stylesheet" href="/css/layout-full.css">
     <link rel="stylesheet" href="/css/pages-luxe.css">
-    <!-- 移动端外壳：底栏三格、顶栏「更多」弹层、回忆分段条。
-         必须排在覆盖层**最后**：它要在窄屏压过 layout-full.css 的底栏与顶栏规则，
-         又要保证宽屏一条都不生效 —— 规则全部关在 @media (max-width: 980px) 下。 -->
     <link rel="stylesheet" href="/css/mobile-shell.css">
+    <link rel="stylesheet" href="/css/settings.css">
 
     <div id="agentRunBar" class="agent-run-bar hidden fixed items-center gap-2" role="status" aria-live="polite"
          style="left:50%;transform:translateX(-50%);top:88px;z-index:100000;max-width:min(92vw,430px);
@@ -1953,7 +1726,6 @@
         <span class="agent-run-dot"></span>
         <span id="agentRunText" style="flex:none;font-size:12px;color:rgba(255,255,255,.93);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">AI 正在操作</span>
         <span id="agentRunStep" style="flex:none;font-size:11px;color:rgba(255,255,255,.5);white-space:nowrap"></span>
-        <!-- 只在 AI 用「模块」后端跑任务时出现：看一眼副屏上到底在干什么 -->
         <button id="agentWatchBtn" type="button" class="hidden"
                 style="margin-left:2px;flex:none;font-size:12px;font-weight:600;padding:5px 10px;border-radius:10px;
                        background:rgba(255,255,255,.16);color:#fff;border:0;cursor:pointer">看画面</button>
@@ -1962,7 +1734,6 @@
                        background:rgba(244,63,94,.94);color:#fff;border:0;cursor:pointer">停止</button>
     </div>
 
-    <!-- 实现方式（后端选择）：由「设置 → 能力 → 手机操作」里的「选择实现方式」按钮打开 -->
     <div id="backendPanel" class="fixed inset-0 z-[62] hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-md max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="px-5 py-4 border-b border-white/60 flex items-start gap-3">
@@ -1985,35 +1756,18 @@
             <div class="px-6 py-5">
                 <h3 id="customModalTitle" class="text-base font-bold text-indigo-950 mb-2">提示</h3>
                 <p id="customModalMessage" class="text-sm text-indigo-800 leading-relaxed whitespace-pre-wrap max-h-[50vh] overflow-y-auto scroll-soft"></p>
-                <!-- ⚠️ 用 textarea 而不是 input：MCP 配置是一段多行 JSON，
-                     input 天生只有一行，粘贴十几行的配置只能左右滚动，完全看不清结构
-                     （用户反馈"输入框只有一行太小"）。
-                     高度由 CSS 按 .is-multiline 切换：单行场景（重命名等）仍是一行高，
-                     不会突然变成一个占满屏幕的大框。 -->
-                <!-- 模板按钮：MCP 有三种传输，选错模板是最常见的"连不上"原因。
-                     点一下直接填好对应预设，省得用户对着空框猜字段名。 -->
                 <div id="customModalPresets" class="hidden mt-3 mb-1 flex flex-wrap gap-1.5"></div>
-                <!-- 代码编辑区：行号 + 高亮。用「textarea 透明叠在 <pre> 上」实现 ——
-                     零依赖，不需要 CodeMirror/Monaco（本项目不引入任何 npm 包）。
-                     为什么这样叠：textarea 负责输入与光标，<pre><code> 只负责显示彩色文本，
-                     两者字号/行高/内边距完全一致，滚动用 JS 同步。 -->
                 <div id="customModalEditor" class="hidden mt-3 modal-code-wrap">
                     <div class="modal-code-gutter" aria-hidden="true"><div id="customModalGutter"></div></div>
                     <textarea id="customModalInput" autocomplete="off" rows="1" spellcheck="false"
                               autocapitalize="off" autocorrect="off"
                               class="modal-code-input"></textarea>
                 </div>
-                <!-- 非代码场景仍用普通输入框（重命名、起名这类） -->
                 <input id="customModalPlainInput" autocomplete="off" type="text"
                        class="hidden w-full mt-3 modal-input text-sm">
             </div>
             <div id="customModalActions" class="px-6 py-4 border-t border-white/60 flex flex-wrap items-center justify-end gap-2">
                 <button id="customModalCancelBtn" class="hidden btn-secondary text-sm">取消</button>
-                <!-- ★ 2026-10：可选的**第三键**（altText / altValue）。给"三选一"场景用 ——
-                     典型是手机操作的「运行方式：前台 / 后台 / 取消」。
-                     没有它时只能把"后台"塞进取消键，而取消键还会被"点遮罩 / 关弹窗"触发，
-                     那等于用户没选就替他把后台用了。 -->
-                <!-- 额外动作（MCP 的「测试连接」）：点它先连一次再决定要不要保存 -->
                 <button id="customModalExtraBtn" class="hidden btn-secondary text-sm"></button>
                 <button id="customModalAltBtn" class="hidden btn-secondary text-sm"></button>
                 <button id="customModalConfirmBtn" class="btn-primary text-sm">确定</button>
@@ -2021,43 +1775,8 @@
         </div>
     </div>
 
-    <!-- ==================== 应用主脚本（已按分区拆分） ====================
-         原来这里是一整块约 10200 行的内联脚本，现按功能分区拆成 7 个文件。
-
-         为什么可以机械拆分而不改任何调用点：主脚本原本就是**全局作用域**
-         （没有 IIFE 包裹），拆成多个外置脚本后它们仍共享同一全局词法环境，
-         顶层 function / const / let 互相可见。
-
-         ⚠️ 顺序即依赖：这些文件必须按下面的顺序加载（const 有 TDZ，
-            且后面的模块会引用前面的定义）。加新模块时插在合适位置，别直接追加到末尾。
-         ⚠️ 不要在本注释里书写脚本标签字面量 —— HTML 注释中出现脚本开标签会让
-            「内联脚本语法检查」把注释内容当成代码解析，报出假的 SyntaxError。 -->
-
-    <!-- 移动端底部导航：对齐根目录原型的手机外壳（对话 / 语笺 / 日记 / 成就 / 记忆）。
-         点击复用左侧竖栏按钮的逻辑，避免两套页面切换代码。
-         设置不在这里 —— 窄屏的设置入口是顶栏齿轮，宽屏另有竖栏那颗。 -->
-    <nav class="rd-bottom-nav" aria-label="移动端导航">
-        <button type="button" data-rd-nav="chat" class="active" aria-label="对话">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 5.5h15v10h-9l-3.5 3v-3H4.5z"/><path d="M8 9h8M8 12h5"/></svg>
-            <span>对话</span>
-        </button>
-        <button type="button" data-rd-nav="notes" aria-label="语笺">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4.5h10v16l-5-3.2-5 3.2z"/><path d="M9.5 8.5h5"/></svg>
-            <span>语笺</span>
-        </button>
-        <button type="button" data-rd-nav="diary" aria-label="日记">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h10.5L19 8v12H5z"/><path d="M15.5 4.5V8H19M8.5 12h7M8.5 15.5h4.5"/></svg>
-            <span>日记</span>
-        </button>
-        <button type="button" data-rd-nav="achievements" aria-label="成就">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4h8v4.5a4 4 0 01-8 0z"/><path d="M8 5.5H5.5v1.2A3.3 3.3 0 008.8 10M16 5.5h2.5v1.2A3.3 3.3 0 0115.2 10M12 12.5V16M8.5 19.5h7"/></svg>
-            <span>成就</span>
-        </button>
-        <button type="button" data-rd-nav="memory" aria-label="记忆">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="5.5" width="16" height="13" rx="2.5"/><path d="M8 10h8M8 13.5h5"/></svg>
-            <span>记忆</span>
-        </button>
-    </nav>
+    <!-- 应用主脚本按功能分区拆成多个外置脚本，共享同一全局词法环境（顶层 function / const / let 互相可见），拆分不改调用点；⚠️ 顺序即依赖：必须按下面书写的顺序加载（加新模块插进合适位置、别追加到末尾）—— pwa.js / chat-stream.js 在 core.js 之后，agent-ops.js 在 agent-tags.js 之前，mcp.js 在 agent.js 之后且 init.js 之前，mods-*.js 全部在 mods.js 之前、host-slots.js 紧随 mods.js 之后（两者都在 init.js 之前），theme.js / diagnostics.js 在 mods.js 之前，theme.js / redesign-extras.js 必须在 init.js 之前（init 的启动重放要调到它们暴露的命名空间）。
+     样式表顺序：base.css 在 head 内最早；themes.css 的规则全带 !important 且都挂在 html[data-theme-template] 之下，靠特异性而非加载位取胜；mobile-shell.css 排在 settings.css 之前（settings.css 是设置页的收口层，必须最后加载）；⚠️ 本注释里不要写脚本开标签字面量 —— 会骗过「内联脚本语法检查」的扫描。 -->
     <script defer src="/js/core-native.js"></script>
 <script defer src="/js/core-search.js"></script>
 <script defer src="/js/core-chat.js"></script>
@@ -2066,20 +1785,8 @@
 <script defer src="/js/core-relay.js"></script>
 <script defer src="/js/core.js"></script>
 <script defer src="/js/core-native-mod.js"></script>
-    <!-- 桌面应用化（安装到桌面 / 独立窗口）。
-         排在 core.js **之后**：它要读 window.ElainaRuntime.canInstallAsApp 才决定
-         是否注册 Service Worker（平台判断留在 core 的适配段，本文件平台无关，见 D5）。
-         它不依赖任何业务模块，也不阻住其它脚本 —— 安装入口挂了不影响聊天。 -->
     <script defer src="/js/pwa.js"></script>
-    <!-- 流式输出（SSE 增量解析）。
-         必须排在 core.js **之后**：core 里的 requestChatJson 会调用
-         window.ChatStream.withStreamFlag()，而这个调用发生在"用户发消息"时，
-         不是加载时，所以顺序其实不敏感；但放在 core 之后更符合"core 定义出口、
-         本文件提供能力"的依赖方向，也方便以后有人把它改成加载时就取。 -->
     <script defer src="/js/chat-stream.js"></script>
-    <!-- Agent 操作注册表：操作定义（名称/参数/风险/可用性）的唯一来源，
-         标签通道与 function calling 通道共用它。排在 agent-tags.js **之前**：
-         分发时要先能查到条目；它只做声明，执行实现由 agent.js 稍后挂上。 -->
     <script defer src="/js/agent-ops.js"></script>
     <script defer src="/js/agent-tags.js"></script>
     <script defer src="/js/announcements.js"></script>
@@ -2112,6 +1819,7 @@
 <script defer src="/js/conversations.js"></script>
 <script defer src="/js/favorites.js"></script>
 <script defer src="/js/diary.js"></script>
+<script defer src="/js/memory-tiers.js"></script>
 <script defer src="/js/memory-page.js"></script>
 <script defer src="/js/ui.js"></script>
     <script defer src="/js/asr.js"></script>
@@ -2133,31 +1841,12 @@
 <script defer src="/js/agents.js"></script>
 <script defer src="/js/save.js"></script>
 <script defer src="/js/settings.js"></script>
-    <!-- MCP 客户端：把外部 MCP 服务器的工具动态注册进 agent-ops 注册表。
-         排在 agent.js **之后** —— 它要用 ElainaOps.define/setExec 与 state.settings；
-         但也必须在 init.js 之前，因为"注册 MCP 工具"是页面加载流程的一部分
-         （在工具清单被第一次组装之前完成，否则第一轮对话看不到这些工具）。 -->
     <script defer src="/js/mcp.js"></script>
-    <!-- 插件市场：从 web 仓库（XYZ921746/web）拉取可选扩展包并安装。
-         排在 settings.js **之后** —— 它复用那边的 .mod-card 样式，
-         装完还要调 refreshModsList() 把「插件」栏一起刷新。
-         它只在**点击时**才调 switchSettingsTab()，所以不必等 init.js。 -->
     <script defer src="/js/market-utils.js"></script>
     <script defer src="/js/download.js"></script>
     <script defer src="/js/mod-market.js"></script>
-    <!-- 多主题：模板切换 + 深色模式。
-         放在业务模块（core～settings）之后、mods.js 之前 —— 它只改 html 属性与一个设置容器，
-         不依赖那些模块的内部函数；而 mods 的界面不该被主题切换影响。 -->
     <script defer src="/js/theme.js"></script>
-    <!-- 诊断输出格式（window.ElainaDiag）。
-         必须排在 mods.js **之前**：插件加载器用它打结构化日志
-         （自报家门 + 三段式问题报告），没它就退回旧的裸字符串输出。
-         与 server/diagnostics.mjs 是同一套格式，两端日志看起来是一回事。 -->
     <script defer src="/js/diagnostics.js"></script>
-    <!-- 插件系统（mod 加载器）。
-         必须排在 init.js **之前**：初始化会读插件清单来渲染
-         「设置 → 插件」那一栏，加载器没就位的话那一栏会是空的。
-         但它要排在 core～settings 之后 —— 插件拿到的宿主 API 依赖这些模块已定义。 -->
     <script defer src="/js/mods-paths.js"></script>
 <script defer src="/js/mods-graph.js"></script>
 <script defer src="/js/mods-drag-sort.js"></script>
@@ -2179,49 +1868,19 @@
 <script defer src="/js/mods-forget.js"></script>
 <script defer src="/js/mods-api.js"></script>
 <script defer src="/js/mods.js"></script>
-    <!-- 宿主插槽清单（★ 插件作者看这一个文件就知道能挂在哪）。
-         必须排在 mods.js **之后**（要用 ElainaMods.defineSlot）、init.js **之前**。
-         为什么单独成文件：插槽是 mod 系统与宿主界面之间**唯一的契约面**，
-         散在各处会让"我能往哪儿挂"变成一个要通读全部前端才能回答的问题。 -->
     <script defer src="/js/host-slots.js"></script>
-    <!-- 日志查看器：软件内按级别/模块筛选查看服务端日志（AstrBot 式分级体验的前端）。 -->
     <script defer src="/js/log-viewer.js"></script>
-    <!-- 成就系统（含生日纪念记录）。
-         排在业务模块（core～settings）之后：它读 state.conversations / state.memoryCore 做进度判定，
-         那些全局变量在 core / data 里定义。
-         但它**不在加载时**碰它们（只在 open()/evaluate() 时读），
-         所以顺序上只要排在 data.js 之后即可。
-         ★ 生日纪念由**插件**（mods/birthday）在合适时机调用它上报（host.unlock）。 -->
     <script defer src="/js/achievements.js"></script>
-    <!-- ★ 2026-10：「星屑之日」生日隐藏模式已从宿主搬进插件 **mods/birthday/**。
-         它当初只能是宿主模块 —— 横跨主题系统（TEMPLATES 白名单）、system 提示词
-         拼接、顶栏/侧栏 DOM 三处宿主私有能力。宿主补齐 host.theme / host.storage /
-         host.unlock 与 app-ready 事件之后才可能插件化（那几个 API 就是为它开的）。
-         装好后要在「设置 → 插件」里**启用**；默认关闭（插件不该在用户不知情时改界面）。 -->
     <script defer src="/js/models.js"></script>
 <script defer src="/js/shell.js"></script>
 <script defer src="/js/bindings.js"></script>
-<script defer src="/js/init.js"></script>
+    <!-- redesign-extras 暴露的 ElainaRdVisual 要在 init() 的启动重放里调用，必须排在 init.js 之前（与 theme.js 同理）。 -->
     <script defer src="/js/redesign-extras.js"></script>
-    <!-- 移动端外壳的交互：底栏三格、顶栏「更多」弹层、回忆分段条。
-         排在 redesign-extras.js 之后 —— 它复用 openSettings / enterMemoryPage 等
-         既有全局函数，并点击既有的隐藏按钮，不重新实现任何业务逻辑。 -->
+<script defer src="/js/init.js"></script>
     <script defer src="/js/mobile-shell.js"></script>
-    <!-- Live2D 视频通话已改由 mods/live2d/ 提供（插件脚本按需注入） -->
 
-    <!-- ==================== 插件弹窗（顶层） ====================
-         ★ 必须放在 #settingsOverlay **外面**（2026-10 修）。
-           原因：#settingsPanel 上有 animation: settings-page-enter（含 transform），
-           而带 transform 的元素会成为 position:fixed 后代的**包含块** —— 嵌在里面时
-           插件设置弹窗会被"关进"主设置面板（看起来像主设置没了、弹窗被裁掉）。
-           放顶层后：主设置留在后面当背景，插件弹窗叠在它上面。
-           .modal-overlay 的 z-index 是 100001，这里再抬一档，确保永远在最上面。 -->
-    <!-- 插件设置弹窗（点插件卡片上的齿轮按钮打开）
-         ★ 为什么插件设置不占主设置的分栏：插件一多，主设置里会堆一排分栏
-           （外观/角色/对话/语音/视觉/能力/高级/插件…），而插件设置大多偶尔才调一次。
-           独立成窗后主设置只留宿主自己的分栏。见 web/js/host-slots.js 的 settings.modal。 -->
 <div id="modSettingsOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
-        <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+        <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
                 <div class="text-sm font-bold text-indigo-950" id="modSettingsTitle">插件设置</div>
                 <button id="modSettingsClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
@@ -2232,13 +1891,8 @@
         </div>
     </div>
 
-    <!-- 插件 README / 技能说明阅读窗（点卡片上的「说明 / 查看」时打开）
-         ★ 内容是**插件作者写的 Markdown**：渲染器见 web/js/readme-view.js，
-           它把所有输入先 escape 再拼标签，不保留任何原始 HTML。
-         ★ 目录（左侧「在本页」）由 renderReadmeDoc 填，手机上隐藏 ——
-           窄屏两侧都不够放，正文优先。 -->
     <div id="modReadmeOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
-        <div class="modal-panel readme-panel w-full max-w-4xl max-h-[86vh] flex flex-col overflow-hidden">
+        <div class="modal-panel readme-panel w-full max-w-4xl max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="readme-head flex items-center gap-3 flex-shrink-0">
                 <span class="readme-head-mark" aria-hidden="true">✦</span>
                 <div class="min-w-0 flex-1">
@@ -2258,13 +1912,8 @@
         </div>
     </div>
 
-    <!-- 插件市场弹窗（从「插件」栏右上角的「插件市场」按钮打开）
-         ★ 为什么市场**不占主设置的分栏**：与插件设置是同一条取舍 ——
-           主设置已经有 8 个分栏（手机上得横向滚动），而市场是"想装东西时才用一次"
-           的地方，独立成窗后不占常驻位置；入口留在插件卡片标题行那一排按钮里。
-         ★ 列表复用 .mod-card / .mod-act 样式，深色模式才能跟着适配（与技能区块同一条理由）。 -->
     <div id="marketOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
-        <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden">
+        <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
                 <div class="text-sm font-bold text-indigo-950">插件市场</div>
                 <button type="button" id="marketRefreshBtn" class="mod-act ml-auto" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新拉取商店索引">⟳ 刷新</button>
@@ -2282,15 +1931,11 @@
                     从商店下载并安装扩展包。<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
                     装完回到「插件」栏打开开关才会生效。
                 </p>
-                <!-- 搜索：**本地过滤**（索引已在内存里），改词不重新请求 ——
-                     每敲一个字都打一次网络既慢又没必要。见 mod-market.js 的 renderMarketList()。 -->
                 <div class="flex items-center gap-2 mb-3">
                     <label for="marketSearch" class="text-[11px] text-indigo-400 flex-none">搜索</label>
                     <input id="marketSearch" autocomplete="off" type="search" class="modal-input text-xs flex-1 min-w-0" placeholder="搜插件：名字 / 说明 / 依赖，例如 live2d、背景">
                 </div>
                 <div id="marketList" class="space-y-2"></div>
-                <!-- 商店源：默认是官方 web 仓库的索引，可改成自建/镜像。
-                     留空并保存 = 恢复默认（见 web/js/mod-market.js 的 marketIndexUrl）。 -->
                 <div class="flex items-center gap-2 mt-5">
                     <label for="marketUrl" class="text-[11px] text-indigo-400 flex-none">商店源</label>
                     <input id="marketUrl" autocomplete="off" type="text" class="modal-input text-xs flex-1 min-w-0" placeholder="https://xyz921746.github.io/web/store/index.json">
@@ -2299,9 +1944,6 @@
             </div>
         </div>
     </div>
-    <!-- 下载悬浮窗：全局钉在应用右下角（不只市场里 —— 关掉市场去聊天也看得见
-         进度）。任务表由 mod-market.js 的 dlTasks 维护，「一次安装点击 = 一行」，
-         依赖包的进度也画在这里；行上可「停止」（中止这次安装）/「卸载」（装完反悔）。 -->
     <div id="marketDlPanel" class="hidden fixed bottom-5 right-5 z-50 w-80 max-w-[calc(100vw-2.5rem)] rounded-xl border border-black/10 bg-white/95 shadow-2xl backdrop-blur" role="region" aria-label="下载进度">
         <div id="marketDlHead" class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left" title="点一下展开/收起">
             <span class="text-[11px] font-semibold text-indigo-800">下载</span>

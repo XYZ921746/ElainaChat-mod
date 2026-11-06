@@ -1,9 +1,4 @@
-/* ============================================================================
- * 插件发现与批量加载（从 mods.js 拆出）
- *
- * discover / loadAll：只做清单读取、依赖排序与逐插件加载的编排；
- * 具体注入与初始化仍在 mods.js 的 loadOne。
- * ========================================================================== */
+/* 插件发现与批量加载：discover / loadAll —— 清单读取、依赖排序与逐插件加载的编排；注入与初始化在 mods-load-one.js。 */
 (function () {
     'use strict';
 
@@ -17,6 +12,8 @@
         const logLoadSummary = deps.logLoadSummary;
         const getRegistry = deps.getRegistry;
         const autoDisableBroken = deps.autoDisableBroken;
+    /** 发现所有插件：浏览器里没法列目录，所以约定 `mods/index.json` 是插件清单数组（构建/手工维护）。
+     *  安卓 APK 上没有静态服务，原生模式改走字面量 `/api/plugins`（core.js 的拦截器精确匹配这个串）。 */
     async function discover() {
         try {
             const res = await fetch(window.__nativeModBase
@@ -33,19 +30,12 @@
         }
     }
 
-
-    /** 加载全部插件 */
     async function loadAll() {
-        // 原生模式：先等插件根就绪（幂等，任何触发路径都安全 ——
-        //   本函数的入口不止 boot 一处，多设备同步也会再调）。
+        // 原生模式：先等插件根就绪（幂等，本函数入口不止 boot 一处，多设备同步也会再调）。
         //   不等的话首次加载会用桌面根 /mods/ 去拼 URL，APK 上全部 404。
         await awaitNativeModRoot();
-        // 先打一条总览日志（console.log，会被前端日志转发带到启动窗口）。
-        // 为什么必须有：插件的加载是"看不见的过程"，而"没有 mod 日志"这个现象
-        // 既可能是**成功**（成功日志若走 console.log 就未必被转发到启动窗口），
-        // 也可能是 **mods.js 压根没跑 / 清单读不到** —— 两者在启动窗口里长得
-        // 一模一样，无法据此排查。所以无论成败都先留一条
-        // "我是谁、我开始加载了、清单里有几个"的痕迹。
+        // 先打一条总览日志（console.log，会被前端日志转发带到启动窗口）：
+        // "没有 mod 日志"既可能是成功、也可能是插件系统压根没跑 / 清单读不到，两者在启动窗口里长得一样。
         const manifests = await discover();
         console.log('[Mod] 【插件系统】（提供界面扩展与功能增强）开始加载 —— '
             + '清单里发现 ' + manifests.length + ' 个插件'
@@ -97,11 +87,8 @@
         // 顺序加载（不是并发）：插件之间可能有依赖，且顺序加载让失败定位更容易
         for (const m of ordered) {
             const lack = missing.get(m.id) || [];
-            // 逐插件兜底：**一个插件出事绝不能带崩整轮加载**。
-            // loadOne 内部已经用 try/catch 包住了插件自己的代码，但它前半段
-            // （读 getRegistry()、处理依赖结论）不在那个 try 里。这里再兜一层，
-            // 保证「第 3 个插件出意外」不会让第 4、5、6 个根本不被加载 ——
-            // 那正是 AGENTS.md「失败隔离」要防的事。
+            // 逐插件兜底：一个插件出事绝不能带崩整轮加载 —— loadOne 内部只包住了插件自己的代码，
+            // 它前半段（读 getRegistry()、处理依赖结论）不在那个 try 里，这里再兜一层。
             let entry;
             try {
                 entry = await loadOne(m, lack);
@@ -124,7 +111,6 @@
         logLoadSummary(results);
         return results;
     }
-
 
         return { discover, loadAll };
     };

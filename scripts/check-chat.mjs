@@ -1,30 +1,20 @@
 // 对话与模型的回归检查：请求格式适配器、Anthropic 请求形状、模型列表、
 // 思考参数的网关兼容、system 消息合并、授权三档 + 停止按钮。
-// 合并自六个脚本（check-chat-providers / check-anthropic-request /
-// check-model-list / check-thinking-compat / check-chat-message-shape /
-// check-chat-stop-and-edge-tts）。它们测的是同一条「用户点发送 → 请求出去 →
-// 回复显示」链路上的不同环节：前四个都在 web/js/chat-providers.js 与
-// index.html 的真实函数体上跑假网络出口，拆成六个文件时各自重抄一遍
-// 「抠函数 / 加载 chat-providers.js / 造假依赖」的样板和一份 pass/fail 汇总，
-// 而且同名顶层变量（ROOT / html / extractFn）在同一个模块里会互相踩。
-// 每段用例在自己的函数作用域里跑，共用文件顶层的 extractFnFrom / extractClassFrom /
-// extractNumberConstFrom，断言经 c.ok 记账，失败信息形如
-// 「对话 API 格式适配器 :: openai: 端点是 /chat/completions」。
+// 每段用例在自己的函数作用域里跑，共用顶层的 extractFnFrom / extractClassFrom / extractNumberConstFrom，
+// 断言经 c.ok 记账，失败信息形如「对话 API 格式适配器 :: openai: 端点是 /chat/completions」。
 // 用法：node scripts/check-chat.mjs            跑全部
 //       node scripts/check-chat.mjs 模型列表   只跑名字含该子串的用例
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend } from './frontend-sources.mjs';
+import { readFrontend, readWebFile } from './frontend-sources.mjs';
 import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
 import { extractFunction as extractFnFrom, extractClass as extractClassFrom, extractVariable, extractTopLevelFunctions, makeVmSandbox, runClassicScripts } from './check-source.mjs';
 
 const PROVIDERS_FILE = path.join(ROOT, 'web', 'js', 'chat-providers.js');
 
-// 共用工具：从真实源码里抠函数 / 类 / 数字常量。
-// 为什么抠而不是复制：断言的是"被测代码自己算出来的东西"，
-// 抄一份到测试里就等于自己测自己，实现改了测试也照样绿。
+// 共用工具：从真实源码里抠函数 / 类 / 数字常量——抄一份到测试里等于自己测自己，实现改了测试照绿。
 // extractFnFrom / extractClassFrom 统一来自 check-source.mjs（跳过字符串与注释的花括号配对）。
 
 /** 抠一个数字常量（形如 `const NAME = 4096;`） */
@@ -35,27 +25,17 @@ function extractNumberConstFrom(html, name) {
 }
 
 // 1. 对话 API 格式适配器（web/js/chat-providers.js）
-// 为什么需要：这三个函数是**对话功能的全部出口** —— 搬错一处，AI 就完全无法回复。
-// 而且它用「依赖注入」的方式从 index.html 取依赖（window.ChatDeps），
-// **漏挂一个依赖的表现是运行到那一步才报 "xxx is not a function"**，
-// 静态看源码看不出来。所以这个检查专门盯住"依赖有没有挂全"。
-// 覆盖：
-//   1. 从 chat-providers.js 源码里扫出所有 deps() 解构出的名字，逐个断言在 ChatDeps 里
-//   2. 三种格式都有实现（分发表完整），且未知格式有兜底
-//   3. 三个函数签名一致（(messages, opts, settings)）
-//   4. 用**假依赖**真的跑一遍三个函数，断言请求体/端点的形状正确
-//   5. index.html 确实引用了本文件、且挂了 ChatDeps
+// 这三个函数是对话功能的全部出口，用依赖注入从 window.ChatDeps 取依赖；漏挂一个要到运行那步
+// 才报 "xxx is not a function"，静态看源码看不出来，所以专门盯住依赖有没有挂全。
+// 覆盖：依赖清单 / 分发表完整 / 签名一致 / 假依赖实跑请求形状 / index.html 接线。
 
 async function caseProviders(c) {
     const src = readFileSync(PROVIDERS_FILE, 'utf8');
-    // ChatDeps 挂载与 CHAT_API_FORMATS 都随主脚本拆到了 web/js/*.js 里
     const html = readFrontend();
     const fileUrl = 'file:///' + PROVIDERS_FILE;
 
-    // ============================================================ 1. 依赖清单
     console.log('=== 1. 依赖注入是否挂全 ===');
 
-    // 扫出所有 `const { a, b, c } = deps();` 里的名字
     const needed = new Set();
     for (const m of src.matchAll(/const\s*\{([^}]+)\}\s*=\s*deps\(\)/g)) {
         for (const raw of m[1].split(',')) {
@@ -66,7 +46,6 @@ async function caseProviders(c) {
     console.log('  chat-providers.js 需要 ' + needed.size + ' 个依赖:');
     console.log('    ' + [...needed].sort().join(', '));
 
-    // 从 index.html 里找 window.ChatDeps = { ... } 的键
     const depsBlock = html.match(/window\.ChatDeps\s*=\s*\{([\s\S]*?)\n\s*\};/);
     c.ok(Boolean(depsBlock), 'index.html 里有 window.ChatDeps 挂载');
     const provided = new Set();
@@ -86,7 +65,6 @@ async function caseProviders(c) {
     const unused = [...provided].filter((n) => !needed.has(n));
     if (unused.length) console.log('  提示：挂载了但没用到 → ' + unused.join(', '));
 
-    // ============================================================ 2. 分发表
     console.log('\n=== 2. 分发表完整性 ===');
     const KNOWN_FORMATS = ['openai-compatible', 'anthropic', 'openai-responses'];
     for (const f of KNOWN_FORMATS) {
@@ -108,7 +86,6 @@ async function caseProviders(c) {
         c.ok(false, '能读到 CHAT_API_FORMATS');
     }
 
-    // ============================================================ 3. 签名一致
     console.log('\n=== 3. 函数签名 ===');
     for (const fn of ['callOpenAICompatibleChat', 'callAnthropicChat', 'callOpenAIResponsesChat']) {
         const m = src.match(new RegExp(`async function ${fn}\\(([^)]*)\\)`));
@@ -119,11 +96,9 @@ async function caseProviders(c) {
         }
     }
 
-    // ============================================================ 4. 真跑一遍（假依赖）
     console.log('\n=== 4. 用假依赖实跑三个格式 ===');
 
-    // 真实的「思考参数构造器」：装 core.js 的**整个顶层函数环境** + THINKING_EFFORTS，
-    //   不再只抠三个函数。以后 buildThinkingParams 拆 helper，这里也不用改。
+    // 真实的「思考参数构造器」：装 core.js 的整个顶层函数环境 + THINKING_EFFORTS，buildThinkingParams 再拆 helper 也不用改。
     const coreThinkSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
@@ -154,7 +129,6 @@ async function caseProviders(c) {
                 },
                 postJsonFromDevice: async (url, body, headers) => {
                     calls.push({ url, body, headers });
-                    // 按端点返回对应形状的假响应
                     if (/\/chat\/completions$/.test(url)) {
                         return { ok: true, status: 200, payload: { choices: [{ message: { content: 'OPENAI_OK', reasoning_content: 'R1' } }] } };
                     }
@@ -178,18 +152,15 @@ async function caseProviders(c) {
             calls,
             deps: {
                 ...depsRef,
-                // providers 现在走 requestChatJson（它内部才决定流式/非流式）。
-                // 本检查验证的是"发出去的请求体"，所以这里转发到同一个假出口。
+                // providers 走 requestChatJson（内部决定流式），本检查只验证请求体，转发到同一个假出口。
                 requestChatJson: async (endpoint, body, headers, opts) =>
                     await depsRef.postJsonFromDevice(endpoint, body, headers, opts?.timeoutMs, opts?.signal),
-                // 真实的思考参数构造器（从 index.html 抠出来注入），
-                // 否则断言"关思考发了什么"就测不到真东西。
+                // 真实的思考参数构造器，否则断言"关思考发了什么"测不到真东西。
                 buildThinkingParams: buildThinkingParamsReal,
             },
         };
     }
 
-    // 在 Node 里加载这个浏览器脚本：给它一个假的 window
     const sandbox = makeFakeDeps();
     const context = vm.createContext({
         window: { ChatDeps: sandbox.deps },
@@ -213,7 +184,6 @@ async function caseProviders(c) {
 
         const msgs = [{ role: 'system', content: 'SYS' }, { role: 'user', content: '你好' }];
 
-        // ---- openai-compatible ----
         {
             sandbox.calls.length = 0;
             const r = await CP.callOpenAICompatibleChat(msgs, { maxTokens: 100 }, { apiKey: 'k', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1' });
@@ -223,8 +193,6 @@ async function caseProviders(c) {
             c.ok(call && call.body.max_tokens === 100, 'openai: max_tokens 正确', call && String(call.body.max_tokens));
             c.ok(r.content === 'OPENAI_OK', 'openai: 回复解析正确', r.content);
             c.ok(r.reasoning === 'R1', 'openai: reasoning 解析正确', r.reasoning);
-            // 关思考必须**显式**发 disabled：DeepSeek 现在默认开思考，
-            // 不发这个字段用户会白等、白花钱，而界面上什么都看不到。
             const cOff = await (async () => {
                 sandbox.calls.length = 0;
                 await CP.callOpenAICompatibleChat(msgs, { thinking: false }, { apiKey: 'k', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1' });
@@ -232,7 +200,6 @@ async function caseProviders(c) {
             })();
             c.ok(cOff && cOff.body.thinking && cOff.body.thinking.type === 'disabled',
                 'openai: 关思考 → 显式 thinking.type = disabled', cOff && JSON.stringify(cOff.body.thinking));
-            // 老模型名映射到当前模型，而不是换成 reasoner
             const cLegacy = await (async () => {
                 sandbox.calls.length = 0;
                 await CP.callOpenAICompatibleChat(msgs, {}, { apiKey: 'k', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1' });
@@ -240,7 +207,6 @@ async function caseProviders(c) {
             })();
             c.ok(cLegacy && cLegacy.body.model === 'deepseek-flash',
                 'openai: 老名字 deepseek-chat → 映射到 deepseek-flash', cLegacy && cLegacy.body.model);
-            // 用户明确选了 pro 就不能被降级（那是花他的钱还改他的选择）
             const cPro = await (async () => {
                 sandbox.calls.length = 0;
                 await CP.callOpenAICompatibleChat(msgs, {}, { apiKey: 'k', model: 'deepseek-v4-pro', baseUrl: 'https://api.deepseek.com/v1' });
@@ -250,7 +216,6 @@ async function caseProviders(c) {
                 'openai: 用户选的 deepseek-v4-pro 不被降级', cPro && cPro.body.model);
         }
 
-        // ---- anthropic ----
         {
             sandbox.calls.length = 0;
             const r = await CP.callAnthropicChat(msgs, { maxTokens: 200 }, { apiKey: 'k', model: 'claude-sonnet-4-20250514', baseUrl: 'https://api.anthropic.com' });
@@ -265,7 +230,6 @@ async function caseProviders(c) {
             c.ok(r.reasoning === 'R2', 'anthropic: thinking 块解析正确', r.reasoning);
         }
 
-        // ---- openai-responses ----
         {
             sandbox.calls.length = 0;
             const r = await CP.callOpenAIResponsesChat(msgs, { maxTokens: 300 }, { apiKey: 'k', model: 'gpt-4.1-mini', baseUrl: 'https://api.openai.com/v1' });
@@ -279,7 +243,6 @@ async function caseProviders(c) {
             c.ok(r.reasoning === 'R3', 'responses: reasoning 解析正确', r.reasoning);
         }
 
-        // ---- 分发 ----
         {
             sandbox.calls.length = 0;
             await CP.forFormat('anthropic')(msgs, {}, { apiKey: 'k', model: 'm', baseUrl: 'https://api.anthropic.com' });
@@ -290,7 +253,6 @@ async function caseProviders(c) {
             c.ok(/\/chat\/completions$/.test(sandbox.calls[0].url), 'forFormat(未知) 兜底到 openai-compatible');
         }
 
-        // ---- 缺 Key 的报错 ----
         {
             let threw = null;
             try { await CP.callOpenAICompatibleChat(msgs, {}, { apiKey: '', model: 'm', baseUrl: 'https://x.com/v1' }); }
@@ -298,7 +260,6 @@ async function caseProviders(c) {
             c.ok(threw && threw.code === 'APP_KEY_MISSING', '缺 API Key 时抛 APP_KEY_MISSING', threw && threw.code);
         }
 
-        // ---- 转换器 ----
         {
             const conv = CP.convertOpenAIToAnthropicMessages([
                 { role: 'system', content: 'A' },
@@ -318,7 +279,6 @@ async function caseProviders(c) {
             c.ok(conv2.input[0].content[0].type === 'input_text', 'responses 转换: user 用 input_text');
             c.ok(conv2.input[1].content[0].type === 'output_text', 'responses 转换: assistant 用 output_text');
 
-            // ---- 工具协议消息的换形（多步任务的历史里这两种是常态）----
             const toolHistory = [
                 { role: 'user', content: '在桌面建个文件' },
                 {
@@ -350,35 +310,23 @@ async function caseProviders(c) {
         }
     }
 
-    // ============================================================ 5. index.html 接线
     console.log('\n=== 5. index.html 接线 ===');
-    c.ok(/<script\s+src="\/js\/chat-providers\.js"><\/script>/.test(html), 'index.html 引用了 chat-providers.js');
+    const indexHtml = readWebFile('index.html');
+    c.ok(/<script[^>]*src="\/js\/chat-providers\.js"[^>]*><\/script>/.test(indexHtml), 'index.html 引用了 chat-providers.js');
 
     // 加载顺序：必须在主脚本（最后一个内联 script）之前
-    const refIdx = html.indexOf('/js/chat-providers.js');
-    const lastInline = html.lastIndexOf('<script>');
+    const refIdx = indexHtml.indexOf('/js/chat-providers.js');
+    const lastInline = indexHtml.lastIndexOf('<script>');
     c.ok(refIdx > 0 && refIdx < lastInline, '引用位置在主脚本之前');
 
     c.ok(/window\.ChatProviders\.forFormat\(/.test(html), 'callChatAPI 用了 forFormat 分发');
 }
 
 // 2. 对话请求的形状（Anthropic 格式为主，外加跨格式的 max_tokens 下限）
-// 背景（真实故障一）：用户切到 Anthropic 格式后必然 400 ——
-//   400 "max_tokens must be greater than 1024 for manual Claude thinking"
-// 原因不在我们这侧的参数，而在**中转站会按模型名后缀替我们决定要不要开 thinking**：
-// 只要模型名以 `-thinking` 结尾（或含 `-thinking-<数字>`），new-api 就会开 manual thinking，
-// 而 manual thinking 要求 `1024 <= budget_tokens < max_tokens`，于是 max_tokens <= 1024 的请求被拒。
-// 我们当时发的是 900（ROLEPLAY_OUTPUT_TOKEN_LIMITS.text），所以必然失败；
-// 「测试对话连接」按钮发的是 8，同样失败。
-// 背景（真实故障二的隐患）：这条约束**跨协议**。new-api 的 `ApplyReasoning()` 里，
-// OpenAI → Claude 的转换（crossProtocol）一定走 `RenderClaude`，
-// 所以用 OpenAI 兼容格式调一个 `…-thinking` 的模型名会踩同一个坑。
-// 因此下限判据被提到 `callChatAPI`，三种格式共用 —— 本检查直接驱动 `callChatAPI` 验证这一点。
-// 做法：把 index.html 里的真实函数体抠出来，只把网络出口（postJsonFromDevice）换成假的，
-// 检查**真正会发出去的 body**。不联网、不复制逻辑。
-// 2026-09 更新：三种协议的实现已拆到 `web/js/chat-providers.js`（表驱动分发）。
-// 本检查相应改成**直接加载那个真模块**，而不是继续从 HTML 里正则抠 ——
-// 抠函数那种做法本来就脆（改个格式就断），拆出去后正好改成"测线上真正跑的那份"。
+// 中转站会按模型名后缀（-thinking）替我们开 manual thinking，manual thinking 要求
+// 1024 <= budget_tokens < max_tokens，所以 max_tokens <= 1024 会被 400；约束是跨协议的
+// （OpenAI → Claude 也走 RenderClaude），因此下限判据提到 callChatAPI，三种格式共用。
+// 做法：加载线上真正跑的模块，只把网络出口换成假的，检查真正会发出的 body。
 
 async function caseAnthropicRequest(c) {
     const html = readFrontend();
@@ -386,8 +334,7 @@ async function caseAnthropicRequest(c) {
     const extractClass = (name) => extractClassFrom(html, name);
     const extractNumberConst = (name) => extractNumberConstFrom(html, name);
 
-    // 整脚本装载 core.js 的函数环境 + 需要的常量，再把“只有网络出口是假的”桩装进同一个 VM。
-    // 不再用 new Function('window', ...) 拼几十行函数体 —— 这样 core.js 再拆 helper 也不用改检查。
+    // 整脚本装载 core.js 的函数环境 + 常量，把“只有网络出口是假的”桩装进同一个 VM——core.js 再拆 helper 也不用改。
     const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
@@ -451,25 +398,14 @@ async function caseAnthropicRequest(c) {
     `, chatSandbox, { filename: 'core.js#chat-fakes' });
     const raw = chatSandbox.__ctx;
 
-    // ===== 让真实模块跑起来：三种协议的实现已拆到 web/js/chat-providers.js =====
-    // 原来是把这个文件里的三个实现 + 两个转换器也一起抠出来执行。现在它们搬走了，
-    // 继续抠会抠不到 —— 而**这正是拆分想要的结果**：不再"从 HTML 里正则抠函数"，
-    // 而是直接加载真模块，测的就是线上真正跑的那份代码。
-    // 做法：
-    //   ① 先建一个空的 fakeWindow 对象
-    //   ② 用 new Function('window', ...) 跑 index.html 里抠出来的真实代码，拿到真实依赖
-    //   ③ 把依赖挂进 fakeWindow.ChatDeps
-    //   ④ 在 vm 里执行 chat-providers.js（它从 window.ChatDeps 取依赖）
-    //   ⑤ 把 ChatProviders 挂回 fakeWindow，让 callChatAPI 里的 window.ChatProviders 能用
+    // ===== 让真实模块跑起来：先跑 index.html 抠出的代码拿到依赖挂进 fakeWindow.ChatDeps，
+    // 在 vm 里执行 chat-providers.js，再把 ChatProviders 挂回 fakeWindow 供 callChatAPI 使用。
     fakeWindow.ChatDeps = {
         ClientApiError: raw.ClientApiError,
         getChatBaseUrl: raw.getChatBaseUrl,
         isDeepSeekOfficial: raw.isDeepSeekOfficial,
         normalizeChatReply: raw.normalizeChatReply,
         postJsonFromDevice: raw.postJsonFromDevice,
-        // providers 现在走 requestChatJson 而不是直接 postJsonFromDevice。
-        // 本检查只验证“发出去的请求体形状”，不验证流式 —— 所以这里让 requestChatJson
-        // 直接转发到那个假的 postJsonFromDevice，保持“只有网络出口是假的”这个性质。
         requestChatJson: async (endpoint, body, headers, opts) =>
             await raw.postJsonFromDevice(endpoint, body, headers, opts?.timeoutMs, opts?.signal),
         buildThinkingParams: raw.buildThinkingParams,
@@ -479,8 +415,7 @@ async function caseAnthropicRequest(c) {
         resolveOutputTokenLimit: raw.resolveOutputTokenLimit,
         ANTHROPIC_MIN_MAX_TOKENS: raw.ANTHROPIC_MIN_MAX_TOKENS,
     };
-    // chat-providers.js 也跑在同一个 VM 里：它从 window.ChatDeps 取依赖，
-    // callChatAPI 再从 window.ChatProviders 取三个实现。
+    // chat-providers.js 也跑在同一个 VM 里：从 window.ChatDeps 取依赖，callChatAPI 再从 window.ChatProviders 取实现。
     runClassicScripts([PROVIDERS_FILE], chatSandbox);
     if (!fakeWindow.ChatProviders) {
         throw new Error('chat-providers.js 没能挂上 window.ChatProviders —— 本检查无法继续');
@@ -488,10 +423,9 @@ async function caseAnthropicRequest(c) {
 
     const { calls, setPayload, last, lastNormalize, getClientErrorPresentation, ClientApiError } = raw;
     const callChatAPI = raw.callChatAPI;
-    // 三个实现直接从**真实模块**取（不再从 HTML 抠）
     const { callAnthropicChat, callOpenAICompatibleChat, callOpenAIResponsesChat } = fakeWindow.ChatProviders;
 
-    // 断言适配器：原脚本用 check / atLeast / absent 三种风格，语义照抄。
+    // 断言适配器：check / atLeast / absent 三种风格。
     function check(label, actual, expected) {
         const a = JSON.stringify(actual);
         const b = JSON.stringify(expected);
@@ -524,8 +458,7 @@ async function caseAnthropicRequest(c) {
 
     void callOpenAICompatibleChat; void callOpenAIResponsesChat;
 
-    // ---------- 一、Anthropic 格式：下限是**无条件**的 ----------
-    // 阈值来自中转站的报错文案：max_tokens must be **greater than** 1024
+    // 阈值来自中转站的报错文案：max_tokens must be greater than 1024
     console.log('\n— Anthropic 格式的 max_tokens 下限（无条件）—');
     const main = await send({ maxTokens: 900 });           // 角色扮演主对话
     atLeast('主对话（900）发出的 max_tokens > 1024', main.body.max_tokens, 1025);
@@ -536,7 +469,6 @@ async function caseAnthropicRequest(c) {
     const big = await send({ maxTokens: 32000 });
     check('传了更大的值时不被压低', big.body.max_tokens, 32000);
 
-    // ---------- 工具通道：请求体怎么带 tools ----------
     console.log('\n— 工具声明（function calling）—');
     const toolDefs = [{
         type: 'function',
@@ -568,7 +500,6 @@ async function caseAnthropicRequest(c) {
         '★ Responses 带上 tools 且用扁平形状（type/name/description/parameters 平铺）',
         JSON.stringify(responsesTools.body.tools));
 
-    // 回复侧：工具调用要交给调用方，且"只调工具、一字不说"不能再被当成空回复抛错
     setPayload({
         choices: [{
             message: {
@@ -591,8 +522,7 @@ async function caseAnthropicRequest(c) {
     c.ok(toolReplyText === '',
         '★ 只调工具、一字不说时返回空正文（不再当空回复抛错）', JSON.stringify(toolReplyText));
 
-    // 回复侧（Anthropic 形态）：content 里的 tool_use block 也要交给调用方 ——
-    //   不解析的话这种格式下工具通道等于不存在（模型发了调用、宿主看不见）。
+    // 回复侧（Anthropic 形态）：content 里的 tool_use block 也要交给调用方，否则这种格式下工具通道等于不存在。
     {
         setPayload({ content: [
             { type: 'text', text: '' },
@@ -608,7 +538,6 @@ async function caseAnthropicRequest(c) {
             '★ Anthropic 回复里的 tool_use 交给调用方（参数解析成对象）', JSON.stringify(info.toolCalls));
         c.ok(t === '', 'Anthropic 只调工具时同样返回空正文', JSON.stringify(t));
     }
-    // 回复侧（Responses 形态）：output 里的 function_call 项
     {
         setPayload({ output: [
             { type: 'reasoning', summary: [{ type: 'summary_text', text: '想想' }] },
@@ -635,9 +564,6 @@ async function caseAnthropicRequest(c) {
     const bigBudget = await send({ maxTokens: 900 }, { model: 'claude-sonnet-4-5-thinking-8000' });
     atLeast('-thinking-8000 时 max_tokens 必须大于该预算', bigBudget.body.max_tokens, 8001);
 
-    // ---------- 二、同一个坑跨格式：OpenAI 系只在模型名带后缀时才抬 ----------
-    // 约束在 new-api 侧是跨协议的（OpenAI → Claude 也走 RenderClaude），
-    // 所以判据必须提到 callChatAPI —— 否则用户换成 OpenAI 格式照样 400。
     console.log('\n— 跨格式：模型名带 -thinking 后缀时同样保底 —');
     const oaiThinking = await send({ maxTokens: 900 }, { model: 'claude-sonnet-4-5-thinking' }, 'openai-compatible');
     atLeast('openai-compatible + -thinking → max_tokens > 1024', oaiThinking.body.max_tokens, 1025);
@@ -649,7 +575,6 @@ async function caseAnthropicRequest(c) {
     const respThinking = await send({ maxTokens: 900 }, { model: 'claude-sonnet-4-5-thinking' }, 'openai-responses');
     atLeast('openai-responses + -thinking → max_output_tokens > 1024', respThinking.body.max_output_tokens, 1025);
 
-    // 反过来更要紧：普通模型名**不能**被无故抬高 —— 那会把用户的输出预算悄悄改大
     console.log('\n— 反向：普通模型名不许被动 —');
     const oaiPlain = await send({ maxTokens: 900 }, {}, 'openai-compatible');
     check('openai-compatible + 普通模型名 → 原样 900', oaiPlain.body.max_tokens, 900);
@@ -666,19 +591,14 @@ async function caseAnthropicRequest(c) {
     // 大小写：判据故意放宽（多抬一个上限是无害的），命中时不能漏
     const upper = await send({ maxTokens: 900 }, { model: 'claude-sonnet-4-5-THINKING' }, 'openai-compatible');
     atLeast('后缀大小写混写也认（宁可多抬，不能漏）', upper.body.max_tokens, 1025);
-    // DeepSeek 官方的老模型名会映射到当前模型（deepseek-chat 已由 deepseek-flash 承接），
-    // 但**不能**再换成 deepseek-reasoner —— 那个模型名属于"思考专用模型"时代，
-    // 现在思考由 thinking 字段控制。这条断言以前写的是"换成 reasoner"，是过时契约。
+    // DeepSeek 官方的老模型名映射到当前模型，但不能换成 deepseek-reasoner（思考现在由 thinking 字段控制）。
     const ds = await send({ maxTokens: 900, thinking: true },
         { baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' }, 'openai-compatible');
     check('DeepSeek 官方 + 老模型名 → 映射到当前模型', ds.body.model, 'deepseek-flash');
     check('  且 max_tokens 不被抬（模型名没有 -thinking 后缀）', ds.body.max_tokens, 900);
 
-    // ---------- 二之二、思考开关与强度（本次适配的核心） ----------
-    // 背景：DeepSeek 现在的接口**默认开启思考**（官方《思考模式》文档：thinking mode
-    // is enabled by default, effort 默认 high）。这意味着"关掉开关"必须**显式**发
-    // disabled —— 不发字段不等于关，用户会白等几十秒、白花思考 token，
-    // 而界面上什么都看不到。这条是本次最容易漏、后果最隐蔽的一条。
+    // DeepSeek 接口默认开启思考（effort 默认 high），所以"关掉开关"必须显式发 disabled：
+    // 不发字段不等于关，用户会白等几十秒、白花思考 token，而界面上什么都看不到。
     console.log('\n— 思考开关与强度 —');
     const dsOff = await send({ thinking: false }, { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'openai-compatible');
     check('DeepSeek 关思考 → 显式发 disabled（默认是开的，不发等于没关）',
@@ -693,8 +613,7 @@ async function caseAnthropicRequest(c) {
         { baseUrl: 'https://api.deepseek.com', model: 'deepseek-flash' }, 'openai-compatible');
     check('DeepSeek 高强度 → reasoning_effort: high', dsHigh.body.reasoning_effort, 'high');
 
-    // Anthropic：用 reasoning.effort，**不能**用 thinking 字段
-    // （那个字段在 Claude 官方是 {type, budget_tokens}，同名不同义，发错会 400）
+    // Anthropic：用 reasoning.effort，不能用 thinking 字段（Claude 官方的 thinking 是 {type, budget_tokens}，同名不同义）。
     const anOff = await send({ thinking: false }, { baseUrl: 'https://api.anthropic.com' }, 'anthropic');
     check('Anthropic 关思考 → reasoning.effort: none', anOff.body.reasoning, { effort: 'none' });
     check('  ★ 且不发 thinking 字段（那是 Claude 官方 extended thinking，同名不同义）',
@@ -715,7 +634,6 @@ async function caseAnthropicRequest(c) {
     const rpOff = await send({ thinking: false }, { baseUrl: 'https://api.openai.com/v1' }, 'openai-responses');
     check('Responses 关思考 → 不发 reasoning（它没有 none 取值）', 'reasoning' in rpOff.body, false);
 
-    // ---------- 三、端点拼接 ----------
     console.log('\n— 端点 —');
     check('裸域名 → /v1/messages',
         (await send({}, { baseUrl: 'https://newapi.example.com' })).url,
@@ -739,14 +657,12 @@ async function caseAnthropicRequest(c) {
         (await send({}, { baseUrl: 'https://api.openai.com/v1' }, 'openai-responses')).url,
         'https://api.openai.com/v1/responses');
 
-    // ---------- 四、请求头 ----------
     console.log('\n— 请求头 —');
     check('Anthropic 用 x-api-key（不是 Authorization）', main.headers['x-api-key'], 'test-key');
     check('Anthropic 带 anthropic-version', main.headers['anthropic-version'], '2023-06-01');
     check('Anthropic 没混进 Authorization', Object.keys(main.headers).some((k) => /^authorization$/i.test(k)), false);
     check('OpenAI 系用 Bearer', oaiPlain.headers.Authorization, 'Bearer test-key');
 
-    // ---------- 五、请求体形状 ----------
     console.log('\n— 请求体 —');
     check('system 提到顶层，且拼成一条', main.body.system, '你是伊蕾娜。\n\n# 世界观\n魔法世界');
     check('messages 里不再有 system', main.body.messages.some((m) => m.role === 'system'), false);
@@ -756,15 +672,12 @@ async function caseAnthropicRequest(c) {
     check('带 -thinking 后缀时模型名原样传（由中转站解析）', thinkingSuffix.body.model, 'claude-sonnet-4-5-thinking');
     check('没传 temperature 时不带上这个键', 'temperature' in main.body, false);
     check('传了 temperature 时带上', (await send({ temperature: 0.7 })).body.temperature, 0.7);
-    // OpenAI 系两种格式也吃到同一份「开头连续 system 合并」（在 callChatAPI 里做的）
     check('openai-compatible 的 system 也合并成一条',
         oaiPlain.body.messages.filter((m) => m.role === 'system').length, 1);
     check('openai-responses 的 system 走 instructions',
         respPlain.body.instructions, '你是伊蕾娜。\n\n# 世界观\n魔法世界');
 
-    // ---------- 六、响应解析 ----------
-    // 中转站按模型名后缀开的 thinking 会把思考内容以 thinking block 返回，
-    // 正文在 text block 里 —— 混在一起会把思考过程当回复显示给用户。
+    // 中转站按模型名后缀开的 thinking 会把思考内容以 thinking block 返回，正文在 text block 里。
     console.log('\n— 响应解析 —');
     const settings = { apiKey: 'test-key', model: 'claude-sonnet-4-5', baseUrl: 'https://newapi.example.com' };
     setPayload({ content: [
@@ -789,7 +702,6 @@ async function caseAnthropicRequest(c) {
     check('没有正文时抛 EMPTY_MODEL_OUTPUT', emptyErr, 'EMPTY_MODEL_OUTPUT');
     setPayload({ content: [{ type: 'text', text: '好的' }] });
 
-    // ---------- 七、缺 Key 时的提示 ----------
     console.log('\n— 错误路径 —');
     let missingKey = null;
     try { await callAnthropicChat(msgs, {}, { apiKey: '', model: 'claude-sonnet-4-5', baseUrl: 'https://x.com' }); }
@@ -799,7 +711,6 @@ async function caseAnthropicRequest(c) {
     try { await send({}, { apiKey: '' }, 'openai-compatible'); } catch (e) { oaiMissingKey = e.code; }
     check('OpenAI 格式没填 Key 时也报 APP_KEY_MISSING', oaiMissingKey, 'APP_KEY_MISSING');
 
-    // ---------- 八、400 的提示要说清 -thinking 后缀 ----------
     // 用户没开过思考，光看到 "manual Claude thinking" 只会更迷惑 —— 提示必须点破模型名后缀。
     console.log('\n— 400 提示 —');
     const present = (message, imageHint) =>
@@ -823,20 +734,10 @@ async function caseAnthropicRequest(c) {
 }
 
 // 3. 获取模型列表（`GET <base>/models`）
-// 背景（真实问题）：界面上一直写着「Anthropic 格式下获取模型不可用」，理由是
-// "它的模型列表接口与 OpenAI 不同"。**这是错的** ——
-// Anthropic 有 Models API：`GET /v1/models`，返回 `{ data: [{ id, display_name, … }] }`，
-// 和 OpenAI 的 `{ data: [{ id }] }` **同构**，解析逻辑本来就能共用。
-// 真正的故障只有一个：**地址拼错了**。
-//   Anthropic 的 Base URL 惯例上不带版本段（默认 `https://api.anthropic.com`），
-//   而它的 Models API 在 `/v1/models` —— 代码直接拼 `/models`，于是 404，
-//   再被上层翻译成"该服务不支持 /models"。
-// 所以本检查的核心不是"能不能解析"，而是**地址拼接规则**，以及一条容易被未来重构破坏的不变量：
-//   `模型列表地址 == 对话地址把 /messages 换成 /models`
-// （一旦不一致，就会出现"对话能通、获取模型 404"这种最费解的现象）。
-// 做法：抠出 index.html 里的真实函数体，只把网络出口换成假的。
-// 2026-09 更新：三种协议的实现已拆到 web/js/chat-providers.js（开发文档 8.33），
-// 本检查相应改成**直接加载那个真模块**来测 callAnthropicChat。
+// Anthropic 与 OpenAI 的列表接口同构（`{ data: [...] }`），真正的故障是地址拼接：
+// Base URL 通常不带版本段而 Models API 在 /v1/models，直接拼 /models 会 404。
+// 核心不变量：模型列表地址 == 对话地址把 /messages 换成 /models。
+// 做法：直接加载 web/js/chat-providers.js 真模块，只把网络出口换成假的。
 
 async function caseModelList(c) {
     const html = readFrontend();
@@ -844,8 +745,7 @@ async function caseModelList(c) {
     const extractClass = (name) => extractClassFrom(html, name);
     const extractNumberConst = (name) => extractNumberConstFrom(html, name);
 
-    // 整脚本装载 core.js 的函数环境 + 需要的常量，再把“假网络出口 / 假 DOM”桩装进同一个 VM。
-    // 不再用 new Function('window', ...) 拼几十行函数体。
+    // 整脚本装载 core.js 的函数环境 + 常量，把“假网络出口 / 假 DOM”桩装进同一个 VM。
     const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
     + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
@@ -885,11 +785,9 @@ async function caseModelList(c) {
         globalThis.throwProviderResponseError = async function () { throw new Error('不该走到这里'); };
         globalThis.toClientApiError = function (error) { return error; };
         globalThis.state = { settings: {} };
-        // 假 DOM / 假弹窗：populateModelSelect 用到 document.createElement 和 showCustomAlert
+        // 假 DOM / 假弹窗：VM 内的公共桩。
         const alertMessages = [];
         globalThis.showCustomAlert = function (msg) { alertMessages.push(String(msg)); };
-        // 组合框会调 input.__modelComboRefresh()；假 input 上没有这个方法，
-        // 真实代码里有 typeof 判断 —— 这里保持“没有该方法”，顺带覆盖兜底分支。
         globalThis.document = {
             createElement() { return { value: '', textContent: '' }; },
         };
@@ -898,7 +796,6 @@ async function caseModelList(c) {
             modelsEndpointFor: globalThis.modelsEndpointFor,
             parseModelList: globalThis.parseModelList,
             fetchModelList: globalThis.fetchModelList,
-            populateModelSelect: globalThis.populateModelSelect,
             ClientApiError: globalThis.ClientApiError,
             getChatBaseUrl: globalThis.getChatBaseUrl,
             normalizeChatReply: globalThis.normalizeChatReply,
@@ -918,14 +815,11 @@ async function caseModelList(c) {
     const ctx = modelSandbox.__ctx;
 
     // ===== 加载真实的 chat-providers.js（三种协议的实现都在那边）=====
-    // 原来是把 callAnthropicChat 从 index.html 里抠出来执行；它搬走后改为直接加载真模块。
     fakeWindow.ChatDeps = {
         ClientApiError: ctx.ClientApiError,
         getChatBaseUrl: ctx.getChatBaseUrl,
         normalizeChatReply: ctx.normalizeChatReply,
         postJsonFromDevice: ctx.postJsonFromDevice,
-        // providers 现在走 requestChatJson（内部决定流式/非流式）。本检查只关心
-        // 模型列表与地址拼接，不验证流式，所以让它转发到同一个假出口。
         requestChatJson: async (endpoint, body, headers, opts) =>
             await ctx.postJsonFromDevice(endpoint, body, headers, opts?.timeoutMs, opts?.signal),
         buildThinkingParams: ctx.buildThinkingParams,
@@ -942,7 +836,7 @@ async function caseModelList(c) {
     ctx.callAnthropicChat = fakeWindow.ChatProviders.callAnthropicChat;
 
     const {
-        modelsEndpointFor, parseModelList, fetchModelList, populateModelSelect,
+        modelsEndpointFor, parseModelList, fetchModelList,
         callAnthropicChat, ClientApiError,
         setGetResults, resetGetCalls, getCalls, postCalls, lastGet, lastPost,
         alertMessages,
@@ -950,27 +844,7 @@ async function caseModelList(c) {
 
     void ClientApiError;
 
-    /**
-     * 造一个最小的假 DOM，够 populateModelSelect 用。
-     * `input.value` 是可观察的核心 —— 真正发给服务商的是它，不是下拉框。
-     */
-    function fakeForm(inputValue = '') {
-        const options = [];
-        return {
-            input: { value: inputValue },
-            select: {
-                classList: { removed: [], remove(cl) { this.removed.push(cl); } },
-                appendChild(o) { options.push(o); },
-                set innerHTML(v) { if (v === '') options.length = 0; },
-                value: '',
-                onchange: null,
-            },
-            options,
-            btn: { textContent: '🔄 获取模型' },
-        };
-    }
-
-    // 断言适配器：原脚本用 check / has / throws 三种风格，语义照抄。
+    // 断言适配器：check / has / throws 三种风格。
     function check(label, actual, expected) {
         const a = JSON.stringify(actual);
         const b = JSON.stringify(expected);
@@ -988,7 +862,6 @@ async function caseModelList(c) {
         c.ok(same, label, same ? '' : `got=${err ? err.message : '（没抛错）'}，应包含 ${JSON.stringify(expect || '任何错误')}`);
     }
 
-    // ---------- 一、地址拼接（这次故障的真因）----------
     console.log('\n— 地址拼接 —');
     check('Anthropic 官方裸域名 → /v1/models（原来拼成 /models，404）',
         modelsEndpointFor('https://api.anthropic.com', 'anthropic'),
@@ -1023,8 +896,7 @@ async function caseModelList(c) {
         'https://api.openai.com/v1/models');
     throws('没填 Base URL → 明确报"请先填写"', () => modelsEndpointFor('', 'anthropic'), '请先填写');
 
-    // 核心不变量：模型列表地址必须和**对话**地址同源（只差最后一段）
-    // 破坏它就会出现"对话能通、获取模型 404"这种最费解的现象。
+    // 核心不变量：模型列表地址必须和对话地址同源（只差最后一段），否则"对话能通、获取模型 404"。
     console.log('\n— 不变量：与对话地址同源 —');
     async function chatEndpoint(baseUrl) {
         await callAnthropicChat([{ role: 'user', content: 'hi' }], {}, { apiKey: 'k', model: 'claude-sonnet-4-5', baseUrl });
@@ -1037,7 +909,6 @@ async function caseModelList(c) {
             chat.replace(/\/messages$/, '/models'));
     }
 
-    // ---------- 二、认证头与请求 ----------
     console.log('\n— 认证头 —');
     setGetResults([{ ok: true, status: 200, payload: { data: [{ id: 'claude-sonnet-4-5' }] } }]);
     await fetchModelList('https://api.anthropic.com', 'sk-ant-test', 'anthropic');
@@ -1053,7 +924,6 @@ async function caseModelList(c) {
     check('OpenAI 兼容不带 anthropic-version', 'anthropic-version' in lastGet().headers, false);
     check('OpenAI 兼容不加 limit 参数（不是所有服务都认）', lastGet().url, 'https://api.deepseek.com/models');
 
-    // ---------- 三、响应解析 ----------
     console.log('\n— 响应解析 —');
     check('Anthropic 的 data[].id（display_name 不参与取值）',
         parseModelList({ data: [
@@ -1072,7 +942,6 @@ async function caseModelList(c) {
     check('payload 为 null → 空数组', parseModelList(null), []);
     check('结果按字母序（下拉框里好找）', parseModelList({ data: [{ id: 'c' }, { id: 'a' }, { id: 'b' }] }), ['a', 'b', 'c']);
 
-    // ---------- 四、Anthropic 失败后退一步重试 ----------
     // 第三方中转（new-api 系）的 /v1/models 常常只认 Bearer，不认 x-api-key。
     console.log('\n— Anthropic 的认证降级 —');
     resetGetCalls();
@@ -1115,13 +984,11 @@ async function caseModelList(c) {
     check('网络层直接抛错时不重试（连不上，换条路也一样）', getCalls.length, 1);
     has('  原样把错误抛出去', thrown, 'Failed to fetch');
 
-    // 反向：OpenAI 系**不该**有第二次尝试
     resetGetCalls();
     setGetResults([{ ok: false, status: 401, payload: { error: { message: 'invalid key' } } }]);
     try { await fetchModelList('https://api.deepseek.com', 'bad', 'openai-compatible'); } catch {}
     check('OpenAI 系 401 只发 1 次（没有"换认证头"这条路）', getCalls.length, 1);
 
-    // ---------- 五、200 但空列表 ----------
     console.log('\n— 空列表 —');
     resetGetCalls();
     setGetResults([{ ok: true, status: 200, payload: { data: [] } }]);
@@ -1131,10 +998,7 @@ async function caseModelList(c) {
     has('  并给出实际请求的地址（便于用户自查）', empty, '/v1/models');
     check('  200 不该被当成"认证问题"去重试', getCalls.length, 1);
 
-    // ---------- 五之二、200 却拿回 HTML 首页（地址少版本段的典型症状）----------
-    // 真实故障：Base URL 填 `https://newapi.gay`（少 /v1）时，`/models` 打到了站点首页，
-    // 返回 200 + text/html。旧代码解析不出 data，报"可能该服务不支持 /models" ——
-    // 把人引向完全错误的方向（实测 /v1/models 才是真接口，只是缺 Key 才 401）。
+    // Base URL 少 /v1 时 /models 打到站点首页，返回 200 + text/html，解析不出 data 会报"可能不支持 /models"，把人引向错误方向。
     console.log('\n— 200 但返回 HTML（少版本段）—');
     resetGetCalls();
     setGetResults([{
@@ -1148,7 +1012,6 @@ async function caseModelList(c) {
     has('  并建议补上 /v1', htmlCase, '/v1');
     has('  且写出实际请求的地址', htmlCase, 'newapi.gay/models');
 
-    // 200 但返回的不是 JSON（非 HTML 的其它脏数据）
     resetGetCalls();
     setGetResults([{ ok: true, status: 200, payload: null, rawText: 'not json at all' }]);
     let badJson = null;
@@ -1156,159 +1019,23 @@ async function caseModelList(c) {
     has('200 + 非 JSON → 报"不是有效 JSON"并附原文开头', badJson, '不是有效 JSON');
     has('  原文开头被带出来（便于判断到底拿到了什么）', badJson, 'not json at all');
 
-    // ---------- 六、拉到列表之后要真的填进模型名输入框 ----------
-    // 真实故障：Anthropic 下「获取模型」能成功拉到列表，但**模型名输入框没被填上**，
-    // 于是下拉框出现了、真正发出去的却还是切格式时自动填的预设名（如
-    // `claude-sonnet-4-20250514`）—— 那个名字往往不在真实列表里，一对话就 404。
-    // 根因：populateModelSelect 只填了 <select>，从没给 <input> 赋值；
-    // 而 readProviderSettingsForm 读的是 **input** 的值。两者脱节，功能等于没生效。
-    // 为什么以前没被发现：本检查只覆盖了 fetchModelList / parseModelList（"能不能拉到"），
-    // 没有覆盖"拉到之后有没有回填"。
-    console.log('\n— 拉到列表后回填输入框 —');
-    // 各格式的预设模型名（与 index.html 的 CHAT_API_FORMATS 对应）
-    const PRESET_MODELS = ['deepseek-chat', 'gpt-4.1-mini', 'claude-sonnet-4-20250514'];
-
-    // 真实故障场景：Anthropic 切格式时自动填了预设名，而它不在真实列表里
-    {
-        const form = fakeForm('claude-sonnet-4-20250514');
-        setGetResults([{ ok: true, status: 200, payload: { data: [
-            { id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' },
-        ] } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://api.anthropic.com', apiKey: 'sk-ant-x', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        check('下拉框被填上了', form.options.map(o => o.value), ['claude-haiku-4-5', 'claude-opus-5']);
-        // ★ 2026-10 改判据：组合框改造后，候选**不再靠取消 select 的 hidden 来显示**
-        //   （select 退回纯数据源，可见的是右三角展开的浮层列表）。
-        //   所以这里断言的是"没有去动 hidden"—— 动了才说明旧的可视逻辑又回来了。
-        check('  候选进了数据源（不再把 select 显示出来）',
-            form.select.classList.removed.includes('hidden'), false);
-        check('输入框被覆盖成列表里的真实模型',
-            ['claude-haiku-4-5', 'claude-opus-5'].includes(form.input.value), true);
-        check('  不能还是那个不在列表里的预设名',
-            form.input.value === 'claude-sonnet-4-20250514', false);
-    }
-
-    // 用户手填的名字**在列表里**时不该被覆盖 —— 尊重用户的选择
-    {
-        const form = fakeForm('claude-opus-5');
-        setGetResults([{ ok: true, status: 200, payload: { data: [
-            { id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' },
-        ] } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://api.anthropic.com', apiKey: 'k', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        check('用户已填且存在于列表 → 保留用户的选择', form.input.value, 'claude-opus-5');
-        check('  下拉框同步选中该项', form.select.value, 'claude-opus-5');
-    }
-
-    // 用户手填的名字**不在列表里**、且不是预设值（中转站的私有别名）→ 不覆盖。
-    // 这是刻意与"预设名"区别对待的：预设名是应用自己填的，别名是用户故意填的。
-    {
-        const form = fakeForm('my-custom-alias');
-        setGetResults([{ ok: true, status: 200, payload: { data: [{ id: 'claude-opus-5' }] } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://newapi.gay', apiKey: 'k', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        check('用户手填的别名不在列表里 → 不覆盖输入框', form.input.value, 'my-custom-alias');
-        check('  下拉框选中列表第一项（点一下就能换过去）', form.select.value, 'claude-opus-5');
-    }
-
-    // 输入框为空时应该填上，否则"拉到了但没选"依然用不了
-    {
-        const form = fakeForm('');
-        setGetResults([{ ok: true, status: 200, payload: { data: [{ id: 'claude-opus-5' }] } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://api.anthropic.com', apiKey: 'k', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        check('输入框为空 → 填上列表第一项', form.input.value, 'claude-opus-5');
-    }
-
-    // 手动选下拉框时要同步进输入框（原有行为，别在修 bug 时弄丢）
-    {
-        const form = fakeForm('');
-        setGetResults([{ ok: true, status: 200, payload: { data: [{ id: 'a-model' }, { id: 'b-model' }] } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://api.anthropic.com', apiKey: 'k', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        form.select.value = 'b-model';
-        form.select.onchange();
-        check('手动选下拉框 → 同步进输入框', form.input.value, 'b-model');
-    }
-
-    // 边界：预设名**恰好有效**时必须保留，不能被换成列表第一项。
-    // 这是"预设名"与"真实列表"两个条件同时成立的情况 —— 判断顺序写反就会在这里翻车。
-    {
-        const form = fakeForm('claude-sonnet-4-20250514');
-        setGetResults([{ ok: true, status: 200, payload: { data: [
-            { id: 'claude-haiku-4-5' }, { id: 'claude-sonnet-4-20250514' },
-        ] } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://api.anthropic.com', apiKey: 'k', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        check('预设名恰好存在于列表 → 保留它（不越权换成第一项）',
-            form.input.value, 'claude-sonnet-4-20250514');
-        check('  下拉框同步选中该项', form.select.value, 'claude-sonnet-4-20250514');
-    }
-
-    // 失败时不能改动输入框，也不能让按钮卡在"获取中"
-    {
-        const form = fakeForm('keep-me');
-        setGetResults([{ ok: false, status: 401, payload: { error: { message: 'bad key' } } }]);
-        await populateModelSelect({
-            btn: form.btn, input: form.input, select: form.select,
-            baseUrl: 'https://api.anthropic.com', apiKey: 'bad', apiFormat: 'anthropic',
-            defaultModels: PRESET_MODELS,
-        });
-        check('失败时输入框原样不动', form.input.value, 'keep-me');
-        check('失败时按钮文案恢复', form.btn.textContent, '🔄 获取模型');
-        check('失败时给出提示', alertMessages.length > 0, true);
-    }
-
     void postCalls;
 }
 
-// 4. 思考参数的严格网关兼容（2026-09，实测 AMD Radeon 端点 400）
-// ── 背景 ────────────────────────────────────────────────────────────────
-// 用户实测：AMD 的 OpenAI 兼容端点对 `thinking` 字段回 400 ——
-//   "thinking" is not supported … Use "reasoning_effort"
-// 而同时发 thinking + reasoning_effort 还会被某些网关拒
-// （Roo-Code #11001：volcengine "Invalid combination"）。
-// GitHub 调研结论：没有哪个思考字段全网通用，成熟做法是
-// **先发 → 400 且报错点名参数 → 按点名剥参数重试**（hermes-agent #34786）。
-// ── 这里的兼容契约 ──────────────────────────────────────────────────────
-//   · 认 thinking 的网关（DeepSeek 官方/中转）→ 第一次就成功，行为不变
-//   · 不认的网关（AMD/OpenAI 官方）→ 第一次 400，自动剥掉被点名的参数重发，
-//     用户无感；报错点名 reasoning_effort 时只剥它
-//   · 其它 400（图片太大等）→ 不剥参数、照常抛错（剥了也解决不了）
-// 测试方式：按对话适配器检查的依赖注入套路，用假 fetch 真跑
-// callOpenAICompatibleChat，捕获每次请求体做断言。
+// 4. 思考参数的严格网关兼容
+// 没有哪个思考字段全网通用（参考 hermes-agent #34786）：先发 → 400 点名参数 → 按点名剥参数重试；
+// 认 thinking 的网关一次成功，不认的自动重发，其它 400 照常抛错。测试用假 fetch 真跑 callOpenAICompatibleChat。
 
 async function caseThinkingCompat(c) {
     const src = readFileSync(PROVIDERS_FILE, 'utf8');
 
-    // 整脚本装载 chat-providers.js，用它导出的公开函数单测（不再抠函数体）：
-    //   ChatProviders 里的 rejectedRequestParam / toToolCall / anthropicToolCalls
-    //   都是正式导出，测的就是线上那份。
+    // 整脚本装载 chat-providers.js，用它的正式导出单测：rejectedRequestParam / toToolCall / anthropicToolCalls。
     const cpSandbox = makeVmSandbox({ ChatDeps: null });
     runClassicScripts([PROVIDERS_FILE], cpSandbox);
     const ChatProviders = cpSandbox.ChatProviders;
     const rejectedRequestParam = ChatProviders.rejectedRequestParam;
     const { toToolCall, anthropicToolCalls } = ChatProviders;
 
-    // ---------- 单测 rejectedRequestParam ----------
     console.log('=== 1. rejectedRequestParam：从 400 里认出被拒参数 ===');
     {
         const amdPayload = {
@@ -1329,8 +1056,7 @@ async function caseThinkingCompat(c) {
             '★ 其它 400（图片类）→ null（不剥参数，照常抛错）');
         c.ok(rejectedRequestParam({ status: 500, rawText: 'thinking not supported' }) === null,
             '★ 非 400 → null（5xx 不是参数问题）');
-        // tools：gateway 拒工具声明时的三种常见措辞都要认出来（认不出就会当场抛错，
-        //   用户看到的是"对话服务请求失败"，而其实只是多带了一个字段）
+        // tools：gateway 拒工具声明时的三种常见措辞都要认出来，认不出会当场抛错成"对话服务请求失败"。
         c.ok(rejectedRequestParam({ status: 400, payload: { error: { message: 'Unrecognized request argument supplied: tools', param: 'tools' } } }) === 'tools',
             '★ OpenAI 官方措辞（Unrecognized request argument）→ tools');
         c.ok(rejectedRequestParam({ status: 400, rawText: 'Unsupported parameter: tools' }) === 'tools',
@@ -1339,7 +1065,6 @@ async function caseThinkingCompat(c) {
             '★ "tools ... not permitted" → tools');
         c.ok(rejectedRequestParam({ status: 400, rawText: 'invalid image size' }) === null,
             '★ 没点到 tools 的 400 → null（别把无关报错认成元凶）');
-        // 统一形状：arguments 是字符串、input 是对象，上层不该关心这个差别
         const oc = toToolCall('call_1', 'save_file', '{"path":"D:\\\\a.txt","content":"hi"}');
         c.ok(oc.args.path === 'D:\\a.txt' && oc.args.content === 'hi' && !oc.badArgs,
             '★ arguments 字符串被解析成对象（统一形状）', JSON.stringify(oc));
@@ -1350,12 +1075,8 @@ async function caseThinkingCompat(c) {
             'anthropic 的 tool_use block → 同一形状（input 本就是对象）');
     }
 
-    // ---------- 集成：真跑 callOpenAICompatibleChat ----------
     console.log('\n=== 2. 集成：假网关真跑，看降级重试 ===');
-    // chat-providers.js 是普通 <script>，靠 window.ChatDeps 取依赖。
-    // 上面的 cpSandbox 就是它的 window：场景之间只换 cpSandbox.ChatDeps。
-    // ⚠️ 用**局部** window 而不是 globalThis.window：每个用例跑在同一进程里，
-    //    往全局挂 window 会与其它用例互相覆盖。
+    // chat-providers.js 是普通 <script>，靠 window.ChatDeps 取依赖；用局部 window 避免与同进程其它用例互相覆盖。
     const win = cpSandbox;
 
     // requestChatJson 的最小假实现：记录请求体，按脚本决定返回
@@ -1403,12 +1124,8 @@ async function caseThinkingCompat(c) {
     };
     const opts = { thinking: false, thinkingEffort: 'medium', maxTokens: 100 };
 
-    // 场景 A：AMD 式网关 —— 带 thinking 字段就 400，剥掉就 200。
-    // ★ 模型名故意用 deepseek-v4-pro：让 vendor 判定走"模型名兜底"变成
-    //   deepseek（真实场景 —— 用户在 AMD 网关上跑 DeepSeek 模型，或中转站
-    //   包着 DeepSeek）。这才能测到**降级路径**：第一次带 thinking 被 400，
-    //   剥掉后重试成功。若是普通模型名，core.js 的修复已经不发 thinking
-    //   （那也是一条已验证的正确路径 —— 场景 A 的第一次请求断言就是它）。
+    // 场景 A：AMD 式网关——带 thinking 字段就 400，剥掉就 200；模型名故意用 deepseek-v4-pro，
+    // 让 vendor 判定走"模型名兜底"变成 deepseek，才能测到降级路径（第一次 400，剥掉重试成功）。
     {
         const captured = [];
         const amd = makeDeps(null, captured);
@@ -1437,8 +1154,7 @@ async function caseThinkingCompat(c) {
             '重试请求其余字段原样保留（messages/max_tokens 不丢）');
     }
 
-    // 场景 A2：AMD 网关 + 普通模型（vendor=generic）—— 现在也带 thinking 字段
-    // （设计定稿：一律发，兼容靠 400 降级），但会通过 AMD 的 400 触发降级后成功。
+    // 场景 A2：AMD 网关 + 普通模型（vendor=generic）：一律发 thinking，靠 400 降级后成功。
     {
         const captured = [];
         const amd = makeDeps(null, captured);
@@ -1459,7 +1175,6 @@ async function caseThinkingCompat(c) {
             JSON.stringify(captured[0]?.body.thinking));
     }
 
-    // 场景 B：DeepSeek 官方 —— 第一次就成功，thinking 字段照发（关闭态必须 disabled）
     {
         const captured = [];
         const ds = makeDeps(null, captured);
@@ -1479,7 +1194,6 @@ async function caseThinkingCompat(c) {
             JSON.stringify(captured[0].body.thinking));
     }
 
-    // 场景 C：其它 400（剥参数解决不了）→ 不重试，直接抛
     {
         const captured = [];
         const img = makeDeps(null, captured);
@@ -1498,7 +1212,6 @@ async function caseThinkingCompat(c) {
         c.ok(captured.length === 1, '★ 不做无意义的重试（剥图片参数解决不了问题）', String(captured.length));
     }
 
-    // ---------- 源码层：warn 一行是英文事实行 ----------
     console.log('\n=== 3. 降级时有日志痕迹 ===');
     {
         c.ok(/\[Provider\] gateway rejected "\$\{param\}"/.test(src),
@@ -1507,26 +1220,18 @@ async function caseThinkingCompat(c) {
 }
 
 // 5. 发给服务商之前，开头连续的 system 消息必须被合并成一条
-// 背景（真实故障）：某些自建/中转网关**只接受一条 system 消息**。实测
-// `developer.amd.com.cn` 的 `self-dploy` 后端：
-//   [system, user]          → 200
-//   [system, system, user]  → 400 "System message must be at the beginning."
-// 报错文案有误导性 —— 它说的其实是"system 消息只能有一条，不能有第二条"。
-// 而本应用的 layered-v2 提示词结构一次会发 4~10 条 system（核心协议 / 世界观 / 角色卡 /
-// Live2D 标签 / 会话设定 / 记忆规则 / 图片一致性 / 配音格式 / 回合锚点 / 模型可用表现 /
-// 水印 / Agent 权限），在这类网关上一个字都发不出去。
-// 做法：把 index.html 里的真实函数体抠出来跑，不复制逻辑、不联网。
+// 某些网关只接受一条 system：多条时回 400 "System message must be at the beginning."。
+// 本应用的 layered-v2 提示词一次发 4~10 条 system，在这类网关上一个字都发不出去。
+// 做法：抠出真实函数体跑，不复制逻辑、不联网。
 
 async function caseMessageShape(c) {
-    // 装 core.js 的整个顶层函数环境（extractTextContent 等 helper 自动在场），
-    //   不再只抠 mergeLeadingSystemMessages 一个函数。
+    // 装 core.js 的整个顶层函数环境（extractTextContent 等 helper 自动在场），不只抠一个函数。
     const coreMsgSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
     const msgSandbox = makeVmSandbox({});
     vm.runInContext(extractTopLevelFunctions(coreMsgSrc), msgSandbox, { filename: 'core.js#messages-env' });
     const mergeLeadingSystemMessages = msgSandbox.mergeLeadingSystemMessages;
 
-    // 断言适配器：原脚本的 check(label, actual, expected) 双参风格，语义照抄
     function check(label, actual, expected) {
         const a = JSON.stringify(actual);
         const b = JSON.stringify(expected);
@@ -1539,14 +1244,12 @@ async function caseMessageShape(c) {
     const A = (s) => ({ role: 'assistant', content: s });
     const roles = (ms) => ms.map((m) => m.role);
 
-    // —— 不该动的情况 ——
     check('空数组原样返回', mergeLeadingSystemMessages([]), []);
     check('单条 system 不合并', roles(mergeLeadingSystemMessages([S('a'), U('x')])), ['system', 'user']);
     check('没有 system 时不动', roles(mergeLeadingSystemMessages([U('x'), A('y')])), ['user', 'assistant']);
     check('只有 user 时不动', roles(mergeLeadingSystemMessages([U('x')])), ['user']);
     check('非数组入参不炸', mergeLeadingSystemMessages(null), []);
 
-    // —— 该合并的情况（核心修复）——
     const many = [S('核心协议'), S('# 世界观\n魔法世界'), S('# 角色卡\n伊蕾娜'), S('# Live2D 标签'), U('你好'), A('你好呀'), U('只回复OK')];
     const merged = mergeLeadingSystemMessages(many);
     check('8 条 system + 历史 → 只剩 1 条 system', roles(merged), ['system', 'user', 'assistant', 'user']);
@@ -1554,7 +1257,6 @@ async function caseMessageShape(c) {
     check('内容一条不少（空行分隔）', merged[0].content, '核心协议\n\n# 世界观\n魔法世界\n\n# 角色卡\n伊蕾娜\n\n# Live2D 标签');
     check('历史消息未被改动', merged.slice(1), [U('你好'), A('你好呀'), U('只回复OK')]);
 
-    // —— 边界 ——
     const withEmpty = mergeLeadingSystemMessages([S('a'), S('   '), S('b'), U('x')]);
     check('空白的 system 被过滤掉', withEmpty[0].content, 'a\n\nb');
     check('全是空白 system → 合成空串仍占一条（不产生 0 条 system 的怪状态）', roles(mergeLeadingSystemMessages([S(''), S(''), U('x')])), ['system', 'user']);
@@ -1562,11 +1264,9 @@ async function caseMessageShape(c) {
     const arrayContent = mergeLeadingSystemMessages([S([{ type: 'text', text: '甲' }, { type: 'text', text: '乙' }]), S('丙'), U('x')]);
     check('数组形式的 system 内容也能拍平', arrayContent[0].content, '甲乙\n\n丙');
 
-    // —— 关键：中间的 system 不该被这里掩盖（那是另一种错误，要留给服务商报出来）——
     const middleSystem = [U('x'), S('s'), U('y')];
     check('system 在中间时不动它（不掩盖别的错误）', roles(mergeLeadingSystemMessages(middleSystem)), ['user', 'system', 'user']);
 
-    // —— 模拟真实分层结构：12 条 system ——
     const layered = [
         S('核心协议'), S('世界观'), S('角色卡'), S('Live2D 标签指南'), S('会话专属设定'), S('记忆规则'),
         S('图片一致性'), S('配音格式'), S('回合锚点'), S('模型可用表现'), S('水印提示'), S('Agent 权限'),
@@ -1579,24 +1279,13 @@ async function caseMessageShape(c) {
     check('真实分层结构：每段内容都还在', layered.every((m) => m.role !== 'system' || layeredMerged[0].content.includes(m.content)), true);
 }
 
-// 6. 授权策略三档 + 聊天停止按钮
-// 两项用户反馈：
-//   1. 手机操作授权「每次运行只确认一次」并设为默认
-//   2. 聊天发送按钮二态（AI 回复中变红色停止）+ 请求可中断
-// 注：原先的 Edge TTS 一节已随 Edge TTS provider 一起删除 —— 它断言的
-// `speakTextEdge` / `#settingEdgeTtsVoice` / `/api/tts/edge` 都已不存在。
-// 现在 TTS 默认走 MiMo（见前端 DOM 引用检查与前端源码）。
+// 6. 授权策略三档 + 聊天停止按钮：覆盖手机操作授权的默认值与发送按钮二态（回复中变红色停止）+ 请求可中断；
+// TTS 默认走 MiMo（见前端 DOM 引用检查与前端源码）。
 
 async function caseStopAndAuth(c) {
     const html = readFrontend();
     const providers = readFileSync(PROVIDERS_FILE, 'utf8');
 
-    // ============================================================ 1. 授权策略
-    // ★★ 2026-10 权限模型重构：这一节原来验证的是**旧的四档手机策略**
-    //   （once / run / always / off 的 UI、默认值与豁免语义）。那套已整体删除，
-    //   改成一个三档设置 agentAccess（strict / auto / full）同时管电脑与手机。
-    //   所以本节改为断言新模型的三件事：UI 三档齐全、默认最严、迁移向宽松倒。
-    //   三档的**运行时行为**由 AI Agent 检查（check-agent.mjs）覆盖（那里跑真实函数）。
     console.log('=== 1. 授权策略：三档 agentAccess ===');
     {
         for (const v of ['strict', 'auto', 'full']) {
@@ -1607,21 +1296,15 @@ async function caseStopAndAuth(c) {
         c.ok(!/name="agentPermission"/.test(html), '★ 旧的 agentPermission UI 已彻底移除');
         c.ok(/\['strict', 'auto', 'full'\]\.includes\(state\.settings\.agentAccess\)/.test(html)
             || /\['strict', 'auto', 'full'\]/.test(html)
-            // ★ 2026-10 修：这条断言原来只认三档字面量 `['strict','auto','full']`，
-            //   而档位后来加了 `'off'`（整体关闭电脑操作）——
-            //   于是代码里的 `['off','strict','auto','full']` **匹配不上**，
-            //   这条断言就一直红着。红的原因是"清单多了一档"，不是"校验没了"，
-            //   属于判据过窄（钉死了字面量而不是钉住语义）。
-            //   这里放宽成"三档都在合法性清单里"，off 有它自己的断言（见下）。
+            // 判据放宽为"三档都在合法性清单里"，而不是钉死字面量数组（档位可能增加）。
             || /\['off',\s*'strict',\s*'auto',\s*'full'\]/.test(html)
             || /AGENT_ACCESS_LEVELS\s*=\s*\[[^\]]*'strict'[^\]]*'auto'[^\]]*'full'/.test(html),
             '合法性校验包含三档');
-        // ★ 反过来钉住"off 也在清单里"：它是合法档位（关闭电脑操作），
-        //   但不能因此把三档的校验悄悄缩水成"只要不是空就行"。
+        // ★ off 也是合法档位（关闭电脑操作），但三档校验不能因此缩水成"非空即可"。
         c.ok(/\['off',\s*'strict',\s*'auto',\s*'full'\]/.test(html)
             || /AGENT_ACCESS_LEVELS\s*=\s*\[[^\]]*'off'/.test(html),
             '★ off 也是合法档位（整体关闭电脑操作）');
-        // 迁移取向：用户选的是"向宽松倒"——旧 computer → full
+        // 迁移：computer → full
         c.ok(/legacyPermission === 'computer'\) \? 'full' : 'strict'/.test(html),
             '★ 迁移：旧 computer → full（用户选择的向宽松倒）');
         c.ok(/delete state\.settings\.agentPermission/.test(html)
@@ -1633,7 +1316,6 @@ async function caseStopAndAuth(c) {
         c.ok(/不会询问你/.test(html), '★ 后果说明里点明"这些操作都不会再询问你"');
     }
 
-    // ============================================================ 2. 停止按钮 + 可中断
     console.log('\n=== 2. 聊天停止按钮 ===');
     {
         c.ok(/onclick="handleComposerButtonClick\(\)"/.test(html), '发送按钮走统一入口（不再直连 handleTextSubmit）');
@@ -1653,18 +1335,14 @@ async function caseStopAndAuth(c) {
         c.ok(/function swapStopIcons/.test(html), 'swapStopIcons 切换图标');
         c.ok(/is-stopping/.test(html), '有 is-stopping 样式类');
         c.ok(!/#ef4444 !important/.test(html), '停止态不做红色突跳（颜色统一，DSH 式）');
-        // 设置迁移：★ 2026-10 起旧的两套设置（agentPermission / agentApproval）
-        // 合并成三档 agentAccess，所以这里断言的是**新的**迁移逻辑。
+        // 设置迁移：两套旧设置（agentPermission / agentApproval）已合并成三档 agentAccess。
         c.ok(/settingsVersion/.test(html), '有 settingsVersion 迁移标记');
         c.ok(/legacyPermission === 'computer'\) \? 'full' : 'strict'/.test(html),
             '迁移逻辑：旧 computer → full，其余 → strict');
-        // busy 时按钮可见
         c.ok(/busy \|\| Boolean\(elements\.initialTextInput\.value\.trim\(\)\)/.test(html), 'busy 时按钮强制可见');
-        // 停止时安静收尾
         c.ok(/回复已被用户停止，安静收尾/.test(html), '停止后不弹错误框');
         c.ok(/stopActiveVoicePlayback\(\)/.test(html.replace(/async function stopActiveVoicePlayback[\s\S]*?\n        \}/, '')) ||
            /void stopActiveVoicePlayback\(\);/.test(html), '停止时同步停掉语音');
-        // providers 透传
         c.ok((providers.match(/opts\.signal/g) || []).length >= 3, '三种协议都透传 signal');
     }
 }
@@ -1688,4 +1366,3 @@ await runChecks({
 });
 
 void wait; void freePort;
-

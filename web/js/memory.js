@@ -1,12 +1,5 @@
-/* ============================================================================
- * 记忆核心（从 data.js 拆出）
- *
- * 记忆 JSON / 日记 / 提示词格式化 / 召回评分 / 摘要提取与整合。
- * 依赖 Store、会话与 AI 请求（运行时才调用）。
- * ========================================================================== */
+// 记忆核心：记忆 JSON / 日记 / 提示词格式化 / 召回评分 / 摘要提取与整合。依赖 Store、会话与 AI 请求（运行时才调用）。
 'use strict';
-
-// ==================== 记忆核心 ====================
 
 const MEMORY_DAYS = 7;
 const MEMORY_SUMMARY_LENGTH = 80;
@@ -310,7 +303,6 @@ function getRelatedMemories(userText) {
 function extractJsonFromText(text) {
     const raw = String(text || '').trim();
     if (!raw) return null;
-    // 剥离 markdown 代码块围栏
     let t = raw.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
     try {
         const direct = JSON.parse(t);
@@ -364,7 +356,6 @@ function tryRepairJson(s) {
     let cur = String(s || '').trim();
     for (let i = 0; i < 8; i++) {
         try { return JSON.parse(cur); } catch (e) { /* continue */ }
-        // 补闭合花括号
         const opens = (cur.match(/\{/g) || []).length;
         const closes = (cur.match(/\}/g) || []).length;
         if (opens > closes) {
@@ -404,19 +395,8 @@ function saveMemoryCoreFromSummary(summary, { mergeDiary = false, preserveEmptyL
     if (!state.memoryCore) state.memoryCore = emptyMemoryCore();
     const mc = state.memoryCore;
     if (Array.isArray(summary.diary)) {
-        // 日记的合并键是「对话 + 日期」，不能只用「日期」。
-        //   只按日期归档（`existingMap[e.date] = e`）会让**同一天在不同对话里
-        //   发生的事互相覆盖**：用户开 5 段对话、每段都做过记忆整理，那天就只剩
-        //   最后一段的日记，前四段被悄悄抹掉。日记条目本来就带 conversationId /
-        //   conversationTitle（见下面的 meta），归档时却没用上它。
-        //   键 = `${conversationId}|${date}`，于是：
-        //     · 同一段对话、同一天：仍然合并（重跑记忆整理不会产生重复条目）
-        //     · 不同对话、同一天：各自一条，互不打扰
-        //  ── 老数据怎么办 ────────────────────────────────────────────────
-        //   老条目没有 conversationId，键会是 `|日期`。
-        //   这里**不迁移、不猜**：没有对话归属的条目就让它按 `|日期` 归组，
-        //   它仍是可见的一条日记，只是不参与任何对话的分组。
-        //   猜一个 conversationId 给它反而会把内容挂到错误的对话上。
+        // 日记的合并键是「对话 + 日期」，不能只用「日期」：只按日期归档（`existingMap[e.date] = e`）会让**同一天在不同对话里发生的事互相覆盖** —— 用户开 5 段对话、每段都做过记忆整理，那天就只剩最后一段的日记，前四段被悄悄抹掉，而条目本来就带 conversationId / conversationTitle（见下面的 meta），归档时却没用上它。
+        // 键 = `${conversationId}|${date}`：同一段对话、同一天仍然合并（重跑记忆整理不会产生重复条目），不同对话、同一天各自一条、互不打扰；没有 conversationId 的条目按 `|日期` 归组，这里**不猜也不改写** —— 它仍是可见的一条日记，只是不参与任何对话的分组，猜一个归属反而会把内容挂到错误的对话上。
         const diaryKey = (convId, date) => String(convId || '') + '|' + String(date || '');
 
         const existingMap = {};
@@ -427,9 +407,7 @@ function saveMemoryCoreFromSummary(summary, { mergeDiary = false, preserveEmptyL
                 const newContent = cleanMemoryPromptText(e.content, 4000);
                 const newEssences = normalizeMemoryStringList(e.essences, 12, 60);
                 if (!date || !newContent) return;
-                // 先把归属定下来再取键 —— 顺序反了会退化成"总是新建一条"
-                //   （拿 `e.conversationId` 去查，而 summary 里常常没有它，
-                //    真正有值的是 sourceMeta）。
+                // 先把归属定下来再取键 —— 顺序反了会退化成"总是新建一条"（拿 `e.conversationId` 去查，而 summary 里常常没有它，真正有值的是 sourceMeta）。
                 const conversationId = e.conversationId || (sourceMeta && sourceMeta.conversationId) || null;
                 const key = diaryKey(conversationId, date);
                 const existing = existingMap[key];
@@ -629,8 +607,7 @@ async function requestMemorySummary(convId) {
 }
 
 function setManualMemoryUi(running) {
-    // memoryNowBtn 是「设置 → 记忆」里那个手动按钮—— 与顶栏的
-    //   「整理记忆」是同一个动作，运行中也该一起置灰/显示状态。
+    // memoryNowBtn 是「设置 → 记忆」里那个手动按钮 —— 与顶栏的「整理记忆」是同一个动作，运行中也该一起置灰/显示状态。
     [elements.memoryBtn, elements.memoryNowBtn, elements.initialComposerMemoryBtn, elements.composerMemoryBtn].filter(Boolean).forEach(button => {
         button.disabled = running;
         button.classList.toggle('opacity-60', running);
@@ -641,10 +618,4 @@ function setManualMemoryUi(running) {
     elements.initialComposerMemoryStatus?.classList.toggle('hidden', !running);
     elements.composerMemoryStatus?.classList.toggle('hidden', !running);
 }
-
-//  用户资料：称呼 + 头像（用户自填） / AI 印象（AI 写，用户不可编辑）
-//  为什么印象只许 AI 写：用户的自我描述会变成提示词的一部分，
-//    模型会顺着它演（用户说"我很温柔"它就一直夸温柔）—— 印象由
-//    AI 在对话后自己写下，回答才反映真实的相处，而不是用户的人设。
-
 

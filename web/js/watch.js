@@ -1,12 +1,7 @@
-/* ============================================================================
- * 副屏监视窗（从 settings.js 拆出）
- *
- * 副屏画面刷新 / 自动轮询 / 启停与日志。依赖原生 ElainaDevice。
- * ========================================================================== */
+/* 副屏监视窗：副屏画面刷新 / 自动轮询 / 启停与日志。依赖原生 ElainaDevice。 */
 "use strict";
 
-// ==================== 副屏监视窗 ====================
-// AI 用「模块」后端时在**独立虚拟副屏**上跑，物理主屏看不到；这个窗口把画面搬进应用。
+// AI 用「模块」后端时在独立虚拟副屏上跑，物理主屏看不到；这个窗口把画面搬进应用。
 // 不做成 iframe 套模块的 3070 网页面板：那等于把浏览器塞进应用，风格割裂，还有滚动/缩放两套坐标系。
 const SCREEN_WATCH_INTERVAL = 1500;   // 自动刷新间隔（模块出帧约 18ms，1.5s 足够跟手）
 let screenWatchTimer = null;
@@ -54,14 +49,14 @@ async function screenWatchRefresh() {
             // 明确区分"没有画面"和"模块不可用" —— 前者要引导启动副屏，后者要引导刷模块
             if (res && res.reason === 'no-frame') {
                 if (meta) meta.textContent = '副屏无画面';
-                if (dot) dot.style.background = '#fbbf24';
+                if (dot) dot.style.background = 'var(--rd-warn)';
                 if (empty) empty.classList.remove('hidden');
                 if (img) img.classList.add('hidden');
                 const hint = screenWatchEl('screenWatchEmptyHint');
                 if (hint) hint.textContent = '副屏是空的（只有壁纸）。让 AI 先执行一次「手机打开 某应用」。';
             } else {
                 if (meta) meta.textContent = '模块不可用';
-                if (dot) dot.style.background = '#f87171';
+                if (dot) dot.style.background = 'var(--rd-danger)';
                 if (empty) empty.classList.remove('hidden');
                 if (img) img.classList.add('hidden');
                 const hint = screenWatchEl('screenWatchEmptyHint');
@@ -83,7 +78,7 @@ async function screenWatchRefresh() {
             }
         }
         const running = String(res.status || '') === 'running';
-        if (dot) dot.style.background = running ? '#34d399' : '#fbbf24';
+        if (dot) dot.style.background = running ? 'var(--rd-ok)' : 'var(--rd-warn)';
         if (meta) {
             meta.textContent = running
                 ? ('运行中 · Display ' + res.displayId + ' · ' + res.width + '×' + res.height)
@@ -114,14 +109,13 @@ function openScreenWatch() {
     // 所以打开监视窗前先把设置关掉 —— 否则两层的先后就落在 DOM 顺序上，
     // 变成"有时监视窗在下层"的不可控行为。
     if (typeof closeSettingsPanel === 'function') closeSettingsPanel();
-    panel.classList.remove('hidden');
-    panel.classList.add('flex');
+    openOverlayPanel(panel);
     void screenWatchRefresh();
     screenWatchStartAuto();
 }
 function closeScreenWatch() {
     const panel = screenWatchEl('screenWatchPanel');
-    if (panel) { panel.classList.add('hidden'); panel.classList.remove('flex'); }
+    closeOverlayPanel(panel);
     screenWatchStopAuto();
 }
 

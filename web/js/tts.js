@@ -1,12 +1,5 @@
-/* ============================================================================
- * TTS 语音合成（从 voice.js 拆出）
- *
- * 音频上下文 / 缓存 / 能量条 / MiMo / OpenAI / MiniMax / DashScope / speakText。
- * 依赖会话状态与语音播放（运行时才调用）。
- * ========================================================================== */
+// TTS 语音合成：音频上下文 / 缓存 / 能量条 / MiMo / OpenAI / MiniMax / DashScope / speakText。依赖会话状态与语音播放（运行时才调用）。
 'use strict';
-
-// ==================== TTS ====================
 
 let _audioContext = null;
 function getAudioContext() {
@@ -21,20 +14,12 @@ function getAudioContext() {
     return _audioContext;
 }
 
-// ── TTS 音频缓存：**纯内存 LRU，上限 5 条**─────────────────
-// 之前是 IndexedDB（硬盘）缓存 80 条。改为内存缓存的两个理由：
-//   · 语音聊天音频属于"听过就没用"的一次性数据，没理由常驻硬盘；
-//     且 IndexedDB 挂在浏览器 profile 上，"删除 data/ 清数据"根本清不到它。
-//   · 上限 5 条足以覆盖"重听最近几条消息"的场景；被挤出缓存的音频
-//     下次播放时走未命中路径重新调用 TTS API 生成（speakTextXxx 里的既有逻辑）。
-// LRU 语义：命中/写入都把 key 移到 Map 末尾（Map 迭代按插入序），
-// 超限时从头部淘汰最久未使用的条目。
+// TTS 音频缓存：纯内存 LRU，上限 TTS_MEMORY_LIMIT 条。语音是"听过就没用"的一次性数据，IndexedDB 又挂在浏览器 profile 上（"删除 data/ 清数据"清不到它）；命中/写入都把 key 移到 Map 末尾，超限时从头部淘汰最久未使用的条目。
 const TTS_MEMORY_LIMIT = 5;
 const activeTtsTasks = new Map();
 const ttsMemoryCache = new Map();
 
-// 一次性清理：老版本留在 IndexedDB 里的缓存库已废弃，删掉释放硬盘空间。
-// deleteDatabase 对不存在的库是空操作，重复执行无害（幂等）。
+// 释放硬盘空间：IndexedDB 缓存库没有读写方，deleteDatabase 对不存在的库是空操作，重复执行无害（幂等）。
 try {
     if ('indexedDB' in window) indexedDB.deleteDatabase('elaina_open_tts_cache_v1');
 } catch { /* 清不掉也不影响新缓存工作 */ }
@@ -60,7 +45,7 @@ function buildMessageTtsCacheKey(message, spokenText, conversationId = state.cur
         ].join('|');
     } else if (provider === 'mimo') {
         const mimoModel = String(state.settings.mimoTtsModel || 'mimo-v2.5-tts');
-        // v2.5 的音色来源随模型变化，必须进指纹 —— 否则换了参考样本/描述仍命中旧缓存
+        // 音色来源随模型变化，必须进指纹 —— 否则换了参考样本/描述仍会命中同一条缓存
         let voiceToken;
         if (mimoModel === 'mimo-v2.5-tts-voiceclone') {
             // 样本是长 base64，指纹只取"文件名 + 长度"这种轻量信息（换样本即变）
@@ -124,17 +109,7 @@ async function saveCachedTtsAudio(key, pcmBuffer, sampleRate, format = 'pcm') {
     }
 }
 
-// 真实语音音量 → Live2D 嘴型（VAD 简化）：播放 TTS 时分析音量驱动模型说话
-// 宿主只负责**报出音量**，谁需要谁订阅（`ElainaMods.on('voice-energy', …)`）。
-//   旧写法是这里直接调 Live2D 插件的音量接口 —— 于是"音量"这条
-//   通道把宿主和 Live2D 拴死了：Live2D 一旦变成可装的 mod（默认关闭），
-//   宿主这句调用就会在它没装/没启用时变成空转，而"没装"与"装了但没声音"
-//   从代码上分不出来。
-//   改成事件之后有两个实际好处：
-//     · 没人听就**不建分析器、不跑逐帧循环** —— 省掉未启用 Live2D 时
-//       每次 TTS 播放的 requestAnimationFrame 开销
-//     · 订阅者的生命周期由 mod 系统统一管：mod 被停用时订阅会被摘掉
-//       （见 mods.js「注册即副作用」），不会再出现"插件关了还在驱动口型"
+// 真实语音音量 → Live2D 嘴型（VAD 简化）：宿主只负责**报出音量**，谁需要谁订阅（`ElainaMods.on('voice-energy', …)`）；直接调 Live2D 插件的音量接口会把宿主和可选 mod 拴死，改成事件后没人听就不建分析器、订阅者的生命周期也归 mod 系统管。
 function voiceEnergyWanted() {
     try {
         return !!(window.ElainaMods
@@ -219,33 +194,20 @@ async function playCachedPcm(record, onStart, onEnd, session) {
 }
 
 
-// ==================== MiMo TTS（小米，OpenAI 兼容） ====================
-// 认证头同样是 `api-key`，但**凭据与 ASR 各自独立**（TTS 用 settings.mimoTtsApiKey /
-// settings.mimoTtsBaseUrl；ASR 用 settings.mimoApiKey / settings.mimoBaseUrl）。
-//   · **要朗读的文本放在 assistant 消息里**
-//   · 请求体加 audio: { format: 'wav', ... }
-//   · 响应 choices[0].message.audio.data 是 base64 的 wav 音频
-// 三个模型（v2.5 系列）字段不同，见下：
-//   · mimo-v2.5-tts            → audio.voice = 预置 Voice ID，user 消息可选
-//   · mimo-v2.5-tts-voicedesign → user 消息 = 音色描述（必填），**不支持 voice 字段**
-//   · mimo-v2.5-tts-voiceclone  → audio.voice = 参考音频样本的 base64 data URL（必填），不支持预置音色
-// 它是**付费 API Key** 服务商，没有 Key 就不能用（与免配置的浏览器内置语音不同）。
+// MiMo TTS（小米，OpenAI 兼容）——付费 API Key 服务商，没有 Key 就不能用（与免配置的浏览器内置语音不同）：认证头是 `api-key`，但**凭据与 ASR 各自独立**（TTS 用 settings.mimoTtsApiKey / settings.mimoTtsBaseUrl；ASR 用 settings.mimoApiKey / settings.mimoBaseUrl）。
+// 协议：**要朗读的文本放在 assistant 消息里**，请求体加 audio: { format: 'wav', ... }，响应 choices[0].message.audio.data 是 base64 的 wav 音频；mimo-v2.5-tts → audio.voice = 预置 Voice ID（user 消息可选），mimo-v2.5-tts-voicedesign → user 消息 = 音色描述（必填）、**不支持 voice 字段**，mimo-v2.5-tts-voiceclone → audio.voice = 参考音频样本的 base64 data URL（必填）、不支持预置音色。
 
 async function generateMimoTtsAudio(text, settings = state.settings) {
     const mimoApiKey = String(settings.mimoTtsApiKey || '').trim();
     if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写小米 MiMo TTS API Key');
     const baseUrl = String(settings.mimoTtsBaseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
     const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim() || 'mimo-v2.5-tts';
-    // voiceclone 但还没有样本时，先补上**软件自带**的那段伊蕾娜日语样本
-    //   —— 用户可能压根没打开过设置页，直接在输入框按朗读也会走到这里。
-    //   settings 有可能是设置页的**草稿对象**（见 testTtsConnection），补完要同步过去，
-    //   否则本次请求读到的仍是空样本。
+    // voiceclone 但还没有样本时，先补上软件自带的伊蕾娜日语样本；settings 可能是设置页的**草稿对象**（见 testTtsConnection），补完要同步过去，否则本次请求读到的仍是空样本。
     if (model === 'mimo-v2.5-tts-voiceclone' && !String(settings.mimoTtsCloneSample || '').trim()) {
         await ensureBuiltinMimoCloneSample();
         settings.mimoTtsCloneSample = state.settings.mimoTtsCloneSample;
         settings.mimoTtsCloneSampleName = state.settings.mimoTtsCloneSampleName;
     }
-    // 要朗读的文本必须放在 assistant 角色里
     const assistantMessage = { role: 'assistant', content: text };
     const audio = { format: 'wav' };
     let messages;
@@ -319,11 +281,7 @@ async function speakTextMimo(text, onStart, options = {}) {
     }
 }
 
-// ==================== 通用 OpenAI TTS ====================
-// 标准 OpenAI 语音接口：POST {base}/audio/speech + Bearer 认证，请求体
-// { model, input, voice, response_format: 'mp3' }，响应是**二进制 mp3**（不是 JSON）。
-// 直接读 arrayBuffer 交给播放器 —— 与 MiniMax 返回的 { bytes, format } 形状一致。
-
+// 通用 OpenAI TTS：POST {base}/audio/speech + Bearer，请求体 { model, input, voice, response_format: 'mp3' }，响应是**二进制 mp3**；直接读 arrayBuffer 交给播放器（与 MiniMax 的 { bytes, format } 形状一致）。
 async function generateOpenaiTtsAudio(text, settings = state.settings) {
     const apiKey = String(settings.openaiTtsApiKey || '').trim();
     if (!apiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写通用 OpenAI TTS 的 API Key');
@@ -347,7 +305,6 @@ async function generateOpenaiTtsAudio(text, settings = state.settings) {
         throw new ClientApiError('UPSTREAM_UNAVAILABLE',
             `通用 OpenAI TTS 失败（HTTP ${response.status}）` + (detail ? `：${detail}` : ''));
     }
-    // 二进制音频：读成 ArrayBuffer 直接交给播放器解码（无需再走 Blob → objectURL 一步）
     const bytes = await response.arrayBuffer();
     if (!bytes || bytes.byteLength < 200) {
         throw new ClientApiError('UPSTREAM_UNAVAILABLE', '通用 OpenAI TTS 返回了空音频');
@@ -541,8 +498,7 @@ if ('speechSynthesis' in window) {
 function sanitizeTtsText(text, stripKana = false) {
     let t = String(text || '').trim();
 
-    // Parenthesized/bracketed passages are stage directions for display only.
-    // Repeat a few times so simple nested brackets are removed as one block.
+    // Bracketed passages are stage directions for display only; repeat so nested brackets collapse as one block.
     for (let i = 0; i < 4; i++) {
         const next = t.replace(/（[^（）]*）|\([^()]*\)|【[^【】]*】|\[[^\[\]]*\]/g, ' ');
         if (next === t) break;

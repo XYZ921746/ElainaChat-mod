@@ -1,9 +1,4 @@
-/* ============================================================================
- * 对话 API：错误归一化、端点判定、思考参数（从 core.js 拆出）
- *
- * ClientApiError / 错误文案 / getChatBaseUrl / isDeepSeekOfficial / 思考四档与
- * buildThinkingParams。纯函数与常量，无 DOM / 网络副作用。
- * ========================================================================== */
+// 对话 API：错误归一化、端点判定、思考参数（ClientApiError / 错误文案 / getChatBaseUrl / isDeepSeekOfficial / 思考四档与 buildThinkingParams）。纯函数与常量，无 DOM / 网络副作用。
 'use strict';
 
 class ClientApiError extends Error {
@@ -13,8 +8,7 @@ class ClientApiError extends Error {
         this.code = code || 'UNKNOWN_ERROR';
         this.status = Number(options.status || 0);
         this.retryable = Boolean(options.retryable);
-        // 本次请求是否真的带了图片。只用来决定报错时要不要提"图片转述"——
-        // 只在真的带过图时才提图片原因 —— 无条件提会误导没发图的用户。
+        // 本次请求是否真的带了图片，只用来决定报错时要不要提"图片转述"——无条件提会误导没发图的用户。
         this.imageHint = Boolean(options.imageHint);
     }
 }
@@ -39,8 +33,7 @@ function inferApiErrorCode(status, payload, rawText = '') {
     if (explicitCode) return explicitCode;
     const providerStatus = Number(payload?.base_resp?.status_code || 0);
     const text = getApiErrorText(payload, rawText).toLowerCase();
-    // 「模型名不在这个服务上」是自建中转 / 新服务商最高频的问题。
-    // 不单独给码的话它会落进 UNKNOWN_ERROR，用户只看到"请求失败"，完全无从下手。
+    // 「模型名不在这个服务上」是自建中转 / 新服务商最高频的问题：不单独给码的话它会落进 UNKNOWN_ERROR，用户只看到"请求失败"，无从下手。
     if (/model_not_found|model.{0,24}not.{0,12}(available|exist|found)|no such model|invalid model/.test(text)) return 'MODEL_NOT_FOUND';
     if (status === 401 || providerStatus === 1004 || /invalid.?api.?key|api.?key.?invalid|key.{0,8}(invalid|expired)|unauthori[sz]ed|authentication/.test(text)) return 'APP_KEY_INVALID';
     if (status === 402 || providerStatus === 1008 || /token[ _-]?plan|quota|insufficient|balance|credit|billing|payment|limit.?exceed|resource.?exhaust/.test(text)) return 'MINIMAX_QUOTA_EXHAUSTED';
@@ -114,16 +107,9 @@ function getClientErrorPresentation(error) {
             };
         case 'BAD_REQUEST': {
             const detail = String(apiError.message || '').trim();
-            // 只有"本次真的带了图片"或"服务商的话本身就在说图片"，才提图片原因。
-            // 无条件拼上去的话**任何** 400 都会甩一句"图片转述常见原因：…"。
-            // 真实案例：服务商返回
-            // "System message must be at the beginning."（其实是"system 消息只能有一条"），
-            // 用户看到图片那行就来问"我没发图片为什么会这样"—— 提示把人带偏了。
+            // 只有"本次真的带了图片"或"服务商的话本身就在说图片"才提图片原因：无条件拼上去会让任何 400 都甩一句"图片转述常见原因"，用户会来问"我没发图片为什么会这样"。
             const imageRelated = apiError.imageHint === true || /image|vision|multimodal|多模态|图片/i.test(detail);
-            // 中转站（new-api 系）会按**模型名的后缀**替我们决定要不要开 Claude 的扩展思考：
-            // 名字里带 `-thinking` 就会开，而扩展思考的预算要求 max_tokens 更大。
-            // 用户根本不知道模型名里那个后缀是什么意思，看到 "manual Claude thinking" 只会更迷惑
-            // （他压根没开过思考）—— 所以这条提示必须直接说清"后缀是干什么的、不想要就删掉"。
+            // 中转站（new-api 系）按模型名后缀替我们决定要不要开 Claude 的扩展思考：名字里带 -thinking 就会开，而扩展思考的预算要求 max_tokens 更大；提示必须说清"后缀是干什么的、不想要就删掉"。
             const thinkingBudgetIssue = /max_tokens/i.test(detail) && /thinking/i.test(detail);
             let hint;
             if (thinkingBudgetIssue) {
@@ -132,7 +118,7 @@ function getClientErrorPresentation(error) {
                     + '\n· 不想要思考：把模型名里的 -thinking 去掉，例如 claude-sonnet-4-5-thinking → claude-sonnet-4-5；'
                     + '\n· 想要思考：可以用 -thinking-<数字> 指定预算，但数字越大越慢、也越贵。';
             } else if (imageRelated) {
-                hint = '\n\n图片转述常见原因：视觉模型名不对、图片过大、或该模型不支持图片。请检查 设置 → 模型 → 视觉模型 的模型名，或换用 Qwen-VL 等支持图片的模型。';
+                hint = '\n\n图片转述常见原因：视觉模型名不对、图片过大、或该模型不支持图片。请检查 设置 → 模型 → 对话模型 → 图片转述 的模型名，或换用 Qwen-VL 等支持图片的模型。';
             } else {
                 hint = '\n\n常见原因：服务商对请求格式有额外要求（例如只接受一条 system 消息）、模型名与接口不匹配、'
                     + '或该模型不支持当前参数。上面「服务商返回」那行通常已经写明了真正的原因。';
@@ -163,9 +149,7 @@ function getClientErrorPresentation(error) {
 
 function showClientApiError(error) {
     const presentation = getClientErrorPresentation(error);
-    // 本机登录态失效：文案说"点确定会跳登录页"，那就必须真的跳 ——
-    //   否则用户按提示刷新还是会撞同一个 401，找不到入口。
-    //   其它错误维持"只提示、不跳转"（绝大多数是配置问题，跳走反而丢失上下文）。
+    // 本机登录态失效：文案说"点确定会跳登录页"就必须真的跳，否则用户按提示刷新还是撞同一个 401；其它错误维持"只提示、不跳转"。
     if (error && error.code === 'LOCAL_SERVER_UNAUTHORIZED') {
         showCustomAlert(presentation.message, presentation.title).then(() => {
             try { location.href = '/login'; } catch { /* 忽略 */ }
@@ -184,60 +168,85 @@ function getChatBaseUrl(settings = state.settings) {
     return raw;
 }
 
-// ===== 多提供商对话模型（配置见 settings.chatProviders，UI 在设置页「模型」分栏） =====
+// 多提供商对话模型（配置见 settings.chatProviders，UI 在设置页「模型」分栏）
 
 function chatProviderById(id) {
     const list = Array.isArray(state.settings.chatProviders) ? state.settings.chatProviders : [];
     return list.find(p => p && p.id === id) || null;
 }
 
-/**
- * 默认模型对应的请求 settings。callChatAPI 的 settings 缺省值就是它 ——
- *   主聊天、记忆摘要、用户印象、翻译、Agent 因此全部自动跟随「默认模型」，
- *   而连接测试那类要测**草稿**的调用方继续显式传自己的 settings，不受影响。
- * 找不到卡（没配 / id 失效）时回落整份 state.settings：老数据在迁移跑完前
- *   也有请求要发，回落语义保证"永远拿得到一套可用凭据"。
- */
+/** 一张卡映射成请求 settings；model 由**调用方给的对**决定（一张卡可勾选多个模型）。 */
+function chatProviderToSettings(prov, model) {
+    const s = state.settings;
+    const keys = (s.chatProviderKeys && typeof s.chatProviderKeys === 'object') ? s.chatProviderKeys : {};
+    return {
+        ...s,
+        apiFormat: CHAT_API_FORMATS[prov.apiFormat] ? prov.apiFormat : (s.apiFormat || 'openai-compatible'),
+        baseUrl: String(prov.baseUrl || '').trim() || s.baseUrl,
+        model: String(model || '').trim() || String(prov.model || '').trim() || s.model,
+        apiKey: String(keys[prov.id] || '')
+    };
+}
+
+/** 「提供商×模型」对的合法性：卡在、模型在其勾选列表里。 */
+function validChatModelPair(pair) {
+    const pid = String(pair && pair.providerId || '');
+    const model = String(pair && pair.model || '').trim();
+    if (!pid || !model) return null;
+    const prov = chatProviderById(pid);
+    if (!prov) return null;
+    const selected = Array.isArray(prov.selectedModels) ? prov.selectedModels : [];
+    // 模型不在勾选列表也放行（手填别名场景），只要卡存在 —— 勾选列表只约束 UI 呈现。
+    return { providerId: pid, model };
+}
+
+// 默认模型对应的请求 settings，callChatAPI 的 settings 缺省值就是它 —— 主聊天、记忆摘要、用户印象、翻译、Agent 因此全部自动跟随「默认模型」；对失效时回落整份 state.settings，保证"永远拿得到一套可用凭据"。
 function activeChatSettings() {
     const s = state.settings;
-    const prov = chatProviderById(s.defaultChatProviderId)
-        || (Array.isArray(s.chatProviders) ? s.chatProviders[0] : null);
-    if (!prov) return s;
-    const keys = (s.chatProviderKeys && typeof s.chatProviderKeys === 'object') ? s.chatProviderKeys : {};
-    return {
-        ...s,
-        apiFormat: CHAT_API_FORMATS[prov.apiFormat] ? prov.apiFormat : (s.apiFormat || 'openai-compatible'),
-        baseUrl: String(prov.baseUrl || '').trim() || s.baseUrl,
-        model: String(prov.model || '').trim() || s.model,
-        apiKey: String(keys[prov.id] || '')
-    };
+    const pair = validChatModelPair(s.defaultChatModel);
+    if (!pair) return s;
+    return chatProviderToSettings(chatProviderById(pair.providerId), pair.model);
 }
 
-/**
- * 失败回退模型的请求 settings；未配置、或与默认是同一张卡时返回 null
- *   （同卡回退等于把同一次失败再原样撞一遍，没有意义）。
- */
-function fallbackChatSettings() {
+// 会话级模型覆盖：「当前会话设定」里给这段对话指定的模型，经同一套合法性校验映射成请求 settings；
+//   未设置或对已失效（提供商被删等）返回 null —— 调用方回落默认模型。
+function conversationChatSettings(conv) {
+    if (!conv || !conv.modelPair) return null;
+    const pair = validChatModelPair(conv.modelPair);
+    if (!pair) return null;
+    return chatProviderToSettings(chatProviderById(pair.providerId), pair.model);
+}
+
+// 当前会话实际生效的模型名（顶栏胶囊显示用）：无覆盖或对失效返回 ''，由调用方回落默认模型名。
+function effectiveConversationModel() {
+    const conv = (typeof getCurrentConversation === 'function') ? getCurrentConversation() : null;
+    if (!conv || !conv.modelPair) return '';
+    const pair = validChatModelPair(conv.modelPair);
+    return pair ? pair.model : '';
+}
+
+// 失败回退链：按用户排的先后顺序把回退对逐个映射成请求 settings，剔除失效对与「和默认同对」的项（同对回退等于把同一次失败再撞一遍）；数组顺序即回退顺序。
+function fallbackChatChainSettings() {
     const s = state.settings;
-    const id = String(s.fallbackChatProviderId || '');
-    if (!id || id === String(s.defaultChatProviderId || '')) return null;
-    const prov = chatProviderById(id);
-    if (!prov) return null;
-    const keys = (s.chatProviderKeys && typeof s.chatProviderKeys === 'object') ? s.chatProviderKeys : {};
-    return {
-        ...s,
-        apiFormat: CHAT_API_FORMATS[prov.apiFormat] ? prov.apiFormat : (s.apiFormat || 'openai-compatible'),
-        baseUrl: String(prov.baseUrl || '').trim() || s.baseUrl,
-        model: String(prov.model || '').trim() || s.model,
-        apiKey: String(keys[prov.id] || '')
+    const list = Array.isArray(s.fallbackChatModels) ? s.fallbackChatModels : [];
+    const defaultPair = validChatModelPair(s.defaultChatModel);
+    const sameAsDefault = (pair) => {
+        const v = validChatModelPair(pair);
+        return v && defaultPair
+            ? v.providerId === defaultPair.providerId && v.model === defaultPair.model
+            : false;
     };
+    const out = [];
+    for (const pair of list) {
+        if (sameAsDefault(pair)) continue;
+        const v = validChatModelPair(pair);
+        if (!v) continue;
+        out.push(chatProviderToSettings(chatProviderById(v.providerId), v.model));
+    }
+    return out;
 }
 
-/**
- * 是不是 DeepSeek 官方端点。
- * 判据是**地址**而不是某个开关：地址填 DeepSeek 官方域名（含其兼容网关）时成立，
- * 填别家中转时不成立 —— 开关形式做不到这一点。
- */
+// 是不是 DeepSeek 官方端点：判据是地址而不是某个开关 —— 地址填官方域名（含其兼容网关）时成立，填别家中转时不成立。
 function isDeepSeekOfficial(baseUrl) {
     try {
         return /(^|\.)deepseek\.com$/i.test(new URL(String(baseUrl || '')).hostname);
@@ -245,56 +254,23 @@ function isDeepSeekOfficial(baseUrl) {
 }
 
 
-// ===== 思考模式（各家参数差异很大，全部收在这里） =====
-// 早先只能靠「换模型名」（deepseek-chat → deepseek-reasoner），因为当时没有独立的思考开关字段；
-//   后来接口改成了显式参数，且**思考默认开启** —— 用户关掉开关时必须**显式**发 disabled，
-//   否则模型照样思考（还在等、还在扣思考 token，界面上什么都看不到）。
-// 所以三件事都做：发新参数（对支持的服务商生效）+ 保留换名（对只认模型名的老中转站生效）。
+// 思考模式（各家参数差异很大，全部收在这里）：关掉思考开关时必须显式发 disabled，否则模型照样思考（还在等、还在扣 token，界面上什么都看不到）；同时保留「换模型名」一条路，供只认模型名的老中转站使用。
 
-/**
- * 思考强度档位（对外只有这四个，映射到各家自己的取值）：
- *   off  → 不思考，直接回答（**默认**；请求里显式发 disabled）
- *   low  → 快速思考
- *   high → 均衡
- *   max  → 深度思考，最慢但最准（也更贵）
- *
- * 对外只给四档而不是把各家取值原样暴露：用户要表达的是「想多深」，不是发 reasoning_effort 还是
- *   output_config.effort；各家合法取值也不一致（DeepSeek 认 low/high/max，OpenAI 没有 max）。
- * off 就等于关思考，所以不需要再单独一个「让模型先思考」的开关（两个开关会互相矛盾）。
- */
+// 思考强度档位（对外只有这四档，映射到各家自己的取值）：off 不思考（默认，请求里显式发 disabled）、low 快速思考、high 均衡、max 深度思考。对外只给四档而不是把各家取值原样暴露：用户要表达的是「想多深」，off 就等于关思考。
 const THINKING_EFFORTS = Object.freeze(['off', 'low', 'high', 'max']);
 
-/**
- * 把一个"思考强度"档位映射成某个服务商能接受的取值。
- *
- * @param {string} effort 内部档位：off / low / high / max
- * @param {string} vendor 'deepseek' | 'anthropic' | 'openai' | 'generic'
- * @returns {string|null} null = 不发这个字段（off 或该服务商不认这一档）
- */
+// 把一个"思考强度"档位映射成某个服务商能接受的取值：effort 为内部档位 off / low / high / max，vendor 为 deepseek | anthropic | openai | generic；返回 null = 不发这个字段（off 或该服务商不认这一档）。
 function mapThinkingEffort(effort, vendor) {
     const level = String(effort || '').trim().toLowerCase();
-    // off（以及任何非法值/已废弃的老档位 medium）→ 不发强度字段；
-    // "关掉思考"由调用方用 enabled 表达（见 buildThinkingParams）。
+    // off（以及任何非法值/已废弃的档位 medium）→ 不发强度字段；"关掉思考"由调用方用 enabled 表达。
     if (level === 'off' || !THINKING_EFFORTS.includes(level)) return null;
-    // OpenAI 的 reasoning_effort 只有 minimal/low/medium/high，没有 max ——
-    // 「极高」在它那边降到 high。
+    // OpenAI 的 reasoning_effort 只有 minimal/low/medium/high，没有 max —— 「极高」在它那边降到 high。
     if (vendor === 'openai' && level === 'max') return 'high';
-    // deepseek（官方取值就是 low/high/max）、anthropic（reasoning.effort: none/low/high/max）、
-    // generic（交给服务商自己判）都原样透传。
+    // deepseek（low/high/max）、anthropic（reasoning.effort: none/low/high/max）、generic（交给服务商自己判）都原样透传。
     return level;
 }
 
-/**
- * 判断一个端点/模型该按哪家的思考参数来发。
- *
- * 判据是"地址优先、模型名兜底"：
- *   · 地址能认出来（DeepSeek 官方 / Anthropic 官方 / OpenAI 官方）→ 按那家发；
- *   · 认不出来（自建中转、硅基流动、OneAPI…）→ 看模型名里有没有 claude / gpt / o1 之类；
- *   · 都认不出来 → 'generic'，只发最通用的 reasoning_effort，让服务商自己决定认不认。
- *
- * 为什么不干脆全发一遍：请求体里塞满互不认识的字段，有些严格的网关会直接 400
- * （"unknown parameter"）。宁可少发，也不要让用户看到一个莫名其妙的报错。
- */
+// 判断一个端点/模型该按哪家的思考参数来发，判据是"地址优先、模型名兜底"：地址认得出（DeepSeek / Anthropic / OpenAI 官方）按那家发；认不出看模型名里的 claude / gpt / o1；都认不出 → 'generic'，只发最通用的 reasoning_effort。
 function detectThinkingVendor(settings) {
     const baseUrl = String(settings?.baseUrl || '');
     const model = String(settings?.model || '').toLowerCase();
@@ -310,51 +286,26 @@ function detectThinkingVendor(settings) {
     return 'generic';
 }
 
-/**
- * 造出「思考相关」的请求字段。三种格式共用，避免同一份判据抄三遍
- * （抄三遍就会有一处忘记更新，而那种 bug 表现为"某个格式关不掉思考"）。
- *
- * @param {boolean} enabled 用户的思考模式开关
- * @param {string} effort 思考强度档位
- * @param {string} format 对话格式：openai-compatible / anthropic / openai-responses
- * @param {object} settings 当前设置（用来判厂商）
- * @returns {object} 要合并进请求体的字段
- */
+// 造出「思考相关」的请求字段。三种格式共用，避免同一份判据抄三遍（抄三遍就会有一处忘记更新，而那种 bug 表现为"某个格式关不掉思考"）；enabled 是思考开关，effort 是强度档位，format 是 openai-compatible / anthropic / openai-responses。
 function buildThinkingParams(enabled, effort, format, settings) {
     const vendor = detectThinkingVendor(settings);
     const level = mapThinkingEffort(effort, vendor);
     const on = Boolean(enabled);
 
     if (format === 'anthropic') {
-        // Anthropic 原生格式：思考开关走 reasoning.effort（none = 关闭）。
-        // 注意 `thinking` 这个字段在 Anthropic 里是**另一种东西**
-        //   （{type:'enabled', budget_tokens:N}，是 Claude 官方的 extended thinking），
-        //   两者同名但不同义，混用会让 Claude 官方端点报参数错，所以这里只发 reasoning。
+        // Anthropic 原生格式：思考开关走 reasoning.effort（none = 关闭）。`thinking` 在 Anthropic 里是另一种东西（{type:'enabled', budget_tokens:N}，Claude 的 extended thinking），同名不同义，混用会让官方端点报参数错。
         const out = { reasoning: { effort: on ? (level || 'high') : 'none' } };
-        // 开了思考时再补一个强度（DeepSeek 的 Anthropic 兼容端点认这个字段）
         if (on && level) out.output_config = { effort: level };
         return out;
     }
 
     if (format === 'openai-responses') {
-        // Responses 格式：只认 reasoning.effort。它没有"关闭"这个取值
-        // （官方取值 minimal/low/medium/high），所以关闭时不发字段 ——
-        // 靠调用方把模型换成非思考模型来表达"不要思考"。
+        // Responses 格式只认 reasoning.effort 且没有"关闭"取值（官方只有 minimal/low/medium/high），关闭时不发字段 —— 由调用方换非思考模型。
         if (!on) return {};
         return { reasoning: { effort: level || 'medium' } };
     }
 
-    // openai-compatible：thinking.type 开关 + reasoning_effort 强度
-    // 兼容策略：
-    //   这里**一律**带上 thinking 字段（关闭时显式 disabled —— DeepSeek 默认
-    //   开启思考，不发就关不掉；包着 DeepSeek 的中转站也靠这个字段传开关）。
-    //   严格网关（如 AMD Radeon 端点）不认这个字段会回 400 —— 那由
-    //   chat-providers.js 的兼容层处理：报错点名某个思考参数时自动剥掉重试，
-    //   用户无感。分层职责：
-    //     · 这里负责"按厂商语义把思考意图表达全"（该发的字段都发）
-    //     · chat-providers.js 负责"网关不认时自动降级"
-    //   之前试过"generic 厂商不发 thinking"——那会让靠这个字段关思考的
-    //   DeepSeek 中转用户失效（发出去总有可能被忽略，但收不到就一定失效）。
+    // openai-compatible：thinking.type 开关 + reasoning_effort 强度。关闭时也显式发 disabled（DeepSeek 默认开启思考，不发就关不掉；包着 DeepSeek 的中转站也靠它传开关）；严格网关不认这个字段会回 400，那由 chat-providers.js 的兼容层剥掉重试。
     const out = { thinking: { type: on ? 'enabled' : 'disabled' } };
     if (on && level) out.reasoning_effort = level;
     return out;

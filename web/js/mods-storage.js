@@ -1,18 +1,12 @@
-/* ============================================================================
- * 插件系统 —— 持久化（host.storage）
- *
- * 从 mods.js 拆出：Store 键读写、按插件 id 分区、上限保护、旧 localStorage 迁移。
- * 依赖 Store 由 mods.js 注入；测试沙箱没有真实 Store 时自动降级为空存储。
- * ========================================================================== */
+/* 插件系统 —— 持久化（host.storage）：Store 键读写、按插件 id 分区、上限保护、localStorage 偏好的导入（migrateLegacyModStorage）。 */
 (function () {
     'use strict';
 
     window.createModsStorage = function (Store) {
         const store = Store || { getItem: () => null, setItem() {} };
 
-    // 存在宿主的一个 Store 键里按插件 id 分区：插件要跨重启记住状态，却拿不到宿主的 Store 内部键；
-    // 自己写 localStorage 又进不了 data/（不跨设备、不进备份）。
-    // 这个键必须列在 store.js 的 DATA_KEYS 白名单里，否则写入只进内存缓存、刷新即丢。
+    // 存在宿主的一个 Store 键里按插件 id 分区：插件要跨重启记住状态，却拿不到宿主的 Store 内部键，
+    // 自己写 localStorage 又进不了 data/（不跨设备、不进备份）；这个键必须列在 store.js 的 DATA_KEYS 白名单里，否则刷新即丢。
     const MOD_STORAGE_KEY = 'elaina_mod_storage';
     /** 单个插件的私有存储上限（按它自己那一片算）：防止一个失控插件撑爆共享键 */
     const MOD_STORAGE_MAX_BYTES = 1024 * 1024;
@@ -44,10 +38,8 @@
                 const all = readModStorage();
                 const cur = (all[modId] && typeof all[modId] === 'object' && !Array.isArray(all[modId])) ? all[modId] : {};
                 cur[String(key)] = value;
-                // 上限保护（按**本插件**的那一片算，不牵连别的插件）：
-                //   这块存储整体落在一个 Store 键里、还要跨设备同步，一个失控的
-                //   插件（循环里 append）能把它撑到几十 MB，之后每次保存/同步都
-                //   变慢，而用户看不出是谁干的。超限直接拒绝并说清。
+                // 上限保护（按**本插件**的那一片算，不牵连别的插件）：整块存储落在一个 Store 键里、还要跨设备同步，
+                //   一个失控插件（循环里 append）能把它撑到几十 MB，之后每次保存/同步都变慢而用户看不出是谁干的；超限直接拒绝并说清
                 let size = 0;
                 try { size = JSON.stringify(cur).length; } catch (e) { size = 0; }
                 if (size > MOD_STORAGE_MAX_BYTES) {
@@ -70,11 +62,8 @@
         };
     }
 
-    /**
-     * 旧插件把偏好存在浏览器 localStorage；迁到 host.storage 时一次性搬过来。
-     * 只认已知的插件前缀，绝不碰宿主的设置/密钥键。目标键已存在时保留新值，
-     * 这样重复启动不会把用户后来改过的设置覆盖回旧值。
-     */
+    /* 把插件在浏览器 localStorage 里的偏好一次性导入 host.storage：只认已知的插件前缀，绝不碰宿主的设置/密钥键；
+     * 目标键已存在时保留新值，这样重复启动不会把用户后来改过的设置覆盖回去。 */
     const LEGACY_MOD_STORAGE = [
         { prefix: 'elaina_pet_', modId: 'pet', stripPrefix: true },
         { prefix: 'elaina_galgame_', modId: 'galgame', stripPrefix: true },
@@ -103,7 +92,6 @@
         }
         if (changed) writeModStorage(all);
     }
-
 
         return { readModStorage, writeModStorage, createModStorage, migrateLegacyModStorage };
     };

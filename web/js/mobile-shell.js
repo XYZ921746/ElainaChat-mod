@@ -1,15 +1,4 @@
-/* ============================================================================
- * 移动端外壳：底栏三格（对话 / 回忆 / 我的）、顶栏「更多」弹层、回忆分段条。
- *
- * 为什么不把这些逻辑并进既有模块：它们横跨"导航 + 页面 + 弹层"三处，塞进任何
- * 一个既有文件都会让那个文件重新长出跨领域职责。窄屏与宽屏又是两套信息架构，
- * 集中在这里才能一眼看清"窄屏多了什么、动的是哪些 id"。
- *
- * 原则：只重排宿主自己的控件，不重写业务逻辑，也不碰插件契约。
- *   · 底栏与弹层里的每一格都点击**既有的**按钮，行为完全沿用原有实现；
- *   · 插件按钮容器（#headerModSlot / #composerModSlot / #sidebarModSlot）
- *     一个都不动，插件注册的按钮继续按插槽原样出现。
- * ========================================================================== */
+// 移动端外壳：底栏三格（对话 / 回忆 / 我的）、顶栏「更多」弹层、回忆分段条；原则：只重排宿主控件，不重写业务逻辑，不碰插件契约。
 
 (function () {
     'use strict';
@@ -42,8 +31,6 @@
         chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>'
     };
 
-    // ==================== 底栏（对话 / 回忆 / 我的） ====================
-
     var NAV_ITEMS = [
         { key: 'chat', label: '对话', icon: ICONS.chat },
         { key: 'memories', label: '回忆', icon: ICONS.memories },
@@ -70,7 +57,6 @@
             if (!b) return;
             var key = b.getAttribute('data-mobile-nav');
             closeAchievements();
-            // 设置是整页下钻，退出还有左上角返回键 —— 点底部导航就该回到对应的页
             closeSettingsIfOpen();
             if (key === 'chat') {
                 closeMine();
@@ -79,7 +65,6 @@
                 closeMine();
                 openMemories();
             } else if (key === 'mine') {
-                // 没有 ✕ 了：再点一次「我的」就是收起
                 var minePage = byId('mobileMine');
                 if (minePage && minePage.classList.contains('open')) closeMine();
                 else openMine();
@@ -89,7 +74,6 @@
         document.body.appendChild(nav);
     }
 
-    /** 进入「回忆」：任一回忆页已开着就保持原样，否则落在「记忆」（最近看的多半是它）。 */
     function openMemories() {
         closeAchievements();
         var onPage = false;
@@ -100,36 +84,23 @@
         if (typeof enterMemoryPage === 'function') enterMemoryPage();
     }
 
-    // ==================== 回忆分段条（日记 / 记忆 / 语笺 / 成就） ====================
-
     var HUB_ITEMS = [
-        { key: 'diary', label: '日记' },
         { key: 'memory', label: '记忆' },
         { key: 'notes', label: '语笺' },
         { key: 'ach', label: '成就' }
     ];
 
-    /**
-     * 胶囊开关里的滑块：正好是"选中那一格"的大小，圆角跟着胶囊走（999px）——
-     * 选中第一格 / 最后一格时，滑块那端的半圆和胶囊那端的半圆同轴，看起来就是紧紧贴着一边。
-     * 位置用 getBoundingClientRect 量，和 span/按钮的定位方式无关。
-     */
+    /** 胶囊开关里的滑块：位置用布局偏移量（offsetLeft / offsetWidth），不受浮层开合动画的 transform 影响。 */
     function syncCapsuleThumb(bar, pad) {
         var thumb = bar && bar.querySelector('.mm-seg-thumb');
         if (!thumb) return;
         var btn = bar.querySelector('button.active') || bar.querySelector('.tab-active');
-        // clientHeight 已经不含边框，扣掉上下内边距就是内高（Element 上没有 clientBottom 这种东西）
         var inner = bar.clientHeight - pad * 2;
         if (!btn || !bar.clientWidth || inner <= 0) { thumb.style.opacity = '0'; return; }
-        // 用布局偏移（offsetLeft / offsetWidth）而不是 getBoundingClientRect：
-        //   浮层开合时面板正在做 scale / translate 动画，rect 量到的是"变换后"的坐标，
-        //   滑块会摆歪几个像素（成就那条尤其明显）；offset* 不受 transform 影响。
         var rrWidth = btn.offsetWidth;
         if (!rrWidth) { thumb.style.opacity = '0'; return; }
         var left = btn.offsetLeft;
-        // 第一次摆位（还没显过形）直接到位、不走过渡：否则滑块会从最左边"滑进来"，像没做完的动画。
-        //   注意 width/height/top/opacity/transform 必须在 transition:none 期间全部写完，
-        //   否则恢复过渡后再改 transform 又会动起来。
+        // 第一次摆位直接到位、不走过渡，否则滑块会从最左边滑进来；width / height / top / opacity / transform 必须在 transition:none 期间全部写完。
         var firstTime = thumb.style.opacity !== '1';
         if (firstTime) thumb.style.transition = 'none';
         thumb.style.width = rrWidth + 'px';
@@ -143,7 +114,6 @@
         }
     }
 
-    /** 当前可见的那条胶囊（三页各一条，隐藏的那些 clientWidth 为 0）。 */
     function visibleHubBar() {
         var bars = document.querySelectorAll('.mobile-hub-seg');
         for (var i = 0; i < bars.length; i++) {
@@ -152,7 +122,6 @@
         return null;
     }
 
-    /** 让新那条胶囊的滑块从上一页的位置滑过来（三页同宽同位，位置可以直接沿用）。 */
     function slideThumbFrom(bar, pad, fromLeft) {
         var thumb = bar && bar.querySelector('.mm-seg-thumb');
         if (!thumb || fromLeft == null) return;
@@ -178,7 +147,6 @@
         });
     }
 
-    /** 语笺的「消息收藏 / 金句收藏」两栏：装进一个胶囊，滑块跟着选中的一栏走。 */
     function wireNotesSeg() {
         var tabs = document.querySelector('#notesPage .notes-tabs');
         if (!tabs || tabs.querySelector('.mm-seg-thumb')) return;
@@ -211,7 +179,6 @@
         return bar;
     }
 
-    /** 成就是懒建的浮层：它第一次被打开时才存在，所以分段条也要在那之后再补。 */
     function ensureAchHub() {
         var panel = document.querySelector('#achievementsOverlay .modal-panel');
         if (!panel || panel.querySelector('.mobile-hub-seg')) return;
@@ -226,7 +193,6 @@
         } catch (err) { /* 成就模块不在时忽略 */ }
     }
 
-    /** 每个回忆页各插一条：分段条随页走，切页时不必搬运同一个节点。 */
     function buildHubBars() {
         ['notesPage', 'diaryPage', 'memoryPage'].forEach(function (pageId) {
             var page = byId(pageId);
@@ -238,10 +204,7 @@
         });
     }
 
-    // ==================== 记忆 / 日记：按对话筛选 ====================
-    // 这两页的内容都按对话组织（日记按 conversationId 分组；记忆目前只有 diary
-    //   类目带归属）。窄屏左侧没有对话列表可点，所以在页内工具栏放一颗「选择对话」，
-    //   点开复用宿主的分类选择弹层列出全部对话。
+    // 三页内容都按对话组织（日记按 conversationId 分组），而窄屏左侧没有对话列表可点，所以页内工具栏放一颗「选择对话」，点开复用宿主的分类选择弹层。
 
     function convFilterIdOf(target) {
         try {
@@ -250,14 +213,13 @@
     }
 
     function convFilterTitle(id) {
-        if (!id) return '全部对话';
+        if (!id) return '暂无对话';
         var conv = (state.conversations || []).find(function (c) { return c.id === id; });
         return conv ? (conv.title || '未命名对话') : '已删除的对话';
     }
 
-    /** 筛选变化后刷新两颗按钮的文案与高亮（两个页面的 render 也会调它）。 */
     function syncConvFilterLabels() {
-        ['diary', 'memory'].forEach(function (target) {
+        ['memory'].forEach(function (target) {
             var btn = document.querySelector('.conv-filter-btn[data-conv-filter="' + target + '"]');
             if (!btn) return;
             var id = convFilterIdOf(target);
@@ -268,17 +230,18 @@
             btn.setAttribute('aria-label', btn.title);
         });
     }
-    // diary.js / memory-page.js 在渲染完会调用它；它们不在本 IIFE 里，必须挂到 window。
     window.syncConvFilterLabels = syncConvFilterLabels;
 
     function applyConvFilter(target, id) {
         try {
             if (target === 'diary') state.diaryFilterConvId = id || '';
-            else state.memoryFilterConvId = id || '';
+            else {
+                state.memoryFilterConvId = id || '';
+                if (typeof rememberMemoryConv === 'function') rememberMemoryConv(id);
+            }
         } catch (e) { return; }
         if (target === 'diary' && typeof renderDiaryPage === 'function') renderDiaryPage();
         if (target === 'memory' && typeof renderMemoryPage === 'function') renderMemoryPage();
-        // 日记筛选还影响侧栏高亮（桌面会用到）；手机上侧栏抽屉也保持一致。
         if (target === 'diary' && typeof renderFolderList === 'function') renderFolderList();
         syncConvFilterLabels();
     }
@@ -303,7 +266,7 @@
             });
             list.appendChild(row);
         };
-        addRow('', '全部对话', ICONS.memories);
+
         var convs = (state.conversations || []).slice();
         convs.forEach(function (c) { addRow(c.id, c.title || '未命名对话', ICONS.chat); });
         if (!convs.length) {
@@ -312,12 +275,17 @@
             empty.textContent = '还没有对话。';
             list.appendChild(empty);
         }
-        overlay.classList.remove('hidden');
-        overlay.classList.add('flex');
+        // 必须走统一的 openOverlayPanel：它会取消上一次关闭动画残留的定时器/监听，
+        // 否则「关闭后 300ms 内再打开」会被旧回调重新加回 hidden —— 按钮就像有概率按不开。
+        if (typeof openOverlayPanel === 'function') openOverlayPanel(overlay);
+        else {
+            overlay.classList.remove('hidden');
+            overlay.classList.add('flex');
+        }
     }
 
     function buildConvFilters() {
-        [['diary', '#diaryPage .diary-toolbar'], ['memory', '#memoryPage .memory-toolbar']].forEach(function (pair) {
+        [['memory', '#memoryPage .memory-toolbar']].forEach(function (pair) {
             var bar = document.querySelector(pair[1]);
             if (!bar || bar.querySelector('.conv-filter-btn')) return;
             var btn = document.createElement('button');
@@ -331,11 +299,7 @@
         syncConvFilterLabels();
     }
 
-    /**
-     * 三个回忆页各由自己的 enter 函数显示，而那些函数只负责藏起"除自己以外的一部分"：
-     * 直接从「记忆」切「日记」时，memoryPage 不会被前者藏起来，两页会叠着显示。
-     * 分段条允许任意跳转，所以切换前先把另外两类收掉，不依赖各 enter 的假设。
-     */
+    /** 三个回忆页各由自己的 enter 函数显示，而那些函数只负责藏起「除自己以外的一部分」：分段条允许任意跳转，切换前先把另外两类收掉，不依赖各 enter 的假设。 */
     function leaveOtherModes(except) {
         try {
             if (except !== 'notes' && state.notesMode && typeof exitNotesMode === 'function') exitNotesMode();
@@ -348,8 +312,6 @@
         var b = e.target && e.target.closest ? e.target.closest('[data-hub]') : null;
         if (!b) return;
         var key = b.getAttribute('data-hub');
-        // 切页前先记下"当前那条胶囊的滑块在哪"：每页各有一条胶囊，
-        //   切过去以后让新条从旧位置滑到新位置，才看得出是同一个开关在动。
         var prevLeft = null;
         var prevBar = visibleHubBar();
         if (prevBar) {
@@ -360,7 +322,6 @@
             }
         }
         if (key === 'ach') {
-            // 成就是同一段分段条里的一格：再点一次收起，和其它三格的切换语义一致。
             var wasOpen = false;
             try {
                 wasOpen = !!(window.ElainaAchievements && typeof window.ElainaAchievements.isOpen === 'function'
@@ -371,8 +332,6 @@
                 else if (window.ElainaAchievements && typeof window.ElainaAchievements.open === 'function') {
                     window.ElainaAchievements.open();
                     ensureAchHub();
-                    // 先把高亮落到「成就」，再让内容滑进来、滑块从上一格滑过去 ——
-                    //   否则打开时是一整块直接出现（其它三页是滑进来的，手感对不上）。
                     syncHubBars();
                     var panel = document.querySelector('#achievementsOverlay .modal-panel');
                     if (panel) slideChildren(panel, 1);
@@ -386,19 +345,16 @@
         var prev = currentHubKey();
         closeAchievements();
         leaveOtherModes(key);
-        if (key === 'diary' && typeof enterDiaryMode === 'function') enterDiaryMode();
-        else if (key === 'memory' && typeof enterMemoryPage === 'function') enterMemoryPage();
+        if (key === 'memory' && typeof enterMemoryPage === 'function') enterMemoryPage();
         else if (key === 'notes' && typeof enterNotesMode === 'function') enterNotesMode();
-        // 往右切页就从右边进来，往左切就从左边进来；从别处刚进回忆（没有上一页）只淡入
         animateHubSwitch(HUB_PAGE[key], HUB_ORDER.indexOf(key) - HUB_ORDER.indexOf(prev));
         if (prevLeft != null) slideThumbFrom(visibleHubBar(), 4, prevLeft);
         syncNav();
     }
 
-    var HUB_ORDER = ['diary', 'memory', 'notes', 'ach'];
+    var HUB_ORDER = ['memory', 'notes', 'ach'];
     var HUB_PAGE = { diary: 'diaryPage', memory: 'memoryPage', notes: 'notesPage' };
 
-    /** 当前停在哪一格：分段条的高亮与"往左还是往右切"都按它算。 */
     function currentHubKey() {
         try {
             if (window.ElainaAchievements && typeof window.ElainaAchievements.isOpen === 'function'
@@ -409,11 +365,7 @@
         return 'memory';
     }
 
-    /**
-     * 切换回忆页时的左右滑入：只动页面里"除浮层以外"的直接子元素。
-     * 为什么跳过 position: fixed 的子元素：给祖先加 transform 会改变 fixed 的定位参照
-     *   （收藏详情、成就浮层都是 fixed），它们必须留在原地。
-     */
+    /** 切换回忆页时的左右滑入：只动页面里「除浮层以外」的直接子元素 —— 给祖先加 transform 会改变 position:fixed 的定位参照。 */
     function animateHubSwitch(pageId, dir) {
         if (!pageId || !dir) return;
         slideChildren(byId(pageId), dir);
@@ -425,7 +377,6 @@
         var cls = dir > 0 ? 'mm-slide-in-right' : 'mm-slide-in-left';
         Array.prototype.forEach.call(root.children, function (el) {
             if (!el || !el.classList || el.classList.contains('hidden')) return;
-            // 浮层不能动（fixed 的定位参照会被祖先的 transform 改掉）
             if (el.classList.contains('mobile-hub-seg')) return;
             var pos = '';
             try { pos = getComputedStyle(el).position; } catch (e) { pos = ''; }
@@ -439,8 +390,6 @@
             });
         });
     }
-
-    // ==================== 顶栏「更多」弹层 ====================
 
     function makeRow(icon, title, desc, onClick) {
         var row = document.createElement('button');
@@ -515,7 +464,6 @@
             clickExisting('headerAnnounceBtn');
             closeSheet();
         }));
-        // 不借道 rdModelPill：那颗胶囊现在点开的是会话设定，模型切换走这里直达设置分栏。
         body.appendChild(makeRow(ICONS.model, '当前模型', '查看或切换 BYOK 模型', function () {
             closeSheet();
             openSettingsAt('tab-model');
@@ -531,8 +479,6 @@
         close.addEventListener('click', closeSheet);
         backdrop.addEventListener('click', closeSheet);
     }
-
-    // ==================== 状态同步 ====================
 
     /** 会话页与列表页共用同一块主区，只靠 hidden 类区分；这里给出唯一判据。 */
     function inConversationView() {
@@ -561,8 +507,7 @@
         var settings = byId('settingsOverlay');
         if (settings) settingsOpen = !settings.classList.contains('hidden');
 
-        // 「＋」工具卡住在主区里，而主区那层 fixed 外壳自成一个层级 ——
-        //   弹层压不过 body 上的底栏。弹层开着时让底栏让位，视觉与点击都归弹层。
+        // 「＋」工具卡住在主区里，而主区那层 fixed 外壳自成一个层级 —— 弹层压不过 body 上的底栏；弹层开着时让底栏让位。
         var composerOpen = false;
         ['composerMoreMenu', 'initialComposerMoreMenu'].forEach(function (id) {
             var el = byId(id);
@@ -572,8 +517,7 @@
         // 进会话就收起底栏：手机上的对话是"沉浸"的，输入栏直接贴底。
         var convOpen = inConversationView();
 
-        // 多选条只属于首页列表：一旦离开首页（进会话 / 设置 / 回忆 / 我的），
-        //   它就只剩一条盖在别的内容上的条子，选中集合也没有可操作的对象。
+        // 多选条只属于首页列表：离开首页（进会话 / 设置 / 回忆 / 我的）后它只剩一条盖在别的内容上的条子，选中集合也没有可操作对象。
         if (convSelect.on) {
             var homeShown = false;
             try {
@@ -613,10 +557,7 @@
         syncAllCapsuleThumbs();
     }
 
-    /**
-     * 状态观察会成串触发（一次切页要改好几个 class）。合并到下一帧再同步一次，
-     * 免得每次 class 变动都全量查一遍 DOM —— 那正是"点一下有点顿"的来源之一。
-     */
+    /** 状态观察会成串触发（一次切页要改好几个 class），合并到下一帧再同步一次，免得每次 class 变动都全量查一遍 DOM。 */
     var syncScheduled = false;
     function scheduleSyncNav() {
         if (syncScheduled) return;
@@ -626,11 +567,7 @@
         else window.setTimeout(run, 16);
     }
 
-    /**
-     * 底栏高亮与分段条都跟着页面状态走，而状态是既有函数用一个 hidden 类表达的。
-     * 监听那几个节点的 class，比在每个 enter/exit 函数里各加一句调用更省事，
-     * 也不会把移动端知识渗进那些与窄屏无关的模块。
-     */
+    /** 底栏高亮与分段条都跟着页面状态走，而状态是既有函数用一个 hidden 类表达的：监听那几个节点的 class 比在每个 enter/exit 函数里各加一句调用更省事，也不会把移动端知识渗进窄屏无关的模块。 */
     function watchState() {
         if (!window.MutationObserver) return;
         var targets = ['notesPage', 'diaryPage', 'memoryPage', 'achievementsOverlay', 'settingsOverlay', 'composerMoreMenu', 'initialComposerMoreMenu', 'announceStatusDot', 'conversationHistory'];
@@ -640,11 +577,9 @@
             if (el) ob.observe(el, { attributes: true, attributeFilter: ['class'] });
         });
 
-        // 消息是逐条 append 的：只在新节点进来时补头像，切会话整屏重绘也走这里。
         var hist = byId('conversationHistory');
         if (hist) new MutationObserver(function () { scheduleDecorate(); }).observe(hist, { childList: true });
 
-        // 侧栏那份列表是"对话数据"的唯一渲染出口；它一重画，首页那份跟着重画。
         var folder = byId('folderList');
         if (folder) new MutationObserver(function () { renderMobileConvList(); }).observe(folder, { childList: true });
 
@@ -658,7 +593,6 @@
             }).observe(initial, { attributes: true, attributeFilter: ['class'] });
         }
 
-        // 金句文本由数据模块写进那个被隐藏的胶囊；它一写，首页卡片跟着变。
         ['quoteText', 'quoteSource'].forEach(function (id) {
             var el = byId(id);
             if (el) new MutationObserver(function () { syncMobileQuote(); })
@@ -672,8 +606,6 @@
         });
     }
 
-    // ==================== 「我的」整页（窄屏） ====================
-
     var MINE_ICONS = {
         capability: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg>',
         plugins: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6v3a2 2 0 104 0V4h2v6h-3a2 2 0 100 4h3v6H9v-3a2 2 0 10-4 0v3H3v-6h3a2 2 0 100-4H3V4h6z"/></svg>',
@@ -683,7 +615,6 @@
         lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8 10.5V8a4 4 0 118 0v2.5"/></svg>'
     };
 
-    /** 「外观主题」那行的副标题取自主题模块，避免把主题名写死在宿主里。 */
     function themeDesc() {
         try {
             if (window.ElainaTheme && typeof window.ElainaTheme.templates === 'function') {
@@ -763,7 +694,6 @@
         return row;
     }
 
-    /** 「我的」里的公告提示条：有未读带红点，点开既有的公告面板。 */
     function makeMineNotice() {
         var row = document.createElement('button');
         row.type = 'button';
@@ -787,8 +717,6 @@
         row.appendChild(copy);
         row.appendChild(badge);
         row.addEventListener('click', function () {
-            // 面板已经搬到 body（压过「我的」），所以这里**不关**「我的」——
-            //   关掉会把用户甩回对话页。setTimeout 只是躲开"同一次点击判成点外面"。
             window.setTimeout(function () { clickExisting('headerAnnounceBtn'); }, 40);
         });
         return row;
@@ -805,15 +733,15 @@
         return group;
     }
 
-    /**
-     * 打开设置并切到指定分栏：「我的」每行都落到既有分栏，不新做一套设置界面。
-     * scrollId 用于大类里的小节（数据 / 密码 / 更新都在「高级」里），
-     * 切过去后再把它滚进视野，否则用户仍要在一整栏里自己找。
-     */
+    /** 打开设置并切到指定分栏（每行都落到既有分栏，不新做界面）；scrollId 用于大类里的小节，切过去后再滚进视野。 */
     function openSettingsAt(tab, scrollId) {
         if (typeof openSettings === 'function') openSettings();
         if (tab && typeof switchSettingsTab === 'function') {
             try { switchSettingsTab(tab); } catch (e) { /* 分栏不存在时只开设置 */ }
+        }
+        // 「模型」是入口列表 + 分页：深链要先把目标所在的分页切出来，scrollIntoView 才找得到。
+        if (tab === 'tab-model' && typeof openModelPageForAnchor === 'function') {
+            try { openModelPageForAnchor(scrollId); } catch (e) { /* 分页不存在时停在入口列表 */ }
         }
         animateSettingsContent();
         if (scrollId) {
@@ -821,7 +749,6 @@
                 var target = byId(scrollId);
                 if (!target || typeof target.scrollIntoView !== 'function') return;
                 try { target.scrollIntoView({ block: 'start' }); } catch (err) { target.scrollIntoView(); }
-                // 滚到的那一段闪一下底：不然"跳过去了"和"本来就在这"看不出区别
                 var section = target.closest ? target.closest('section') : null;
                 if (section && section.classList) {
                     section.classList.remove('mm-target-flash');
@@ -834,12 +761,39 @@
         syncNav();
     }
 
+    /** 同一分栏里的分区在手机上拆成独立二级页：每行直达自己的分区，不再多行共用一页只靠滚动区分；
+        传数组时多个分区同页（人设与世界观本是一起编辑的一套）；包不上二级页（桌面 / 分区缺失）时退回滚动定位。 */
+    function openSettingsSection(tab, sectionIds, title) {
+        if (typeof openSettings === 'function') openSettings();
+        if (tab && typeof switchSettingsTab === 'function') {
+            try { switchSettingsTab(tab); } catch (e) { /* 分栏不存在时只开设置 */ }
+        }
+        var wrapped = false;
+        if (window.innerWidth <= 980 && typeof openSectionSubpage === 'function') {
+            try { wrapped = openSectionSubpage(sectionIds, title); } catch (e) { wrapped = false; }
+        }
+        var firstId = Array.isArray(sectionIds) ? sectionIds[0] : sectionIds;
+        if (!wrapped && firstId) {
+            window.setTimeout(function () {
+                var target = byId(firstId);
+                if (!target || typeof target.scrollIntoView !== 'function') return;
+                try { target.scrollIntoView({ block: 'start' }); } catch (err) { target.scrollIntoView(); }
+                if (target.classList) {
+                    target.classList.remove('mm-target-flash');
+                    void target.offsetWidth;
+                    target.classList.add('mm-target-flash');
+                    window.setTimeout(function () { target.classList.remove('mm-target-flash'); }, 1400);
+                }
+            }, 30);
+        }
+        animateSettingsContent();
+        syncNav();
+    }
+
     function buildMine() {
         if (byId('mobileMine')) return;
         var page = document.createElement('div');
         page.id = 'mobileMine';
-        // 页头（「我的」标题 + ✕）不再需要：这一页就是底栏的一格，
-        //   进出都走底栏（再点一次「我的」收起，点别的格直接换页）。
         var scroll = document.createElement('div');
         scroll.className = 'mm-scroll';
 
@@ -870,33 +824,29 @@
         });
         scroll.appendChild(profile);
 
-        // 公告是"要主动看"的东西，放在资料卡正下方一条高亮提示，而不是埋进「更多」。
         scroll.appendChild(makeMineNotice());
 
-        // 「外观模式」那条去掉了：外观与主题页里本来就有同一个三段开关，
-        //   放在「我的」上等于把同一个设置摆两遍。
         scroll.appendChild(makeMineGroup('外观', [
             { icon: ICONS.theme, title: '外观与主题', desc: themeDesc(), descId: 'mmThemeDesc', onClick: function () { openSettingsAt('tab-appearance'); } }
         ]));
 
-        // 每行落到**自己那一段**：只给分栏名的话，模型/语音三行、角色/世界观两行
-        //   点进去都是同一页的顶部，看起来像"三个入口其实是同一个页面"。
+        // 每行都带 scrollId：只给分栏名的话，同一分栏里的几行点进去都是同一页顶部。
         scroll.appendChild(makeMineGroup('模型与语音', [
             { icon: ICONS.model, title: '对话模型', desc: '默认模型 / 失败回退 / 多套配置', onClick: function () { openSettingsAt('tab-model', 'settingChatModel'); } },
-            { icon: ICONS.bell, title: '语音输出', desc: 'TTS 服务商与音色', onClick: function () { openSettingsAt('tab-model', 'settingTtsProvider'); } },
-            { icon: ICONS.memory, title: '语音输入', desc: 'ASR 服务商与语言', onClick: function () { openSettingsAt('tab-model', 'settingAsrApiKey'); } }
+            { icon: ICONS.bell, title: '语音输出', desc: 'TTS 服务商与音色', onClick: function () { openSettingsAt('tab-model', 'ttsProviderHome'); } },
+            { icon: ICONS.memory, title: '语音输入', desc: 'ASR 服务商与语言', onClick: function () { openSettingsAt('tab-model', 'asrProviderHome'); } },
+            { icon: MINE_ICONS.capability, title: '对话优化', desc: '思考强度与采样参数', onClick: function () { openSettingsAt('tab-model', 'settingThinkingEffort'); } }
         ]));
 
         scroll.appendChild(makeMineGroup('角色与能力', [
-            { icon: ICONS.mine, title: '人设与角色卡', desc: '角色名 / 称号 / 完整角色卡', onClick: function () { openSettingsAt('tab-character', 'characterSettingsSection'); } },
-            { icon: ICONS.mine, title: '世界观', desc: '世界规则与时代背景', onClick: function () { openSettingsAt('tab-character', 'worldSettingsSection'); } },
+            { icon: ICONS.mine, title: '人设与世界观', desc: '角色卡 / 世界规则与时代背景', onClick: function () { openSettingsSection('tab-character', ['characterSettingsSection', 'worldSettingsSection'], '人设与世界观'); } },
             { icon: MINE_ICONS.capability, title: '能力与权限', desc: '记忆整理 / 联网 / 手机操作', onClick: function () { openSettingsAt('tab-capability'); } }
         ]));
 
         scroll.appendChild(makeMineGroup('数据与安全', [
-            { icon: MINE_ICONS.data, title: '我的数据', desc: '导入 / 导出 / 局域网共享', onClick: function () { openSettingsAt('tab-advanced', 'dataSettingsSection'); } },
-            { icon: MINE_ICONS.lock, title: '访问密码', desc: '本机与局域网登录凭据', onClick: function () { openSettingsAt('tab-advanced', 'authSettingsSection'); } },
-            { icon: MINE_ICONS.about, title: '版本与更新', desc: '检测新版本与安装包', onClick: function () { openSettingsAt('tab-advanced', 'updateSettingsSection'); } }
+            { icon: MINE_ICONS.data, title: '我的数据', desc: '导入 / 导出 / 局域网共享', onClick: function () { openSettingsSection('tab-advanced', 'dataSettingsSection', '我的数据'); } },
+            { icon: MINE_ICONS.lock, title: '访问密码', desc: '本机与局域网登录凭据', onClick: function () { openSettingsSection('tab-advanced', 'authSettingsSection', '访问密码'); } },
+            { icon: MINE_ICONS.about, title: '版本与更新', desc: '检测新版本与安装包', onClick: function () { openSettingsSection('tab-advanced', 'updateSettingsSection', '版本与更新'); } }
         ]));
 
         scroll.appendChild(makeMineGroup('更多', [
@@ -914,10 +864,6 @@
         document.body.appendChild(page);
     }
 
-    /**
-     * 资料卡的数字都来自既有状态（对话数 / 记忆条数 / 已解锁成就），
-     * 不在这里另存一份计数 —— 另存一份就一定会与真实数据对不上。
-     */
     function syncMineProfile() {
         var name = '旅人';
         try { if (typeof getUserProfileName === 'function') name = getUserProfileName() || name; } catch (e) { /* 资料未就绪 */ }
@@ -987,9 +933,7 @@
         syncNav();
     }
 
-    // ==================== 设置：窄屏单栏下钻 ====================
-    // 窄屏不再给 7 个分栏做横向图标栏：分类由「我的」承担，设置只显示当前这一类。
-    // 顶栏换成「返回 + 类名」，类名跟着既有 switchSettingsTab 的选中态走。
+    // 设置：窄屏单栏下钻，分类由「我的」承担 —— 设置只显示当前这一类，顶栏写「返回 + 类名」，类名跟着 switchSettingsTab 的选中态走。
 
     function buildSettingsTitle() {
         var top = byId('settingsTopBar');
@@ -999,10 +943,7 @@
         top.appendChild(t);
     }
 
-    /**
-     * 同一颗按钮在宽屏是「关闭设置」、窄屏是「返回」：图标由 CSS 切换，
-     * 无障碍名称也得跟着视口换 —— 否则读屏会把它念成"关闭设置"。
-     */
+    /** 同一颗按钮在宽屏是「关闭设置」、窄屏是「返回」：图标由 CSS 切换，无障碍名称也得跟着视口换 —— 否则读屏会把它念成「关闭设置」。 */
     function syncSettingsBackLabel() {
         var btn = byId('closeSettings');
         if (!btn) return;
@@ -1013,7 +954,8 @@
 
     function settingsTitleText() {
         var btn = document.querySelector('#settingsTabNav .settings-tab-btn.active');
-        var label = btn ? (btn.textContent || '').trim() : '';
+        var title = btn ? btn.querySelector('.settings-nav-copy b') : null;
+        var label = (title ? title.textContent : (btn ? btn.textContent : '') || '').trim();
         return label || '设置';
     }
 
@@ -1025,7 +967,6 @@
     function watchSettings() {
         buildSettingsTitle();
         syncSettingsBackLabel();
-        // 旋转 / 拉宽窗口后按钮会从「返回」变回「关闭」，名称要跟着换
         var mq = window.matchMedia(MOBILE_MQ);
         if (mq && mq.addEventListener) mq.addEventListener('change', syncSettingsBackLabel);
         if (!window.MutationObserver) return;
@@ -1039,8 +980,7 @@
                 pushSettingsHistoryEntry();
             }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
         }
-        // 分栏切换（「我的」里点另一行 = switchSettingsTab）时，内容也滑一次。
-        // 只在"当前分栏 id 真的变了"时触发 —— 否则动画自己加的那个类会再触发一次观察者，绕成死循环。
+        // 分栏切换时内容也滑一次；只在「当前分栏 id 真的变了」时触发 —— 否则动画自己加的那个类会再触发一次观察者，绕成死循环。
         var content = byId('settingsContent');
         if (content) {
             new MutationObserver(function () {
@@ -1053,19 +993,13 @@
         }
     }
 
-    // 上一次动画落在哪个分栏：观察者只在 id 真变了时才播，避免"动画加类→观察者→再动画"的死循环
     var lastSettingsPanelId = null;
 
-    /**
-     * 设置内容从右侧滑入：进设置、以及点「我的」里另一行换分栏时都播一次。
-     * 只动**当前分栏面板**，不动外层滚动容器 —— 否则整页（连同标题栏）一起平移，
-     * 看起来像"整个页面被推了一下"，而不是"这一类内容换了一屏"。
-     */
+    /** 设置内容从右侧滑入：进设置、以及点「我的」里另一行换分栏时都播一次；只动当前分栏面板、不动外层滚动容器，否则整页（连同标题栏）一起平移，看起来像整页被推了一下。 */
     function animateSettingsContent() {
         var panel = document.querySelector('#settingsContent .settings-tab-panel.active-panel');
         if (!panel || !panel.classList) return;
         lastSettingsPanelId = panel.id;
-        // 换分栏就回到顶部：停在上一栏的滚动位置会让人以为内容没变
         var content = byId('settingsContent');
         if (content) content.scrollTop = 0;
         panel.classList.remove('mm-slide-in-right');
@@ -1083,9 +1017,7 @@
         try { closeSettingsPanel(); } catch (e) { /* 忽略：关不掉也不该挡住导航 */ }
     }
 
-    // ---- 设置页的系统返回 ----
-    // 返回有三条路：左上角返回键、系统返回手势、底部导航。手势走的是浏览器返回，
-    // 所以打开设置时压一条历史记录，返回时把它吃掉并关面板。
+    // 设置页的系统返回：三条路是左上角返回键、系统返回手势、底部导航。手势走的是浏览器返回，所以打开设置时压一条历史记录，返回时把它吃掉并关面板。
     var settingsHistoryPushed = false;
 
     function pushSettingsHistoryEntry() {
@@ -1112,10 +1044,7 @@
         }
     });
 
-    /**
-     * 顶栏的公告入口：宿主自己的按钮在窄屏都收进了「更多」，
-     * 但公告属于"要主动看"的东西，留一颗铃铛在顶栏才算显眼。
-     */
+    /** 顶栏的公告入口：宿主自己的按钮在窄屏都收进了「更多」，但公告属于「要主动看」的东西，留一颗铃铛在顶栏才算显眼。 */
     function buildAnnounceBtn() {
         var header = byId('chatHeader');
         if (!header || byId('mobileAnnounceBtn')) return;
@@ -1125,8 +1054,6 @@
         b.title = '公告';
         b.setAttribute('aria-label', '公告');
         b.innerHTML = ICONS.bell + '<span id="mobileAnnounceDot" class="ma-dot hidden"></span>';
-        // 必须挡住冒泡：宿主对"点面板外"的判定挂在 document 上，
-        // 这颗铃铛不在原按钮/面板的子树里，不拦就会被同一次点击立刻判成"点了外面"。
         b.addEventListener('click', function (ev) {
             if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
             clickExisting('headerAnnounceBtn');
@@ -1135,7 +1062,6 @@
         if (more) header.insertBefore(b, more); else header.appendChild(b);
     }
 
-    /** 未读红点只有一个来源（#announceStatusDot），两处入口都照它显示。 */
     function syncAnnounceBadge() {
         var src = byId('announceStatusDot');
         var unread = !!(src && !src.classList.contains('hidden'));
@@ -1145,17 +1071,10 @@
         });
     }
 
-    // ==================== 窄屏首页：对话列表 + 返回 ====================
-
-    /**
-     * 窄屏没有"列表在左边栏"这块常驻区域，所以首页要自己给一份最近对话。
-     * 数据读 state.conversations（与侧栏同源），点击复用 switchConversation；
-     * 侧栏重绘时用 observer 跟着重画，避免两处各维护一份。
-     */
+    /** 窄屏没有「列表在左边栏」这块常驻区域，首页要自己给一份最近对话：数据读 state.conversations，点击复用 switchConversation，侧栏重绘时跟着重画。 */
     function buildMobileHome() {
         var init = byId('initialState');
         if (!init || byId('mobileConvList')) return;
-        // 搜索框独立于列表：列表每次重画只清自己，输入焦点不会被重画打断。
         var search = document.createElement('input');
         search.id = 'mobileConvSearch';
         search.className = 'mmc-search hidden';
@@ -1173,10 +1092,7 @@
 
         buildConvSelectBar();
 
-        // 点空白处 = 想退出多选。首页这块空白很大（金句卡、输入框、分组头、行与行的缝），
-        //   随手一碰就把攒好的一批清掉太容易误触，所以先问一句（askCancelConvSelect）。
-        // 用捕获阶段并停在这里：多选时这些点击只表达"退出"，不该顺带把分组收起、
-        //   把输入框点开之类的副作用一起做掉。
+        // 点空白处 = 想退出多选：首页这块空白很大，随手一碰就把攒好的一批清掉太容易误触，所以先问一句；用捕获阶段并停在这里，这些点击只表达「退出」，不带走其它副作用。
         init.addEventListener('click', function (ev) {
             if (!convSelect.on) return;
             var t = ev.target;
@@ -1188,7 +1104,6 @@
         }, true);
     }
 
-    /** 列表时间：今天给时刻、昨天说「昨天」、更早给月/日 —— 「11/01」分不出是不是今天。 */
     function convTimeText(conv) {
         var d = new Date(conv && conv.updatedAt ? conv.updatedAt : NaN);
         if (isNaN(d.getTime())) return '';
@@ -1202,28 +1117,18 @@
         return pad(d.getMonth() + 1) + '/' + pad(d.getDate());
     }
 
-    /**
-     * 收起来的分组（只在本次会话里记着）。
-     * 为什么不落盘：落盘就得新增一个设置键，而新增键要按 D13 三处同步
-     *   （store 白名单 / Android 白名单 / server 读写）—— 为"分组收没收起"付这个代价不值。
-     */
+    /** 收起来的分组（只在本次会话里记着）。不落盘：落盘就得新增设置键，而新增键要按 D13 三处同步（store 白名单 / Android 白名单 / server 读写），为「分组收没收起」付这个代价不值。 */
     var collapsedFolders = {};
 
-    // 有对话被移进某个分组时先把那个分组展开（收起状态下落进去等于没看见）。
     window.__elainaExpandConvFolder = function (id) {
         if (id && collapsedFolders[id]) delete collapsedFolders[id];
     };
 
-    /** 一段对话属于哪个分组：空串 = 未分类。 */
     function convFolderOf(conv) {
         return (conv && conv.categoryId) ? String(conv.categoryId) : '';
     }
 
-    /**
-     * 首页按「文件夹」分区铺开：置顶一组、未分类一组、每个自定义分类一组。
-     * 分组头和抽屉那套用同一个 data-folder-id —— 拖拽落点因此两处共用一份逻辑；
-     * 空分类也留一个头，否则就没地方把对话拖进去。
-     */
+    /** 首页按「文件夹」分区铺开：置顶一组、未分类一组、每个自定义分类一组；分组头与抽屉那套用同一个 data-folder-id，拖拽落点两处共用一份逻辑；空分类也留一个头，否则没地方把对话拖进去。 */
     function appendConvSection(box, spec) {
         var section = document.createElement('div');
         section.className = 'mmc-section';
@@ -1249,22 +1154,17 @@
         head.appendChild(label);
         head.appendChild(count);
         head.appendChild(chev);
-        // 收起 / 展开：折起来的行仍然留在 DOM 里（只是高度收成 0），
-        //   不 display:none 是为了让展开时能量到真实高度、做得出动画。
-        //   两层结构：外层是"裁剪框"（高度动画），内层整体上移（位移动画）——
-        //   于是行是从分组头底下"滑上去"，而不是原地被裁掉。
+        // 收起 / 展开：折起来的行仍留在 DOM 里（高度收成 0），不 display:none 是为了让展开时能量到真实高度、做得出动画；外层裁剪框配内层整体上移，行才是从分组头底下滑上去而不是原地被裁掉。
         var wrap = document.createElement('div');
         wrap.className = 'mmc-rows';
         var inner = document.createElement('div');
         inner.className = 'space-y-0.5 mmc-rows-inner';
         wrap.appendChild(inner);
         if (collapsedFolders[spec.header.id]) {
-            // 首帧就是收起的：直接给 0 高度，不走动画
             section.classList.add('is-collapsed');
             wrap.style.height = '0px';
         }
         head.addEventListener('click', function () {
-            // 长按出菜单后紧跟的那次点击不该顺带把分组收起
             var until = 0;
             try { until = suppressConversationClickUntil || 0; } catch (e) { until = 0; }
             if (Date.now() < until) return;
@@ -1272,7 +1172,6 @@
             collapsedFolders[spec.header.id] = next;
             animateConvSection(section, wrap, inner, next);
         });
-        // 真文件夹才给菜单：「未分类」「置顶」不是分类，删不掉也不该重命名
         if (spec.header.id && spec.header.id !== '__unfiled__' && !spec.header.pinned
             && typeof bindCategoryPick === 'function') {
             bindCategoryPick(head, spec.header.id);
@@ -1289,9 +1188,6 @@
         item.type = 'button';
         item.className = 'mmc-item';
         item.setAttribute('data-conv-id', conv.id);
-        // 勾选圈压在前面的图标（头像）上：多选时"点哪一行"与"选中的是谁"
-        //   落在同一个位置上，不必再把整行改成另一种排版。
-        //   头像内容跟对话绑定的卡走（绑卡 = 卡名首字，否则应用图标），与桌面侧栏同源。
         var avWrap = document.createElement('span');
         avWrap.className = 'mmc-avatar-wrap';
         var av = document.createElement('span');
@@ -1325,8 +1221,6 @@
         main.appendChild(prev);
         item.appendChild(avWrap);
         item.appendChild(main);
-        // 长按出菜单（收藏 / 置顶 / 重命名 / 分类 / 多选 / 删除）；
-        // 菜单里的「多选」才进勾选态 —— 勾选框只长在这份列表的行上，所以只有这里传 onMultiSelect。
         if (typeof bindConversationPick === 'function') {
             bindConversationPick(item, conv, {
                 onMultiSelect: function (id) { enterConvSelect(id); }
@@ -1336,33 +1230,23 @@
             var until = 0;
             try { until = suppressConversationClickUntil || 0; } catch (e) { until = 0; }
             if (Date.now() < until) return;
-            // 多选时整行就是勾选框：点一下切换选中，不再进对话。
             if (convSelect.on) { toggleConvSelect(conv.id); return; }
             if (typeof switchConversation === 'function') switchConversation(conv.id);
         });
         box.appendChild(item);
     }
 
-    /**
-     * 收起 / 展开：外层裁剪框的高度 与 内层内容的位移 同时走 ——
-     *   高度 H → 0，内层 translateY 0 → -H。行于是从分组头底下**滑上去**，
-     *   而不是原地被下边缘一点点裁掉（那样看着像"消失"）。
-     * 为什么不用 display:none：display 不可过渡；为什么不用 grid-template-rows：旧 WebView 上没保障。
-     * 行始终留在 DOM 里，所以按 DOM 顺序读列表的逻辑不受影响。
-     */
+    /** 收起 / 展开：外层裁剪框的高度与内层内容的位移同时走 —— 高度 H → 0，内层 translateY 0 → -H，行于是从分组头底下滑上去。display 不可过渡，grid-template-rows 在旧 WebView 上没保障；行始终留在 DOM 里，所以按 DOM 顺序读列表的逻辑不受影响。 */
     function animateConvSection(section, wrap, inner, collapsed) {
         if (!wrap || !inner) return;
         var from = wrap.getBoundingClientRect().height;
-        // contentH 是这一组内容的真实高度：收起时就是当前高度，展开时用 scrollHeight 量
         var contentH = collapsed ? from : wrap.scrollHeight;
-        // 起点先坐实：同一帧里直接改两次 height 不会产生过渡
         wrap.style.height = from + 'px';
         inner.style.transform = 'translateY(' + (from - contentH) + 'px)';
         void wrap.offsetHeight;
         section.classList.toggle('is-collapsed', collapsed);
         var to = collapsed ? 0 : contentH;
         wrap.style.height = to + 'px';
-        // 位移和高度同步走：内容始终"贴着自己那一截"，看着是从分组头底下滑进 / 滑出
         inner.style.transform = 'translateY(' + (to - contentH) + 'px)';
         window.clearTimeout(wrap.__mmAnim);
         wrap.__mmAnim = window.setTimeout(function () {
@@ -1380,7 +1264,6 @@
     function renderMobileConvList() {
         var box = byId('mobileConvList');
         if (!box) return;
-        // 列表重画会换掉长按锚点，旧菜单留着就挂在了一个已经不在文档里的节点上。
         if (typeof closeConversationContextMenu === 'function') closeConversationContextMenu();
         var list = [];
         try { list = (state.conversations || []).slice(); } catch (e) { list = []; }
@@ -1407,24 +1290,15 @@
             var rows = visible.filter(function (c) {
                 return !c.isPinned && convFolderOf(c) === cat.id;
             });
-            // 搜索时把没命中的分组整个收起来；不搜索时保留空分组（它是拖拽落点）。
             if (!rows.length && kw) return;
             appendConvSection(box, { header: { id: cat.id || '__unfiled__', name: cat.name }, rows: rows });
         });
         syncHomeGreeting();
-        // 重画会换掉所有行节点，选中态得按 id 重新贴回去（搜索、分组变更都会走到这里）。
         syncConvSelectUI();
     }
 
 
-    // ==================== 首页多选：菜单「多选」进入，分类 / 删除 ====================
-
-    /**
-     * 多选状态。
-     *
-     * 为什么记 id 而不是记节点：列表会被搜索、分组变更整份重画，
-     *   节点一换，挂在节点上的"选中"就全丢了；id 跟着数据走，重画后照样对得上。
-     */
+    /** 多选状态记 id 而不是节点：列表会被搜索、分组变更整份重画，节点一换挂在节点上的「选中」就全丢了。 */
     var convSelect = { on: false, ids: {}, historyPushed: false, asking: false };
 
     function convSelectedIds() {
@@ -1472,13 +1346,7 @@
         document.body.appendChild(bar);
     }
 
-    /**
-     * 进入多选（由长按菜单里的「多选」调用）。
-     *
-     * 长按菜单本身保持原样（收藏 / 置顶 / 重命名 / 分类 / 删除）：那些都是"只对这一条"的操作。
-     *   进了多选之后才换成"一次处理一批"的两颗按钮（分类 / 删除）—— 这时单条操作没有意义，
-     *   而六项菜单挤在一条底部横条里也放不下。
-     */
+    /** 进入多选（由长按菜单里的「多选」调用）。长按菜单本身保持原样 —— 那些都是「只对这一条」的操作；进了多选才换成「一次处理一批」的两颗按钮，单条操作这时没有意义，六项菜单也挤不进一条底部横条。 */
     function enterConvSelect(convId) {
         if (!window.matchMedia(MOBILE_MQ).matches) return;
         if (typeof closeConversationContextMenu === 'function') closeConversationContextMenu();
@@ -1496,15 +1364,7 @@
         syncConvSelectUI();
     }
 
-    /**
-     * 「要不要取消多选」的确认：点空白处、Esc、系统返回都先走这里。
-     *
-     * 为什么不直接退：首页这块空白很大（金句卡、输入框、分组头、行与行的缝），
-     *   随手一碰就把攒好的一批清掉，而多选本来就是"攒一批再操作"才用得上的功能。
-     *   多选条上的 ✕ 是明确的退出按钮，按它的人知道自己要退出 —— 那里才直接退。
-     *
-     * @param {() => void} [onKeep] 用户选了"继续多选"之后调用（系统返回要据此补回历史记录）
-     */
+    /** 「要不要取消多选」的确认：点空白处、Esc、系统返回都先走这里。首页这块空白很大，随手一碰就会把攒好的一批清掉；多选条上的 ✕ 是明确退出按钮，那里才直接退。 */
     function askCancelConvSelect(onKeep) {
         if (!convSelect.on || convSelect.asking) return;
         if (typeof showCustomConfirm !== 'function') { exitConvSelect(); return; }
@@ -1521,7 +1381,6 @@
         if (!convSelect.on) return;
         if (convSelect.ids[convId]) delete convSelect.ids[convId];
         else convSelect.ids[convId] = true;
-        // 一个都不剩就等于没有可操作的对象：直接退出，不留一条"已选 0"的条子占着底边。
         if (!convSelectedIds().length) { exitConvSelect(); return; }
         syncConvSelectUI();
     }
@@ -1533,7 +1392,6 @@
         var init = byId('initialState');
 
         if (convSelect.on) {
-            // 别处删掉的对话不能还留在"已选"里，否则计数与实际可删的对象对不上。
             var alive = {};
             try {
                 (state.conversations || []).forEach(function (c) { alive[c.id] = true; });
@@ -1557,7 +1415,6 @@
             var count = bar.querySelector('.mm-selbar-n');
             if (count) count.textContent = '已选 ' + convSelectedIds().length + ' 项';
         }
-        // 多选条是固定层，会把列表末尾几行盖住；给首页补一段等高的底部留白。
         if (init) init.classList.toggle('is-conv-selecting', convSelect.on);
     }
 
@@ -1585,7 +1442,6 @@
         try {
             state.conversations = (state.conversations || []).filter(function (c) { return !gone[c.id]; });
         } catch (e) { return; }
-        // 日记 / 收藏也挂在对话上：只删对话会留下"已删除的对话"分组（单个删除走的是同一个函数）。
         if (typeof purgeConversationDependents === 'function') purgeConversationDependents(ids);
         if (typeof saveConversations === 'function') saveConversations();
         if (typeof updateNotesBadge === 'function') updateNotesBadge();
@@ -1602,7 +1458,6 @@
         if (state.memoryPageMode && typeof renderMemoryPage === 'function') renderMemoryPage();
     }
 
-    // 多选是"浮在首页上"的一层：系统返回、Esc 都该退出它，而不是离开页面。
     function pushConvSelectHistory() {
         if (convSelect.historyPushed || !window.history || !history.pushState) return;
         if (!window.matchMedia(MOBILE_MQ).matches) return;
@@ -1622,8 +1477,7 @@
         if (!convSelect.historyPushed) return;
         convSelect.historyPushed = false;
         if (!convSelect.on) return;
-        // 系统返回也算"取消"：先问一句，用户选择继续多选就把这条历史记录补回去
-        //   （记录已被这次返回吃掉，不补的话下一次返回会直接离开首页）。
+        // 系统返回也算「取消」：先问一句，用户选择继续多选就把这条历史记录补回去（记录已被这次返回吃掉，不补的话下一次返回会直接离开首页）。
         askCancelConvSelect(pushConvSelectHistory);
     });
 
@@ -1631,11 +1485,7 @@
         if (convSelect.on && ev.key === 'Escape') askCancelConvSelect();
     });
 
-    /**
-     * 气泡里不写名字和秒级时间。
-     * 消息节点由 ui.js 渲染（业务链路），AI 头像也在那条路径里（.ai-msg-avatar），
-     * 这里只把时间裁到分钟，不再另插头像 —— 插了就和业务渲染的撞成两份。
-     */
+    /** 气泡里不写名字和秒级时间：消息节点与 AI 头像由 ui.js 渲染（.ai-msg-avatar），这里只把时间裁到分钟，不再另插头像（插了会和业务渲染撞成两份）。 */
     function decorateMessage(item) {
         if (!item || item.getAttribute('data-mm-decor') === '1') return;
         item.setAttribute('data-mm-decor', '1');
@@ -1657,8 +1507,6 @@
         if (window.requestAnimationFrame) window.requestAnimationFrame(run);
         else window.setTimeout(run, 16);
     }
-
-    // ==================== 首页输入框：点一下直接进对话（草稿态） ====================
 
     var DRAFT_ANIM_MS = 280;
 
@@ -1697,11 +1545,7 @@
         });
     }
 
-    /**
-     * 首页点输入框 = 直接开始一段对话，但**先不建会话记录**：
-     * 真正发消息那条路径（handleTextSubmit）才会 createConversation，
-     * 所以什么都没发就返回的话，列表里不会多一条空的「新对话」。
-     */
+    /** 首页点输入框 = 直接开始一段对话，但先不建会话记录：真正发消息那条路径（handleTextSubmit）才会 createConversation，所以什么都没发就返回的话，列表里不会多一条空的「新对话」。 */
     function enterDraftChat() {
         var init = byId('initialState');
         var shell = init ? init.querySelector('.initial-composer-shell') : null;
@@ -1761,7 +1605,6 @@
         syncNav();
     }
 
-    /** 首页的「今日金句」卡：窄屏把被重设计层藏起来的金句以卡片形式放回来。 */
     function buildMobileQuote() {
         var init = byId('initialState');
         var composer = init ? init.querySelector('.initial-composer') : null;
@@ -1802,7 +1645,6 @@
         else init.appendChild(card);
     }
 
-    /** 金句文本与收藏态都读既有实现的状态，不另存一份。 */
     function syncMobileQuote() {
         var card = byId('mobileQuoteCard');
         if (!card) return;
@@ -1827,13 +1669,7 @@
         if (fav) fav.classList.toggle('is-on', faved);
     }
 
-    // ==================== 首页 / 会话页两套顶栏（对齐原型） ====================
-
-    /**
-     * 原型里首页与会话页是两条不同的顶栏：
-     *   首页 = 头像 + 问候 + 搜索 + 新建；会话页 = 返回 + 角色头像 + 名字 + 状态。
-     * 这里把两套需要的节点都建好，靠 .is-home / .is-conv 切换可见性。
-     */
+    /** 首页与会话页是两条不同的顶栏（首页 = 头像 + 问候 + 搜索 + 新建；会话页 = 返回 + 角色头像 + 名字 + 状态）：两套节点都建好，靠 .is-home / .is-conv 切换可见性。 */
     function buildHomeHeader() {
         var header = byId('chatHeader');
         if (!header) return;
@@ -1861,7 +1697,6 @@
             search.title = '搜索对话';
             search.setAttribute('aria-label', '搜索对话');
             search.innerHTML = ICONS.search;
-            // 首页现在就是完整的对话列表（含文件夹），搜索就地筛这份列表，不再去开抽屉。
             search.addEventListener('click', function (ev) {
                 if (ev && typeof ev.stopPropagation === 'function') ev.stopPropagation();
                 var input = byId('mobileConvSearch');
@@ -1875,8 +1710,6 @@
                     renderMobileConvList();
                 }
             });
-            // 右上角不再放「新建对话」：中间那条输入框就是入口 ——
-            //   点它直接进对话（见 enterDraftChat），不需要再多一颗按钮。
             box.appendChild(search);
             var slot = byId('headerModSlot');
             if (slot && slot.parentNode === header) header.insertBefore(box, slot);
@@ -1884,8 +1717,6 @@
         }
 
         var copy = header.querySelector('.rd-header-copy');
-        // 回忆的四个页面原本各写一条页头（英文眉题 + 大标题 + 返回），窄屏收成
-        //   "外壳顶栏 + 分段条"两行：标题写「回忆」，具体分类由分段条表达。
         if (copy && !byId('mobileHubTitle')) {
             var hub = document.createElement('div');
             hub.id = 'mobileHubTitle';
@@ -1944,15 +1775,10 @@
         header.insertBefore(b, header.firstChild);
     }
 
-    /**
-     * 滚动条只在滚动时亮：平时 thumb 透明，滚动开始后给 700ms 的可见窗口。
-     * 为什么不用 CSS 自动淡出：这条滚动条是 ::-webkit-scrollbar 自绘的，
-     *   自绘的 thumb 只要给了颜色就会一直显示（触屏上常亮很扎眼）。
-     */
+    /** 滚动条只在滚动时亮：平时 thumb 透明，滚动开始后给 700ms 的可见窗口 —— 自绘的 thumb（::-webkit-scrollbar）只要给了颜色就会一直显示，触屏上常亮很扎眼。 */
     function wireScrollbarFade() {
         var timers = new WeakMap();
         document.addEventListener('scroll', function (e) {
-            // 文档整体滚动时 target 是 document，换成滚动元素才能挂类
             var el = (e.target === document || e.target === document.documentElement)
                 ? (document.scrollingElement || document.documentElement)
                 : e.target;
@@ -2026,7 +1852,6 @@
         window.addEventListener('resize', function () { syncAllCapsuleThumbs(); });
         window.addEventListener('orientationchange', function () { window.setTimeout(syncAllCapsuleThumbs, 220); });
         if (document.fonts && document.fonts.ready && typeof document.fonts.ready.then === 'function') {
-            // 字体晚到会改变每格宽度，圆要跟着重摆
             document.fonts.ready.then(function () { syncAllCapsuleThumbs(); }).catch(function () {});
         }
         buildNav();
@@ -2046,7 +1871,6 @@
         syncMobileQuote();
         watchState();
         watchSettings();
-        // 成就浮层是懒建的：出现的那一刻把它并入「回忆」这套排版。
         if (window.MutationObserver) {
             new MutationObserver(function () {
                 if (byId('achievementsOverlay')) ensureAchHub();

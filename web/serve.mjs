@@ -16,113 +16,64 @@ import { inflateRawSync } from 'node:zlib';
 import dns from 'node:dns';
 import { createStore } from '../server/store.mjs';
 import { createModManager } from '../server/mods.mjs';
-// 技能（skill）是**另一个概念**（给 AI 的指令与知识，纯文本），与插件分开管理：
-//   插件扩应用本身（代码、可装可卸），技能给 AI 用（文本、不注册进应用）。
-// 所以它有自己的管理器与自己的接口（/api/skills），绝不混进插件清单（详见 server/skills.mjs）。
+// 技能（skill）是给 AI 的纯文本指令，与插件分开管理、走独立的 /api/skills（见 server/skills.mjs）
 import { createSkillManager } from '../server/skills.mjs';
-// 备份里的插件 / 技能目录：与 data/ 的键值分开收集，但合进同一个 zip ——
-// 用户备份时只该拿一个文件（见 server/backup-packages.mjs）。
+// 备份时把插件 / 技能目录与 data/ 键值合进同一个 zip（见 server/backup-packages.mjs）
 import { createPackageBackup } from '../server/backup-packages.mjs';
 import { createLanShare, LAN_SHARE_PREFIX } from '../server/lan-share.mjs';
-// 版本检测：查 GitHub 的最新 Release（设置 → 高级「版本与更新」的数据来源）。
-// 单独成模块：可注入 fetch/时钟，网络失败与限流能被穷举断言。
+// 版本检测：查 GitHub 最新 Release（见 server/update-check.mjs）；可注入 fetch/时钟，便于穷举断言
 import { createUpdateChecker } from '../server/update-check.mjs';
-// 插件（mod）的**服务端半边**：按 manifest.json 的 server 声明装载路由与上传目录。
-// 单独成模块的理由与 auth-guard / pc-command 一致：纯逻辑、可注入、能穷举断言 ——
-// 而它放行的是"第三方 JS 在服务端进程里注册接口"，判定错了后面全是空的。
+// 插件的服务端半边：按 manifest.json 的 server 声明装载路由与上传目录（见 server/mod-server.mjs）
 import { createModServer } from '../server/mod-server.mjs';
-// MCP（Model Context Protocol）**客户端**：把外部 MCP 服务器的工具接进 AI 的工具清单。
-//   只做客户端方向 —— "把本机能力暴露成 MCP 服务器"等于把文件读写与命令执行交给
-//   任何能连上它的客户端，与 BYOK / 权限闸的定位直接冲突（见 mcp-client.mjs 头部说明）。
+// MCP 客户端：把外部 MCP 服务器的工具接进 AI 工具清单；只做客户端方向（见 server/mcp-registry.mjs）
 import { createMcpRegistry } from '../server/mcp-registry.mjs';
-// "看电脑在干什么"（前台窗口 + 进程）—— 供桌宠让 AI 知道用户在做什么。
-// 单独成模块：纯函数式便于测试，且以后"AI 操作电脑"要判断当前窗口时能直接复用。
+// 电脑活动摘要（前台窗口 + 进程），供桌宠使用（见 server/activity.mjs）
 import { activitySummaryCached } from '../server/activity.mjs';
-// 电脑命令执行（全权限模式下 AI 跑 PowerShell / cmd）。危险命令的判定是纯函数，
-// 单独成模块便于穷举断言 —— 判定错了后面所有防护都是空的（见 pc-command.mjs）。
+// 电脑命令执行：危险命令判定是纯函数，单独成模块便于穷举断言（见 server/pc-command.mjs）
 import { classifyCommand, runCommand, formatCommandResult, availableShells } from '../server/pc-command.mjs';
-// 登录防爆破 + 密码强度。单独成模块的理由与 pc-command 一致：纯逻辑、可注入时钟、
-// 能穷举断言锁定策略 —— 而放开"局域网可执行命令"之后，密码是唯一还站着的防线。
+// 登录防爆破与密码强度：局域网可执行命令之后，密码是唯一防线（见 server/auth-guard.mjs）
 import { createLoginGuard, validatePasswordStrength, PWD_MIN_LEN } from '../server/auth-guard.mjs';
-// zip 解压 / 危险扩展名判定：**服务端唯一的实现**在 server/zip.mjs
-// （体积上限、危险类型拦截、GBK 解码、zip64 回退都在 readZip 里）。
-// 解压逻辑只准有一份 —— 两份意味着安全修复要改两处，漏一处就是个洞。
-// 这里只保留一个薄包装，语义（{files, blocked}）不变。
-// isUnsafeEntryName / MAX_UPLOAD 也从这里拿：解压与落盘的安全约束跟着解压
-// 实现走，所有调用方（含手机端 bootstrap 的 hostUtils）吃同一份判定与数字。
+// zip 解压与安全判定唯一实现在 server/zip.mjs（上限、危险扩展名、GBK、zip64）；这里只是薄包装
 import { readZip, BLOCKED_EXT, effectiveExt, isUnsafeEntryName, MAX_UPLOAD } from '../server/zip.mjs';
-// 启动头格式（横幅）。日志**正文**不走这里 —— 正文保持一行一事件、英文为主。
-// 诊断细节的呈现已移到软件内日志查看器（/api/logs/tail + 设置页），不再刷控制台。
 import { banner } from '../server/diagnostics.mjs';
 // 内存日志缓冲：软件内日志查看器的数据源（控制台全量、界面筛着看）。
 import { createLogBuffer } from '../server/log-buffer.mjs';
-// jsonResponse / readJsonBody 是通用 HTTP 小工具，与"电脑端"无关，
-//   单独放在 server/http-util.mjs：手机端内嵌的 Node 要 import 同一份，
-//   否则就要复制一份，细节迟早不一致。
+// jsonResponse / readJsonBody：通用 HTTP 小工具，手机端内嵌 Node 要共用同一份（见 server/http-util.mjs）
 import { jsonResponse, readJsonBody } from '../server/http-util.mjs';
-// 本地中继放在 server/relay.mjs，是**两端共用**的模块（手机端也要跑同一条路）。
-//   这里只把本机的追踪日志与三个安全判定接上去。
+// 本地中继：两端共用一份实现（见 server/relay.mjs），这里只接上本机日志与安全判定
 import { createRelay } from '../server/relay.mjs';
-// 网络边界判定（是否本机请求 / 回环主机名 / 内网地址）放在 server/net-guard.mjs ——
-//   手机端那条中继要用**同一份**判定，安全逻辑不留两份。
+// 网络边界判定（本机 / 回环 / 内网），手机端中继共用同一份（见 server/net-guard.mjs）
 import { isLocalRequest, isLoopbackHostname, isPrivateIPv4, isInternalAddress } from '../server/net-guard.mjs';
-// AI 用浏览器：真的开一个 Chrome / Edge，看页面、点东西、填表单。
-//   与 pc-command 分开是刻意的 —— 命令通道是"文本进文本出"，看不到页面；
-//   浏览器通道要读 DOM、要真点，两件事的失败方式与安全边界都不一样
-//   （浏览器的调试端口能读会话 cookie，所以它只许绑 127.0.0.1）。
+// AI 用浏览器：真开 Chrome / Edge 操作页面；与 pc-command 分开是刻意的（见 server/browser.mjs）
 import { createBrowserSession, runBrowserAction, findBrowserExecutable } from '../server/browser.mjs';
 
 const scryptAsync = promisify(scrypt);
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-// 应用根目录（web 的上一级）与其下的 data/：
-//   证书 + 端侧数据存储都放这里。因为它在 web/ 之外，静态文件服务够不到，
-//   不会像放在 web/ 里那样被直接下载走。
+// 应用根目录（web 的上一级）：证书与端侧数据都放这里；它在静态根 web/ 之外，不会被直接下载走
 const APP_ROOT = path.resolve(root, '..');
-// DATA_DIR 可用环境变量覆盖：自动化检查要跑真实的读写与迁移，
-// 如果直接写用户的 data/，每跑一次就会动到真实数据（甚至触发迁移）。
+// DATA_DIR 可用环境变量覆盖：自动化检查要跑真实读写，不能落到用户真实 data/
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(APP_ROOT, 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
 const CERT_FILE = path.join(DATA_DIR, 'cert.pem');
 const KEY_FILE = path.join(DATA_DIR, 'key.pem');
 const STORE_MAX_BYTES = 32 * 1024 * 1024; // 端侧数据（聊天记录等）单次提交上限
-// 单个键的上限（字符数）。超限必须**报错**而不是丢弃：聊天记录全装在一个键里，
-//   丢掉它等于"保存成功但什么都没写"，用户重启后才发现消息没了。
+// 单个键超限必须**报错**而不是丢弃：聊天记录全在一个键里，丢弃等于"保存成功但什么都没写"
 const STORE_KEY_MAX_CHARS = 8 * 1024 * 1024;
-// 默认监听 0.0.0.0：局域网内其他设备（手机/平板）可通过 http://<本机IP>:4173 访问。
-// 可用 HOST 环境变量覆盖（如 HOST=127.0.0.1 仅本机）。
+// 默认监听 0.0.0.0：局域网内其他设备可通过 http://<本机IP>:4173 访问；HOST 环境变量可覆盖（如 127.0.0.1 仅本机）。
 const host = process.env.HOST || '0.0.0.0';
 /**
- * 端口：默认从 3999 起，**被占用就往上找**（4000、4001…）。
- *
- * 为什么默认不再写死 4173：用户完全可能同时装了两个版本，或者上一次的服务
- *   还没退干净。这时旧行为是启动直接失败（EADDRINUSE），而用户看到的是
- *   "双击了 启动.bat，窗口闪一下就没了" —— 最难自查的一类。
- *
- * 什么时候**不**自动递增：显式传了 `PORT` 时按给定端口启动，占用了就报错退出。
- *   自动化检查就是这种情况（它们各自 `PORT=<临时端口>` 起服务）：
- *   · 让它们静默漂移到别的端口，检查断言的地址会全部对不上；
- *   · 几十个用例并发时更糟 —— 会互相"抢"端口，表现成随机失败。
- *   所以"自动递增"是**用户友好**，不该悄悄影响可测性。
+ * 端口默认从 3999 起、被占用就往上找；显式传 PORT 时按给定端口、占用即报错退出
+ * （自动化检查各自传临时端口，静默漂移会断言对不上、并发用例会互抢端口）。
  */
 const PORT_EXPLICIT = process.env.PORT !== undefined && String(process.env.PORT).trim() !== '';
 const PORT_START = Number(PORT_EXPLICIT ? process.env.PORT : 3999);
 /** 往上最多找多少个端口（3999 → 4098）。够用，又不至于卡住启动。 */
 const PORT_SCAN_SPAN = 100;
-/**
- * 「本项目的另一个实例已经在跑」时的退出码：`启动.bat` 认这个码就不再 pause，
- * 窗口直接关掉。只有**另起一个服务**才需要人留着窗口看它，而这个分支没有服务可看。
- */
+/** 本项目另一实例已在跑时的退出码：启动.bat 认这个码就不再 pause（此分支没有服务可看） */
 const EXIT_ALREADY_RUNNING = 3;
 
-// 已有实例在跑 → 不起第二个服务（用户把 启动.bat 双击了两次就是这条）。
-// 为什么必须分辨「谁占着端口」：端口被占有两种，处置完全相反 ——
-//   · **别的软件**（QQ、别的服务）占着 → 该往后换端口照常起服务；
-//   · **本项目上一个实例**占着 → 再起一个只会多出一份启动窗口、多占一个端口，
-//     而用户要的还是那个已经在跑的界面，于是把浏览器指过去、自己退出。
-// 判定只认我们自己（见 isOurInstance），别的软件不会被误当成"已有实例"。
-// 只在未显式传 PORT 时做（用户双击启动这条路）：检查脚本各自传 PORT 起服务，
-// 它们要的就是"起一个干净的新实例"，不能被这个分支拦下。
+// 未显式传 PORT 时先探测：本项目实例占端口就复用并退出（见 isOurInstance），别的软件占着就往后换端口；检查脚本各自传 PORT。
 if (!PORT_EXPLICIT) {
     try {
         const running = await findRunningInstance(PORT_START, PORT_SCAN_SPAN);
@@ -136,78 +87,27 @@ if (!PORT_EXPLICIT) {
     }
 }
 
-// 插件（mod）根目录。把 xxx.zip 丢进来就会被自动解压并写进 index.json，
-// 前端只读清单 —— 因为浏览器没法列目录（详见 server/mods.mjs 的说明）。
-//   `mods/` 放在**项目根**、不在静态根 `web/` 里：`web/` 是**静态文件根**，
-//   插件住在那儿意味着"插件目录"与"应用自己的前端资源"混在同一棵树里 ——
-//   既不好区分（`web/js` 是宿主的，插件的 JS 是插件的），也让"哪些是程序本体"
-//   这个问题变得含糊。放在根目录下与 `data/` 平级：两者都是"运行期内容"，
-//   都不在静态根内。
-//   ⚠️ 代价（必须由代码补上，否则插件资源全部 404）：
-//      静态处理器只发 `web/` 里的东西，够不到 `mods/`，
-//      所以下面有一条**显式的 /mods/* 路由**（见「插件静态资源」那段）。
-//      少了那条路由，立绘 / 背景 / Live2D 模型 / 插件自带的 panel.html
-//      全部 404 —— 正是本项目最忌讳的"装了等于没装"。
-// 可用环境变量 MODS_DIR 覆盖：
-//   自动化检查要往插件目录里放测试 zip，而**用户自己的服务可能正跑着** ——
-//   它每次被请求 /api/plugins 都会重新扫描目录，于是会把测试的 zip 抢走，
-//   表现为"检查时好时坏"（假故障：单独跑通过、跟别的检查并发跑就失败）。
-//   与 DATA_DIR / LOG_DIR 同理：测试该能完全隔离，不碰用户的真实数据。
+// 插件（mod）根目录：xxx.zip 丢进来即自动解压写进 index.json；它在静态根 web/ 之外，必须另有显式 /mods/ 路由否则全 404；MODS_DIR 可覆盖。
 const MODS_DIR = process.env.MODS_DIR
     ? path.resolve(process.env.MODS_DIR)
     : path.join(root, '..', 'mods');
 
-// 技能（skill）根目录。与 MODS_DIR 平级（都在项目根，不在静态根 web/ 内）：
-//   技能**不是**插件、也不会被静态服务直接发出去，所以它同样住在 web/ 之外，
-//   只经 /api/skills 这一组接口暴露（详见 server/skills.mjs）。
-//   同样可用环境变量 SKILLS_DIR 覆盖 —— 与 MODS_DIR 同理：自动化检查要往
-//     技能目录里放测试包，而用户自己的服务可能正跑着，指向临时目录才能完全隔离。
+// 技能（skill）根目录：与 MODS_DIR 平级、不在静态根内，只经 /api/skills 暴露；SKILLS_DIR 同样可覆盖以隔离自动化检查。
 const SKILLS_DIR = process.env.SKILLS_DIR
     ? path.resolve(process.env.SKILLS_DIR)
     : path.join(root, '..', 'skills');
-// Live2D 服务端的四个接口与模型目录读写都在 mods/live2d-models/（见它的 server.mjs）：
-//   GET  /api/live2d/models · POST /api/live2d/upload
-//   DELETE /api/live2d/models/<名> · POST /api/live2d/rename
-// 模型文件也住在那个插件目录下，URL 不变（由 manifest.server.static 映射）。
-// MAX_UPLOAD 从 server/zip.mjs import（所有调用方同一个数，防"电脑能传手机 413"）。
-// BLOCKED_EXT / effectiveExt 定义在 server/zip.mjs（解压实现所在处），
-// 这里通过上面的 import 使用 —— 危险类型清单属于"解压"的安全约束，
-// 跟着实现走才能保证所有调用方（模型上传 / 数据导入 / mod 安装）都受保护。
 
 /** 该路径是否是禁止在应用文件夹内写入的危险类型 */
 function isBlockedWritePath(target) {
     return BLOCKED_EXT.has(effectiveExt(path.basename(String(target || ''))));
 }
 
-// ===== 日志系统 =====
-// 格式参照 AstrBot（`astrbot/core/log.py`）：
-//   控制台  [HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息     （终端支持时带 ANSI 颜色）
-//   文件    [YYYY-MM-DD HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息
-// 时间戳带毫秒：同一秒里能连打十几条日志，秒级精度下它们在查看器里
-// 分不出先后、也无法与 bat 面板逐行对齐。
-// 级别固定四位（DBUG/INFO/WARN/ERRO/CRIT），WARN 及以上再带 ` [v版本]` —— 都照 AstrBot 抄的，
-// 等宽、能一眼扫出来、也好 grep。
-// 时间用**本地时间**，不用 toISOString() 的 UTC：否则文件名写着 20:04、
-// 行内却是 12:04，差 8 小时对不上号 —— 日志最基础的可用性就是这个。
-// 两个文件，各管一件事：
-//   <启动时刻>.log         主日志：一行一条记录，方便 grep。服务、访问、中转摘要、Agent、页面报错。
-//   <启动时刻>.trace.log   追踪日志：LLM 的完整请求消息 + 完整回复 + 完整上游报错。
-//                          多行原样保留（这是给人读的），主日志里则压成一行并截断。
-// 为什么分成两个：对话内容又长又私密。混在主日志里会把 grep 结果淹掉；而且排查问题时
-// 主日志常常是要直接发出去的 —— 分开之后"要不要发对话内容"就变成一个明确的动作。
-// 追踪日志默认开（`LOG_CHAT=0` 关掉），启动时会打一行提醒。
-// 落盘策略：**每次启动一组文件**，文件名就是启动时刻；单个文件超过 LOG_MAX_BYTES 就拆 `_2`/`_3`；
-// 只保留最近 LOG_KEEP 次启动（同一次启动的主日志与追踪日志一起留、一起删）。
-// 不记录请求头：Authorization 就在里面，落盘等于把 API Key 写到磁盘上。
-// 请求体/响应体里的凭据形态由 redactSecrets() 兜底。
-// LOG_DIR 可以覆盖：自动化检查要起真实服务、跑真实的日志写入，
-// 如果直接写用户的 data/logs，每跑一次就多一次"启动"、还会触发轮转删掉旧日志。
+// 日志系统：格式参照 AstrBot（控制台 [HH:mm:ss.SSS] [标签] [级别] [来源:行号]: 消息，文件带完整日期；级别四位、WARN 及以上附版本号、本地时间）；主日志一行一条便于 grep，追踪日志存完整对话；每次启动一组文件、超限拆 _2/_3、只留 LOG_KEEP 次；不记请求头；LOG_DIR 可覆盖。
 const LOG_DIR = process.env.LOG_DIR ? path.resolve(process.env.LOG_DIR) : path.join(DATA_DIR, 'logs');
 const LOG_KEEP = 10;                       // 保留最近多少次启动的日志
 const LOG_MAX_BYTES = 8 * 1024 * 1024;     // 单个日志文件上限，超出拆 _2/_3
 const LOG_TO_FILE = String(process.env.LOG_TO_FILE ?? '1') !== '0';
-// 完整对话内容是否写进追踪日志。默认开 —— 排查"AI 为什么这么答"时最缺的就是这个。
-// 只作为**初始值**：运行中可在 设置 → 高级 → 日志 里切换（见 traceEnabled）。
+// 完整对话是否写追踪日志（LOG_CHAT=0 关掉）；只作初始值，运行期在 设置 → 高级 → 日志 切换（traceEnabled）
 const LOG_CHAT = String(process.env.LOG_CHAT ?? '1') !== '0';
 // （本条日志与追踪日志的几个大小上限在 server/relay.mjs —— 它们只服务于中继。）
 
@@ -224,12 +124,7 @@ function logStampFor(date) {
 }
 /**
  * 时刻 → 日志行里的 `YYYY-MM-DD HH:mm:ss.SSS`。
- *
- * 带毫秒（对齐 AstrBot 与 LingChat 的日志行）：
- *   一次启动会连打十几条日志，秒级精度下它们**时间戳完全相同** ——
- *   在日志查看器里既分不出先后，也无法和 bat 面板逐行对齐。
- *   毫秒让同一秒内的记录可区分，也是"这次请求慢在哪"唯一能看出来的地方。
- *   文件名仍用秒级（logStampFor），因为它是路径的一部分，且"哪次启动"只需秒级。
+ * 带毫秒：一次启动连打十几条日志，秒级精度分不出先后；文件名仍用秒级（logStampFor）。
  */
 function logTimeFull(date = new Date()) {
     return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} `
@@ -242,7 +137,7 @@ function logTimeShort(date = new Date()) {
         + `.${pad3(date.getMilliseconds())}`;
 }
 
-// ---- 级别（四位，对齐 AstrBot 的 short_levelname）----
+// 级别（四位，对齐 AstrBot short_levelname）
 const LEVEL_SHORT = { DEBUG: 'DBUG', INFO: 'INFO', WARN: 'WARN', ERROR: 'ERRO', CRITICAL: 'CRIT' };
 const LEVEL_NO = { DEBUG: 10, INFO: 20, WARN: 30, ERROR: 40, CRITICAL: 50 };
 // 级别从低到高。对外（设置界面 / API）一律用这套全名，短名只出现在日志行里。
@@ -256,14 +151,7 @@ const LEVEL_INPUT_ALIASES = {
     CRIT: 'CRITICAL', CRITICAL: 'CRITICAL', FATAL: 'CRITICAL',
 };
 
-// ---- 落盘级别 ----
-// 与 AstrBot 的分工一致：**控制台 sink 恒为 DEBUG（终端永远看全量），文件 sink 按级别过滤**。
-// 这样"排查时终端不丢东西"和"日志文件不被 DEBUG 刷爆"可以同时成立。
-// **级别不是用户配置**（设置界面里没有这块，见 index.html 说明）。
-//   只有"环境变量 > 默认"两档，运行期仍可用 /api/logs/settings 临时改（调试与自动化检查要用）。
-//   为什么**不持久化到磁盘**：data/logs/log-settings.json 是给界面用的 ——
-//   界面上没有入口却继续读它，会让磁盘上把级别调成 ERROR 的用户永远卡在只记报错、
-//   而且**没有任何入口能改回来**。那比丢掉这个配置项糟得多。
+// 落盘级别：控制台 sink 恒看全量、文件 sink 按级别过滤；级别不是用户配置也不持久化到磁盘，只认"环境变量 > 默认"两档，运行期可经 /api/logs/settings 临时改。
 let fileLevel = 'INFO';        // 当前落盘级别（低于它的记录只进控制台）
 let traceEnabled = LOG_CHAT;   // 对话追踪日志开关（默认开；LOG_CHAT=0 可关）
 
@@ -272,22 +160,13 @@ function normalizeLevelName(raw) {
     return LEVEL_INPUT_ALIASES[String(raw || '').trim().toUpperCase()] || null;
 }
 
-// ── 控制台级别──────────────────────────────────────────
-// 控制台不能无条件全量：请求日志是 DEBUG 级，全量会把终端刷成
-// 每个请求一行 —— 对日常使用是纯噪音，反而耽误排查问题的进度。
-// 所以**控制台与文件各有级别开关**（都可在 设置 → 高级 → 日志 运行时调整）：
-//   · consoleLevel = DEBUG → 什么都能看到（排查时用）
-//   · consoleLevel = INFO（默认）→ 日常干净，请求细节/页面调试不刷屏
-// 内存缓冲不受任何级别约束 —— 软件内查看器随时能看全部历史。
+// 控制台级别：请求日志是 DEBUG 级，全量会把终端刷成每个请求一行；consoleLevel=DEBUG 看全部、INFO（默认）日常干净；内存缓冲不受级别约束。
 let consoleLevel = 'INFO';
 
-// 初始化：环境变量 > 默认（不再读 data/logs/log-settings.json，理由见上面 fileLevel 那段）。
-// 环境变量优先是刻意的 —— 自动化检查要能强制指定级别，而不受本机状态干扰。
+// 初始化只读环境变量（理由见上面 fileLevel 那段），环境变量优先是刻意的 —— 自动化检查要能强制指定级别。
 {
     fileLevel = normalizeLevelName(process.env.LOG_LEVEL) || 'INFO';
     consoleLevel = normalizeLevelName(process.env.LOG_CONSOLE) || 'INFO';
-    // 追踪日志：默认开（LOG_CHAT 的默认值是 '1'），要关只能用 LOG_CHAT=0。
-    // 这里不再叠加 saved.trace —— 界面已经不能改它了，读旧值只会让用户无法恢复。
 }
 
 /** 当前级别是否该落盘 */
@@ -315,9 +194,8 @@ function setFileLogLevel(next) {
 }
 
 /**
- * 运行中开关对话追踪日志（现在只有 /api/logs/settings 会调它 —— 界面上没有这个开关了）。
- * 打开时若文件还没建过就补建一个 —— 否则调用方打开开关、去目录里找却什么都没有，
- * 会以为开关没生效（启动时只建过一次，那时是关的）。
+ * 运行中开关对话追踪日志（只有 /api/logs/settings 会调它）。
+ * 打开时若文件还没建过就补建一个，否则调用方打开开关、去目录里找却什么都没有。
  */
 function setTraceEnabled(on) {
     const next = Boolean(on);
@@ -339,10 +217,7 @@ const LEVEL_COLOR = {
 const ANSI_RESET = '\x1b[0m';
 const ANSI_TIME = '\x1b[32m';   // 时间绿色，同 AstrBot 的 <green>{time}</green>
 
-// 版本号：WARN 及以上会附在级别后面（同 AstrBot 的 astrbot_version_tag）。
-// 这个项目频繁重打包，出问题时能一眼对上"这份日志是哪一版产生的"。
-// 打包形态（Electron 桌面壳）里 package.json 在 asar 内，服务端读不到磁盘上的它；
-// 桌面壳会通过 APP_VERSION 传版本号。浏览器/exe/安卓入口没有这个变量，照旧读文件。
+// 版本号：WARN 及以上附在级别后（同 AstrBot 的 astrbot_version_tag）；打包形态里 package.json 在 asar 内，桌面壳通过 APP_VERSION 传版本号。
 let APP_VERSION = process.env.APP_VERSION || '0.0.0';
 if (!process.env.APP_VERSION) {
     try {
@@ -350,18 +225,13 @@ if (!process.env.APP_VERSION) {
     } catch { /* 读不到就算了 */ }
 }
 
-// 运行形态：桌面壳通过 ELAINA_EDITION 告诉服务端自己是谁 ——
-//   电脑版（C# + WebView2）传 windows；直接跑源码 / 浏览器打开时不传。
-//   版本检测要据此给出对应的安装包，所以只认白名单，
-//   未知值一律当 web（宁可少标一个平台，不可标错）。
+// 运行形态：桌面壳通过 ELAINA_EDITION 告知（目前只认 windows），版本检测据此给对应安装包，未知值一律当 web。
 const APP_EDITION = (() => {
     const raw = String(process.env.ELAINA_EDITION || '').trim().toLowerCase();
     return raw === 'windows' ? raw : 'web';
 })();
 
-// 消息开头的 [xxx] 会被抽出来当标签，正文里不再重复 —— 所以调用点照旧写
-// `console.log('[relay] ...')` 即可。这里把历史遗留的标签收敛成一套固定词汇，
-// 免得日志里同时出现 [boot]/[log]/[HTTPS]/[鉴权] 四种风格。
+// 消息开头的 [xxx] 抽出来当标签、正文不再重复，调用点照旧写 console.log('[relay] ...')；散落的标签在这里收敛成固定词汇。
 const TAG_ALIASES = {
     boot: 'Core', log: 'Core', store: 'Store', relay: 'Relay', live2d: 'Live2D',
     agent: 'Agent', chat: 'Chat', http: 'HTTP', page: 'Page',
@@ -377,9 +247,7 @@ function normalizeTag(raw) {
     return key.length <= 12 ? key[0].toUpperCase() + key.slice(1) : 'Core';
 }
 
-// 来源位置：取调用栈里第一条**不属于日志模块自己**的帧。
-// 必须跳过内部帧，否则每条日志都会指向 emitLog 自己，等于没写。
-// patchedConsoleLog 是下面那个 console 包装函数的名字 —— 得在这里就先登记上。
+// 来源位置：取调用栈里第一条不属于日志模块自己的帧（跳过内部帧，否则每条日志都指向 emitLog 自己）；patchedConsoleLog 是下面包装函数的名字。
 const LOG_INTERNAL_FNS = new Set(['emitLog', 'appendToFile', 'captureLocation', 'patchedConsoleLog', 'traceLine', 'logCritical']);
 function captureLocation() {
     try {
@@ -387,10 +255,7 @@ function captureLocation() {
         for (let i = 1; i < lines.length; i++) {
             const m = lines[i].match(/at\s+(?:(.*?)\s+\()?(.*?):(\d+):(\d+)\)?\s*$/);
             if (!m) continue;
-            // 被赋成 console.log 之后，V8 把函数名渲染成 `console.patchedConsoleLog [as log]`。
-            // 不剥掉 ` [as log]` 后缀的话，名字既不等于 `patchedConsoleLog`、也过不了
-            // `^.*\.` 那一刀，于是包装层会被当成"真正的调用点" —— 结果是**每一条**日志
-            // 都指向包装函数内部那一行，来源定位完全失效。
+            // 被赋成 console.log 之后，V8 把函数名渲染成 console.patchedConsoleLog [as log]；不剥掉这个后缀就过不了内部帧判定。
             const rawFn = (m[1] || '').replace(/\s*\[as\s+[^\]]*\]\s*$/, '').trim();
             if (LOG_INTERNAL_FNS.has(rawFn) || LOG_INTERNAL_FNS.has(rawFn.replace(/^.*\./, ''))) continue;
             const file = m[2].replace(/\\/g, '/');
@@ -403,8 +268,7 @@ function captureLocation() {
     return 'serve.mjs:?';
 }
 
-// 控制台是否上色。hasColors() 自己会尊重 NO_COLOR / FORCE_COLOR；非 TTY（重定向到文件）
-// 时返回 false，所以把控制台重定向出去也不会带一堆转义码。
+// 控制台是否上色：hasColors() 尊重 NO_COLOR / FORCE_COLOR；非 TTY 时返回 false，重定向不会带转义码。
 const CONSOLE_COLOR = (() => {
     try {
         if (!process.stdout.isTTY) return false;
@@ -421,9 +285,7 @@ const consoleOriginal = {
     info: console.info.bind(console),
 };
 
-// 老版本的日志是固定名 server.log（按 4MB 滚动成 server.log.1）。
-// 直接放着不管会永远留一个不会再更新的孤儿文件，用户分不清哪个是新的；
-// 按它的修改时间改名成新格式，让它作为一份历史日志正常参与轮转。
+// 固定名 server.log（4MB 滚动成 server.log.1）不改名会留下孤儿文件、用户分不清新旧；按其修改时间改名成新格式，让它作为历史日志参与轮转。
 function adoptLegacyLogs() {
     for (const [legacy, tag] of [['server.log', ''], ['server.log.1', '_old']]) {
         const full = path.join(LOG_DIR, legacy);
@@ -433,16 +295,13 @@ function adoptLegacyLogs() {
             let target = path.join(LOG_DIR, stamp + tag + '.log');
             for (let i = 2; existsSync(target); i++) target = path.join(LOG_DIR, `${stamp}${tag}_${i}.log`);
             renameSync(full, target);
-            // 走 console.log（→ emitLog）而不是 consoleOriginal：见 appendToFile 里的同类说明。
-            // 只进面板、不进查看器的话，"我的日志文件怎么改名了"在应用内查不到。
+            // 走 console.log（→ emitLog）而不是 consoleOriginal："日志文件改名了"也要在应用内查看器查得到。
             console.log(`[Core] 旧日志 ${legacy} 已改名为 ${path.basename(target)}`);
         } catch { /* 改不动就留着，不影响启动 */ }
     }
 }
 
-// 只保留最近 LOG_KEEP **次启动**。
-// 按"启动"分组而不是按文件数：一次启动现在会产出两个文件（主日志 + 追踪日志），
-// 按文件数算的话"留 10 份"就只等于 5 次启动，用户设的保留量会凭空缩水一半。
+// 只保留最近 LOG_KEEP 次启动：一次启动产出两个文件，按文件数算"留 10 份"只等于 5 次启动，保留量会凭空缩水一半。
 function pruneOldLogs() {
     try {
         const sessions = new Map();
@@ -456,9 +315,7 @@ function pruneOldLogs() {
         for (const key of stale) {
             for (const name of sessions.get(key)) {
                 rmSync(path.join(LOG_DIR, name), { force: true });
-                // 走 console.log（→ emitLog）而不是 consoleOriginal：理由同 appendToFile。
-                // 注意这里不能加 [Core] 以外的标签 —— prune 是同步清理，日志文件已关，
-                // 走 emitLog 是安全的（logBuffer 早已就绪）。
+                // 走 console.log（→ emitLog）：prune 在 console 包装之后跑，日志文件已关，走 emitLog 是安全的。
                 console.log(`[Core] 清理旧日志 ${name}（只保留最近 ${LOG_KEEP} 次启动）`);
             }
         }
@@ -466,49 +323,20 @@ function pruneOldLogs() {
 }
 
 /**
- * 写进日志文件的文本要脱敏。
- *
- * 起因：启动横幅里有「访问密码: xxxxxxxx」，而它会被原样落盘。排查问题时这些日志
- * 是要发出去的（贴到聊天里、发给别人看），明文密码就跟着一起漏了。
- * 追踪日志里还有完整对话和上游请求体，更需要这一层。
- *
- * 只在**写文件**这一层脱敏，控制台输出保持原样 —— 用户本来就靠终端里那行密码登录，
- * 而 `启动.bat` 并没有把控制台重定向到文件，所以不存在"换个地方又漏出去"的口子。
- *
- * 内存缓冲用的**也是这一份规则**（见 emitLog 里 logBuffer.push 的调用）。
- *   为什么缓冲要脱敏、控制台不脱敏：控制台只在本机那个 bat 窗口里，
- *   而缓冲会经 `/api/logs/tail` 发给**任何已登录的局域网设备**（手机/平板）。
- *   所以同一个密码在 bat 面板里是明文、在应用内查看器里是 `******` ——
- *   这是**有意的不一致**，不是 bug。
+ * 写进日志文件的文本要脱敏：日志常被发出去看，启动横幅里的明文访问密码会跟着漏。
+ * 只在写文件与内存缓冲两层脱敏（缓冲经 /api/logs/tail 发给局域网设备），控制台保持原样以便本机用密码登录。
  */
 const SECRET_RULES = [
-    // 启动横幅：只保留标签。
-    // 这条规则必须容忍"标签与冒号之间还有别的字"。
-    //   收紧写法 `/访问密码[:：]\s*\S+/`（要求 `访问密码` 后面**紧跟**冒号）会漏：
-    //   文案「局域网访问密码（初始随机）：xxxx」中间多了「（初始随机）」，
-    //   正则匹配不上 → **密码被明文写进日志文件**。
-    //   check-log.mjs 的"日志文件里没有明文访问密码"盯着这件事
-    //   （那条断言的价值就在这：文案一改，脱敏就可能失效）。
+    // 启动横幅只保留标签；规则必须容忍"标签与冒号之间还有别的字"—— 收紧成"访问密码紧跟冒号"会漏掉「局域网访问密码（初始随机）：xxxx」。
     [/访问密码[^：:\n]{0,20}[:：]\s*\S+/g, '访问密码: ******（仅打印在控制台，不写入日志）'],
-    // 英文事实行形态。
-    //   `[auth] LAN access password (initial, change it in Settings): xxx`
-    //   中文规则匹配不上 → 密码明文落盘。规则必须跟着文案走，
-    //   check-log.mjs 把所有既有格式全部喂一遍来盯着这件事。
+    // 英文事实行 `[auth] LAN access password (initial, change it in Settings): xxx` 形态（check-log.mjs 把所有既有格式喂一遍盯着）。
     [/LAN access password[^:\n]*:\s*\S+/gi, 'LAN access password: ******'],
-    // 密码**单独占一行**的形态。
-    //   为了让密码不被看漏，日志里它被放到了独立一行：
-    //       ⚠ 手机 / 平板连进来时要输这个密码
-    //           xxxxxxxxxxxx          ← 这一行只有密码
-    //   那种形态下按"访问密码:"匹配的规则完全失效 —— 密码会明文落盘。
-    //   这里按"提示语在上一行、密码独占下一行"来匹配，把密码那一行替换掉。
-    //   限制为 6-64 位的连续非空白字符，避免误伤普通文本行。
+    // 密码单独占一行的形态（提示语在上一行、密码独占下一行）；限制 6-64 位连续非空白字符，避免误伤普通文本行。
     [/(输这个密码[^\n]*\n\s*)(\S{6,64})(\s*\n)/g, '$1******（仅打印在控制台，不写入日志）$3'],
     // 兜底：万一日志里带上了 Authorization 头或 key=value 形式的凭据
     [/(Bearer\s+)[A-Za-z0-9._\-]{8,}/gi, '$1******'],
     [/((?:apiKey|api_key|api-key|accessKey|access_key|token|password|secret|authorization)"?\s*[:=]\s*"?)([A-Za-z0-9._\-]{12,})/gi, '$1******'],
-    // Tavily 的 Key 形态是 tvly-xxxx。上面那条按"字段名"匹配，而 Tavily 走的是
-    //   Authorization: Bearer tvly-…（已被 Bearer 规则覆盖）与请求体里的裸 key 两种形态 ——
-    //   裸 key 没有字段名，只能按厂商前缀认。
+    // Tavily 的 Key 形态 tvly-xxxx：Bearer 那条已覆盖 Authorization 形态，裸 key 没有字段名，只能按厂商前缀认。
     [/\btvly-[A-Za-z0-9._\-]{8,}/g, 'tvly-******'],
     // 常见厂商的裸 key 形态（sk- / rc- 等），万一出现在对话或报错里
     [/\b(sk|rc|hk|ak)-[A-Za-z0-9._\-]{16,}/g, '$1-******'],
@@ -520,9 +348,7 @@ function redactSecrets(text) {
     return out;
 }
 
-// ---- 两个 sink 的文件状态 ----
-// part=1 时文件名不带序号；超过 LOG_MAX_BYTES 后递增，变成 `_2`、`_3`……
-// 同一秒内起两个实例时用 `-2` 挂在 base 上（不是 `_2`），免得和大小拆分的序号撞车。
+// 两个 sink 的文件状态：part=1 不带序号，超过 LOG_MAX_BYTES 递增成 _2；同秒起第二实例用 -2 挂在 base 上，免得与大小拆分序号撞车。
 const mainSink = { base: '', ext: '.log', part: 1, file: '', bytes: 0 };
 const traceSink = { base: '', ext: '.trace.log', part: 1, file: '', bytes: 0 };
 function sinkPath(sink) {
@@ -541,8 +367,7 @@ function initLogFiles() {
         mainSink.file = sinkPath(mainSink);
         traceSink.file = sinkPath(traceSink);
         appendFileSync(mainSink.file, '');   // 立即建出空文件：这样它也会被算进"最近 N 次启动"
-        // 追踪日志也先建出来。启动横幅里已经报了它的路径，用户照着去找却找不到会以为功能坏了；
-        // 而且这样 `tail -f` 能从服务一启动就挂上，不用等第一次对话。
+        // 追踪日志也先建出来：启动横幅已报出路径，且 tail -f 能从服务启动就挂上。
         if (traceEnabled) appendFileSync(traceSink.file, '');
     } catch { /* 目录不可写时退化为"只打控制台" */ }
 }
@@ -556,12 +381,7 @@ function appendToFile(sink, text) {
             sink.part += 1;
             sink.file = sinkPath(sink);
             sink.bytes = 0;
-            // 走 console.log（→ emitLog）而不是 consoleOriginal.log。
-            //   必须走 console.log 而不是 consoleOriginal 直推终端：直推的话
-            //   **这条只在 bat 面板里、查看器里没有** —— 而"日志被拆成第二个文件了"
-            //   恰恰是要在查看器里解释的现象（日志续写在 <时刻>_2.log 里，
-            //   看当前那个文件会以为日志断了）。
-            //   项目里"查得到"比"不刷屏"更重要：它是 Core/INFO，落盘级别默认就收。
+            // 走 console.log（→ emitLog）而不是 consoleOriginal：直推终端的话这条只在 bat 面板、查看器里没有，而"日志拆成第二个文件"恰恰要在查看器里解释。
             console.log('[Core] 日志超过 '
                 + `${Math.round(LOG_MAX_BYTES / 1024 / 1024)}MB，换到 ${path.basename(sink.file)}`);
         }
@@ -572,10 +392,7 @@ function appendToFile(sink, text) {
 
 /**
  * 写一条主日志。
- *
- * 消息开头的 `[标签]` 会被抽出来当标签字段，正文里不再重复 —— 这样调用点还是
- * `console.log('[relay] ...')` 这种最自然的写法，输出却是 AstrBot 那种结构化的
- * `[时刻] [Relay] [INFO] [serve.mjs:1344]: ...`。
+ * 消息开头的 `[标签]` 被抽成标签字段、正文不再重复，所以调用点仍是 `console.log('[relay] ...')` 的自然写法。
  */
 function emitLog(level, args) {
     const text = args
@@ -593,22 +410,17 @@ function emitLog(level, args) {
     // AstrBot 只在 WARNING 及以上附版本号 —— 正常信息里塞版本号纯属噪音
     const verTag = (LEVEL_NO[level] || 20) >= 30 ? ` [v${APP_VERSION}]` : '';
 
-    // 内存缓冲：**每条都收**（不受任何级别约束，过滤在读的时候做）——
-    // 无论控制台/文件级别怎么调，软件内查看器随时能看到全部历史。
-    // 脱敏后再存：缓冲会经 /api/logs/tail 提供出去，与文件同一口径。
+    // 内存缓冲：每条都收（不受级别约束，读时过滤），查看器随时能看全部历史；脱敏后再存，与文件同一口径。
     logBuffer.push({
         ts: now, level, tag, loc,
         message: redactSecrets(body).replace(/^\n+/, ''),
     });
 
-    // 文件：按落盘级别过滤。
     if (shouldLogToFile(level)) {
         appendToFile(mainSink, formatForFile(body, now, tag, short, verTag, loc));
     }
 
-    // 控制台：按控制台级别过滤。
-    // 正文保持原样（多行就多行），人看的。被过滤的记录进了缓冲与（若达标）文件，
-    // 需要时切级别或开查看器都能找回来 —— 不会丢，只是不刷屏。
+    // 控制台：按控制台级别过滤；正文保持原样（人看的）。被过滤的记录进了缓冲与（若达标）文件，需要时切级别或开查看器都能找回来。
     if (!shouldLogToConsole(level)) return;
     const head = CONSOLE_COLOR
         ? `${ANSI_TIME}[${logTimeShort(now)}]${ANSI_RESET} [${tag}] ${LEVEL_COLOR[level] || ''}[${short}]${ANSI_RESET}${verTag} [${loc}]: `
@@ -618,51 +430,25 @@ function emitLog(level, args) {
 
 /**
  * 把一条记录格式化进主日志文件。
- *
- * 单行 vs 多行分开处理：
- *
- *   **无条件**把换行压成 `⏎` 会毁掉诊断块。那对普通一行日志是对的（保证 grep/tail 可用），
- *   但把诊断块（启动横幅 / 检查清单 / 问题报告）压成一行后完全没法读了 ——
- *   而这些块存在的意义恰恰是"让人一眼看懂"，压扁等于白做。
- *
- *   规则：
- *     · 单行 → 保持原样，一行一条。
- *     · 多行 → **保留换行**，首行带完整前缀（时间/标签/级别/来源），
- *              后续行只缩进、不再重复前缀。
- *
- *   为什么这样仍然可 grep：每个块的首行有完整前缀，`grep '\[ERRO\]'` 照样命中；
- *   而块内的细节行缩进对齐，`tail -f` 看上去是一段完整的说明而不是被切碎的行。
- *   这也和 traceLine 的处理方式一致（那里也是首行带时间戳、正文块不切）。
+ * 单行保持一行一条（保证 grep/tail 可用）；多行保留换行、首行带完整前缀、后续行只缩进 —— 压成一行会毁掉诊断块的可读性。
  */
 function formatForFile(body, now, tag, short, verTag, loc) {
     const head = `[${logTimeFull(now)}] [${tag}] [${short}]${verTag} [${loc}]: `;
-    // 先去掉正文**开头**的空行。
-    //   为什么：诊断块为了在终端里和上一条隔开，正文以 `\n` 开头
-    //   （`section()` 就是这么产出的）。若原样落盘，记录的首行会变成
-    //   `[时刻] [Core] [INFO] [serve:558]: ` —— 冒号后面空空如也，
-    //   而真正的标题 `【提醒】` 成了下一行、还没有缩进。
-    //   结果：既看不出这条记录属于谁，grep `[ERRO]` 也定位不到内容。
-    //   现在把开头的空行剥掉，标题直接接在前缀后面 —— 终端里的空行不受影响
-    //   （那是 consoleOriginal 那条路径输出的，走的还是原始 body）。
+    // 先去掉正文开头的空行：诊断块以 \n 开头与上一条隔开，原样落盘会让记录首行只剩前缀、标题成了下一行且无缩进，grep [ERRO] 也定位不到内容。
     const safe = redactSecrets(body).replace(/^\n+/, '');
     if (!safe.includes('\n')) return head + safe + '\n';
     const lines = safe.split('\n');
-    // 首行接在前缀后面；后续行原样保留（它们自己已经带缩进），
-    // 只把行尾空白去掉，避免日志文件里出现一堆尾随空格。
+    // 首行接在前缀后面；后续行原样保留（自带缩进），只去行尾空白。
     const rest = lines.slice(1).map((l) => l.replace(/\s+$/, ''));
     return head + lines[0].replace(/\s+$/, '') + '\n' + rest.join('\n') + '\n';
 }
 
-// ── 内存日志缓冲（软件内日志查看器的数据源）────────────────────────────
-// 每条日志在 emitLog 里存一份解析好的结构化记录；/api/logs/tail 按级别/模块/
-// 关键词过滤后返回给前端。**写入不受落盘级别约束** —— 过滤发生在读的时候，
-// 这样查看器切到 DEBUG 能看到全量（等同终端），切到 ERROR 只看报错。
+// 内存日志缓冲（软件内日志查看器的数据源）：emitLog 存结构化记录，/api/logs/tail 读时按级别/模块/关键词过滤（写入不受落盘级别约束）。
 const logBuffer = createLogBuffer();
 
 /**
- * 写追踪日志：LLM 的完整请求消息、完整回复、完整上游报错。
- * 多行**原样保留**（这是给人读的）；主日志里对应的那条会压成一行并截断。
- * 只在开头带一个时间戳，正文块不再逐行加前缀，免得把内容切碎。
+ * 写追踪日志：LLM 完整请求消息、完整回复、完整上游报错。
+ * 多行原样保留（给人读）；只在开头带一个时间戳，正文块不逐行加前缀。
  */
 function traceLine(text) {
     if (!traceEnabled) return;
@@ -679,9 +465,7 @@ for (const [method, level] of [
     // 具名函数：captureLocation() 靠函数名跳过包装层，匿名箭头函数拿不到稳定的名字
     console[method] = function patchedConsoleLog(...args) {
         try {
-            // 只走 emitLog —— 它已经负责格式化并调用 consoleOriginal 输出。
-            // 这里若再 original(...args) 打一遍，控制台上每条日志会出现两行（原文 + 格式化），
-            // 而落盘的只有格式化那行，两边对不上号。
+            // 只走 emitLog —— 它已负责格式化并调用 consoleOriginal 输出，再打一遍会让每条日志出现两行。
             emitLog(level, args);
         } catch {
             // 日志系统自己出问题时必须把内容原样吐出来，否则等于把整条链路静音
@@ -690,9 +474,7 @@ for (const [method, level] of [
     };
 }
 
-// CRITICAL 没有对应的 console 方法，用显式函数暴露。
-// 之前 LEVEL_SHORT / LEVEL_NO / LEVEL_COLOR 里都定义了 CRITICAL，却没有任何代码能产生它 ——
-// 是彻头彻尾的死配置。现在补上真正的产生路径，级别过滤里它才有意义。
+// CRITICAL 没有对应的 console 方法，用显式函数暴露，补上真正的产生路径（否则级别过滤里的它没有意义）。
 function logCritical(...args) {
     try { emitLog('CRITICAL', args); } catch { consoleOriginal.error(...args); }
 }
@@ -702,17 +484,7 @@ pruneOldLogs();   // 放在包装之后：清理动作本身也进日志
 // 记录本次启动的标识，日志文件里能看出这份日志属于哪一次、跑了多久
 const BOOT_AT = Date.now();
 
-// ── 启动输出：**简短、英文、信息密度优先**──────
-// 两条要求：日志要的是"详细"，不是往里加不相干的信息；
-// 正文用全英文（中文日志不如英文日志好用）。
-// 两条约束：
-//   · 日志里不能塞「这是什么 / 怎么用」这类大段说明 —— 那是文档不是日志，
-//     每次启动都滚一遍，把真正的事件淹没，从日志提取信息反而变难。
-//   · 正文不能用中文长句（"无法加载" vs "加载失败"同义不同词），无法 grep。
-// 取舍：
-//   · 日志正文 = **一行一个事件，英文**，给 grep / AI / 日志查看器用
-//   · 面向人的引导（地址、密码、注意事项）只在**首次生成密码**那一条里保留中文，
-//     其余全部移出日志流 —— 需要时软件内有日志查看器与设置页，不必靠刷屏
+// 启动输出：简短、英文、信息密度优先 —— 正文一行一个事件、用英文（中文长句无法 grep），「这是什么/怎么用」不塞进日志流；面向人的引导只在首次生成密码那条保留中文。
 console.log(banner({
     name: 'ElainaChat Mod',
     version: APP_VERSION,
@@ -727,8 +499,7 @@ if (LOG_TO_FILE && traceEnabled) {
         + path.relative(APP_ROOT, traceSink.file));
 }
 
-// 收尾也留一行：日志文件的最后一个时间戳就是会话结束时刻，配合文件名就能知道"这次跑了多久"。
-// 排查"服务是不是半夜自己挂了"时，这一行是唯一的判据。
+// 收尾也留一行：文件最后一个时间戳就是会话结束时刻，配合文件名能知道这次跑了多久（排查"服务是不是半夜自己挂了"的判据）。
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         try {
@@ -743,9 +514,7 @@ const contentTypes = new Map([
     ['.html', 'text/html; charset=utf-8'],
     ['.js', 'text/javascript; charset=utf-8'],
     ['.css', 'text/css; charset=utf-8'],
-    // PWA 安装清单。.webmanifest 不在表里时会被当成 octet-stream，
-    // 而浏览器**只认** application/manifest+json —— 类型错了安装入口就不出现，
-    // 且控制台只报一句含糊的 "Manifest: Line: 1, column: 1, Syntax error"。
+    // PWA 安装清单：类型错了安装入口就不出现，且控制台只报含糊的 "Manifest: Line: 1, column: 1, Syntax error"。
     ['.webmanifest', 'application/manifest+json; charset=utf-8'],
     ['.png', 'image/png'],
     ['.jpg', 'image/jpeg'],
@@ -753,53 +522,20 @@ const contentTypes = new Map([
     ['.json', 'application/json'],
     ['.moc3', 'application/octet-stream'],
     ['.svg', 'image/svg+xml'],
-    // 软件自带的 MiMo TTS 参考音频（web/audio/mimo-elaina-jp.m4a）。
-    //   它**真的是 m4a（ftypisom）容器**，只是原始文件名带 .mp3 —— 所以
-    //   不能按扩展名推断音频格式（见 settings.js 关于「样本格式要按文件头嗅探」的注释）。
-    //   前端 fetch 后按字节解码再转 wav，所以这里给对 MIME 只是规范问题。
+    // 软件自带的 MiMo TTS 参考音频确实是 m4a（ftypisom）容器，只是文件名带 .mp3 —— 不能按扩展名推断音频格式（见 settings.js 按文件头嗅探的说明）。
     ['.mp3', 'audio/mpeg'],
     ['.m4a', 'audio/mp4'],
 ]);
 
-
-
-
-
-// isUnsafeEntryName 已搬到 server/zip.mjs 并从那里 import（判定跟着解压
-// 实现走，见 zip.mjs 内的说明）。
-
-
-
 /**
- * zip 解压（deflate/store，无依赖）。
- *
- * - **以中央目录为准**读取条目名 / 压缩大小 / 数据偏移，因此天然正确支持带 data descriptor
- *   （bit 3）的 zip（PowerShell Compress-Archive 等）。
- *   靠扫描 0x08074b50 签名来定位描述符是不行的：只要压缩数据里恰好出现这 4 个字节，该条目
- *   就会被截断、并且后续条目会被整体丢弃（54 字节的文件解出 5 字节，第二个条目直接消失，
- *   接口却仍返回 ok）。以中央目录为准才不会发生这种事。
- * - 中文文件名：UTF-8 标志位（bit 11）+ GBK 兜底。
- * - 解压体积硬上限（单文件 + 总量），防压缩炸弹。
- * - 危险扩展名（.html/.js/.svg/.exe…）跳过不落盘，并在结果里回报，避免上传后被同源执行。
- * - 路径穿越（..）/ 绝对路径条目跳过。
- *
- * 返回 { files: [{name, data}], blocked: [name] }
- */
-
-
-/**
- * 兼容包装：解压实现只有一份，在 server/zip.mjs。
- *
- * 这个名字与返回形态（{files, blocked}）是调用点的既有约定 ——
- * 模型上传与 mod 安装都按这个形态取值。实现只有一份，在 zip.mjs。
+ * zip 解压薄包装：实现在 server/zip.mjs（readZip 内含体积上限、危险类型拦截、GBK、zip64）；
+ * {files, blocked} 是调用点既有约定，模型上传与 mod 安装都按这个形态取值。
  */
 function unzip(buf, opts = {}) {
     return readZip(buf, { ...opts, returnBlocked: true });
 }
 
-// ===== 插件（mod）管理器 =====
-// 复用上面那份 unzip（它已带体积上限、危险类型拦截、路径穿越防护），
-// 而不是另写一份解压 —— 解压是安全敏感代码，只该有一个实现。
+// 插件（mod）管理器：复用上面的 unzip —— 解压是安全敏感代码，只该有一个实现。
 const modManager = createModManager({
     modsDir: MODS_DIR,
     unzip,
@@ -808,26 +544,17 @@ const modManager = createModManager({
     log: (msg) => console.log('[Mod] ' + msg),
 });
 
-// ===== MCP 客户端注册表 =====
-// MCP 服务器是**长命子进程**，所以只建一份注册表跨请求复用 ——
-//   每个请求各建一个会长出成堆的 node 进程（它们不会自己退出）。
+// MCP 客户端注册表：服务器是长命子进程，只建一份注册表跨请求复用，否则会长出成堆不会退出的 node 进程。
 const mcpRegistry = createMcpRegistry({
     log: (msg) => console.log('[MCP] ' + msg),
 });
 
 /**
  * 读用户配置的 MCP 服务器清单。
- *
- * 设置存在 data/main/store.json 的 elaina_open_settings 里（与前端同一个键），
- *   走 store 的公开接口而不是自己读文件 —— 布局变动后自拼路径会静默失效，
- *   那时"关掉了却还能被调起来"正是最该防住的情况（与 browserEnabledByUser 同理）。
- *
- * ⚠️ 返回的服务器**一个都不启动**：这是纯读配置。真启动发生在
- *   listTools / callTool 里，由调用方按需触发。
+ * 走 store 公开接口读 elaina_open_settings（自拼路径在布局变动后会静默失效）；只读配置，真启动发生在 listTools / callTool。
  */
 function normalizeMcpHeaders(headers) {
-    // 自定义请求头（远程鉴权）：只保留字符串值，其余丢掉 ——
-    //   非字符串进 header 会让 fetch 抛 TypeError，报错看不懂
+    // 自定义请求头（远程鉴权）只保留字符串值：非字符串进 header 会让 fetch 抛 TypeError，报错看不懂。
     if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return {};
     return Object.fromEntries(Object.entries(headers)
         .filter(([k, v]) => k && (typeof v === 'string' || typeof v === 'number'))
@@ -838,7 +565,6 @@ function normalizeMcpServer(s) {
     return {
         id: String(s.id || '').trim(),
         name: String(s.name || s.id || '').trim(),
-        // 远程传输：url 非空就走 HTTP（见 server/mcp-http-client.mjs）
         url: String(s.url || '').trim(),
         command: String(s.command || '').trim(),
         args: Array.isArray(s.args) ? s.args.map(String) : [],
@@ -856,18 +582,14 @@ async function mcpServersFromSettings() {
         return list
             .filter((s) => s && typeof s === 'object' && s.enabled === true)
             .map(normalizeMcpServer)
-            // 只要有 url 或 command 就能连；两者都没有的条目在客户端已被标 disabled，
-            //   这里再挡一次，避免把空配置传给 registry 建一个必然失败的连接。
+            // 只要有 url 或 command 就能连；两者都没有的条目已在客户端标 disabled，这里再挡一次，避免建一个必然失败的连接。
             .filter((s) => s.id && (s.url || s.command));
     } catch {
         return [];
     }
 }
 
-// ===== 技能（skill）管理器 =====
-// 与 modManager 复用**同一份** unzip（已含体积上限、危险类型拦截、路径穿越防护）——
-// 解压是安全敏感代码，只该有一个实现（见 server/zip.mjs 的说明）。
-// modsDir 传进去是为了读插件 manifest 里 `"skills": [...]` 的声明（随附技能）。
+// 技能（skill）管理器：与 modManager 复用同一份 unzip；modsDir 用于读插件 manifest 里 "skills": [...] 的声明（随附技能）。
 const skillManager = createSkillManager({
     skillsDir: SKILLS_DIR,
     modsDir: MODS_DIR,
@@ -877,8 +599,7 @@ const skillManager = createSkillManager({
     log: (msg) => console.log('[Skill] ' + msg),
 });
 
-// 数据备份里的插件 / 技能：共用安装接口那套路径与扩展名校验，
-// 这样从备份恢复的包与从市场安装的包受同一份安全规则约束。
+// 数据备份里的插件 / 技能：共用安装接口那套路径与扩展名校验，备份恢复与市场安装受同一份安全规则约束。
 const packageBackup = createPackageBackup({
     modsDir: MODS_DIR,
     skillsDir: SKILLS_DIR,
@@ -888,32 +609,19 @@ const packageBackup = createPackageBackup({
 });
 
 /**
- * 宿主自己占用的 `/api` 前缀 —— 插件注册路由时撞名会被**拒绝装载**。
- *
- * 为什么要显式列一份，而不是"反正宿主路由先分发、撞了也轮不到插件"：
- *   那样插件会静默失效（注册成功、永远收不到请求），而"装了等于没装"
- *   正是本项目的头号事故形态。装载期报出来，用户才知道该换前缀。
- * 这份清单必须跟着新接口更新。漏了不会造成安全问题（宿主仍然优先），
- *   只会让插件作者的困惑从"装载报错"退化成"接口没反应"。
+ * 宿主自己占用的 `/api` 前缀：插件注册路由撞名会被拒绝装载，装载期报错好过静默失效（装了等于没装）。
+ * 这份清单必须跟着新接口更新；漏了不会不安全（宿主仍优先），只会让插件从"装载报错"退化成"接口没反应"。
  */
 const HOST_API_PREFIXES = [
     '/api/server-info', '/api/auth', '/api/relay', '/api/client-log',
-    '/api/logs', '/api/store', '/api/data', '/api/tts',
+    '/api/logs', '/api/store', '/api/data',
     '/api/plugins', '/api/skills', '/api/agent',
-    // '/api/live2d' **不在**这份清单里：它现在是插件
-    //   （live2d-models 的 server.routes）自己声明的地址，不属于宿主。
-    //   列进来的话，插件会因为"与宿主撞名"而被拒绝装载 —— 这正是这套撞名检查
-    //   该起的作用：宿主交出这块地址时，必须同时把清单里的那一行删掉。
+    // '/api/live2d' 不在清单里：它是 live2d-models 插件自己声明的地址；宿主交出这块地址时必须同时删掉这一行。
 ];
 
 /**
- * 宿主自己占用的**静态资源**前缀 —— 插件声明 server.static 时撞名会被拒绝。
- * 与 HOST_API_PREFIXES 同理，只是这一层管的是非 /api 的 URL。
- *
- * '/live2d' 不在清单里：模型目录住在 mods/live2d-models/，
- *   宿主不拥有这块地址 —— 它现在是那个插件用 server.static 声明的。
- *   列进来的话插件会因为"与宿主撞名"被拒绝装载，
- *   而这个检查恰恰是对的：**宿主交出目录时，必须同时把它从前缀清单里删掉**。
+ * 宿主自己占用的静态资源前缀：插件声明 server.static 撞名会被拒绝，与 HOST_API_PREFIXES 同理，只是非 /api。
+ * '/live2d' 不在清单里：模型目录住在 mods/live2d-models/，由该插件用 server.static 声明。
  */
 const HOST_STATIC_PREFIXES = [
     '/vendor', '/js', '/css', '/mods', '/themes',
@@ -925,8 +633,7 @@ const modServer = createModServer({
     hostStaticPrefixes: HOST_STATIC_PREFIXES,
     jsonResponse,
     readJsonBody,
-    // 共享给插件的宿主工具。解压是安全敏感代码，**实现只有一份**
-    // （见 server/zip.mjs 的说明）—— 插件拿到的就是这套已加固的实现。
+    // 共享给插件的宿主工具：解压是安全敏感代码，实现只有一份（见 server/zip.mjs），插件拿到的就是这套已加固的实现。
     hostUtils: {
         readZip: (buf, opts) => readZip(buf, { ...opts, returnBlocked: true }),
         isUnsafeEntryName,
@@ -936,33 +643,7 @@ const modServer = createModServer({
     log: (msg) => console.log('[Mod] ' + msg),
 });
 
-
-
-
-
-
-
-
-
-// ===== AI Agent 文件操作 API =====
-// 权限模型是**四档**：`off` / `strict` / `auto` / `full`。
-//   "能碰哪里"与"要不要问"必须拆成两件事。捆在一个开关上（能碰任意路径 = 不再逐条确认）
-//   的话，用户想要"能碰任意路径但仍然每次都问"时无从表达。
-//   所以**三档都能访问任意路径**，区别只在"要不要问"与"允不允许删除"。
-//   再加上一个"整块关闭"的 `off` 档：
-//     · off    关闭     —— 电脑操作**整体不存在**：不能读（列目录 / 读文件 / 拿真实路径）、
-//                          不能写 / 覆盖 / 删 / 执行命令，连"这台电脑的桌面在哪"这类信息也不外泄。
-//                          这是"能力不存在"，与下面几档的"要不要问"不是一回事。
-//     · strict 逐条确认 —— 会**改动电脑**的操作（写入 / 覆盖 / 删除 / 命令）每次都问；
-//                          读取（列目录 / 读文件）不问。
-//     · auto   自动通过 —— 改动类操作直接放行，但**禁止删除**（删除接口整体拒绝）。
-//     · full   完全访问 —— 含删除在内全部放行。
-//   ⚠️ 两个必须记住的后果（都是刻意的，不是疏漏）：
-//     ① **读取在 strict/auto/full 任何一档下都不询问**。所以 strict 档下 AI 仍可无声地读
-//        `data/store.json`（内含 API Key 明文）、`~/.ssh/id_rsa` 等任意文件。
-//        这是"读取不问"这个选择的直接代价；介意的话把读取也纳入确认，或直接选 `off`。
-//     ② `auto` 档**只禁删除，不禁覆盖** —— 而覆盖一个已有文件同样会丢掉原内容，
-//        所以 AI 可以用"写入同名文件"绕过删除禁令。要堵这条路就把覆盖也禁掉。
+// AI Agent 文件操作 API：四档权限（off 整块关闭、strict 逐条确认、auto 自动通过但禁删、full 完全访问）；读取三档都不询问、可无声读 data/store.json；auto 只禁删不禁覆盖。
 const AGENT_APP_ROOT = path.resolve(root);
 const AGENT_READ_LIMIT = 300 * 1024; // 读文件上限 300KB
 const AGENT_WRITE_LIMIT = 1024 * 1024; // 写请求体上限 1MB
@@ -978,11 +659,8 @@ function normalizeAgentAccess(value) {
 }
 
 /**
- * 这一档是不是"整块关闭电脑操作"。
- *
- * `off` 的语义是**能力不存在**，而不是"要不要问"：AI 既不能读（列目录 / 读文件 /
- * 拿真实路径），也不能写 / 删 / 执行命令。与 auto / full 那些"放行"档是两回事，
- * 所以判据单独拎出来，别混进 accessAsksBeforeChange。
+ * off 的语义是能力不存在，而不是"要不要问"：读、写、删、执行命令全都没有。
+ * 与 auto / full 那些"放行"档是两回事，所以判据单独拎出来，别混进 accessAsksBeforeChange。
  */
 function accessDisabled(access) {
     return normalizeAgentAccess(access) === 'off';
@@ -1008,26 +686,15 @@ function accessAsksBeforeChange(access) {
     return normalizeAgentAccess(access) === 'strict';
 }
 
-// ===== AI 用浏览器 =====
-// 一个**进程级单例**：浏览器是有状态的（当前在哪个页面、登录态、profile 目录），
-//   每次请求新建一个的话，"看页面 → 点一下 → 再看"这条链就断了。
-// 空闲自动关闭由 session 自己管（见 browser.mjs 的 IDLE_CLOSE_MS）。
+// AI 用浏览器：进程级单例（浏览器有状态，每请求新建会切断"看页面 → 点一下 → 再看"）；空闲自动关闭由 session 自己管（见 browser.mjs）。
 const browserSession = createBrowserSession({
     log: (msg) => console.log('[Browser] ' + msg),
-    // 有头模式：让用户**看得见** AI 在点什么。这是这个项目一贯的要求
-    //   （"AI 到底动了什么"必须可见，见 recordTurnTool 那套）。
-    //   代价是它会弹出一个窗口；不想要的话把环境变量 ELAINA_BROWSER_HEADLESS 设为 1。
+    // 有头模式让用户看得见 AI 在点什么；不要弹窗就把 ELAINA_BROWSER_HEADLESS 设为 1。
     headless: process.env.ELAINA_BROWSER_HEADLESS === '1',
 });
 
 /**
- * 浏览器接口的统一鉴权与档位判定。
- *
- * 边界比文件操作更紧，两条理由：
- *   ① 调试端口能读**所有** cookie 与 localStorage —— 它等价于"这个浏览器里的
- *      全部登录态"。所以只认**本机**，局域网设备一律拒绝（文件/命令是"登录即可"，
- *      浏览器不是）。
- *   ② 关闭档（off）同样整块关闭：浏览记录与页面内容都属于"电脑信息"。
+ * 浏览器接口的统一鉴权与档位判定：调试端口能读所有 cookie 与 localStorage，所以只认本机；off 档同样整块关闭。
  *
  * @returns {string|null} 拒绝原因；null 表示放行
  */
@@ -1038,21 +705,12 @@ function browserDenyReason(request, access) {
 }
 
 /**
- * 用户有没有打开「允许 AI 用浏览器」。
- *
- * 为什么服务端要自己读一遍设置，而不是信前端传来的开关：
- *   这个接口会**在这台机器上起一个浏览器进程**。前端可以被绕过（同源 fetch 谁都能发），
- *   而"关掉了却还能被调起来"是最糟的那种失效 —— 用户以为关了就没事了。
- *
- * 设置存在 data/store.json 的 elaina_open_settings 里（与前端同一个键）。
- *   读不到（文件不存在 / JSON 坏 / 键缺失）一律当**关闭**：默认值就是关。
+ * 用户有没有打开「允许 AI 用浏览器」：服务端必须自己读设置（前端可被绕过），读不到一律当关闭。
+ * 设置存在 data/store.json 的 elaina_open_settings（与前端同键）。
  */
 async function browserEnabledByUser() {
     try {
-        // 走 store 的公开接口而不是自己读文件：store.json 的真身是
-        //   data/main/store.json（分类布局），且它有自己的内存缓存与迁移逻辑。
-        //   自己拼路径读会在布局变动后静默失效 —— 那时"关掉了却还能被调起来"，
-        //   正是这段代码最该防住的情况。
+        // 走 store 公开接口而不是自己读文件：store.json 真身是 data/main/store.json，自拼路径在布局变动后会静默失效。
         const data = await loadStore();
         const settings = JSON.parse(data['elaina_open_settings'] || '{}');
         return settings.agentBrowserEnabled === true;
@@ -1062,15 +720,8 @@ async function browserEnabledByUser() {
 }
 
 /**
- * 两个路径是不是同一个。
- *
- * 为什么不能直接 `a === b`：**Windows 的路径比较是大小写不敏感的**，
- *   `D:\222\ElainaChat-Open\web` 与 `D:\222\elainachat-open\web` 是同一个目录，
- *   但字符串比较说不等。删除守卫若用 `===`，换一下大小写就能绕过
- *   （`check-agent` 的守卫测试正是靠这一点抓到它）。
- *
- * 在大小写敏感的平台上（Linux / macOS 默认）保持严格比较 —— 那里
- *   `Web` 与 `web` 确实是两个不同目录，不敏感化才是对的。
+ * 两个路径是不是同一个：Windows 路径比较大小写不敏感，直接 === 会让换个大小写绕过删除守卫；
+ * 大小写敏感平台（Linux / macOS）保持严格比较。
  */
 function samePath(a, b) {
     const ra = path.resolve(String(a || ''));
@@ -1081,8 +732,7 @@ function samePath(a, b) {
 }
 
 /**
- * target 是否在 dir 内部或就是 dir 本身（同样按平台处理大小写）。
- * 用于"系统目录不许删"这类**子树**守卫。
+ * target 是否在 dir 内部或就是 dir 本身（同样按平台处理大小写）。用于"系统目录不许删"这类子树守卫。
  */
 function isPathInside(target, dir) {
     const t = path.resolve(String(target || ''));
@@ -1095,13 +745,7 @@ function isPathInside(target, dir) {
     return t === d || t.startsWith(d + path.sep);
 }
 
-// ===== 外壳文件夹（桌面/文档/下载…）的真实位置 =====
-// 为什么非要有这块：用户可以把桌面「移动」到任意位置（资源管理器 → 桌面属性 → 位置 → 移动），
-// OneDrive 也会把桌面重定向到 OneDrive 下。此时 C:\Users\<用户名>\Desktop **根本不存在**，
-// 而 AI 只会按惯例猜这个路径 —— 猜错就是一句「目录不存在」，然后它就没招了
-// （典型故障：桌面在 D:\桌面，AI 猜 C:\Users\Administrator\Desktop，404，操作终止）。
-// 权威答案在注册表 HKCU\...\Explorer\User Shell Folders 里，这里读出来给 AI 用。
-// fallback 是「注册表读不到」时的按惯例猜测（非 Windows、或安全策略拦住 reg.exe/PowerShell）。
+// 外壳文件夹（桌面/文档/下载…）的真实位置：用户可把桌面移到任意位置、OneDrive 也会重定向，按惯例猜必然猜错；权威答案在注册表 HKCU\...\User Shell Folders。
 const SHELL_FOLDER_SPECS = [
     { key: 'desktop', label: '桌面', reg: ['Desktop'], fallback: ['Desktop', '桌面', 'OneDrive/Desktop', 'OneDrive/桌面'], aliases: ['desktop', '桌面'] },
     { key: 'documents', label: '文档', reg: ['Personal'], fallback: ['Documents', '文档'], aliases: ['documents', '文档'] },
@@ -1120,12 +764,8 @@ function expandWindowsEnv(value) {
 }
 
 /**
- * 把命令行程序的原始输出字节解成字符串。
- *
- * 为什么不能直接 `encoding: 'utf8'`：Windows 的控制台程序（reg.exe / powershell.exe）
- * 默认按**系统 ANSI 代码页**写 stdout，中文系统是 GBK。按 UTF-8 解会把 `D:\桌面`
- * 变成 `D:\����` —— 路径看起来"读到了"，实际是错的，比读不到更危险。
- * Node 自带完整 ICU，所以这里用「先 UTF-8，出现替换字符就按 GBK 重解」的启发式。
+ * 把命令行程序的原始输出字节解成字符串：Windows 控制台程序默认按系统 ANSI 代码页（中文系统 GBK）写 stdout，
+ * 按 UTF-8 解会把路径弄坏；用"先 UTF-8，出现替换字符就按 GBK 重解"。
  */
 function decodeCliText(buf) {
     const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf ?? ''));
@@ -1140,8 +780,7 @@ function readUserShellFolders() {
     if (process.platform !== 'win32') return out;
     const regKey = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders';
 
-    // ① PowerShell：输出用 Base64 包一层（见下），这样非 ASCII 路径不会被代码页打碎。
-    //    放在前面是因为 reg.exe 没法控制输出编码，中文路径有被弄坏的风险。
+    // ① PowerShell：输出用 Base64 包一层，非 ASCII 路径不会被代码页打碎；放前面是因为 reg.exe 控制不了输出编码。
     try {
         const script = "$p = Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders'"
             + " | Select-Object -Property * -Exclude PS* | ConvertTo-Json -Compress;"
@@ -1200,9 +839,8 @@ function resolveShellFolders() {
 }
 
 /**
- * 把 AI 写的路径别名换成真实路径。
- * 支持 `%DESKTOP%\a.txt`（大小写不敏感）与 `~desktop/a.txt` / `~/a.txt`。
- * 只认这两种显式写法 —— 不去猜「桌面\a.txt」这种裸词，否则一个恰好叫「桌面」的目录会被劫持。
+ * 把 AI 写的路径别名换成真实路径（支持 %DESKTOP%\a.txt 与 ~desktop/a.txt）。
+ * 只认这两种显式写法：不猜「桌面\a.txt」这种裸词，否则一个恰好叫「桌面」的目录会被劫持。
  */
 function expandPathAliases(raw) {
     const { aliasMap } = resolveShellFolders();
@@ -1225,24 +863,11 @@ function shellFolderHint() {
         + '。路径不存在时请直接用上面的绝对路径，或用别名 %DESKTOP% / %DOCUMENTS% / %DOWNLOADS%。';
 }
 
-// isLocalRequest 在 server/net-guard.mjs（文件顶部 import 回来）——
-// 手机端那条中继要用同一份判定，见那个文件开头关于"安卓回环是整机共享"的说明。
+// isLocalRequest 在 server/net-guard.mjs（文件顶部 import 回来）；手机端中继要用同一份判定。
 
 /**
- * 是否已获得「操作这台电脑」的授权。
- *
- * ── 为什么授权条件是"已认证"而不是"仅本机" ────────────────────────────
- *
- * **局域网设备登录后与本机同等能力** —— 文件读写 + 执行命令，不按来源降级。
- *
- * 这不是把防线去掉了，而是把它**前移并收紧**：
- *   · 按来源降级时，局域网设备猜不到密码也没关系，因为它本来就什么都不能干；
- *   · 现在密码成了唯一那道门 —— 所以密码强度校验与登录防爆破
- *     （server/auth-guard.mjs）是这套权限模型的**必要组成**。
- *     没有那个模块，这个设计就是危险的；有它，边界仍然是清晰的。
- *
- * 能走到 /api/agent/* 的请求必然已经过了 handleLogin 那关（见主处理链里的
- * isAuthenticated 闸门），所以这里的判定实际上等价于"已登录或本机"。
+ * 是否已获得「操作这台电脑」的授权：局域网设备登录后与本机同等能力，密码成为唯一那道门，
+ * 所以密码强度校验与登录防爆破（server/auth-guard.mjs）是必要组成；能走到这里必然已过 handleLogin。
  */
 function hasComputerGrant(request) {
     return isAuthenticated(request);
@@ -1251,30 +876,15 @@ function hasComputerGrant(request) {
 const PERM_DENIED_MSG = '需要先登录后才能操作电脑（局域网设备请在设置里填访问密码）。';
 
 /**
- * 解析 Agent 路径，并区分"路径无效"与"越界"两种失败。
+ * 解析 Agent 路径，只做路径规范化 + 授权检查（三档都能访问任意路径）；allowOutside 保留形参是为了不动调用方签名。
+ * reason: 'outside' 永远不会返回，needEscalation 分支仅为兼容老客户端保留。
  *
- * 三档权限模型下，这个函数只做两件事：路径规范化 + 授权检查。三档都能访问任意路径，
- *   所以"目标在不在 web/ 内"不影响放行与否 —— 唯一的硬边界是
- *   `privileged`（本机或已登录设备）。
- *
- *   `allowOutside` 参数已不再使用（调用点仍在传）：它是"用户已就本次越界批准"的残留，
- *   而当前模型没有越界这个概念。保留形参是为了不动
- *   所有调用方的签名；等调用点都清干净可以删掉。
- *
- *   ⚠️ `reason: 'outside'` 永远不会返回 —— 前端那条 needEscalation 分支
- *   因此不会再被触发。留着分支无害（老客户端连新服务端时会用不上），
- *   但不要再基于它做新的判断。
- *
- * @param {string} rawPath
- * @param {string} access 'strict' | 'auto' | 'full'
- * @param {boolean} privileged 已获得操作电脑的授权（本机或已登录的局域网设备）
  * @returns {{ok:true, path:string} | {ok:false, reason:'invalid'|'remote'}}
  */
 function resolveAgentPathEx(rawPath, access, privileged, allowOutside = false) {
     const p = expandPathAliases(rawPath);
     if (!p) return { ok: false, reason: 'invalid' };
     const resolved = path.resolve(p);
-    // 唯一的硬边界：必须已认证。未认证的设备（猜不到密码）任何路径都拿不到。
     if (!privileged) return { ok: false, reason: 'remote' };
     return { ok: true, path: resolved };
 }
@@ -1287,10 +897,7 @@ function resolveAgentPath(rawPath, access, privileged, allowOutside = false) {
 
 /**
  * 统一的「路径被拒」响应。
- *
- * 三档模型下 'outside' 已不可能出现（见 resolveAgentPathEx），
- *   但分支保留：老版本前端可能仍在等这个 needEscalation 信号，
- *   而"返回一个它认识的形状"比"返回 403 让它卡住"要好。
+ * 'outside' 已不可能出现（见 resolveAgentPathEx），但分支保留以兼容仍在等 needEscalation 的老前端。
  */
 function denyPath(res, reason, privileged) {
     if (reason === 'outside') {
@@ -1301,21 +908,15 @@ function denyPath(res, reason, privileged) {
         });
     }
     if (reason === 'remote') {
-        // 认证闸门在更前面（未登录的请求根本到不了 /api/agent/*），
-        // 所以这通常意味着"会话过期了"。
+        // 认证闸门在更前面（未登录的请求到不了 /api/agent/），所以这通常意味着"会话过期了"。
         return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
     }
     return jsonResponse(res, 403, { ok: false, message: '路径无效' });
 }
 
 /**
- * 列目录。返回 [{ name, type, link }]。
- *
- * type 的判定必须走 stat 兜底：Windows 上的 junction（`C:\Users\All Users`、
- * `C:\Users\<用户>\My Documents` 这类兼容性链接）在 readdir 的 Dirent 里
- * **既不是目录也不是文件** —— `isDirectory()` 返回 false、`isSymbolicLink()` 返回 true。
- * 只看 isDirectory() 会把这 12 个 junction 全标成「文件」，
- * 用户一看就觉得「和我电脑里的文件夹对不上」。
+ * 列目录。返回 [{ name, type, link }]；type 判定必须走 stat 兜底 —— Windows junction 在 Dirent 里既不是目录也不是文件，
+ * 只看 isDirectory() 会把这些兼容性链接全标成文件。
  */
 async function listAgentEntries(target) {
     const entries = await readdir(target, { withFileTypes: true });
@@ -1379,8 +980,7 @@ async function agentRead(params, res, privileged) {
 }
 
 async function readAgentWriteBody(request, res) {
-    // 读请求体并限制大小（不设上限的话，一个超大 body 就能把进程内存吃满）
-    const chunks = [];
+    const chunks = [];   // 不设上限的话，一个超大 body 就能把进程内存吃满
     let total = 0;
     for await (const chunk of request) {
         total += chunk.length;
@@ -1400,17 +1000,7 @@ async function readAgentWriteBody(request, res) {
 }
 
 function rejectBlockedWriteTarget(target, access, res) {
-    // web/ 内禁写危险类型（.html/.js/.svg）：这些文件一旦落进 web/，静态服务就会
-    // 以同源身份执行/渲染它们（.html 直接构成存储型 XSS）。
-    // 三档模型下只有 `full` 放行 —— 它对应旧的 computer 模式，语义就是
-    //   "用户已授权操作电脑任意路径，风险自担"。strict / auto 仍然拦。
-    // 判据走 isBlockedWritePath（剥掉 ADS / 尾随点 / 尾随空格后再取扩展名）——
-    // 直接 path.extname(target) 会被 `x.html::$DATA` 这类写法绕过，落盘仍是 x.html。
-    // 所以 in-web 的保护**永不**因"目标在 web/ 外"而放宽。
-    // ⚠️ 诚实说明：这道闸门只挡"通过写入接口"这条路 —— 有了命令执行之后，
-    //    `echo x > web/a.html` 这类写法被危险判定归为 **safe**（重定向目标不是
-    //    绝对系统路径），不带授权就能落盘。所以它防的是"模型顺手写个文件"，
-    //    不是"铁了心要注入的人"。真正的边界是"要不要给命令执行"。
+    // web/ 内禁写危险类型（.html/.js/.svg）：落进 web/ 就会被同源执行/渲染；它只挡写入接口，有命令执行后 echo x > web/a.html 仍可落盘。
     const inAppRoot = target === AGENT_APP_ROOT || target.startsWith(AGENT_APP_ROOT + path.sep);
     if (inAppRoot && access !== 'full' && isBlockedWritePath(target)) {
         jsonResponse(res, 400, { ok: false, message: '应用文件夹内不允许写 .html/.js/.svg 等可执行类型的文件（防止同源代码注入）' });
@@ -1420,28 +1010,13 @@ function rejectBlockedWriteTarget(target, access, res) {
 }
 
 async function confirmAgentWrite(target, access, body, res) {
-    // strict 档下**任何写入都要先确认**（新建与覆盖都算"改动电脑"）。
-    //   这与设置页文案（「写入、覆盖已有文件、删除、执行命令 …… 每一次都会问你」）
-    //   以及注入给模型的提示词（data.js 的 accessNote）保持一致。
-    //   历史缺口：早期实现只对"覆盖已有文件"要确认，于是 strict 档下
-    //   **新建一个文件（例如在桌面新建）既不弹窗也不询问** —— 用户选了最低档
-    //   却仍被无声写入。这条缺口已在此补上：目标不存在时回 `needCreate`。
-    // 三档语义（见文件顶部那段说明）：
-    //   strict → 回 needOverwrite / needCreate，前端弹一次确认，
-    //            同意后带 overwrite:true 重发
-    //   auto   → 直接放行（用户选的就是"自动通过"）
-    //   full   → 直接放行
-    // ⚠️ `auto` 档放行覆盖是有意的：它只禁删除。代价是 AI 可以用
-    //    "写入同名文件"绕过删除禁令 —— 见文件顶部第 ② 条说明。
-    // 判据用 stat 而不是 existsSync：目标可能是目录（写它会 ENOTDIR/EISDIR），
-    // 那种情况交给下面的 writeFile 自己报错，不在这里伪装成"覆盖确认"。
+    // strict 档下任何写入都要先确认（新建与覆盖都算"改动电脑"）；auto 与 full 直接放行（auto 只禁删除，AI 可用"写入同名文件"绕过）。
     let targetExists = false;
     try {
         const existed = await stat(target);
         targetExists = existed.isFile();
     } catch { /* 不存在 / 无权限：都按"新建"处理，真正的错误由 writeFile 抛出 */ }
-    // overwrite:true = 用户已确认这次写入。新建与覆盖共用这一个确认令牌，
-    // 因为前端两条确认分支复用同一个 send(true) 通道（见 agent.js 的 doAgentFile）。
+    // overwrite:true = 用户已确认这次写入；新建与覆盖共用这一个确认令牌（前端两条确认分支复用同一个 send(true) 通道，见 agent.js 的 doAgentFile）。
     if (accessAsksBeforeChange(access) && body.overwrite !== true) {
         if (targetExists) {
             jsonResponse(res, 403, {
@@ -1492,22 +1067,8 @@ async function agentWrite(request, res, privileged) {
 }
 
 /**
- * AI 执行电脑命令（PowerShell / cmd）。
- *
- * 三档权限在这里的落点：
- *   · strict → 放行，但**每条命令都要求 approved**（不只是危险命令）。
- *              理由：命令是"任意操作"，在"逐条确认"这一档下没有安全的免问子集。
- *   · auto   → 放行，危险命令（含删除类）仍要求 approved —— 因为这一档禁止删除。
- *   · full   → 全部放行，连危险命令也不再问（用户已明确选择完全访问）。
- *
- * 为什么危险判定必须在服务端再做一次：
- *   前端已经问过用户了，但前端可以被绕过（直接 POST 这个接口）。
- *   如果服务端只看 `approved` 字段，那"授权"就只是客户端的一个礼貌动作，
- *   攻击者传 approved:true 即可执行任意命令。所以服务端**自己判**，
- *   并且在前端没带 approved 时拒绝 —— 这样绕过前端也拿不到危险命令。
- *
- * ⚠️ `full` 档下连删除类命令都不再询问 —— 这正是这一档的定义。
- *    它的实际含义是：**AI 可以在你的电脑上执行任意命令，包括 rm -rf。**
+ * AI 执行电脑命令（PowerShell / cmd）：服务端必须自己判定危险并拒绝未带 approved 的请求（前端可被绕过）。
+ * strict 每条都要求 approved（命令是任意操作，没有安全的免问子集）；auto 只拦危险命令；full 全放行，含删除类命令。
  */
 async function agentExec(request, res, privileged) {
     try {
@@ -1515,7 +1076,6 @@ async function agentExec(request, res, privileged) {
         try { body = await readJsonBody(request, 256 * 1024); } catch { return jsonResponse(res, 400, { ok: false, message: '请求体无效' }); }
 
         const access = normalizeAgentAccess(body.access || body.permission);
-        // 唯一的硬边界：必须已认证。三档都能执行命令，区别只在"要不要问"。
         if (!privileged) {
             return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
         }
@@ -1525,12 +1085,8 @@ async function agentExec(request, res, privileged) {
         if (!command) return jsonResponse(res, 400, { ok: false, message: '命令为空' });
         if (command.length > 8000) return jsonResponse(res, 400, { ok: false, message: '命令过长（上限 8000 字符）' });
 
-        // 服务端权威判定：不信前端传来的 risk
-        const verdict = classifyCommand(command);
-        // 该不该要求 approved：
-        //   strict → 一律要求（每条命令都问）
-        //   auto   → 只有危险命令要求（这一档禁止删除，而删除类命令正是危险命令）
-        //   full   → 从不要求
+        const verdict = classifyCommand(command);   // 服务端权威判定，不信前端传来的 risk
+        // 该不该要 approved：strict 一律要（每条都问），auto 只要危险命令，full 从不。
         const needsApproval = access === 'strict' ? true : (access === 'auto' && verdict.risk === 'dangerous');
         if (needsApproval && body.approved !== true) {
             return jsonResponse(res, 403, {
@@ -1544,7 +1100,6 @@ async function agentExec(request, res, privileged) {
             });
         }
 
-        // cwd 仍受认证约束（未认证到不了这里）
         let cwd;
         if (body.cwd) {
             const target = resolveAgentPath(body.cwd, access, privileged);
@@ -1571,45 +1126,18 @@ async function agentExec(request, res, privileged) {
 }
 
 /**
- * AI 删除文件或目录。
- *
- * 为什么单独一个接口、而不是让 AI 用「电脑命令」删：
- *   · 命令那条路在 strict 档下每条都要问，在 auto 档下又因为"删除类命令"
- *     被判为 dangerous 而必问 —— 结果就是 auto 档**根本删不掉东西**，
- *     与这一档"自动通过"的语义直接冲突；
- *   · 更重要的：命令是字符串，`del a.txt` 与 `del /s /q C:\` 在接口层无从区分，
- *     只能靠正则黑名单，而黑名单必然漏（见 pc-command.mjs 的说明）。
- *     这个接口收的是**结构化路径**，删除范围是确定的、可校验的。
- *
- * 三档语义：
- *   · strict → 回 needDelete 让前端确认一次，同意后带 confirmed:true 重发
- *   · auto   → **整体拒绝**（这一档的定义就是禁止删除）
- *   · full   → 直接执行
- *
- * 服务端自己判档位，不信前端的 confirmed —— 绕过前端直接 POST 也删不掉。
- *   这是与 agentExec 同一条理由：授权不能只是客户端的礼貌动作。
+ * AI 删除文件或目录：单独成接口而不是走命令 —— 命令在 auto 档因"删除类危险"必问而根本删不掉，且删除范围只能靠黑名单（必然漏）。
+ * 三档：strict 回 needDelete 确认一次；auto 整体拒绝；full 直接执行；服务端自己判档，不信前端 confirmed。
  */
 function rejectDeleteTarget(target, res) {
-    // 拒绝删除几个"删了就回不来 / 会连坐"的位置。
-    // 判据刻意是**精确匹配**（+ 系统目录用前缀），不是"整个 web/ 子树"：
-    //   「完全访问」这一档的定义就是"AI 能做任何事，包括删除" ——
-    //   如果把 web/ 下所有文件都禁掉，那 AI 连自己刚建的一个临时文件都删不掉，
-    //   这一档就名不副实了。
-    //   所以只挡**整锅端**的那几个：盘符根、Windows、Program Files、
-    //   以及应用自己的两个根目录（web/ 与项目根）**本身**。
-    //   删它们等于把应用连根拔掉，而删它们**里面的某个文件**是用户的自由。
-    //   ⚠️ 诚实说明：这条保护是"防手滑"，不是"防恶意" ——
-    //      完全访问档下 AI 仍可以逐个删掉 web/ 里的文件。
-    //      真正的边界是"要不要开这一档"，这正是设置页里那段后果说明的意义。
+    // 拒绝删除"删了就回不来 / 会连坐"的位置，判据是精确匹配（+ 系统目录用前缀）；full 档只挡整锅端的那几个，这是"防手滑"不是"防恶意"。
     const projectRoot = path.resolve(AGENT_APP_ROOT, '..');
     const rootOfTarget = path.parse(target).root;
     if (samePath(target, rootOfTarget)) {
         jsonResponse(res, 400, { ok: false, message: '不能删除盘符根目录：' + target });
         return true;
     }
-    // 比较必须走 samePath（Windows 下大小写不敏感）——
-    //   直接 `target === path.resolve(g.p)` 会被 `D:\222\elainachat-open\web`
-    //   这种**换了个大小写**的写法绕过（Windows 认为是同一个目录）。
+    // 比较必须走 samePath（Windows 下大小写不敏感），直接 === 会被换个大小写的同一目录绕过。
     const exactGuard = [
         { p: projectRoot, why: '项目根目录' },
         { p: AGENT_APP_ROOT, why: '应用自己的文件夹（web/）' },
@@ -1638,9 +1166,7 @@ function rejectDeleteTarget(target, res) {
 }
 
 function deleteFailureReason(rmErr) {
-    // 删除失败要给**人能看懂**的原因，不能把 Node 的原始错误码甩出去。
-    //   最常见的两种：EBUSY（文件被别的程序占用 —— 比如正开着这个文件）、
-    //   EPERM（没有权限 / 只读）。这两种都不是"操作错了"，而是"现在删不了"。
+    // 删除失败要给人能看懂的原因，不能把 Node 原始错误码甩出去：EBUSY / EPERM 不是"操作错了"，而是"现在删不了"。
     const code = String(rmErr?.code || '');
     if (code === 'EBUSY') return '这个文件或目录正被别的程序占用（先关掉它再试）';
     if (code === 'EPERM') return '没有权限删除它（可能是只读，或需要管理员权限）';
@@ -1656,10 +1182,8 @@ async function agentDelete(request, res, privileged) {
 
         const access = normalizeAgentAccess(body.access || body.permission);
         if (!privileged) return jsonResponse(res, 403, { ok: false, message: PERM_DENIED_MSG });
-        // `off` 档：整块关闭，删除能力不存在（与 auto 档的"禁止删除"不是一回事）。
         if (accessDisabled(access)) return agentDisabledResponse(res);
 
-        // auto 档：这一档禁止删除，直接拒绝并说清去哪改。
         if (!accessAllowsDelete(access) && access === 'auto') {
             return jsonResponse(res, 403, {
                 ok: false,
@@ -1677,7 +1201,6 @@ async function agentDelete(request, res, privileged) {
         const info = await stat(target).catch(() => null);
         if (!info) return jsonResponse(res, 404, { ok: false, message: '要删除的东西不存在：' + target });
 
-        // strict 档：需要用户确认一次（前端弹窗后带 confirmed:true 重发）
         if (accessAsksBeforeChange(access) && body.confirmed !== true) {
             return jsonResponse(res, 403, {
                 ok: false,
@@ -1710,12 +1233,7 @@ async function agentDelete(request, res, privileged) {
     }
 }
 
-// ===== 来源校验：Host 白名单 + 同站校验 =====
-// 为什么需要：Agent 文件接口的权限模式由**请求方自己传参**决定，"是否本机"又只看 remoteAddress。
-// 攻击者可以让自己的域名解析到 127.0.0.1（DNS rebinding），此时浏览器发出的请求同时满足
-//   remoteAddress = 127.0.0.1（被当成本机管理员）
-//   Origin.host === Host 头（两者都是攻击者的域名 → 旧的 CSRF 校验也会放行）
-// 从而拿到任意文件读写能力。因此必须校验 Host 头本身。
+// 来源校验：Host 白名单 + 同站校验 —— Agent 文件接口的权限模式由请求方传参决定、"是否本机"只看 remoteAddress，DNS rebinding 可同时满足两者，所以必须校验 Host 头本身。
 const EXTRA_ALLOWED_HOSTS = String(process.env.ALLOWED_HOSTS || '')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
@@ -1753,11 +1271,7 @@ function isAllowedHost(request) {
 
 // isLoopbackHostname 在 server/net-guard.mjs（文件顶部 import 回来）。
 
-// 同站校验：第三方页面用 <img> / <script> / <a> 发起的 GET 不会带 Origin，
-// 但一定会带 Sec-Fetch-Site: cross-site —— 这正是"任意网页都能读本机文件"的口子。
-// 少数浏览器 / 部分客户端不带 Sec-Fetch-*，所以再补一条：只要带了 Origin 且与 Host 不同源，
-// 同样按跨站处理（不依赖方法，GET 也拦）。
-// 非浏览器客户端（curl / 本机脚本 / Capacitor 原生插件）两者都不带，不参与判定。
+// 同站校验：第三方页面的 GET 不带 Origin，但会带 Sec-Fetch-Site: cross-site；不带 Sec-Fetch-* 的客户端若带了 Origin 且与 Host 不同源也按跨站处理。
 function isCrossSiteRequest(request) {
     const sfs = String(request.headers['sec-fetch-site'] || '').toLowerCase();
     if (sfs) return sfs !== 'same-origin' && sfs !== 'none';
@@ -1766,17 +1280,7 @@ function isCrossSiteRequest(request) {
     try { return new URL(origin).host !== (request.headers.host || ''); } catch { return true; }
 }
 
-// ===== HTTPS（手机端麦克风需要 secure context） =====
-// 浏览器只允许在 https:// 或 localhost 下调 getUserMedia。手机通过 http://<局域网IP>:4173
-// 访问时 navigator.mediaDevices 直接就是 undefined，所以语音输入在手机上必然不可用 ——
-// 这是浏览器的硬性规定，前端没有任何绕过办法，只能补一个 HTTPS 端口。
-// 证书自签，首次启动时生成到 data/ 下；手机上会提示"证书不受信任"，点继续即可。
-// HTTPS_PORT 现在由主端口推导（见文件末尾的启动段）：主端口自动漂移时，
-// 兼容入口必须跟着漂，否则用户拿到的链接会指向别人。
-
-// isPrivateIPv4 / mappedIPv4 / isInternalAddress 已抽到 server/net-guard.mjs
-// （文件顶部 import 回来）。上面 localIPv4List 仍在用 isPrivateIPv4 排序 ——
-// 那段"IPv4-mapped IPv6 会被前缀比较绕过"的踩坑记录也一起搬过去了。
+// HTTPS（手机端麦克风需要 secure context）：浏览器只允许在 https / localhost 下调 getUserMedia，只能补一个自签 HTTPS 端口（证书首次启动生成到 data/，端口由主端口推导）。
 
 function localIPv4List() {
     const out = [];
@@ -1785,21 +1289,12 @@ function localIPv4List() {
             if (ni.family === 'IPv4' && !ni.internal) out.push(ni.address);
         }
     }
-    // 私有网段排前面：手机/平板能连上的通常是 192.168.x.x / 10.x / 172.16-31.x，
-    // 而 VPN、虚拟网卡（常常是公网段，比如 26.x）手机根本连不到，
-    // 日志里把它排前面会把人带偏。
+    // 私有网段排前面：手机/平板能连的通常是 192.168.x.x / 10.x / 172.16-31.x，VPN 与虚拟网卡常在公网段会把人带偏。
     return out.sort((a, b) => (isPrivateIPv4(b) ? 1 : 0) - (isPrivateIPv4(a) ? 1 : 0));
 }
 
 /**
- * 探测某个端口能否被监听。
- *
- * 用真正 listen 一次再关掉，而不是猜 —— 端口被占用的情况有好几种
- * （别的进程监听 0.0.0.0、只监听 127.0.0.1、TCP 端口还在 TIME_WAIT…），
- * 只有真去绑一次才能得出"我能不能用"这个结论。
- *
- * 注意用 host 而不是回环地址：本服务通常监听 0.0.0.0，如果只试 127.0.0.1，
- * 会出现"探测说空闲、真绑却 EADDRINUSE"的假阴性。
+ * 探测某个端口能否被监听：真正 listen 一次再关掉，且必须绑 host 而不是回环地址（否则会假阴性）。
  *
  * @returns {Promise<boolean>}
  */
@@ -1808,22 +1303,14 @@ function canListen(p, h) {
         const probe = createNetServer();
         probe.once('error', () => resolve(false));
         probe.once('listening', () => probe.close(() => resolve(true)));
-        // exclusive 防止与别的进程共享同一个端口（Windows 上默认允许共享，
-        // 不加的话"两个服务都监听 3999"也能探测成功）
+        // exclusive 防止与别的进程共享同一个端口（Windows 默认允许共享，不加的话"两个服务都监听 3999"也能探测成功）。
         probe.listen({ port: p, host: h, exclusive: true });
     });
 }
 
 /**
- * 这个端口上**已经有东西在收连接**吗（站在本机客户端的角度问）。
- *
- * 为什么不能只看 canListen：Windows 允许「一个进程绑 127.0.0.1:P、另一个进程绑
- *   0.0.0.0:P」同时成立 —— 实测就是这样，连 exclusive 也拦不住。于是"我绑上了"
- *   不等于"这个端口归我"：连到 127.0.0.1:P 的请求会落到对方手里，用户看到的是
- *   "这个端口的服务时好时坏、连接被重置"。所以"端口能不能用"必须再问一句
- *   **连上去有没有人接**。
- *
- * 超时按"没人应答"处理：防火墙丢包也会超时，宁可当成空闲，也不把能用的端口让出去。
+ * 这个端口上已经有东西在收连接吗：Windows 允许两个进程分别绑 127.0.0.1:P 与 0.0.0.0:P，
+ * 所以"我绑上了"不等于"端口归我"；超时按"没人应答"处理。
  *
  * @returns {Promise<boolean>}
  */
@@ -1844,10 +1331,7 @@ function portHasListener(p) {
 }
 
 /**
- * 我们能不能**独占**地用这个端口：绑得上，且此刻没人在上面收连接。
- *
- * 两个条件缺一不可 —— 只满足前者，就是"绑上了却与别人共享"（见 portHasListener）。
- * 先问"有没有人接"：探测要连一次，比真的绑一次便宜。
+ * 我们能不能独占地用这个端口：绑得上，且此刻没人在上面收连接；先问"有没有人接"，比真的绑一次便宜。
  *
  * @returns {Promise<boolean>}
  */
@@ -1870,14 +1354,8 @@ async function pickPort(start, h, span) {
 }
 
 /**
- * 这个端口上跑的**是不是本项目自己的实例**（而不是别的软件占了它）。
- *
- * 判据是 `/api/server-info` 的应答形状：该接口无需鉴权、只回端口号，
- * 应答形如 `{ ok: true, httpPort: <数字> }`。别的软件不会恰好回这个形状 ——
- * 所以"能解析出 ok:true 且 httpPort 是数字"就足以认定是自己人。
- *
- * 只连回环地址，不碰对外地址：本服务的实例一定在 127.0.0.1 上可达
- * （即使 HOST=0.0.0.0 也只多监听别的网卡，回环仍然通）。
+ * 这个端口上跑的是不是本项目自己的实例：判据是 /api/server-info 的应答形状，只连回环地址。
+ * 应答须为 `{ ok:true, httpPort:<数字> }`，别的软件不会恰好回这个形状。
  *
  * @returns {Promise<boolean>}
  */
@@ -1899,18 +1377,14 @@ function isOurInstance(p) {
                 } catch { resolve(false); }
             });
         });
-        // 连不上（端口其实是空的）与探测超时都算"不是我们的实例"
         req.on('error', () => resolve(false));
         req.on('timeout', () => { req.destroy(); resolve(false); });
     });
 }
 
 /**
- * 从 start 往上找：在遇到第一个**空闲**端口之前，有没有本项目自己的实例在跑。
- *
- * 遇到第一个空闲端口就停 —— 那正是新实例本该起的地方，说明它前面没有我们的实例
- * （端口只有被别的软件隔开才可能出现"空一个又有一个自己人"，而那种排布本项目的
- *   启动顺序产不出来：它总是从 3999 起、占最靠下的那几个空闲端口）。
+ * 从 start 往上找：在遇到第一个空闲端口之前，有没有本项目自己的实例在跑。
+ * 遇到第一个空闲端口就停 —— 启动顺序总是从 3999 起占最靠下的空闲端口，前面不会有自己人。
  *
  * @returns {Promise<number>} 已有实例的端口；没有则 0（正常的全新启动）
  */
@@ -1938,9 +1412,7 @@ function findOpenssl() {
     return null;
 }
 
-// 读出证书还剩多少天、以及它是不是我们自己生成的。
-// 自签证书默认 825 天（这是 Chrome / Safari 接受的上限），到期后浏览器会报
-// ERR_CERT_DATE_INVALID —— 所以剩余不足 30 天时自动换新，不用等它坏了再来查。
+// 读出证书还剩多少天、以及它是不是我们自己生成的；自签证书默认 825 天（Chrome / Safari 上限），剩余不足 30 天自动换新。
 function describeCert(certBuf) {
     try {
         const x = new X509Certificate(certBuf);
@@ -1992,13 +1464,8 @@ async function ensureCertificate(force = false) {
 }
 
 /**
- * 数据导入的完整判定（纯逻辑，不碰 request / response）。
- *
- * 拆成函数是为了让"先校验、后落盘"看得见：整包解不开 / 没有任何可导入的内容时
- * 必须在**写任何文件之前**返回错误，否则一个坏包会先把已有数据清掉再报失败。
- *
- * 备份 zip 的顶层三件（与项目根一一对应）：data/（聊天数据）、mods/（插件）、
- * skills/（技能）。data/ 交给 store，后两者交给 packageBackup（见 server/backup-packages.mjs）。
+ * 数据导入的完整判定（纯逻辑，不碰 request / response）：整包解不开 / 没有可导入内容时必须在写任何文件之前返回错误；
+ * 备份 zip 顶层三件与项目根一一对应（data/ → store，mods/ 与 skills/ → packageBackup）。
  *
  * @param {Buffer} raw   原始备份字节（zip 或 v1 单 JSON）
  * @param {'merge'|'replace'} mode
@@ -2009,17 +1476,13 @@ async function importBackupPayload(raw, mode) {
     let packageFiles = null;
     let hasPackages = false;
     if (isZip) {
-        // 插件 / 技能条目要从同一个 zip 里单独读一遍：数据解析刻意不开
-        // allowScripts（默认黑名单保护数据路径），而插件入口本来就是 .js。
-        // 两次解析换来两条路径各自的安全边界，值这个内存与时间。
+        // 插件 / 技能条目要从同一个 zip 里单独读一遍：数据解析刻意不开 allowScripts（默认黑名单保护数据路径），而插件入口本来就是 .js。
         try {
             packageFiles = readZip(raw, { maxTotal: 256 * 1024 * 1024, maxEntry: 64 * 1024 * 1024, allowScripts: true });
         } catch (err) {
             return { status: 400, body: { ok: false, message: '这个文件不是有效的 zip 备份：' + String((err && err.message) || err) } };
         }
-        // 先看**恢复器认不认**这个包：至少要有一个能落盘的插件 / 技能。
-        // 纯 .exe 的 mods/ 目录会让"有包"为真却一个也恢复不了，那种情况该报
-        // "没有可导入的数据"，而不是先清数据再报错。
+        // 先看恢复器认不认这个包：纯 .exe 的 mods/ 会让"有包"为真却一个也恢复不了，那种情况该报"没有可导入的数据"，而不是先清数据再报错。
         const preview = await packageBackup.restore(packageFiles, { dryRun: true });
         hasPackages = preview.mods > 0 || preview.skills > 0;
     }
@@ -2037,8 +1500,7 @@ async function importBackupPayload(raw, mode) {
     let pkg = null;
     if (hasPackages) {
         pkg = await packageBackup.restore(packageFiles, { allowScripts: true });
-        // 插件 / 技能目录变了，清单必须重扫：否则前端拿到的还是旧 index.json，
-        // 表现为"导入成功但插件列表没变"。
+        // 插件 / 技能目录变了，清单必须重扫：否则前端拿到的还是旧 index.json，表现为"导入成功但插件列表没变"。
         if (pkg.mods || pkg.skills) {
             try { await modManager.scanAndSync(); } catch (err) { console.warn('[备份] 重扫插件失败：' + String((err && err.message) || err)); }
             try { await skillManager.scan(); } catch (err) { console.warn('[备份] 重扫技能失败：' + String((err && err.message) || err)); }
@@ -2072,12 +1534,7 @@ async function importBackupPayload(raw, mode) {
     };
 }
 
-// ===== 端侧数据存储（data/ 分类落盘）=====
-// localStorage 是"每台设备各存一份"：电脑上聊的记录、填的 API Key，手机上完全看不到。
-// 这里把需要跨设备共享的那几项落到服务端 data/ 目录，前端启动时拉取、写入时回推。
-// 存储结构见 server/store.mjs —— 那边负责把整块键值拆成分类文件（人设卡一卡一文件、
-// 聊天记录与记忆各自独立），读的时候再拼回键值。**前端仍然只看到键值**，所以
-// data-sync.js 与 APK 侧一行都不用改。
+// 端侧数据存储（data/ 分类落盘）：localStorage 每台设备各存一份，需要跨设备共享的键改落服务端 data/；结构见 server/store.mjs，前端仍然只看到键值。
 const store = createStore({
     dataDir: DATA_DIR,
     log: (level, msg) => (level === 'error' ? console.error(msg) : console.log(msg)),
@@ -2091,7 +1548,6 @@ async function buildBackupBuffer() {
     return await store.exportZip(packages.entries, packages.counts);
 }
 
-// 局域网共享数据：与「我的数据」的导出 / 导入共用同一套备份实现。
 const lanShare = createLanShare({
     collectBackup: buildBackupBuffer,
     maxUpload: MAX_UPLOAD,
@@ -2100,19 +1556,12 @@ const lanShare = createLanShare({
     log: (msg) => console.log('[LAN共享] ' + msg),
 });
 
-// 版本检测器：跨请求复用，成功结果缓存十分钟（未登录的 GitHub 接口每小时 60 次）。
-// 仓库名可用 ELAINA_UPDATE_REPO 覆盖 —— 给 fork 的用户留一条不改代码的路。
+// 版本检测器：跨请求复用，成功结果缓存十分钟（未登录的 GitHub 接口每小时 60 次）；仓库名可用 ELAINA_UPDATE_REPO 覆盖。
 const updateChecker = createUpdateChecker({});
 
 /**
- * 校验并收敛 POST /api/store 提交上来的补丁。
- * 只收字符串值（与 localStorage 语义一致）；限制键长与单键体积，
- * 避免一个超大键把 data/ 撑爆。分类拆分由 server/store.mjs 负责，这里只管"收得干净"。
- *
- * `null` 是**删除**（对应前端 Store.removeItem）：必须原样保留这个标记，
- * 交给下面的合并步骤真删。把它一起过滤掉的话，"删除"永远到不了磁盘 ——
- * 键看起来删了（前端内存里没了），刷新又从 store.json 读回来。典型症状：
- * 插件失败记录清不掉，卡片一直显示上一次的「加载失败 · 已自动停用」。
+ * 校验并收敛 POST /api/store 提交上来的补丁：只收字符串值（与 localStorage 语义一致），限制键长与单键体积。
+ * null 是删除标记，必须原样保留交给合并步骤真删，否则"删除"永远到不了磁盘（例如插件失败记录清不掉）。
  */
 function normalizeStorePatch(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { patch: {}, oversized: [] };
@@ -2128,25 +1577,13 @@ function normalizeStorePatch(raw) {
     return { patch, oversized };
 }
 
-// ===== 多设备实时同步（store 变更广播） =====
-// 一个服务连多台设备（电脑 + 手机 + 平板）是常见用法。没有推送时
-// "手机改了设置、电脑要手动刷新才看到"，体验上像两个应用。
-// 实现：每个打开的页面用 EventSource 订阅 /api/store/stream，
-// POST /api/store 成功后把**这次改动的键**推给所有订阅者。
-// 为什么只推"键名 + 值"而不是让所有设备重新拉全量：
-//   聊天记录可能几 MB，每改一个字就全量广播会浪费带宽。
-//   推送增量由客户端按键合并，和 POST 的语义完全一致。
-// 为什么要带 origin 标记（谁改的）：
-//   改动的发起方自己不需要重新应用（它已经改过了），否则会出现
-//   "输入框里的字被自己推回来的旧值覆盖"这类回环问题。
-//   每个客户端带一个随机 id，广播时排除发起者。
+// 多设备实时同步（store 变更广播）：每个打开的页面订阅 /api/store/stream，POST 成功后把本次改动的键推给所有订阅者；带 origin 标记跳过发起方，避免旧值覆盖。
 const storeSubscribers = new Set();   // { res, clientId }
 
 function broadcastStoreChange(patch, request) {
     if (!storeSubscribers.size) return;
     const keys = Object.keys(patch);
     if (!keys.length) return;
-    // 发起方的 clientId（前端提交时放在头里），用于跳过它自己
     const from = String(request.headers['x-store-client'] || '');
     const payload = JSON.stringify({ type: 'store-change', keys, data: patch, from });
     for (const sub of storeSubscribers) {
@@ -2172,8 +1609,7 @@ function handleStoreStream(request, response) {
     response.write(': connected\n\n');
     const sub = { res: response, clientId };
     storeSubscribers.add(sub);
-    // 心跳：中间有反向代理时，长时间无数据会被掐断。
-    // 25 秒一次注释行，成本可忽略。
+    // 心跳：中间有反向代理时长时间无数据会被掐断，25 秒一次注释行，成本可忽略。
     const beat = setInterval(() => {
         try { response.write(': ping\n\n'); } catch { /* 断开由下面的 close 处理 */ }
     }, 25000);
@@ -2188,31 +1624,15 @@ function handleStoreStream(request, response) {
     // 注意：**不要** end()，这是个长连接，保持打开直到客户端断开
 }
 
-// ===== 访问鉴权（局域网访问控制） =====
-// 背景：服务默认监听 0.0.0.0（手机/平板可访问），而 Agent 文件接口没有鉴权、权限模式又由请求方
-// 自己传参决定。如果不设访问控制，同一局域网内任何设备都能打开应用、甚至读写本机文件。
-// 规则：
-//   · 本机（127.0.0.1）自动视为管理员：免密进入，且可修改访问密码 —— 这也是忘记密码时的找回入口。
-//   · 局域网设备必须登录，登录后种 HttpOnly Cookie 会话（默认 7 天）。
-//   · 默认状态是「尚未设置访问密码」：此时只有本机可用。要允许局域网设备进入，必须在本机主动设置密码。
-// 文件位置：data/auth.json。
-// 不放进 web/ 下的 .local-auth.json —— 那是"运行时私密数据混在源码目录里"，
-// 只能靠 .gitignore 单独排除 + 静态服务的"禁止访问隐藏文件"规则兜住，位置本身就不对。
-// 统一收进 data/（和 store.json、证书、日志同一处），那里的老文件首次启动自动搬过来。
+// 访问鉴权：服务默认监听 0.0.0.0 且 Agent 接口没有鉴权，必须设访问控制 —— 本机免密进且可改密码；局域网设备必须登录（HttpOnly Cookie，默认 7 天）。
 const AUTH_FILE = path.join(DATA_DIR, 'auth.json');
 const LEGACY_AUTH_FILE = path.join(root, '.local-auth.json');
 const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_COOKIE = 'elaina_session';
-// 登录防爆破：单 IP 指数退避 + 全局限流。参数集中在 auth-guard.mjs 里，那里有完整的推导。
-// 为什么不用"5 次 / 锁 60 秒"这类固定窗口：它等于告诉攻击者
-// "每 60 秒能试 5 次" —— 保持低频就能一天试七千多次。这里锁定时间逐次翻倍（上限 1 小时），
-// 且**计数只在成功时清零**，持续攻击只会越锁越久。
+// 登录防爆破：单 IP 指数退避 + 全局限流，参数集中在 auth-guard.mjs；固定窗口等于告诉攻击者"每 60 秒能试 5 次"，这里锁定时间逐次翻倍、计数只在成功时清零。
 const loginGuard = createLoginGuard();
-// 会话表：键是 token 的 sha256，值是过期时间戳。
-//   为什么不以明文 token 为键：这张表要落盘，文件被读走时不该直接得到可用的会话凭据。
-//   为什么落盘：桌面壳每次启动都会新起一个 node 进程，会话只放内存的话重启一次就要所有人
-//   （包括本机）重新输一次密码 —— 那正是"输入了很多次密码"的来源。
+// 会话表：键是 token 的 sha256（表要落盘，不该直接得到可用凭据），值是过期时间戳；落盘是因为桌面壳每次启动新起 node 进程，只放内存会逼所有人重新输密码。
 const sessions = new Map();
 
 function sessionKey(token) {
@@ -2245,15 +1665,13 @@ async function saveSessions() {
     }
 }
 
-// 定期清理过期会话。
-// 只在"该 token / 该 IP 再次被访问"时顺带清理是不够的：长期运行会缓慢堆积内存。
+// 定期清理过期会话：长期运行时只增不减会慢慢堆积内存；登录守卫的 per-IP 记录一并清理（它自己的规则保证还欠着失败次数的记录不会被抹掉）。
 const pruneTimer = setInterval(() => {
     const now = Date.now();
     let pruned = false;
     for (const [token, exp] of sessions) if (now > exp) { sessions.delete(token); pruned = true; }
     if (pruned) saveSessions();
-    // 登录守卫的 per-IP 记录同样只增不减（换源的扫描 / DHCP 续租 / IPv6 隐私地址都会产生新键），
-    //   一并在这里清：它自己的规则保证"还欠着失败次数"的记录不会被抹掉。
+    // 登录守卫的 per-IP 记录同样只增不减（换源扫描 / DHCP 续租 / IPv6 隐私地址都会产生新键），一并在这里清。
     try { loginGuard.prune(now); } catch { /* 清理失败不影响鉴权 */ }
 }, 10 * 60 * 1000);
 pruneTimer.unref?.();
@@ -2284,8 +1702,7 @@ async function loadAuthFile() {
         if (o && typeof o === 'object') return o;
     } catch { /* 文件不存在或损坏 → 继续看老位置 */ }
 
-    // 一次性迁移：老位置有就搬到新位置。
-    // 搬不动（权限等）也不能让用户被锁在门外，退回用老内容继续跑。
+    // 一次性迁移：老位置有就搬到新位置；搬不动（权限等）也不能让用户被锁在门外，退回用老内容继续跑。
     try {
         const legacy = JSON.parse(await readFile(LEGACY_AUTH_FILE, 'utf8'));
         if (legacy && typeof legacy === 'object') {
@@ -2308,8 +1725,7 @@ async function saveAuthFile(o) {
     await writeFile(AUTH_FILE, JSON.stringify(o, null, 2), 'utf8');
 }
 
-// 启动时准备密码：默认状态就是「尚未设置」。局域网设备只认用户主动设置的密码，
-// 不生成随机默认密码 —— 一个没人设置过的随机串对局域网没有意义，只会在界面上误导用户。
+// 启动时准备密码：默认状态是「尚未设置」；局域网设备只认用户主动设置的密码，不生成随机默认密码（没人设置过的随机串只会在界面上误导用户）。
 async function ensureAuth() {
     auth = await loadAuthFile();
     if (auth && (auth.isDefault === false || (auth.salt && auth.hash))) return { generated: false, isDefault: false };
@@ -2321,8 +1737,7 @@ async function ensureAuth() {
     return { generated: false, isDefault: true, password: '' };
 }
 
-// 校验密码。scrypt 是本服务里最重的计算，必须异步执行，
-// 否则并发登录请求会把事件循环整块占住（同步 scryptSync 每次阻塞数十毫秒）。
+// 校验密码：scrypt 是本服务最重的计算，必须异步，否则并发登录请求会把事件循环整块占住（同步 scryptSync 每次阻塞数十毫秒）。
 async function verifyPassword(password) {
     if (!auth) return false;
     if (auth.isDefault && auth.password) return safeEqualText(password, auth.password);
@@ -2330,7 +1745,6 @@ async function verifyPassword(password) {
     return false;
 }
 
-// 改成加盐哈希保存，之后控制台不再打印明文
 async function setPassword(next) {
     const salt = randomBytes(16).toString('hex');
     auth = { isDefault: false, salt, hash: await hashPassword(next, salt), changedAt: new Date().toISOString() };
@@ -2366,14 +1780,8 @@ function hasValidSession(request) {
 }
 
 /**
- * 磁盘上有没有一个目录，其 manifest.id 等于给定身份？
- *
- * 为什么需要：`/api/plugins/open-folder?id=` 收的是**插件身份**（manifest.id），
- * 而目录名是可以被用户改的（`birthday` 住在 `birthday-1.1.0`）。两者对不上时
- * 旧实现只回"目录不存在"，用户看到的是"我的插件打不开了"，而真相是
- * "名字与目录不一致"—— 前者会让人以为插件坏了，后者一句话就能自己改对。
- *
- * 返回一句人话提示（找不到就返回空串，调用方保持原来的错误文案）。
+ * 磁盘上有没有一个目录，其 manifest.id 等于给定身份：目录名可被用户改（birthday 住在 birthday-1.1.0），
+ * 只回"目录不存在"会让用户以为插件坏了；返回"目录名与 id 不一致"的人话提示（找不到返回空串）。
  */
 async function suggestModDir(wantId) {
     try {
@@ -2407,30 +1815,21 @@ function hasAccessPassword() {
 function isAuthenticated(request) {
     // 未设置访问密码：只有本机可用（局域网接口在 muxSocket 处已直接关闭）。
     if (!hasAccessPassword()) return isAdmin(request);
-    // 设置过密码：本机与局域网一律要登录。本机不再是「永久免密」——
-    //   设置密码后第一次打开同样要输入密码，之后靠会话 Cookie 保持登录。
+    // 设置过密码：本机与局域网一律要登录（第一次打开也要输密码，之后靠会话 Cookie 保持登录）。
     return hasValidSession(request);
 }
 
-// 简单 CSRF 防护：浏览器发起的跨站请求会带 Origin，这里要求它与 Host 同源。
-// 否则任意网页都能在你浏览器里悄悄 POST /api/auth/change-password 改掉本机密码。
+// 简单 CSRF 防护：浏览器发起的跨站请求会带 Origin，要求它与 Host 同源，否则任意网页都能悄悄 POST /api/auth/change-password。
 function isSameOrigin(request) {
     const origin = request.headers.origin;
     if (!origin) return true; // 非浏览器请求（curl / 本机脚本）
     try { return new URL(origin).host === (request.headers.host || ''); } catch { return false; }
 }
 
-// ===== 请求日志 =====
-// 目的：启动窗口里直接能看到「谁、什么时候、访问了什么、结果如何」，
-// 排查手机连不上 / 接口报错时不用再去开浏览器控制台。
+// 请求日志：启动窗口里直接看到「谁、什么时候、访问了什么、结果如何」，排查手机连不上 / 接口报错时不用开浏览器控制台。
 const QUIET_FILE_RE = /\.(?:js|mjs|css|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|eot|map)$/i;
-//
-// 高频轮询接口在**成功时**不打日志。
-//   /api/logs/tail 是日志查看器自己每 2 秒拉一次的数据源 ——
-//   若每次轮询也记一行，日志系统就在"观察自己"：查看器一打开，
-//   启动窗口每 2 秒滚一条 GET /api/logs/tail，把其它事件全挤走
-//   （用户实测贴出来的日志一半是这种自噪音）。
-//   失败（4xx/5xx）时**仍然要打** —— 那才是值得知道的异常。
+// 高频轮询接口在成功时不打日志：/api/logs/tail 是查看器每 2 秒拉一次的数据源，
+// 记下来等于日志系统观察自己，把其它事件全挤走；失败（4xx/5xx）仍然要打。
 const QUIET_POLL_RE = /^\/api\/(?:logs\/tail|client-log)(?:$|\?)/;
 
 function ipOf(request) {
@@ -2440,16 +1839,7 @@ function ipOf(request) {
     return raw || '?';
 }
 
-// 把 response 包一层，结束时打一行。
-// 级别纪律：
-//   之前每个成功请求都记 INFO —— 一次页面加载十几行 GET /api/xxx 200，
-//   把真正的启动/插件/对话事件淹没（用户："大量无用日志耽误排查进度"）。
-//   AstrBot 的做法是常规成功事件归 DEBUG。这里照做：
-//     DEBUG  正常请求（默认不可见 —— 排查时把级别调到 DEBUG 就全回来了）
-//     WARN   请求失败（4xx）或响应超慢（>3s，能让"怎么这么卡"有据可查）
-//     ERROR  服务端错误（5xx）
-//   也就是说：**默认终端/文件一条请求日志都看不到**（除了失败和超慢的），
-//   但软件内日志查看器（内存缓冲全量）随时能按需翻 —— 信息不丢，只是不再刷屏。
+// 把 response 包一层，结束时打一行：成功请求记 DEBUG，4xx 或超过 3s 记 WARN，5xx 记 ERROR；默认看不到成功请求，但内存缓冲保留全量。
 function attachRequestLog(request, response) {
     const started = Date.now();
     const origWriteHead = response.writeHead;
@@ -2477,7 +1867,6 @@ function attachRequestLog(request, response) {
     });
 }
 
-// 302 跳转（可选带一条 Set-Cookie），用于 http → https 升级
 function redirect(res, location, setCookie) {
     // Location 里的请求路径是攻击者可控输入，过滤控制字符与引号，防止响应分割/注入
     const safeLocation = String(location).replace(/[\r\n"'<>\\]/g, '');
@@ -2488,12 +1877,8 @@ function redirect(res, location, setCookie) {
     res.end();
 }
 
-// jsonResponse / readJsonBody 已抽到 server/http-util.mjs（文件顶部 import 回来）——
-// 手机端内嵌的 Node 要用同一份实现，见那个文件开头的说明。
-
 /**
- * 读原始请求体（二进制安全）。给数据导入用 —— zip 是二进制，
- * 走 readJsonBody 会被 JSON.parse 弄坏。
+ * 读原始请求体（二进制安全），给数据导入用 —— zip 走 readJsonBody 会被 JSON.parse 弄坏。
  */
 async function readRawBody(request, limit = 64 * 1024) {
     const chunks = [];
@@ -2512,17 +1897,7 @@ async function readRawBody(request, limit = 64 * 1024) {
     return Buffer.concat(chunks);
 }
 
-// ===== 本地中转 /api/relay =====
-// **实现放在 server/relay.mjs，电脑端与手机端共用一份**。
-//   为什么能共用：手机端内嵌的 Node 面对的是同一个问题 —— WebView 页面在
-//   https://localhost，而内嵌服务在 http://127.0.0.1:<随机端口>，天生跨源，
-//   和电脑版"浏览器直连被 CORS 挡住"是一模一样的处境。两边没有理由各写一套
-//   （否则"同一个 Key、同一个地址在电脑上通、在手机上不通"这类问题要查两遍）。
-//   "为什么需要它 / 追踪日志为什么埋在这一层"的说明就在那个模块里。
-//   这里只做接线：把它接到**本机这一侧**的能力上。
-//     · traceLine           追踪日志（本文件的 data/logs/<启动时刻>.trace.log）
-//     · 后面三个安全判定     本文件自己的实现 —— 这台机器在局域网里，有别的设备
-//                           能打进来，SSRF 那两道校验必须真的生效
+// 本地中转 /api/relay：实现在 server/relay.mjs，电脑端与手机端共用一份；这里只做接线（追踪日志 + 三个安全判定）。
 const relayHandler = createRelay({
     traceLine,
     isLocalRequest,
@@ -2534,8 +1909,7 @@ const handleRelay = relayHandler.handleRelay;
 
 async function handleLogin(request, response) {
     const ip = ipOf(request);
-    // 未设置访问密码时，局域网设备不能登录。默认状态不是给局域网用的，
-    // 必须在主机上主动设一个密码。
+    // 未设置访问密码时，局域网设备不能登录：默认状态不是给局域网用的，必须在主机上主动设一个密码。
     if (!isLocalRequest(request) && !hasAccessPassword()) {
         request.resume();
         return jsonResponse(response, 403, {
@@ -2573,8 +1947,7 @@ async function handleLogin(request, response) {
     sessions.set(sessionKey(token), Date.now() + SESSION_TTL_MS);
     await saveSessions();
     jsonResponse(response, 200, { ok: true }, {
-        // HTTPS 下必须带 Secure：否则同一个 token 在明文 HTTP 路径上也会被浏览器发出去。
-        //   HTTP 访问时不能加，否则用户根本登录不上 —— 那也是项目明确支持的降级用法。
+        // HTTPS 下必须带 Secure（否则 token 会走明文 HTTP）；HTTP 访问时不能加，否则用户登录不上。
         'Set-Cookie': SESSION_COOKIE + '=' + token + '; Path=/; HttpOnly; SameSite=Strict'
             + (request.socket.encrypted ? '; Secure' : '')
             + '; Max-Age=' + Math.floor(SESSION_TTL_MS / 1000),
@@ -2725,22 +2098,10 @@ const requestHandler = async (request, response) => {
     attachRequestLog(request, response);
     try {
         const url = new URL(request.url || '/', `http://${host}`);
-        // 反斜杠先归一成斜杠。
-        //   为什么必须做：`new URL()` 按 WHATWG 规范会规范化 `..`，但**不碰反斜杠** ——
-        //   而 Windows 上 path.resolve() 把 `\` 和 `/` 都当分隔符。于是
-        //       GET /live2d/models/..\..\serve.mjs
-        //   到达这里时 pathname 里仍是 `..\..\serve.mjs`，path.resolve 一解析就上跳两层，
-        //   落到 web/serve.mjs —— 在 root 之内，所以通过了边界检查。实测确认回 200。
-        //   严重性（别夸大）：它**穿不出 web/** —— 想读 data/（访问密码、聊天记录）
-        //   会被 `target.startsWith(root)` 挡住，实测 /..\..\data\auth.json 是 403。
-        //   而 web/ 下的文件本来就是公开的。所以这不是"新泄漏"，是**路径解析错误**：
-        //   不存在的路径该 404。但它必须修 —— 它让"谁负责这条 URL"变得含糊，
-        //   也绕过了插件静态映射的逐段校验。
-        //   在 decodeURIComponent **之后**归一：%5c（编码的反斜杠）也要一起处理。
+        // 反斜杠先归一成斜杠，必须在 decodeURIComponent 之后（%5c 也要处理）：new URL() 不碰反斜杠，path.resolve 会把 ..\..\serve.mjs 解析上跳。
         const pathname = decodeURIComponent(url.pathname).replace(/\\/g, '/');
 
-        // ① Host 白名单：防 DNS rebinding（详见 isAllowedHost 说明）。
-        //    必须在其他所有处理之前，因为"是否本机"这个判断本身就依赖请求来源可信。
+        // ① Host 白名单：防 DNS rebinding（详见 isAllowedHost 说明），必须在其他所有处理之前 —— "是否本机"本身依赖请求来源可信。
         if (!isAllowedHost(request)) {
             const msg = '禁止访问：请求的 Host「' + String(request.headers.host || '') + '」不在允许列表内。\n'
                 + '如果你确实是通过主机名/域名访问，请用环境变量追加白名单后重启，例如：\n'
@@ -2751,14 +2112,7 @@ const requestHandler = async (request, response) => {
             return response.end(msg);
         }
 
-        // ①.5 HTTP → HTTPS 自动跳转
-        // 手机用 http + 局域网 IP 打开时，浏览器一定不给麦克风（非安全上下文），
-        // 与其让用户自己把地址改成 https，不如直接跳过去。四条边界：
-        //   1. 只有 HTTPS 真的可用（证书就绪）时才跳，否则跳过去是打不开的
-        //   2. 本机（localhost / 127.0.0.1）不跳 —— 它本来就是安全上下文
-        //   3. /api/ 不跳 —— 前端 fetch 跟着跳转会因跨域失败
-        //   4. 带 ?stay=http 可以留在 http（写 cookie 记住），给"只想聊天、不想点证书警告"的人一条退路；
-        //      ?stay=https 恢复自动跳转
+        // ①.5 HTTP → HTTPS 自动跳转：HTTPS 可用才跳、本机不跳、/api/ 不跳；?stay=http 留在 http（写 cookie），?stay=https 恢复自动跳转。
         if (!request.socket.encrypted) {
             let urlObj = null;
             try { urlObj = new URL(request.url || '/', 'http://' + (request.headers.host || 'localhost')); } catch { /* 忽略怪 URL */ }
@@ -2780,8 +2134,7 @@ const requestHandler = async (request, response) => {
                 && parseCookies(request)['elaina_stay_http'] !== '1'
                 && /text\/html/i.test(String(request.headers.accept || '')); // 只跳页面导航，不跳静态资源
             if (canUpgrade) {
-                // 跳到**同一个端口**的 https：每个端口都同时认两种协议，
-                // 所以地址里只有协议变了，用户不用换端口号
+                // 跳到同一个端口的 https：每个端口都同时认两种协议，地址里只有协议变了，用户不用换端口号。
                 const hostHeader = String(request.headers.host || '');
                 const colon = hostHeader.lastIndexOf(':');
                 const reqPort = colon > 0 ? hostHeader.slice(colon + 1) : '443';
@@ -2793,33 +2146,27 @@ const requestHandler = async (request, response) => {
         if (request.method !== 'GET' && request.method !== 'HEAD' && !isSameOrigin(request)) {
             return jsonResponse(response, 403, { ok: false, message: '跨站请求被拒绝' });
         }
-        // ③ 跨站 GET 也要拦：第三方页面的 <img>/<script>/跨域 fetch 请求都可能不带 Origin，
-        //    但会带 Sec-Fetch-Site: cross-site（旧浏览器则带 Origin）。不拦的话
-        //    /api/agent/read 这类 GET 接口可以被任意网页借本机浏览器读取本地文件。
+        // ③ 跨站 GET 也要拦：第三方页面可能不带 Origin，但会带 Sec-Fetch-Site: cross-site；不拦的话 /api/agent/read 可被任意网页借本机浏览器读取本地文件。
         if (pathname.startsWith('/api/') && isCrossSiteRequest(request)) {
             return jsonResponse(response, 403, { ok: false, message: '跨站请求被拒绝' });
         }
 
-        // 服务端信息（无需鉴权，只暴露端口号）：登录页也要用它 —— 手机用 http 打开时
-        // 语音输入会被浏览器禁用，登录页得能给出可点的 HTTPS 地址。
+        // 服务端信息（无需鉴权，只暴露端口号）：登录页也用它，手机用 http 打开时得能给出可点的 HTTPS 地址。
         if (pathname === '/api/server-info' && request.method === 'GET') {
             return jsonResponse(response, 200, {
                 ok: true,
                 // 现在**同一个端口**就支持 https，所以返回主端口本身
                 httpsPort: certInfo ? port : 0,
                 httpPort: port,
-                // 版本与运行形态：设置页的「版本与更新」要显示当前版本，
-                // 并按形态给出对应的安装包。不含敏感信息，登录页也拿得到。
+                // 版本与运行形态：设置页要显示当前版本并按形态给安装包；不含敏感信息，登录页也拿得到。
                 version: APP_VERSION,
                 edition: APP_EDITION,
             });
         }
 
-        // 登录页（无需鉴权）。同样加防嵌套头 —— 登录页能被 iframe 嵌套就等于给了
-        // 点击劫持一个落点（诱导用户在伪造页面上输入访问密码）。
+        // 登录页（无需鉴权）；同样加防嵌套头 —— 能被 iframe 嵌套就等于给了点击劫持一个落点。
         if (pathname === '/login') {
-            // 已经持有有效会话就不该再看到密码表单：浏览器前进/后退、刷新回到这里时
-            //   再要一次密码会让用户以为刚才根本没登录成功。直接回首页（那才是有内容的页面）。
+            // 已持有有效会话就不该再看到密码表单：后退/刷新回到这里再要一次密码会让用户以为没登录成功，直接回首页。
             if (hasValidSession(request)) return redirect(response, '/');
             response.writeHead(200, {
                 'Content-Type': 'text/html; charset=utf-8',
@@ -2830,12 +2177,10 @@ const requestHandler = async (request, response) => {
             });
             return response.end(loginPageHtml());
         }
-        // 登录
         if (pathname === '/api/auth/login' && request.method === 'POST') {
             return await handleLogin(request, response);
         }
-        // 访问控制：本机（管理员）放行，其余必须已登录
-        if (!isAuthenticated(request)) {
+        if (!isAuthenticated(request)) {   // 本机（管理员）放行，其余必须已登录
             if (pathname.startsWith('/api/')) {
                 return jsonResponse(response, 401, { ok: false, message: '需要访问密码', needLogin: true });
             }
@@ -2843,15 +2188,12 @@ const requestHandler = async (request, response) => {
             return response.end();
         }
 
-        // 本地中转：把浏览器发不出去的跨域请求搬到 Node 侧（见 handleRelay 的说明）。
-        // 放在鉴权之后 —— 它会把请求原样转发到任意 http(s) 地址，不能让未登录的访客当跳板用。
+        // 本地中转：放在鉴权之后 —— 它会把请求原样转发到任意 http(s) 地址，不能让未登录访客当跳板。
         if (pathname === '/api/relay' && request.method === 'POST') {
             return await handleRelay(request, response);
         }
 
-        // 前端日志上报：把浏览器控制台里的错误转到启动窗口。
-        // 前端的问题（ASR 起不来、模型加载失败）平时只出现在浏览器控制台里，
-        // 拿手机排查时根本看不到；转过来就能和请求日志对照着看。
+        // 前端日志上报：把浏览器控制台错误转到启动窗口，拿手机排查时也能与请求日志对照。
         if (pathname === '/api/client-log' && request.method === 'POST') {
             let body;
             try { body = await readJsonBody(request, 64 * 1024); } catch { return jsonResponse(response, 400, { ok: false }); }
@@ -2862,29 +2204,21 @@ const requestHandler = async (request, response) => {
                 const page = String((it && it.page) || '').slice(0, 36);
                 const text = String((it && it.text) || '').trim();
                 if (!text) continue;
-                // 主日志压成一行。截得太短（300 字符）恰好把最关键的上游报错砍在半截
-                // （`requestedModel":"Qwen3.8-` 就断了），查问题时等于没有。放宽到 2000。
+                // 主日志压成一行；截得太短（300 字符）会把最关键的上游报错砍在半截，放宽到 2000。
                 const oneLine = text.replace(/\s+/g, ' ');
                 const clipped = oneLine.length > 2000
                     ? oneLine.slice(0, 2000) + ' …（已截断，完整内容见追踪日志）'
                     : oneLine;
-                // 浏览器的 console.debug 必须真的记成 DBUG（压成 INFO 的话，
-                // "把级别调到 DEBUG"也看不到前端调试信息）
+                // 浏览器的 console.debug 必须真的记成 DBUG，否则"把级别调到 DEBUG"也看不到前端调试信息。
                 const method = { debug: 'debug', info: 'log', warn: 'warn', error: 'error' }[level] || 'log';
                 console[method]('[page] ' + ipOf(request).padEnd(15) + ' '
                     + (page ? page + '  ' : '') + clipped);
-                // 完整原文一行不丢地进追踪日志 —— 浏览器控制台里的报错往往带着真正的错误原因
                 traceLine(`===== 浏览器上报 · ${page || '/'} · ${level.toUpperCase()} =====\n${text}`);
             }
             return jsonResponse(response, 200, { ok: true });
         }
 
-        // 日志查看器的数据源：从内存缓冲按条件取。
-        // 查询参数（都是可选）：level（最低级别）、tags（逗号分隔的模块名）、
-        // search（关键词）、limit（条数上限）、since + sinceSeq（增量游标，见下）。
-        // 为什么放内存缓冲而不是读文件：文件是"落盘级别"过滤后的产物，
-        // 且读大文件再解析既慢又占内存；缓冲里是**全量**（不受落盘级别约束），
-        // 查看器切级别/模块都是即时的。
+        // 日志查看器的数据源：从内存缓冲按条件取（level / tags / search / limit / since + sinceSeq）；不读文件，缓冲才是全量，切级别/模块即时生效。
         if (pathname === '/api/logs/tail' && request.method === 'GET') {
             const u = new URL(request.url || '/', 'http://x');
             const result = logBuffer.query({
@@ -2892,9 +2226,7 @@ const requestHandler = async (request, response) => {
                 tags: u.searchParams.get('tags') ? u.searchParams.get('tags').split(',').map((s) => s.trim()).filter(Boolean) : undefined,
                 search: u.searchParams.get('search') || undefined,
                 limit: Number(u.searchParams.get('limit')) || undefined,
-                // 增量游标是**两个值**：时间戳 + 写入序号。
-                //   只传 since（毫秒）会让同一毫秒里的后续记录被永久跳过 ——
-                //   详见 server/log-buffer.mjs 的 query()。两个都要带上。
+                // 增量游标是两个值（时间戳 + 写入序号）：只传 since 会让同一毫秒里的后续记录被永久跳过（见 server/log-buffer.mjs 的 query()）。
                 since: Number(u.searchParams.get('since')) || undefined,
                 sinceSeq: u.searchParams.get('sinceSeq') !== null && u.searchParams.get('sinceSeq') !== ''
                     ? Number(u.searchParams.get('sinceSeq')) : undefined,
@@ -2902,8 +2234,7 @@ const requestHandler = async (request, response) => {
             return jsonResponse(response, 200, { ok: true, ...result, tags: logBuffer.tags() });
         }
 
-        // 日志设置：读取当前状态 / 运行时调整级别与对话追踪。
-        // 放在鉴权之后 —— 它会改服务端行为，不能让未登录的局域网设备操作。
+        // 日志设置：读取当前状态 / 运行时调整级别与对话追踪；放在鉴权之后 —— 它会改服务端行为。
         if (pathname === '/api/logs/settings' && request.method === 'GET') {
             return jsonResponse(response, 200, {
                 ok: true,
@@ -2936,9 +2267,6 @@ const requestHandler = async (request, response) => {
             if (body && body.trace !== undefined) {
                 if (setTraceEnabled(body.trace)) notes.push(body.trace ? '对话追踪已开启' : '对话追踪已关闭');
             }
-            // 这次调整本身也要留下痕迹：否则日志级别被改过、事后却看不出来，
-            // 排查"怎么少了那么多日志"时会先怀疑代码而不是设置。
-            // 用 warn 级别：即便控制台级别是 INFO 它也一定显示（用户刚做的操作必须可见）。
             if (notes.length) {
                 console.warn(`[log] 日志设置已更新：${notes.join('；')}（操作者 ${ipOf(request)}）`);
             }
@@ -2947,8 +2275,7 @@ const requestHandler = async (request, response) => {
             });
         }
 
-        // 端侧数据存储：需要跨设备共享的那几项（设置 / 聊天记录 / API Key 等）走这里读写
-        // data/store.json。已过上面的鉴权 —— 本机免密，手机端需要先登录。
+        // 端侧数据存储：需要跨设备共享的项（设置 / 聊天记录 / API Key）走 data/store.json；已过上面的鉴权。
         if (pathname === '/api/store' && request.method === 'GET') {
             return jsonResponse(response, 200, { ok: true, data: await loadStore() });
         }
@@ -2971,10 +2298,7 @@ const requestHandler = async (request, response) => {
                 });
             }
             const current = await loadStore();
-            // 按键合并：只覆盖本次提交的键，不动其它设备的其它键。
-            //   null 是删除标记，必须 delete 而不是赋成 null —— 赋 null 会把
-            //   `"键": null` 写进 store.json，下次读取时虽被 normalize 丢掉，
-            //   但文件里留着一份假数据，且"删除"的语义变成了"写了个空值"。
+            // 按键合并：只覆盖本次提交的键；null 是删除标记，必须 delete 而不是赋成 null（否则文件里留一份假数据）。
             for (const [k, v] of Object.entries(patch)) {
                 if (v === null) delete current[k];
                 else current[k] = v;
@@ -2989,45 +2313,29 @@ const requestHandler = async (request, response) => {
                         + String((err && err.message) || err),
                 });
             }
-            // 广播给所有其它设备（多设备实时同步，见 /api/store/stream）
             broadcastStoreChange(patch, request);
             return jsonResponse(response, 200, { ok: true, keys: Object.keys(patch).length });
         }
 
-        // 多设备实时同步：SSE 长连接，服务端把 store 的变更推给所有打开的页面。
-        // 为什么需要它：一个服务连多台设备（电脑 + 手机 + 平板）是常见用法，
-        // 没有推送时"手机改了设置，电脑要手动刷新才看到" —— 体验上像两个应用。
-        // 为什么用 SSE 而不是 WebSocket：服务端是零依赖的静态服务，SSE 只需
-        // 一个普通 HTTP 长连接（`text/event-stream`），浏览器端用 EventSource
-        // 原生支持、自动重连。WebSocket 要多一层握手与帧协议实现，为这个场景
-        // 不值得。
+        // 多设备实时同步：SSE 长连接（EventSource 原生支持、自动重连），比 WebSocket 少一层握手与帧协议实现。
         if (pathname === '/api/store/stream' && request.method === 'GET') {
             return handleStoreStream(request, response);
         }
 
-        // 数据导出：把 data/ 下的全部分类数据打包成一个 JSON 文件下载。
-        // 用途：换机器、重装、版本升级前备份 —— 用户最怕的"更新一次聊天记录没了"。
+        // 数据导出：把 data/ 下的全部分类数据打包成一个 zip 文件下载，用于换机器、重装、升级前备份。
         if (pathname === '/api/data/export' && request.method === 'GET') {
             let body;
             try {
                 body = await buildBackupBuffer();
             } catch (err) {
-                // 插件目录读不到（被占用 / 权限）时不能悄悄退回"只导出 data/"：
-                // 用户会以为备份是全的，换机器时才发现插件全没了。
+                // 插件目录读不到（被占用 / 权限）时不能悄悄退回"只导出 data/"：用户会以为备份是全的。
                 const msg = String((err && err.message) || err);
                 console.error('[备份] 导出失败：' + msg);
                 return jsonResponse(response, 500, { ok: false, message: '导出失败：' + msg });
             }
             const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
             const filename = `elainachat-backup-${stamp}.zip`;
-            // 刻意**不发** Content-Disposition: attachment。
-            // 原因：迅雷/FDM 这类下载器会往 Chrome 里装机器级扩展（HKLM 注册表强制安装，
-            // 任何 profile 都躲不掉），只要看到 attachment 就把这个 URL 抢走转给自己的
-            // 下载引擎 —— 结果是浏览器里拿到一个被改写的空响应（实测是 204 + 0 字节），
-            // 用户既拿不到文件、也不知道为什么，还会被弹一个下载器窗口。
-            // 改成：这里只把字节正常发出去，前端 fetch 成 blob 后用 <a download> 触发保存。
-            // blob: 是内存地址，外部下载器无从接管，也不会弹窗。
-            // 文件名通过自定义头带过去（自定义头不触发下载器识别）。
+            // 刻意不发 Content-Disposition: attachment：迅雷/FDM 这类下载器看到 attachment 就抢走 URL；改由前端 fetch 成 blob 后用 <a download> 保存，文件名走自定义头。
             response.writeHead(200, {
                 'Content-Type': 'application/zip',
                 'Content-Length': body.length,
@@ -3037,13 +2345,10 @@ const requestHandler = async (request, response) => {
             });
             return response.end(body);
         }
-        // 数据导入：接受 zip（推荐）或 v1 的单 JSON 旧备份，按 merge（默认）或 replace 合并进 data/。
-        // 这里收**原始字节**而不是 JSON —— zip 是二进制，走 readJsonBody 会被解析坏。
+        // 数据导入：接受 zip 或 v1 单 JSON 备份，按 merge（默认）或 replace 合并进 data/；收原始字节而不是 JSON（zip 会被解析坏）。
         if (pathname === '/api/data/import' && request.method === 'POST') {
             let raw;
             try {
-                // 备份现在含插件与技能（可能几十 MB），不能再用只够聊天记录的 32MB。
-                // 与插件 / 技能上传同一个上限，避免"市场能装、备份导不回来"。
                 raw = await readRawBody(request, MAX_UPLOAD);
             } catch (err) {
                 const over = err && (err.code === 'LIMIT_EXCEEDED' || /过大|too large/i.test(String(err.message || err)));
@@ -3051,7 +2356,6 @@ const requestHandler = async (request, response) => {
                     ok: false, message: over ? '备份文件过大' : '读取备份失败：' + String((err && err.message) || err),
                 });
             }
-            // mode 走 query（body 是二进制，塞不进 JSON 字段）
             const mode = url.searchParams.get('mode') === 'replace' ? 'replace' : 'merge';
             try {
                 const out = await importBackupPayload(raw, mode);
@@ -3060,7 +2364,6 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 400, { ok: false, message: '导入失败：' + (err && err.message ? err.message : '未知错误') });
             }
         }
-        // 数据位置信息：告诉用户"我的数据在哪、有哪些"，配合导入导出用
         if (pathname === '/api/data/info' && request.method === 'GET') {
             const storeData = await loadStore();
             const keys = Object.keys(storeData);
@@ -3093,22 +2396,18 @@ const requestHandler = async (request, response) => {
             });
         }
 
-        // 版本检测：查 GitHub 仓库的最新 Release，供「设置 → 高级 → 版本与更新」用。
-        // 放在鉴权闸门之后：它会替本机去访问外部站点，不能让未登录的访客当跳板。
-        // 只做检测与提示，不做自动替换（三端安装方式不同，见 web/js/update-check.js）。
+        // 版本检测：查 GitHub 最新 Release，供「设置 → 高级 → 版本与更新」用；放在鉴权闸门之后避免未登录访客当跳板，只做检测与提示（见 web/js/update-check.js）。
         if (pathname === '/api/app/update' && request.method === 'GET') {
             const result = await updateChecker.check();
             return jsonResponse(response, 200, Object.assign({ current: APP_VERSION, edition: APP_EDITION }, result));
         }
 
-        // 局域网共享数据：与「我的数据」的导出 / 导入配套。
-        // 放在这里是因为它同属 /api/data/*；仍走上面的鉴权闸门。
+        // 局域网共享数据：与「我的数据」的导出 / 导入配套；同属 /api/data/，仍走上面的鉴权闸门。
         if (pathname.startsWith(LAN_SHARE_PREFIX + '/')) {
             if (await lanShare.handle(request, response, { pathname, url })) return;
         }
 
-        // 鉴权状态（供设置页展示：是否本机管理员、是否已设置访问密码）
-        // 注意：初始明文密码只回给本机管理员，局域网会话拿不到（避免"能登录的人就能拿到明文密码"）
+        // 鉴权状态：初始明文密码只回给本机管理员；本机管理员才拿到真实路径（重置密码要删的就是它，DATA_DIR 可被覆盖）。
         if (pathname === '/api/auth/status' && request.method === 'GET') {
             const admin = isAdmin(request);
             return jsonResponse(response, 200, {
@@ -3116,12 +2415,9 @@ const requestHandler = async (request, response) => {
                 isAdmin: admin,
                 isDefaultPassword: Boolean(auth && auth.isDefault),
                 passwordHint: (admin && auth && auth.isDefault && auth.password) ? auth.password : '',
-                // 本机管理员才拿到真实路径：重置密码要删的就是它（DATA_DIR 可被环境变量覆盖，
-                // 所以这里回实际路径而不是写死 data/auth.json）。
                 authFile: admin ? AUTH_FILE : '',
             });
         }
-        // 修改访问密码（仅本机、且已登录；忘记密码只能删 data/auth.json 重置）
         if (pathname === '/api/auth/change-password' && request.method === 'POST') {
             if (!isAdmin(request) || !isAuthenticated(request)) {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机（已登录的管理员）可以修改访问密码' });
@@ -3129,20 +2425,15 @@ const requestHandler = async (request, response) => {
             let body;
             try { body = await readJsonBody(request); } catch { return jsonResponse(response, 400, { ok: false, message: '请求无效' }); }
             const next = String(body.next || '');
-            // 强度校验：密码是"能不能在这台电脑上执行命令"的唯一那道门。
-            //   旧规则只要 6 位，可以设成 123456 —— 在跑得动 scrypt 的机器上离线爆破是秒级。
-            //   规则与界面提示见 server/auth-guard.mjs 的 validatePasswordStrength。
+            // 强度校验：密码是"能不能在这台电脑上执行命令"的唯一那道门，弱口令在跑得动 scrypt 的机器上可被离线秒破（见 auth-guard.mjs）。
             const strength = validatePasswordStrength(next);
             if (!strength.ok) {
                 return jsonResponse(response, 400, { ok: false, message: strength.message });
             }
             await setPassword(next);
-            // 改密码后把登录失败记录一并清掉：旧密码攒下的锁定不该连累新密码，
-            // 否则用户刚设完强密码却发现自己的手机还被锁着。
+            // 改密码后把登录失败记录一并清掉：旧密码攒下的锁定不该连累新密码，否则用户刚设完强密码手机还被锁着。
             loginGuard.reset();
-            // 当前这台设备刚设完密码，直接补发一个会话：setPassword() 会清空所有会话
-            //   （其它设备必须用新密码重新登录），若连本机一起踢回登录页，用户还得把
-            //   刚设的密码再输一遍 —— 这正是"输入了很多次密码"的来源。
+            // 当前设备刚设完密码，直接补发一个会话：setPassword() 清空所有会话，若连本机一起踢回登录页就要再输一遍。
             const token = randomBytes(32).toString('hex');
             sessions.set(sessionKey(token), Date.now() + SESSION_TTL_MS);
             await saveSessions();
@@ -3159,43 +2450,28 @@ const requestHandler = async (request, response) => {
         }
 
 
-        // ===== 插件（mod）接口 =====
-        // 列出插件：每次请求都重新扫描目录。为什么不在启动时扫一次就够 ——
-        // 用户完全可能在服务运行期间把 zip 拷进 mods/（那正是"丢个 zip 就装好"
-        // 的用法），启动时扫一次会让他以为没生效。扫描本身很轻（一次 readdir）。
+        // 插件（mod）接口：列出插件每次请求都重新扫描目录 —— 用户可能在服务运行期间把 zip 拷进 mods/，启动扫一次会让他以为没生效。
         if (pathname === '/api/plugins' && request.method === 'GET') {
             try {
                 const result = await modManager.scanAndSync();
                 return jsonResponse(response, 200, {
                     ok: true,
                     plugins: result.installed,
-                    // 回报安装结果：zip 解压失败时必须让用户看到原因，
-                    // 否则"我把 zip 放进去了但没反应"会变成无从排查的问题
+                    // 回报安装结果：zip 解压失败时必须让用户看到原因，否则"我把 zip 放进去了但没反应"无从排查。
                     installResults: result.results,
-                    // 服务端半边（manifest.server）的装载状态：谁装载了、谁**要重启才生效**。
-                    // 服务端路由是启动时一次装载的常驻注册表，装完插件不重启就生效会让
-                    // "哪些接口存在"随运行状态漂移 —— 所以这里如实报出"需重启"，
-                    // 而不是让用户面对一个静默不工作的接口。
+                    // 服务端半边装载状态：路由是启动时一次装载的常驻注册表，如实报出 needsRestart 而不是让用户面对静默不工作的接口。
                     serverRoutes: modServer.status(result.installed),
                 });
             } catch (err) {
                 return jsonResponse(response, 500, { ok: false, message: '扫描插件目录失败：' + String((err && err.message) || err) });
             }
         }
-        // 在文件管理器里打开插件目录（方便开发者改插件文件）。
-        // 安全：这是"让服务进程去唤起本机程序"的特权操作，所以两道限制：
-        //   ① **只限本机**（isLocalRequest）—— 局域网设备调它等于远程指挥本机开窗口
-        //   ② **不接受任意路径**：只认 `?id=<插件id>`（开某个插件目录，且 id 过白名单）
-        //      或不带参数（开插件根目录）。绝不把请求里的路径直接交给 shell。
-        // 为什么值得做：开发者改插件要反复"找目录 → 编辑 → 回设置页点重新扫描"，
-        //   而插件目录藏在 mods/ 下，路径不直观。一个按钮省掉这段路。
+        // 在文件管理器里打开插件目录：这是让服务进程唤起本机程序的特权操作，只限本机，且只认 ?id=<插件id> 或不带参数（不把路径交给 shell）。
         if (pathname === '/api/plugins/open-folder' && request.method === 'POST') {
             if (!isLocalRequest(request)) {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机可以打开文件夹' });
             }
-            // `dir=`：浏览器里点「在文件管理器打开」失败、或这台机器没有可用的
-            //   文件管理器（远程桌面 / 精简系统 / 非 Windows）时的**兜底查看**。
-            //   只回目录名清单 —— 与 open-folder 同一道本机限制，不收也不回任何路径。
+            // `dir=`：浏览器里点「在文件管理器打开」失败时的兜底查看，只回目录名清单 —— 同一道本机限制，不收也不回任何路径。
             if (url.searchParams.get('dir') === '1') {
                 const shown = process.platform === 'win32' ? MODS_DIR : 'mods/';
                 const entries = await readdir(MODS_DIR, { withFileTypes: true }).catch(() => []);
@@ -3209,19 +2485,13 @@ const requestHandler = async (request, response) => {
             }
             let target = MODS_DIR;
             const wantId = String(url.searchParams.get('id') || '').trim();
-            // sub：插件目录**内**的一层子路径（如模型名 models/deepseek）。
-            // 同样不接受任意路径：逐段白名单 + 解析后必须仍在插件目录内。
-            //   它存在的理由与 id 一样 —— 模型住在 <插件>/models/<模型名>/，
-            //   而用户想"打开这个模型的文件夹"直接改文件。
+            // sub：插件目录内的一层子路径（如 models/deepseek），逐段白名单 + 解析后必须仍在插件目录内；用于直接打开模型文件夹改文件。
             const wantSub = String(url.searchParams.get('sub') || '').trim().replace(/\\/g, '/');
             if (wantId) {
-                // 复用插件管理器那条白名单（挡 .. / 绝对路径 / 非法字符）
                 if (!modManager.MOD_ID_RE.test(wantId)) {
                     return jsonResponse(response, 400, { ok: false, message: '插件名不合法' });
                 }
-                // id 是**身份**（manifest.id），磁盘上住的是**目录名**，两者可以不同（表 A9）。
-                //   直接 path.join(MODS_DIR, id) 对 "身份≠目录名" 的插件必然 404 ——
-                //   与 DELETE /api/plugins/:id 一样必须先按 id 反查真实目录。
+                // id 是身份（manifest.id），磁盘上住的是目录名，两者可以不同（表 A9）；必须先按 id 反查真实目录。
                 const resolved = await modManager.findModDirById(wantId);
                 let dir = resolved || path.join(MODS_DIR, wantId);
                 if (!dir.startsWith(MODS_DIR + path.sep)) {
@@ -3229,7 +2499,6 @@ const requestHandler = async (request, response) => {
                 }
                 if (wantSub) {
                     const segs = wantSub.split('/').filter(Boolean);
-                    // 逐段校验：挡 . / .. / 隐藏段 / Windows 非法字符
                     for (const s of segs) {
                         if (s === '.' || s === '..' || s.startsWith('.')) {
                             return jsonResponse(response, 400, { ok: false, message: '子路径不合法' });
@@ -3238,25 +2507,16 @@ const requestHandler = async (request, response) => {
                             return jsonResponse(response, 400, { ok: false, message: '子路径含非法字符' });
                         }
                     }
-                    // 插件目录的**边界**是反查出来的那个真实目录，不是按 id 拼出来的路径
-                    //   （两者对 "身份≠目录名" 的插件不同，拿错那一个会让合法的子路径被判越界）。
+                    // 插件目录的边界是反查出来的真实目录，不是按 id 拼出来的路径（两者对"身份≠目录名"的插件不同，拿错会让合法子路径被判越界）。
                     const pluginDir = dir;
                     dir = path.join(pluginDir, ...segs);
-                    // 双保险：拼完必须仍在插件目录内
-                    if (dir !== pluginDir && !dir.startsWith(pluginDir + path.sep)) {
+                    if (dir !== pluginDir && !dir.startsWith(pluginDir + path.sep)) {   // 双保险：拼完必须仍在插件目录内
                         return jsonResponse(response, 400, { ok: false, message: '路径越界' });
                     }
                 }
                 const info = await stat(dir).catch(() => null);
                 if (!info || !info.isDirectory()) {
-                    // 失败原因要能指回**用户能做的动作**。
-                    //   `?id=` 收的是插件**身份**（manifest.id），而磁盘上住的是
-                    //   **目录名**，两者常常不同（如 identity=birthday 住在 birthday-1.1.0）；
-                    //   只回一句"目录不存在"会让用户以为插件坏了，而实际只是名字对不上
-                    //   （安装目录被人改过名），旁边就有可用的答案。
-                    //   插件目录本身找得到、只是缺子路径时，问题在子路径 —— 这时别再说
-                    //   "目录名不一致"，那句话会把用户引到错误的修法上。
-                    //   反查到了真实目录，说明"名字对不上"这件事已经解决 —— 也别说这句。
+                    // 失败原因要指回用户能做的动作：反查到了真实目录说明"名字对不上"已解决；缺子路径时别再说"目录名不一致"。
                     const hint = resolved ? '' : await suggestModDir(wantId);
                     return jsonResponse(response, 404, {
                         ok: false,
@@ -3269,24 +2529,16 @@ const requestHandler = async (request, response) => {
                 }
                 target = dir;
             } else {
-                // 根目录可能还不存在（全新安装、一个插件都没装）→ 先建出来，
-                // 否则"打开文件夹"会失败，而用户只是想往里放 zip
+                // 根目录可能还不存在（全新安装、一个插件都没装）→ 先建出来，否则"打开文件夹"会失败。
                 await mkdir(MODS_DIR, { recursive: true }).catch(() => {});
             }
-            // 用 spawn 而不是 exec：参数以数组传入，不经过 shell 解析，
-            // 路径里即使有空格/引号也不会变成命令注入。
-            // **不能只"发出去就报成功"**：explorer/open/xdg-open 都是瞬间返回的子进程，
-            //   文件管理器没起来（没有桌面会话、被策略禁用、xdg-open 未安装）时
-            //   接口照样回 200，用户看到的是"点了没反应"—— 这正是最难查的一类故障。
-            //   所以这里等它的启动结果：被拒绝（spawn 报错 / 命令不存在）才回失败，
-            //   并明确给出下一步。
+            // 用 spawn 而不是 exec（参数经数组、不经 shell，路径里的空格/引号不会变命令注入）；不能"发出去就报成功"—— explorer/open 瞬间返回，要等启动结果。
             const openInfo = process.platform === 'win32'
                 ? { cmd: 'explorer', shown: target }
                 : process.platform === 'darwin'
                     ? { cmd: 'open', shown: target }
                     : { cmd: 'xdg-open', shown: target };
-            // explorer 打开目录是正常用法；它退出码可能非 0，不能据此判失败 ——
-            //   只认 spawn 的同步抛错（命令不存在 / 没有权限启动）。
+            // explorer 打开目录是正常用法，退出码可能非 0，不能据此判失败 —— 只认 spawn 的同步抛错（命令不存在 / 没权限启动）。
             try {
                 spawn(openInfo.cmd, [target], { detached: true, stdio: 'ignore' }).unref();
             } catch (err) {
@@ -3294,7 +2546,6 @@ const requestHandler = async (request, response) => {
                 console.log('[Mod] 打开插件目录失败：' + why + '（' + target + '）');
                 return jsonResponse(response, 500, {
                     ok: false,
-                    // 带上相对路径：用户可以在编辑器 / 终端的当前目录里直接找它
                     message: '打不开系统文件管理器（' + openInfo.cmd + '）：' + why
                         + '。插件目录是 ' + (process.platform === 'win32' ? target : 'mods/')
                         + '，可改用「浏览目录」查看。',
@@ -3304,7 +2555,6 @@ const requestHandler = async (request, response) => {
             console.log('[Mod] 已请求打开插件目录：' + target);
             return jsonResponse(response, 200, { ok: true, path: target });
         }
-        // 卸载插件（删除目录）。仅本机管理员 —— 它能删文件，不该让局域网访客调。
         const plugDel = pathname.match(/^\/api\/plugins\/([^/]+)$/);
         if (plugDel && request.method === 'DELETE') {
             if (!isLocalRequest(request)) {
@@ -3317,13 +2567,7 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
             }
         }
-        // 上传安装插件：POST /api/plugins/install?name=xxx
-        // 为什么需要这个接口：只靠"把 zip 拷进 mods/ 目录"再让服务端扫描是不够的。
-        // 那条路在电脑上可行，但**手机/平板用户根本碰不到文件系统**（尤其 APK，
-        // 连服务端都没有）。所以另开一个应用内上传的入口。
-        // 请求体就是 zip 原始字节（不是 multipart）—— 前端用 fetch 直接把
-        // File 对象当 body 发，省掉解析 multipart 的一整套代码，也不引入依赖。
-        // 插件名从 query 取（zip 文件名），与"丢文件进目录"那条路命名规则一致。
+        // 上传安装插件：只靠"把 zip 拷进 mods/"不够（手机/平板碰不到文件系统）；请求体是 zip 原始字节（非 multipart），插件名从 query 取。
         if (pathname === '/api/plugins/install' && request.method === 'POST') {
             if (!isLocalRequest(request)) {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机可以安装插件' });
@@ -3332,11 +2576,7 @@ const requestHandler = async (request, response) => {
             if (!rawName) {
                 return jsonResponse(response, 400, { ok: false, message: '缺少插件名（请把 zip 文件名作为 name 参数）' });
             }
-            // 先拒绝"名字里带路径成分"的请求，**再**净化。
-            //   顺序很重要：如果先净化（`replace(/^.*[\\/]/, '')`）再校验，
-            //   `../../hack.zip` 会被静默改成 `hack` 并安装成功 —— 用户意图被曲解，
-            //   而且掩盖了一次路径穿越尝试（非法名会返回 HTTP 200）。
-            //   这里明确报错，让调用方知道名字不合法。
+            // 先拒绝"名字里带路径成分"的请求，再净化：先净化会把 ../../hack.zip 静默改成 hack 并安装成功，既曲解意图又掩盖穿越尝试。
             if (/[\\/]/.test(rawName) || rawName.includes('..')) {
                 return jsonResponse(response, 400, { ok: false, message: '插件名不能包含路径成分（/ \\ ..）' });
             }
@@ -3366,13 +2606,7 @@ const requestHandler = async (request, response) => {
             }
         }
 
-        // ===== 技能（skill）接口 =====
-        // 技能与插件是**两回事**（见 server/skills.mjs 的说明）：插件扩展应用本身
-        //   （代码、可装可卸），技能是**给 AI 的指令与知识**（纯文本、不注册进应用）。
-        //   所以这里独立成一组 /api/skills，绝不复用 /api/plugins —— 混在一起会让
-        //   "插件列表"里冒出本不该在那儿的项，而且两者卸载方式根本不同。
-        // 列出技能：每次请求都重新扫描（理由同 /api/plugins：用户可能刚好往
-        // skills/ 里拷了个目录，启动时扫一次就够会让"我刚放的没出现"无从排查）。
+        // 技能（skill）接口：技能是给 AI 的指令与知识（纯文本、不注册进应用），与插件分开管理、独立成 /api/skills；列出技能每次请求都重新扫描。
         if (pathname === '/api/skills' && request.method === 'GET') {
             try {
                 const result = await skillManager.scan();
@@ -3381,9 +2615,6 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 500, { ok: false, message: '扫描技能目录失败：' + String((err && err.message) || err) });
             }
         }
-        // 上传安装技能：POST /api/skills/install?name=xxx
-        // 与插件上传**同一种传输方式**：请求体就是 zip 原始字节（不是 multipart）——
-        // 前端用 fetch 直接把 File 当 body 发，省掉 multipart 解析、也不引依赖。
         if (pathname === '/api/skills/install' && request.method === 'POST') {
             if (!isLocalRequest(request)) {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机可以安装技能' });
@@ -3392,9 +2623,7 @@ const requestHandler = async (request, response) => {
             if (!rawName) {
                 return jsonResponse(response, 400, { ok: false, message: '缺少技能名（请把 zip 文件名作为 name 参数）' });
             }
-            // 先拒绝"名字里带路径成分"的请求，**再**净化（顺序同插件安装，理由见那段注释）：
-            //   先净化会把 `../../hack.zip` 静默改成 `hack` 并安装成功 —— 既曲解意图，
-            //   又掩盖一次路径穿越尝试。
+            // 先拒绝"名字里带路径成分"的请求，再净化（顺序同插件安装）：否则 `../../hack.zip` 会被静默改成 `hack`。
             if (/[\\/]/.test(rawName) || rawName.includes('..')) {
                 return jsonResponse(response, 400, { ok: false, message: '技能名不能包含路径成分（/ \\ ..）' });
             }
@@ -3423,9 +2652,6 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
             }
         }
-        // 卸载技能（DELETE /api/skills/<id>）。仅本机 —— 它能删文件，不该让局域网访客调。
-        // 只对**本地**技能有效：插件随附的技能由 skillManager 明确拒绝（要随插件一起卸），
-        //   所以这里不额外判断来源，交给管理器统一给出可读的错误。
         const skillDel = pathname.match(/^\/api\/skills\/([^/]+)$/);
         if (skillDel && request.method === 'DELETE') {
             if (!isLocalRequest(request)) {
@@ -3438,19 +2664,13 @@ const requestHandler = async (request, response) => {
                 return jsonResponse(response, 400, { ok: false, message: String((err && err.message) || err) });
             }
         }
-        // 读技能的 SKILL.md（界面上的「查看」）：GET /api/skills/<id>/content
-        // 为什么走接口而不是让前端 fetch 静态文件：技能目录不在静态根 web/ 内，
-        // 前端拼不出路径；而且随附技能的 id 带斜杠（owner/rel），前端更无从拼。
-        // 这里用 `(.+)`（可含斜杠）而不是 `([^/]+)`：插件随附技能的 id 是
-        //   `owner/rel` 形式。安全性不靠正则，靠 skillManager.readSkill 内部
-        //   "反查已注册技能"的路径校验（前端传不了任意路径）。
+        // 读技能的 SKILL.md：技能目录不在静态根 web/ 内，前端拼不出路径；用 (.+) 允许 id 含斜杠，安全性靠 skillManager.readSkill 的路径校验。
         const skillContent = pathname.match(/^\/api\/skills\/(.+)\/content$/);
         if (skillContent && request.method === 'GET') {
             try {
                 const id = skillContent[1];
                 const r = await skillManager.readSkill(id);
                 if (!r.ok) {
-                    // 404 表示"没有这个技能 / 没有 SKILL.md"，前端据此提示；不是服务器错误
                     return jsonResponse(response, 404, { ok: false, message: r.message });
                 }
                 return jsonResponse(response, 200, { ok: true, name: r.name, text: r.text });
@@ -3459,21 +2679,10 @@ const requestHandler = async (request, response) => {
             }
         }
 
-        // API：AI Agent 文件/命令操作（权限档位：off=关闭 / strict=逐条确认 / auto=自动通过 / full=完全访问）
-        // privileged = 本机（免密管理员）**或已登录的局域网设备**。
-        //   这是刻意的设计：登录之后的设备与本机同等能力（文件 + 命令）。
-        //   相应地，密码强度与登录防爆破成了这套权限模型的必要组成（见 auth-guard.mjs）。
-        //   注意能走到这里的请求必然已过上面的 isAuthenticated 闸门，
-        //   所以 privileged 实际等价于"已认证"。
+        // API：AI Agent 文件/命令操作（权限档位见 AGENT_ACCESS_LEVELS）；privileged = 本机或已登录的局域网设备，能到这里必然已过 isAuthenticated。
         const privileged = hasComputerGrant(request);
         if (pathname === '/api/agent/roots' && request.method === 'GET') {
-            // 把「桌面/文档/下载…到底在哪」告诉前端 —— 用户可以把桌面移动到任意位置，
-            // 让 AI 按惯例猜 C:\Users\<用户名>\Desktop 是会猜错的。
             const { roots } = resolveShellFolders();
-            // strict / auto / full 三档都能访问任意路径，所以真实路径一律可见（只要已认证）。
-            // 不按权限档区分可见性：三档都能访问任意路径，可见性只取决于是否已认证。
-            // `off` 档例外：整块关闭时"桌面在哪"也是**电脑信息**，一并隐去
-            //   （与未认证时的形状一致：只给标签，不给 path）。
             const rootsAccess = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
             const revealPaths = privileged && !accessDisabled(rootsAccess);
             const visible = revealPaths ? roots : roots.map(r => ({ ...r, path: undefined }));
@@ -3488,20 +2697,13 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/agent/write' && request.method === 'POST') {
             return await agentWrite(request, response, privileged);
         }
-        // 删除。只有 full 档能删；auto 档整体拒绝；strict 档问一次。
         if (pathname === '/api/agent/delete' && request.method === 'POST') {
             return await agentDelete(request, response, privileged);
         }
-        // 电脑命令执行（三档都可执行，区别在"要不要问"，见 agentExec）。
         if (pathname === '/api/agent/exec' && request.method === 'POST') {
             return await agentExec(request, response, privileged);
         }
-        // AI 用浏览器：真的开一个 Chrome / Edge，看页面、点东西、填表单。
-        // 与 /api/agent/exec 的分工：命令通道是"文本进、文本出"，AI 看不到页面；
-        //   这条通道给的是"看页面 → 决定 → 真点一下"。
-        // 鉴权比文件/命令更紧（见 browserDenyReason）：**只认本机**。
-        //   调试端口能读这个浏览器里的全部 cookie，等于把登录态交出去，
-        //   而局域网设备只要拿到访问密码就能调 —— 密码不该成为它的唯一防线。
+        // AI 用浏览器：真的开 Chrome / Edge 看页面、点东西；鉴权比文件/命令更紧（见 browserDenyReason）—— 调试端口能读全部 cookie，只认本机。
         if (pathname === '/api/agent/browser' && request.method === 'POST') {
             let body;
             try { body = await readJsonBody(request, 64 * 1024); } catch { return jsonResponse(response, 400, { ok: false, message: '请求体无效' }); }
@@ -3515,13 +2717,9 @@ const requestHandler = async (request, response) => {
                 });
             }
             const result = await runBrowserAction(browserSession, body.action, body.args || {});
-            // 一律 200：ok 在 body 里。浏览器"打不开这个网址"是**正常结果**，
-            //   不是接口故障 —— 用 4xx/5xx 会让前端把它当成"服务端坏了"，
-            //   而模型需要的恰恰是那条具体原因（DNS 失败 / 证书错 / 404）。
+            // 一律 200：ok 在 body 里。浏览器"打不开这个网址"是正常结果，用 4xx/5xx 会让前端当成服务端坏了，而模型需要那条具体原因。
             return jsonResponse(response, 200, result);
         }
-        // 浏览器状态：给设置页显示"现在开着吗 / 装没装浏览器"。
-        //   放在这里而不是让前端去试探 —— 试探会真的把浏览器拉起来。
         if (pathname === '/api/agent/browser/status' && request.method === 'GET') {
             const access = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
             const deny = browserDenyReason(request, access);
@@ -3534,13 +2732,9 @@ const requestHandler = async (request, response) => {
                 running: browserSession.isRunning(),
             });
         }
-        // ===== MCP 客户端 =====
-        // 列出"用户配置的 MCP 服务器此刻提供哪些工具"。前端启动时拉一次，
-        //   把它们注册成操作注册表里的条目（ns:'mcp'），于是 AI 的工具清单里就有了。
+        // MCP 客户端：列出"用户配置的 MCP 服务器此刻提供哪些工具"，前端启动时拉一次并注册成操作注册表条目（ns:'mcp'）。
         if (pathname === '/api/mcp/tools' && request.method === 'GET') {
             const access = normalizeAgentAccess(url.searchParams.get('access') || url.searchParams.get('permission'));
-            // 与电脑操作同一道闸：MCP 工具可能读写文件 / 发网络请求，
-            //   所以 'off' 档一律不给。这不是"技术限制"而是明确的权限声明。
             if (access === 'off') {
                 return jsonResponse(response, 403, { ok: false, message: '电脑操作已关闭，MCP 工具也不可用' });
             }
@@ -3553,7 +2747,6 @@ const requestHandler = async (request, response) => {
                     name: def.name,
                     ok: res.ok,
                     error: res.error,
-                    // 工具名带服务器前缀，避免两台服务器都有 search 时撞名
                     tools: res.tools.map((t) => ({
                         name: t.name,
                         description: t.description,
@@ -3563,7 +2756,6 @@ const requestHandler = async (request, response) => {
             }
             return jsonResponse(response, 200, { ok: true, servers: out });
         }
-        // 调一个 MCP 工具。前端工具通道把 AI 的 tool_call 转到这里。
         if (pathname === '/api/mcp/call' && request.method === 'POST') {
             let body;
             try { body = await readJsonBody(request, 256 * 1024); } catch { return jsonResponse(response, 400, { ok: false, message: '请求体无效' }); }
@@ -3578,20 +2770,15 @@ const requestHandler = async (request, response) => {
             }
             const servers = await mcpServersFromSettings();
             const def = servers.find((s) => s.id === serverId);
-            // 不在"已启用"清单里的服务器一律拒绝：前端可以被绕过（同源 fetch 谁都能发），
-            //   "配置里没有却能调起来"等于绕过用户关掉的那个开关。
+            // 不在"已启用"清单里的服务器一律拒绝：前端可以被绕过，"配置里没有却能调起来"等于绕过用户关掉的开关。
             if (!def) {
                 return jsonResponse(response, 403, { ok: false, message: '没有这台 MCP 服务器，或它没有启用：' + serverId });
             }
             const result = await mcpRegistry.callTool(def, toolName, body.arguments || {});
-            // 一律 200：ok 在 body 里。工具自身报错（isError / 超时）是**正常结果**，
-            //   模型需要的是那条具体原因，不是"接口 500"。
+            // 一律 200：ok 在 body 里。工具自身报错（isError / 超时）是正常结果，模型需要那条具体原因而不是"接口 500"。
             return jsonResponse(response, 200, result);
         }
-        // 测试连接：拿一份**还没保存**的配置去连一次，只回报能不能连、有什么工具。
-        //   为什么需要：现在只有"保存后才知道连不连得上"，配错了要改三轮。
-        //   注意它接受 body 里的完整配置（而不是 server id）—— 配置还没落盘，
-        //   服务端没有它，只能由前端把候选配置递过来。
+        // 测试连接：拿一份还没保存的配置去连一次（否则只有"保存后才知道连不连得上"）；配置还没落盘，只能由前端把候选配置递过来。
         if (pathname === '/api/mcp/test' && request.method === 'POST') {
             let body;
             try { body = await readJsonBody(request, 64 * 1024); } catch { return jsonResponse(response, 400, { ok: false, message: '请求体无效' }); }
@@ -3620,10 +2807,8 @@ const requestHandler = async (request, response) => {
             if (!def.url && !def.command) {
                 return jsonResponse(response, 200, { ok: false, message: '需要 url（远程）或 command（本地），否则连不上' });
             }
-            // 用独立的 id 前缀避免和已保存的同名服务器串在一起（registry 按 id 复用连接）
             def.id = '__test__' + def.id;
             try {
-                // listTools 会按需启动并完成握手 —— 正是"测试连接"要验证的全过程
                 const res = await mcpRegistry.listTools(def);
                 if (!res.ok) {
                     return jsonResponse(response, 200, { ok: false, message: res.error || '连接失败' });
@@ -3639,11 +2824,9 @@ const requestHandler = async (request, response) => {
             } catch (err) {
                 return jsonResponse(response, 200, { ok: false, message: String((err && err.message) || err) });
             } finally {
-                // 测完立刻断开：测试连接不该长期占着一个进程 / 会话
                 try { await mcpRegistry.stop({ id: def.id }); } catch { /* 忽略 */ }
             }
         }
-        // 停掉进程（改了配置 / 点了刷新时前端会调）。**不传 server 就是全部停掉**。
         if (pathname === '/api/mcp/stop' && request.method === 'POST') {
             let body = {};
             try { body = await readJsonBody(request, 16 * 1024); } catch { body = {}; }
@@ -3655,7 +2838,6 @@ const requestHandler = async (request, response) => {
             await mcpRegistry.stop();
             return jsonResponse(response, 200, { ok: true, stopped: 'all' });
         }
-        // 状态：给设置页显示"起来了吗 / 有什么错"（不启动进程 —— 刷新状态不该拉起子进程）
         if (pathname === '/api/mcp/status' && request.method === 'GET') {
             const servers = await mcpServersFromSettings();
             return jsonResponse(response, 200, {
@@ -3663,18 +2845,12 @@ const requestHandler = async (request, response) => {
                 servers: servers.map((def) => ({ id: def.id, name: def.name, ...mcpRegistry.status(def) })),
             });
         }
-        // 看电脑在干什么（前台窗口 + 进程）—— 供桌宠让 AI"知道你在做什么"并主动搭话。
-        // **已登录的局域网设备也可以读**。
-        //   这是"用户在看什么"的隐私数据（前台窗口标题与可见文本、进程列表），
-        //   放开等于把它交给了每一个拿到访问密码的设备。仍然拦住的只有"未登录"，
-        //   以及下面 certInfo 之外的情况 —— 也就是说**密码就是这道门**。
-        //   如果你不希望手机能看到电脑上开着什么窗口，把这里换成 isLocalRequest(request)。
+        // 看电脑在干什么（前台窗口 + 进程），供桌宠让 AI 知道用户在做什么；这是隐私数据，已登录的局域网设备也能读 —— 密码就是这道门。
         if (pathname === '/api/agent/activity' && request.method === 'GET') {
             if (!privileged) {
                 return jsonResponse(response, 403, { ok: false, message: '需要登录后才能读取电脑活动状态' });
             }
-            // `off` 档：这也是"电脑信息"（前台窗口标题 / 可见文本 / 进程列表），
-            //   整块关闭时一并拒掉 —— 否则"已关闭电脑操作"仍然能看到你在用什么软件。
+            // off 档：前台窗口标题 / 可见文本 / 进程列表也是"电脑信息"，整块关闭时一并拒掉。
             if (accessDisabled(url.searchParams.get('access') || url.searchParams.get('permission'))) {
                 return agentDisabledResponse(response);
             }
@@ -3682,28 +2858,16 @@ const requestHandler = async (request, response) => {
             return jsonResponse(response, 200, activitySummaryCached(force));
         }
 
-        // ===== 插件（mod）注册的服务端路由 =====
-        // 位置很关键：排在**宿主所有路由之后**、静态文件之前。
-        //   · 排最后 → 宿主永远优先（第二道保险；撞名其实在装载期就被拒了）
-        //   · 排静态之前 → 插件的 /api 前缀不会被静态处理器当成"找不到的文件"
-        // 能走到这里说明请求已过 isAuthenticated 闸门（见上面的访问控制），
-        // 所以插件接口**自动受同一套鉴权保护**，插件作者不需要自己写一遍。
+        // 插件（mod）注册的服务端路由：排在宿主所有路由之后、静态文件之前 —— 宿主永远优先，插件 /api 前缀不会被静态处理器当成找不到的文件。
         if (await modServer.handle(request, response, { pathname, url })) return;
 
-        // 读插件的 README（插件页的「说明」按钮）。
-        // 为什么走接口而不是让前端 fetch `/mods/<id>/README.md`：
-        //   · 插件目录名与 id 可能不一致（用户改过名），前端拼路径会 404
-        //   · 静态服务对 mods/ 下的文件按扩展名给 MIME，而 .md 不在表里，
-        //     拿到 octet-stream 后浏览器会当下载而不是显示
-        //   · 更重要的：这里用**白名单文件名**读，前端传不了任意路径
-        // 放在 modServer.handle 之后：插件自己的路由优先（万一它也提供同名接口）。
+        // 读插件的 README：走接口而不是让前端 fetch —— 目录名与 id 可能不一致、.md 不在 MIME 表里会被当下载、且这里用白名单文件名读；放在 modServer.handle 之后让插件路由优先。
         const readmeMatch = pathname.match(/^\/api\/plugins\/([^/]+)\/readme$/);
         if (readmeMatch && request.method === 'GET') {
             try {
                 const id = readmeMatch[1];
                 const r = await modManager.readReadme(id);
                 if (!r.ok) {
-                    // 404 表示"这个插件没有 README"，前端据此提示；不是服务器错误
                     return jsonResponse(response, 404, { ok: false, message: r.message });
                 }
                 return jsonResponse(response, 200, { ok: true, name: r.name, text: r.text });
@@ -3712,21 +2876,7 @@ const requestHandler = async (request, response) => {
             }
         }
 
-        // 插件清单必须**每次请求都重新扫描**，不能当静态文件发。
-        // 为什么：
-        //   若 index.json 只在 `/api/plugins` 被请求时才重新生成，而**前端加载
-        //   插件读的是这个静态文件**，那么用户手动改了插件目录名之后、只刷新页面
-        //   （没打开设置页 → 没触发 /api/plugins）时，清单还是旧的：
-        //       [Mod] 加载 elaina-avatar → 去请求 /mods/<旧目录名>/index.js → 404
-        //       → 插件加载失败 → 立绘不出来
-        //   故障形态（把目录从 fafdaf 改名成 1111，只刷新页面）：
-        //       失败请求: 404 /mods/fafdaf/index.js
-        //       插件状态: elaina-avatar=error
-        //   而"先打开一次设置页"（触发扫描）再刷新就正常 —— 这就是用户
-        //   觉得"改个名就用不了了"的根因：**清单的更新时机不对**。
-        // 所以把它当成动态接口：每次请求都扫描一次目录再生成。
-        // 扫描本身很轻（一次 readdir + 读几个 manifest），而这个文件是
-        // 插件系统的入口 —— 它过期会让整个插件系统指向错误路径。
+        // 插件清单必须每次请求都重新扫描：前端加载插件读的就是这个文件，只刷新页面时清单还是旧的，目录改名后会去请求旧目录、插件加载失败。
         if (pathname === '/mods/index.json' && request.method === 'GET') {
             try {
                 const result = await modManager.scanAndSync();
@@ -3747,34 +2897,13 @@ const requestHandler = async (request, response) => {
             }
         }
 
-        // 浏览器会自己请求 /favicon.ico，没这个文件就每开一次页面刷一条 404，淹没真正的日志。
-        // 回 204（表示"没有图标"）即可，安静且语义正确。
+        // 浏览器会自己请求 /favicon.ico，没这个文件就每开一次页面刷一条 404；回 204 安静且语义正确。
         if (pathname === '/favicon.ico') {
             response.writeHead(204, { 'Cache-Control': 'public, max-age=86400' });
             return response.end();
         }
 
-        // ===== 插件静态资源：/mods/* =====
-        // 为什么必须有这一段：插件目录是**项目根**下的 `mods/`
-        //   （见 MODS_DIR 的说明），而 `web/` 才是静态文件根 ——
-        //   静态处理器只发 `web/` 里的东西，够不到 `/mods/*`，
-        //   没有这一段就是**全部 404**：
-        //   立绘、场景背景、Live2D 模型、插件自带的 panel.html 全部加载失败 ——
-        //   正是本项目最忌讳的"装了等于没装"。
-        // MIME 必须**按真实扩展名**发（不能一律 octet-stream）：
-        //   插件会 `fetch(host.assetUrl('panel.html'))` 拿自己的设置面板 HTML，
-        //   还有 `.mjs`（live2d-models 的服务端半边）、`.css`、`.js`。
-        //   一律 octet-stream 的话，配合下面的 `nosniff`，浏览器会**拒绝执行**
-        //   脚本、拒绝解析 HTML —— 表现为"插件装了但界面是空的"。
-        // 为什么这里发真实 MIME 不增加风险：插件本来就能在页面里执行任意 JS
-        //   （加载器就是注入它的 `<script>`），所以给它自带目录放行真实 MIME
-        //   并没有给出它本来没有的能力。（用户**上传**的内容仍走
-        //   modServer 的 uploadRoots 分支，那里一律 octet-stream —— 见下面。）
-        // 安全约束（与静态处理器同一套，逐条对应）：
-        //   · 路径穿越：`..` 已在上面被拒（relative 的段检查）；
-        //     这里再用 resolve + startsWith 二次确认，双保险。
-        //   · 符号链接不跟随（lstat）：防止插件目录里的软链把任意文件读出去。
-        //   · 只发普通文件，目录不给列表（浏览器本来也没法列）。
+        // 插件静态资源 /mods/：插件目录在项目根的 mods/，静态处理器只发 web/，没有这段就是立绘 / 背景 / Live2D 模型 / panel.html 全部 404；MIME 按真实扩展名发。
         if (pathname.startsWith('/mods/')) {
             try {
                 const rel = pathname.slice('/mods/'.length);
@@ -3783,16 +2912,14 @@ const requestHandler = async (request, response) => {
                     return;
                 }
                 const target = path.resolve(MODS_DIR, rel);
-                // 二次确认仍在插件根内（resolve 之后比较，挡住任何拼接绕过）
-                if (target !== MODS_DIR && !target.startsWith(MODS_DIR + path.sep)) {
+                if (target !== MODS_DIR && !target.startsWith(MODS_DIR + path.sep)) {   // 二次确认仍在插件根内，挡住拼接绕过
                     response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
                     return;
                 }
                 const st = lstatSync(target);
                 if (st.isSymbolicLink() || !st.isFile()) throw new Error('Not a regular file');
 
-                // 插件声明的"用户上传落地处"仍按二进制流发（用户上传的 zip 里
-                // 若混入 .html/.svg，同源渲染就是一个 XSS 执行点）。
+                // 插件声明的"用户上传落地处"仍按二进制流发：用户上传的 zip 若混入 .html/.svg，同源渲染就是 XSS 执行点。
                 const uploadRoots = modServer.uploadRoots();
                 const inUploadDir = uploadRoots.some((r) => target.startsWith(r + path.sep));
                 const ext = path.extname(target).toLowerCase();
@@ -3804,7 +2931,6 @@ const requestHandler = async (request, response) => {
                     'Content-Type': ctype,
                     'Cache-Control': 'no-store',
                     'X-Content-Type-Options': 'nosniff',
-                    // 插件自带的 HTML（panel.html）不许被第三方 iframe 嵌套
                     ...(ctype.startsWith('text/html') ? {
                         'X-Frame-Options': 'DENY',
                         'Referrer-Policy': 'no-referrer',
@@ -3818,51 +2944,24 @@ const requestHandler = async (request, response) => {
         }
 
         const relative = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
-        // 禁止访问隐藏文件：这条规则仍然必要 —— 它挡住的是 .env / .git / 各类点文件，
-        // 以及误放在这里的 .local-auth.json（访问密码，正确位置是 data/ 下）。
+        // 禁止访问隐藏文件：挡住 .env / .git / 各类点文件，以及误放在这里的 .local-auth.json（正确位置是 data/）。
         if (relative.split('/').some(seg => seg.startsWith('.'))) {
             response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
             return;
         }
 
-        // 路径穿越：`..` 段一律拒绝。
-        //   为什么需要单独一条：pathname 只做了 decodeURIComponent，**没有规范化**。
-        //   于是 `/live2d/models/../../serve.mjs` 会被 path.resolve(root, relative)
-        //   解析成 web/serve.mjs —— 它在 root 之内，所以能通过下面那道边界检查。
-        //   实测确认过：加这条之前它回 200 并吐出 serve.mjs 的源码。
-        //   严重性说明（别夸大）：它**逃不出 web/** —— 想穿到 data/（密码、聊天记录）
-        //   会被 `target.startsWith(root)` 挡住，而 web/ 下的文件本来就能直接访问
-        //   （/serve.mjs 就是公开的）。所以这不是"新泄漏"，而是
-        //     ① 语义错误：不存在的路径该 404，不该 200
-        //     ② 它绕过了插件静态映射，让"谁负责这条 URL"变得含糊
-        //   仍然必须修：将来若有人把敏感文件放进 web/，这条就变成真漏洞。
-        //   在**解码之后**判：%2e%2e 这类写法必须在这里已经被还原成 ..
+        // 路径穿越：`..` 段一律拒绝 —— pathname 只做了 decodeURIComponent、没有规范化，不判的话不存在的路径会 200 并绕开插件静态映射。
         if (relative.split(/[\\/]+/).some(seg => seg === '..')) {
             response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
             return;
         }
 
-        // 先问插件：这条 URL 是不是某个插件声明的静态资源？
-        //   Live2D 模型就是这样：URL 仍是 /live2d/models/<名>/…，而文件住在
-        //   mods/live2d-models/models/ 下（见那个插件的 manifest.server.static）。
-        //   排在宿主静态解析**之前**：宿主目录里已经不再有 live2d/ 了，
-        //   交给下面的 root 解析只会 404。
-        //   resolveStatic 内部负责：段边界匹配、解码后再解析、逐段白名单、
-        //   解析后必须仍在映射目录内（挡 `..` / 绝对路径 / `%2e%2e` 绕过）。
+        // 先问插件：这条 URL 是不是某个插件声明的静态资源（Live2D 模型走 /live2d/models/…）；排在宿主静态解析之前，resolveStatic 内部负责段边界与越界校验。
         const modStatic = modServer.resolveStatic(pathname, (abs) => {
             try { const st = lstatSync(abs); return st.isFile() && !st.isSymbolicLink(); } catch { return false; }
         });
         if (modStatic) {
-            // MIME 由插件**声明**决定（manifest.server.static 的 mime 字段）：
-            //   'binary'（默认）—— 用户上传的内容。一律 application/octet-stream：
-            //       模型 zip 里若混入 .html/.svg，同源渲染就是一个 XSS 执行点。
-            //   'auto' —— mod **自带**的代码/资源（如 Live2D 引擎的三个库）。
-            //       必须按真实 MIME 返回，否则浏览器因 nosniff + 错误 MIME 拒绝执行，
-            //       懒加载脚本直接失败。
-            // 为什么 'auto' 不增加风险：mod 本来就能在页面里执行任意 JS
-            //   （加载器就是注入它的 <script>）。所以给它的**自带**目录放行真实 MIME，
-            //   并没有给出它本来没有的能力。关键是这个选择必须**声明出来**，
-            //   而不是靠"哪个目录"去猜 —— 声明写在 manifest 里，用户看清单就知道。
+            // MIME 由插件声明决定：'binary' 一律 octet-stream（防 zip 混入 .html/.svg 被同源渲染）；'auto'（mod 自带代码）按真实 MIME，否则 nosniff 会拒绝执行。
             const mime = modStatic.mime === 'auto'
                 ? (contentTypes.get(path.extname(modStatic.abs).toLowerCase()) || 'application/octet-stream')
                 : 'application/octet-stream';
@@ -3875,13 +2974,10 @@ const requestHandler = async (request, response) => {
             response.writeHead(403, { 'X-Content-Type-Options': 'nosniff' }).end('Forbidden');
             return;
         }
-        // 用 lstat：符号链接一律不跟随，避免 web/ 内的软链把任意文件读出去
-        const info = await lstat(target);
+        const info = await lstat(target);   // 符号链接不跟随，避免 web/ 内的软链把任意文件读出去
         if (info.isSymbolicLink() || !info.isFile()) throw new Error('Not a regular file');
 
-        // 插件声明的"用户上传落地处"，一律按二进制流返回：
-        // 用户上传的 zip 里若混入 .html/.svg，同源渲染就等于给了对方一个 XSS 执行点。
-        // 应用自身的页面（不在这些目录下）类型保持不变。
+        // 插件声明的"用户上传落地处"一律按二进制流返回：用户上传的 zip 混入 .html/.svg，同源渲染就是 XSS 执行点。
         const uploadRoots = modServer.uploadRoots();
         const inUploadDir = uploadRoots.some((r) => target.startsWith(r + path.sep));
         const ext = path.extname(target).toLowerCase();
@@ -3891,12 +2987,8 @@ const requestHandler = async (request, response) => {
             'Content-Type': ctype,
             'Cache-Control': 'no-store',
             'X-Content-Type-Options': 'nosniff',
-            // Service Worker 写在站点根、要求 scope 为 / —— 用 Service-Worker-Allowed
-            // 显式声明这个范围。本文件本来就在根上（脚本自身位置即默认 scope），
-            // 但把它写出来，将来若把 sw.js 挪进子目录也不必再翻规范。
             ...(relative === 'sw.js' ? { 'Service-Worker-Allowed': '/' } : {}),
-            // HTML 页面不许被第三方页面 iframe 嵌套（点击劫持），也不该把页面 URL
-            // 通过 Referer 泄给外链目标 —— 页面 URL 里会带着 ?stay=http 这类参数。
+            // HTML 页面不许被第三方页面 iframe 嵌套（点击劫持），Referer 也不该把带 ?stay=http 的 URL 泄给外链。
             ...(ctype.startsWith('text/html') ? {
                 'X-Frame-Options': 'DENY',
                 'Referrer-Policy': 'no-referrer',
@@ -3913,16 +3005,12 @@ const requestHandler = async (request, response) => {
 };
 
 /**
- * 流式返回一个文件（宿主页面与插件静态资源共用这一段）。
- *
- * 为什么单独抽出来：插件静态资源的返回路径与宿主页面完全一样
- * （错误兜底、客户端断开释放句柄），复制一份迟早会分叉 ——
- * 而"某一条路径忘了兜错"表现为进程级的未处理异常。
+ * 流式返回一个文件（宿主页面与插件静态资源共用）。
+ * 单独抽出来是为了让两条路径共用同一份错误兜底与句柄释放，复制一份迟早分叉。
  */
 function streamFile(response, filePath) {
     const stream = createReadStream(filePath);
-    // pipe 不会转发错误，必须自己兜住，否则读取失败 / 客户端中途断开
-    // 会变成未处理异常；同时保证客户端断开时释放文件句柄。
+    // pipe 不转发错误，必须自己兜住：读取失败 / 客户端中途断开不能变成未处理异常，且要释放文件句柄。
     stream.on('error', () => { try { response.destroy(); } catch { /* ignore */ } });
     response.on('close', () => { try { stream.destroy(); } catch { /* ignore */ } });
     stream.pipe(response);
@@ -3930,11 +3018,7 @@ function streamFile(response, filePath) {
 
 /**
  * 返回插件静态目录里的一个文件。
- *
- * 类型**固定为 application/octet-stream**：这些目录装的是用户上传的内容
- * （模型 zip 里若混入 .html/.svg，同源渲染就等于给了对方一个 XSS 执行点）。
- * 与 uploadRoots 那条策略是同一个理由，只是这里连扩展名都不看 ——
- * 插件静态目录里本来就只该有资源。
+ * 类型固定为 octet-stream（与 uploadRoots 同一理由），防用户上传的 .html/.svg 被同源渲染。
  */
 function serveFile(response, filePath, ctype) {
     response.writeHead(200, {
@@ -3945,9 +3029,7 @@ function serveFile(response, filePath, ctype) {
     return streamFile(response, filePath);
 }
 
-// 启动监听失败：**英文、一行事件 + 结构化细节**（技术日志规范）。
-// 用 CRITICAL —— 服务根本没起来，最高级别的失败。
-// 修复命令保留给需要的人；"怎么回事"的一句话用中文附在末尾（给人看）。
+// 启动监听失败：英文、一行事件 + 结构化细节（技术日志规范），用 CRITICAL —— 服务根本没起来；修复命令保留给需要的人。
 function printListenError(err, which, usedPort) {
     if (err && err.code === 'EADDRINUSE') {
         const alt = Number(usedPort) + 2;
@@ -3962,9 +3044,7 @@ function printListenError(err, which, usedPort) {
     process.exitCode = 1;
 }
 
-// 启动前准备访问密码（node web/serve.mjs --reset-password 可强制重新生成）
 if (process.argv.includes('--reset-password')) {
-    // 新旧两个位置都清，否则迁移逻辑会把老文件又搬回来，"重置"等于没重置
     await rm(AUTH_FILE, { force: true });
     await rm(LEGACY_AUTH_FILE, { force: true });
     await rm(SESSIONS_FILE, { force: true });
@@ -3973,16 +3053,13 @@ if (process.argv.includes('--reset-password')) {
 const authInfo = await ensureAuth();
 await loadSessions();
 
-// 数据存储迁移：单文件 data/store.json 把聊天记录/人设卡/记忆全挤在一起，
-// 所以按类别拆开（见 server/store.mjs）。这一步在监听之前跑完，保证第一个请求
-// 读到的就是迁移后的数据。幂等：没有可迁移的数据时什么都不做。
+// 数据存储迁移：单文件 store.json 把聊天记录/人设卡/记忆挤在一起，按类别拆开（见 server/store.mjs）；在监听之前跑完，幂等。
 try {
     const moved = await store.migrateIfNeeded();
     if (moved.length) {
         console.log(`[store] 数据已迁移到分类存储：${moved.join('、')}（原始数据未删除，见 data/）`);
     }
 } catch (err) {
-    // 迁移失败不能挡住启动 —— 旧数据仍在 store.json 里，服务照常可用
     console.error('[store] 迁移失败（服务继续启动，旧数据未受影响）:', err && err.message ? err.message : err);
 }
 
@@ -3995,20 +3072,13 @@ if (forceNewCert) {
 }
 const certInfo = await ensureCertificate(forceNewCert);
 
-// ===== 监听入口：协议分路器 =====
-// 为什么不各自 listen 一个端口：浏览器地址栏只输「192.168.0.200:4173」时，会自动补成 http://，
-// 而麦克风只在 https / localhost 下可用。如果 https 必须走另一个端口，用户就得记住端口号、
-// 还得手动敲 https:// 那 7 个字符 —— 这正是之前踩的坑。
-// 所以让**同一个端口同时认两种协议**：首字节 0x16 是 TLS 握手（交给 https server），
-// 其余（G/P/H 这些请求方法首字母）按明文 HTTP 处理。明文那一路由 requestHandler 里的
-// 「HTTP → HTTPS 自动跳转」接走（本机地址除外）。
+// 监听入口：协议分路器 —— 地址栏只输 IP 会自动补 http://，而麦克风只在 https / localhost 下可用，所以让同一端口同时认两种协议。
 const httpServer = createServer(requestHandler);
 const httpsServer = certInfo
     ? createSecureServer({ key: certInfo.key, cert: certInfo.cert }, requestHandler)
     : null;
 
 if (httpsServer) {
-    // TLS 握手失败：排查"手机连不上"时，有这一行就知道对方到底有没有连上来
     httpsServer.on('tlsClientError', (err, socket) => {
         const addr = (socket && socket.remoteAddress) ? socket.remoteAddress.replace('::ffff:', '') : '?';
         console.warn('[tls] ' + addr.padEnd(15) + ' TLS 握手失败   '
@@ -4017,17 +3087,12 @@ if (httpsServer) {
 }
 
 const muxSocket = (socket) => {
-    // 未设置访问密码时，局域网接口**直接关闭**：非回环地址的连接不进 HTTP / TLS，
-    //   也不回任何提示，直接销毁 socket（客户端看到的是连接被重置）。
-    //   本机回环照常可用；设置密码后新连接立即放行，不需要重启。
+    // 未设置访问密码时，局域网接口直接关闭：非回环连接直接销毁 socket（连接被重置）；本机回环照常可用，设置密码后新连接立即放行。
     if (!hasAccessPassword() && !isLocalRequest({ socket })) {
         try { socket.destroy(); } catch (e) { /* 已关 */ }
         return;
     }
-    // 客户端"连上又立刻断开"（浏览器 DevTools 的自动探测就是连上→发半截→RST）会让
-    // 裸 socket 抛 ECONNRESET —— 分路发生在首包之后，分路之前没人接这个错误，
-    // 未捕获的 'error' 事件会带崩整个进程（实测：壳版 WebView2 里整服务退出）。
-    // 兜底只销毁连接：一个探测连接的死活不值得记日志，更不值得陪葬。
+    // 客户端"连上又立刻断开"（DevTools 自动探测）会让裸 socket 抛 ECONNRESET，分路之前没人接这个错误会带崩进程；兜底只销毁连接。
     socket.on('error', () => { try { socket.destroy(); } catch (e) { /* 已关 */ } });
     socket.once('data', (buf) => {
         if (!buf || !buf.length) { socket.destroy(); return; }
@@ -4041,8 +3106,7 @@ const muxSocket = (socket) => {
 
 const mainServer = createNetServer(muxSocket);
 
-// 真正对外用的端口。显式给了 PORT 就用它（检查脚本走这条），
-// 否则从 3999 起自动找一个空闲的（用户双击启动走这条）。
+// 真正对外用的端口：显式给了 PORT 就用它（检查脚本走这条），否则从 3999 起自动找一个空闲的。
 let port = PORT_START;
 if (!PORT_EXPLICIT) {
     try {
@@ -4055,41 +3119,29 @@ if (!PORT_EXPLICIT) {
         process.exit(1);
     }
 }
-// HTTPS 那条"兼容入口"跟着主端口走，否则用户拿到的 4174 链接会指向别人。
-// 显式指定 HTTPS_PORT 时以它为准（检查脚本会传）。
+// HTTPS 兼容入口跟着主端口走（否则 4174 链接会指向别人）；显式指定 HTTPS_PORT 时以它为准。
 const HTTPS_PORT = Number(process.env.HTTPS_PORT || (port + 1));
 
 mainServer.on('error', (err) => printListenError(err, 'HTTP/HTTPS', port));
 
-// exclusive：在 Windows 上闸住"同一 地址:端口 被别的进程再绑一次"（例如探测与
-//   真正绑定之间被抢走）。
-//   它**挡不住**"别人绑 127.0.0.1:P、我们绑 0.0.0.0:P"那种共享（实测如此），
-//   所以端口归谁是用 isPortFree 的"连一下"探针定的，这里只补一道闸：
-//   万一还是撞上，宁可明确报错，也不要两个监听者共用一个端口、连接看运气。
+// exclusive 在 Windows 上闸住"同一地址:端口被别的进程再绑一次"，但挡不住共享；端口归谁由 isPortFree 的探针决定，这里只补一道闸。
 mainServer.listen({ port, host, exclusive: true }, async () => {
-    // ── 启动事件：**一行一个事实，英文**─────────
-    // "怎么用"的引导文字已全部移出日志流 —— 地址和密码在应用里都能看到
-    // （设置页 / 登录页），日志里刷一遍只会让机器与人更难提取有用信息。
-    // 日志行回答"什么在什么端口、装了什么插件、密码是不是初始的"这些**事实**。
+    // 启动事件：一行一个事实、英文（"怎么用"的引导已移出日志流）—— 什么在什么端口、装了什么插件、密码是不是初始的。
     const urls = ['http://127.0.0.1:' + port];
-    // 没设置访问密码时局域网接口是关闭的，不再把局域网地址当成可用入口印出来。
     if ((host === '0.0.0.0' || host === '::') && hasAccessPassword()) {
         for (const ip of localIPv4List()) urls.push('http://' + ip + ':' + port);
     }
     console.log(`[boot] listening on ${urls.join(', ')} (HTTP+HTTPS on the same port)`);
 
-    // 自动打开浏览器（只在用户双击启动那条路下做，判定收在 openBrowser 里）。
-    // 地址用**实际监听到的端口**：端口漂移过之后，写着 3999 的地址是打不开的。
+    // 自动打开浏览器（只在用户双击启动那条路下做，判定收在 openBrowser 里）；地址用实际监听到的端口，端口漂移后写死 3999 是打不开的。
     openBrowser('http://127.0.0.1:' + port);
 
-    // 访问密码：默认状态是「尚未设置」，局域网设备因此在设置密码前不可用。
     if (authInfo.isDefault) {
         console.log('[auth] LAN access password: not set (set one in Settings → Advanced before LAN devices can connect)');
     } else {
         console.log('[auth] LAN access password: user-configured');
     }
 
-    // 插件清单：一行一条事实（id/目录/依赖），详情（名称、描述）归软件内查看器
     try {
         const r = await modManager.scanAndSync();
         if (r.installed.length) {
@@ -4105,14 +3157,7 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
                 else console.error(`[mod] install failed: ${res.zip} - ${res.error}`);
             }
         }
-        // 插件的**服务端半边**（manifest.server）：启动时装载一次。
-        // 装好之后不再重新装载 —— 路由是常驻注册表，随运行状态增减会让
-        // "哪些接口存在"无法复现；装了新插件请在 /api/plugins 里看 needsRestart。
-        // 必须按用户的启用状态过滤（与手机端 bootstrap 同一套判据）：
-        //   · 总开关 elaina_plugins_enabled === '0' → 全部不装；
-        //   · 某插件 elaina_plugin_<id> === '0' → 不装；
-        //   · 没写过开关时看 manifest.defaultEnabled。
-        // 不传 isEnabled 的话停用只停前端、服务端路由照旧活着，与"停用要真的停用"矛盾。
+        // 插件的服务端半边（manifest.server）：启动时装载一次，路由是常驻注册表；必须按用户的启用状态过滤，否则停用只停前端。
         const enabledState = await loadStore();
         const isEnabled = (id, entry) => {
             if (String(enabledState['elaina_plugins_enabled'] ?? '') === '0') return false;
@@ -4129,36 +3174,23 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
         console.error(`[mod] scan failed: ${String((err && err.message) || err)}`);
     }
 
-    // 指路（保留中文 —— 这是给人看的一句，也是启动输出里唯一一句）：
     console.log('[boot] 就绪。日志可在应用内「设置 → 日志」按级别/模块筛选查看。');
 });
 
 /**
- * 按需打开浏览器指向某个已就绪的地址。
- *
- * 两条调用点共用它：全新启动（在 listen 回调里，地址是刚监听到的端口）与
- *   「已有实例在跑」（地址是那个已经在跑的实例，此时也没有自己的服务可等）。
- *
- * 只在 `OPEN_BROWSER === '1'`（启动.bat 传的）时打开：serve.mjs 同时是几十个
- *   检查用例的子进程，也会被 `npm run serve:web` 拉起，无条件弹窗会炸出几十个标签页。
- * 失败只警告不退出：没有默认浏览器、被策略拦、headless 环境都会失败，
- *   而服务本身是好的 —— 用户完全可以自己复制地址过去。
- *
- * 声明放在使用点之后（函数声明会提升，照常可调用）：这样"打开浏览器"这件事
- *   全库只有一处实现，检查脚本也只需锚定这一处来确认它没有脱离 OPEN_BROWSER 开关。
+ * 按需打开浏览器指向某个已就绪的地址（全新启动与「已有实例在跑」共用）。
+ * 只在 OPEN_BROWSER === '1' 时打开（serve.mjs 也是几十个检查用例的子进程，无条件弹窗会炸出几十个标签页）；失败只警告不退出。
  */
 function openBrowser(url) {
     if (process.env.OPEN_BROWSER === '1') {
         try {
-            // Windows 的 start 是 cmd 内建命令，必须经过 cmd /c；第一个引号参数是窗口标题，不能省
-            // （省了的话带引号的 URL 会被当成标题，结果什么都不打开）。
+            // Windows 的 start 是 cmd 内建命令，必须经 cmd /c；第一个引号参数是窗口标题，不能省（否则带引号的 URL 会被当成标题）。
             const cmd = process.platform === 'win32'
                 ? ['cmd', ['/c', 'start', '', url]]
                 : process.platform === 'darwin'
                     ? ['open', [url]]
                     : ['xdg-open', [url]];
             const child = spawn(cmd[0], cmd[1], { detached: true, stdio: 'ignore' });
-            // 不 await：浏览器进程要陪着用户，不该让服务端等它
             child.unref();
             console.log('[boot] opening browser: ' + url);
         } catch (err) {
@@ -4168,11 +3200,9 @@ function openBrowser(url) {
     }
 }
 
-// 兼容入口：老的 https://IP:4174 链接继续可用（两个端口都支持双协议）。
-// 在这个端口上用明文 http 访问时，自动跳到同端口的 https。
+// 兼容入口：老的 https://IP:4174 链接继续可用（两个端口都支持双协议）；明文 http 访问时自动跳到同端口的 https。
 if (httpsServer && HTTPS_PORT !== port) {
     const legacyServer = createNetServer((socket) => {
-        // 与主分路器同款兜底：分路前的裸 socket 错误不能带崩进程（见 muxSocket 处说明）
         socket.on('error', () => { try { socket.destroy(); } catch (e) { /* 已关 */ } });
         socket.once('data', (buf) => {
             if (!buf || !buf.length) { socket.destroy(); return; }
@@ -4183,7 +3213,6 @@ if (httpsServer && HTTPS_PORT !== port) {
                 process.nextTick(() => socket.resume());
                 return;
             }
-            // 明文：从请求头解析 Host 和目标路径，回 302 跳到同端口的 https
             const text = buf.toString('latin1');
             const hostMatch = /^host:\s*([^\r\n]+)/im.exec(text);
             const lineMatch = /^[A-Z]+\s+(\S+)/.exec(text);
@@ -4191,9 +3220,7 @@ if (httpsServer && HTTPS_PORT !== port) {
                 || (String(socket.localAddress || '127.0.0.1') + ':' + HTTPS_PORT);
             let target = lineMatch ? lineMatch[1] : '/';
             if (!target.startsWith('/')) target = '/' + target;
-            // Host 与请求路径都是攻击者可控的输入（Host 头可随意伪造、路径可带脚本），
-            // 原样拼进 HTML 就是反射 XSS。这里按 HTML 属性值转义，Location 头另按 RFC 只留
-            // 合法字符 —— 双保险。
+            // Host 与请求路径都是攻击者可控输入（Host 头可伪造、路径可带脚本），原样拼进 HTML 就是反射 XSS；这里按 HTML 属性值转义，Location 头另按 RFC 只留合法字符。
             const to = 'https://' + hostHeader + target;
             const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -4209,17 +3236,12 @@ if (httpsServer && HTTPS_PORT !== port) {
                 + 'Connection: close\r\n\r\n' + body);
         });
     });
-    // 兼容入口是**旁路**（只为老 https 链接），端口被别的软件占着就不起它。
-    //   缺这层判断时它会与占用者**共享**同一个端口（Windows 默认允许共享），
-    //   于是这个端口变成抽签：请求有时落到对方服务上，表现为"这个端口时好时坏、
-    //   连接被重置"。宁可不起这条旁路，也不要让一个端口有两个主人。
-    //   失败只警告：主服务在主端口上照常跑，旁路起不来不该把它判成"没启动"。
+    // 兼容入口是旁路（只为老 https 链接）：端口被占着就不起它，否则会与占用者共享同一端口；起不来只警告，不影响主服务。
     legacyServer.on('error', (err) => {
         console.warn('[boot] HTTPS compat entry unavailable on port ' + HTTPS_PORT + ': '
             + String((err && err.message) || err));
     });
-    // isPortFree 先探一次（绑得上 + 此刻没人在上面收连接）：探测与绑定之间被抢走
-    // 那种竞态，由上面的警告兜住。
+    // isPortFree 先探一次（绑得上 + 此刻没人在上面收连接）；探测与绑定之间被抢走那种竞态由上面的警告兜住。
     if (await isPortFree(HTTPS_PORT, host)) {
         legacyServer.listen({ port: HTTPS_PORT, host, exclusive: true });
     } else {

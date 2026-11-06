@@ -1,12 +1,6 @@
-/* ============================================================================
- * AI 定时任务（从 agent.js 拆出）
- *
- * [任务:...] 解析、创建 / 取消 / 列表、到期触发、设置页列表渲染。
- * 依赖宿主的 Store / callAI / 会话与消息函数（经典脚本全局）。
- * ========================================================================== */
+// AI 定时任务：[任务:...] 解析、创建/取消/列表、到期触发、设置页列表渲染；依赖宿主 Store / callAI / 会话与消息函数。
 'use strict';
 
-// ==================== AI 定时任务（未来任务） ====================
 // LLM 回复可用 [任务:每天 09:00 提醒我喝水] 创建定时任务；到点 AI 以角色身份发消息。
 // 支持格式：每天 / 明天 / 每周X + HH:MM；每N小时/分钟/天；N分钟后；仅 HH:MM（今天该时间）。
 const TASK_STORE_KEY = 'elaina_open_tasks';
@@ -185,7 +179,6 @@ function checkScheduledTasks() {
     if (changed) saveScheduledTasks(tasks);
 }
 
-// 设置页任务列表渲染
 function renderScheduledTaskList() {
     const listEl = document.getElementById('scheduledTaskList');
     if (!listEl) return;

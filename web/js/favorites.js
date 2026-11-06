@@ -1,11 +1,5 @@
-/* ============================================================================
- * 收藏 / 语笺（从 ui.js 拆分）
- *
- * 消息收藏、语笺数据与页面、侧栏高亮和主界面标题同步。
- * ========================================================================== */
+// 收藏 / 语笺：消息收藏、语笺数据与页面、侧栏高亮和主界面标题同步。
 'use strict';
-
-// ==================== 收藏（语笺） ====================
 
 function isMessageFavorited(conversationId, messageId) {
     return state.favorites.some(f =>
@@ -183,7 +177,7 @@ function jumpToOriginal(fav) {
 }
 
 
-// ==================== 语笺页面 ====================
+// 语笺页面
 
 function enterNotesMode() {
     state.notesMode = true;
@@ -191,8 +185,7 @@ function enterNotesMode() {
     // 与 enterDiaryMode 同一条约束：三个整页互斥，状态和页面一起切。
     state.memoryPageMode = false;
     if (window.matchMedia('(max-width: 980px)').matches) {
-        // 窄屏也能在两栏之间切换，所以不强制切回「消息收藏」——只把按钮状态对齐当前栏。
-        // 否则用户切到「金句收藏」再进出一次，按钮与内容就对不上了。
+        // 窄屏也能在两栏之间切换，所以不强制切回「消息收藏」，只把按钮状态对齐当前栏（否则进出一次按钮与内容就对不上）。
         document.querySelectorAll('.notes-tab').forEach(btn => {
             const active = btn.dataset.tab === state.notesTab;
             btn.classList.toggle('tab-active', active);
@@ -229,12 +222,9 @@ function exitNotesMode() {
 }
 
 function setRailActive(action) {
-    // 竖栏上只有「成就」一个按钮（data-rail-action = achievements），分类弹窗
-    //   由**成就面板内部**的按钮打开。所以这里把两者当成**同一组**处理：
-    //     · 打开分类弹窗时高亮的是那个成就按钮（它们是同一个入口）
-    //     · 切到别的动作时，两个浮层都要收起来
-    //   不这么写的话，点开分类弹窗后竖栏会没有任何按钮是高亮的
-    //   （看起来像"点了没反应"）。
+    // 竖栏上只有「成就」一个按钮，分类弹窗由成就面板内部的按钮打开，所以两者当成同一组处理：
+    // 打开分类弹窗时高亮的是成就按钮（同一个入口），切到别的动作时两个浮层都要收起来。
+    // 不这么写，点开分类弹窗后竖栏会没有任何按钮高亮，看起来像"点了没反应"。
     const ACH = 'achievements';
     const isAchGroup = (a) => a === ACH || a === 'categories';
 
@@ -254,7 +244,7 @@ function setRailActive(action) {
     document.querySelectorAll('.sidebar-rail-btn[data-rail-action]').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.railAction === want);
     });
-    // 原型的语笺/日记页仍保留外壳顶栏，所以「整理记忆」和「公告」不再随页面模式收起。
+    // 「整理记忆」和「公告」不随页面模式收起：语笺/日记页仍保留外壳顶栏。
     elements.memoryBtn.classList.remove('page-mode-hidden');
     elements.memoryBtn.setAttribute('aria-hidden', 'false');
     elements.memoryBtn.tabIndex = 0;
@@ -263,7 +253,7 @@ function setRailActive(action) {
 }
 
 function syncMainHeaderVisibility() {
-    // 设置/成就/市场现在都让出顶栏、作为主区页面显示，外壳顶栏始终保留。
+    // 设置/成就/市场都让出顶栏、作为主区页面显示，外壳顶栏始终保留。
     elements.chatHeader.classList.remove('hidden');
     elements.chatHeader.setAttribute('aria-hidden', 'false');
 }

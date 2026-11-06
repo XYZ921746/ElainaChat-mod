@@ -1,19 +1,9 @@
-// 软件内日志模块（"数据与日志"页）。
-// 日志是排查工具、不是日常入口，所以放设置里的独立分栏（#tab-log）：
-// 放主界面 rail 会占位，放「设置 → 高级」末尾会被内容区高度挤出屏幕。
-// 数据源：GET /api/logs/tail（服务端内存缓冲，全量、不受落盘级别约束）。
-// 级别 / 模块 / 关键词过滤在服务端做；"排除用户对话"按正文特征过滤，只影响显示，所以放前端。
-// 轮询而非 WebSocket：服务端是零依赖静态服务，没有 ws 升级层；日志页是低频操作，2 秒轮询可以忽略。
-// 日志正文本身是英文（检索友好），这里的**界面文案**用中文（给人看）。
+// 软件内日志模块（设置里的独立分栏 #tab-log）：日志是排查工具、不是日常入口 —— 放主界面 rail 会占位，放「设置 → 高级」末尾会被内容区高度挤出屏幕。
+// 数据源 GET /api/logs/tail（服务端内存缓冲，全量）：级别 / 模块 / 关键词在服务端筛，"排除用户对话"只影响显示故放前端；2 秒轮询够用，无需 WebSocket 升级层。
 (function () {
     'use strict';
 
-    /**
-     * 级别药丸的顺序与短码，**与服务端 LEVEL_SHORT 同一套**。
-     * 落盘文件与控制台显示的是短码（DBUG/ERRO/CRIT）；查看器若显示长名，
-     * 同一行日志在两个窗口里级别文字就不一样，用户会以为"两边的日志不同"。
-     * 药丸上显示长名只为可读，送进接口的仍是短码。
-     */
+    // 药丸的顺序与短码和服务端 LEVEL_SHORT 同一套：落盘文件与控制台显示短码，查看器显示长名会让同一行日志在两个窗口里文字不一样。
     const LEVELS = [
         { short: 'DBUG', long: 'DEBUG', full: 'DEBUG' },
         { short: 'INFO', long: 'INFO', full: 'INFO' },
@@ -21,16 +11,9 @@
         { short: 'ERRO', long: 'ERROR', full: 'ERROR' },
         { short: 'CRIT', long: 'CRITICAL', full: 'CRITICAL' },
     ];
-    /** 级别长名（接口用） → 四位短码（行内显示用） */
     const LEVEL_SHORT = { DEBUG: 'DBUG', INFO: 'INFO', WARN: 'WARN', ERROR: 'ERRO', CRITICAL: 'CRIT' };
 
-    /**
-     * "排除用户对话"的判据。
-     *
-     * 服务端追踪对话时会打 `[chat] 提问：…` / `[chat] 回复：…` 摘要（见 serve.mjs 的对话追踪），含真实聊天内容：
-     * 排障时是纯噪音，录屏/截图分享日志时是隐私面。判据刻意**窄** —— 只认这几种正文，
-     * 不用"含中文就排除"这类宽判据（那会把真正要看的中文报错一起藏掉）。
-     */
+    // "排除用户对话"的判据刻意窄（只认这几种正文）：这些行含真实聊天内容，排障时是噪音、分享日志时是隐私面；不用"含中文就排除"这类宽判据，那会把要看的中文报错一起藏掉。
     const CHAT_LINE_RE = /^(提问|回复|提问来自自动功能)/;
 
     let timer = null;
@@ -38,11 +21,7 @@
     let lastSeq = -1;        // 增量游标：同一毫秒内靠写入序号区分（见 log-buffer.mjs 的 query）
     let knownTags = new Set();
     let bound = false;
-    /**
-     * 请求序号：只渲染**最后一次**发起的请求的结果。
-     * 连点药丸会并发发出多个 refresh，返回顺序不保证与发出顺序一致；
-     * 旧过滤条件的结果后到就会盖掉新结果（表现为"点了药丸，界面却是上一个状态"）。
-     */
+    // 请求序号：连点药丸会并发发出多个请求，返回顺序不保证与发出顺序一致，只渲染最后一次发起的那个。
     let reqSeq = 0;
 
     const el = (id) => document.getElementById(id);
@@ -54,7 +33,6 @@
     function fmtTime(ts) {
         const d = new Date(ts);
         const p = (n, w = 2) => String(n).padStart(w, '0');
-        // 毫秒：与服务端日志行一致（同一秒里可能连打十几条，没有毫秒分不出先后）
         return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
     }
 
@@ -66,13 +44,7 @@
         return out;
     }
 
-    /**
-     * 把选中的级别换算成服务端的 `level` 查询参数。
-     *
-     * 服务端的 level 是"最低级别（含）"，药丸是**多选**（可以只留 DEBUG + ERROR 这种
-     * 不连续的组合），两者不能直接对应：全选或选中的正好是连续前缀 → 传那个最低级别；
-     * 其它组合 → 不传 level（拿全量）由前端精确筛，这样不漏也不白拉。
-     */
+    // 服务端的 level 是"最低级别（含）"，药丸是多选：全选或选中的正好是连续前缀 → 传那个最低级别，其它组合同样不传 level（拿全量）由前端精确筛。
     function levelParam() {
         const sel = selectedLevels();
         if (!sel.length) return '__none__';       // 全关：没有级别该显示
@@ -94,11 +66,7 @@
         return true;
     }
 
-    /**
-     * 一条记录 → 一行 HTML。
-     * 字段顺序、级别写法都**与 bat 面板/日志文件对齐**（[时刻] [模块] [级别] [来源] 正文）：
-     * 顺序一旦不同，同一行日志在两个窗口里看起来像两件事；级别用四位短码也是同理。
-     */
+    // 字段顺序与级别写法都与 bat 面板 / 日志文件对齐（[时刻] [模块] [级别] [来源] 正文）：顺序不同，同一行日志在两个窗口里看起来像两件事。
     function renderEntry(e) {
         const short = LEVEL_SHORT[e.level] || e.level;
         return `<div class="log-line" data-level="${esc(e.level)}">`
@@ -109,7 +77,6 @@
             + `<span class="log-msg">${esc(e.message)}</span></div>`;
     }
 
-    /** 按当前过滤条件取回要导出的日志条目；没有可导出内容时说明原因并返回 null。 */
     async function collectExportEntries(say) {
         const params = new URLSearchParams();
         const lv = levelParam();
@@ -129,7 +96,6 @@
         return { entries, lv, tag, search };
     }
 
-    /** 把条目拼成可直接保存的文本（含表头与过滤说明），并生成文件名。 */
     function buildExportText(entries, lv, tag, search) {
         const p = (n, w = 2) => String(n).padStart(w, '0');
         const stamp = (ts) => {
@@ -150,8 +116,7 @@
         const head = [
             'ElainaChat 运行日志导出',
             '导出时间：' + stamp(Date.now()),
-            // 版本号只在侧栏底部（"v2.0.1 · 魔女之旅"）：按 v 前缀全页找，
-            //   不能写死下标 —— 布局一改就会拿到别处的 "1"
+            // 版本号只在侧栏底部（"v2.0.1 · 魔女之旅"）：按 v 前缀全页找，不能写死下标 —— 布局一改就会拿到别处的数字。
             '版本：' + (Array.from(document.querySelectorAll('[class*="text-[10px]"]'))
                 .map((el) => el.textContent.trim())
                 .find((t) => /^v\d/.test(t)) || ''),
@@ -168,19 +133,11 @@
         return { text, fname, count: lines.length };
     }
 
-    /**
-     * 按运行环境选择保存方式：
-     *   ① APK：原生 ElainaExport 拉 SAF「创建文档」选择器（自选目录与文件名，无需存储权限）。
-     *      WebView 里做不到 —— showSaveFilePicker 在 Android WebView 上不存在，
-     *      a[download] 的 blob 会被 DownloadListener 静默丢掉（界面说"已导出"，全盘找不到文件）。
-     *      选择器打不开的极罕见环境回落固定目录：公共 Download（Android 11+ 无需权限）→ CACHE。
-     *   ② 电脑：showSaveFilePicker（真正的系统"另存为"）；桌面 navigator.share 只有 Outlook 类
-     *      目标，不选它。③ 手机浏览器：navigator.share。④ 兜底：a[download]。
-     */
+    // 保存方式按环境选：① APK 用原生 ElainaExport 拉 SAF「创建文档」选择器（WebView 里 showSaveFilePicker 不存在、a[download] 会被 DownloadListener 静默丢掉），
+    // 最差回落到公共 Download → CACHE；② 电脑用 showSaveFilePicker；③ 手机浏览器用 navigator.share；④ 兜底 a[download]。
     async function saveExportText(text, fname, count, say) {
         const file = new File([text], fname, { type: 'text/plain' });
 
-        // ① APK：系统「创建文档」选择器 —— 自选保存位置（SAF，无需权限）
         const cap = window.Capacitor;
         const capFs = cap && cap.Plugins && cap.Plugins.Filesystem;
         const capExport = cap && cap.Plugins && cap.Plugins.ElainaExport;
@@ -188,7 +145,6 @@
             const r = await capExport.saveText({ data: text, fileName: fname });
             if (r && r.ok) { say('已保存到所选位置（' + count + ' 条）'); return; }
             if (r && r.reason === 'cancelled') { say('已取消导出'); return; }
-            // 选择器打不开等异常 → 在状态栏说明原因，落到固定目录兜底
             say((r && r.text) || '系统选择器不可用，改存固定位置…');
         }
         if (capFs) {
@@ -197,7 +153,6 @@
                 say(okMsg);
             };
             try {
-                // Android 11+（API 30+）：公共 Download 创建自己的文件无需任何权限
                 await tryWrite('EXTERNAL_STORAGE', 'Download/' + fname,
                     '已保存到「下载」文件夹：' + fname + '（' + count + ' 条）');
                 return;
@@ -211,7 +166,6 @@
             }
         }
 
-        // ② 电脑：系统「另存为」对话框（File System Access API）
         if (typeof window.showSaveFilePicker === 'function') {
             try {
                 const handle = await window.showSaveFilePicker({
@@ -229,7 +183,6 @@
             }
         }
 
-        // ③ 手机浏览器（仅移动端）：系统分享面板（桌面共享面板没有文件落点，跳过）
         const mobile = (typeof IS_MOBILE_DEVICE !== 'undefined') && IS_MOBILE_DEVICE;
         if (mobile && navigator.canShare && navigator.canShare({ files: [file] })) {
             try {
@@ -254,14 +207,7 @@
         }
     }
 
-    /**
-     * 导出当前过滤下的全部缓冲日志（「日志」栏工具栏的导出按钮）。
-     *
-     * 手机上几百行等宽小字没法看，用户真正要的是"把日志发给懂的人"，
-     * 所以按环境选保存方式（见 saveExportText）。过滤与页面**同一套**
-     * （导出"看到的"而不是"全部的"）；时刻带完整日期 ——
-     * 页面只看"今天几点"，文件是拿走的，必须自带日期。
-     */
+    // 用户真正要的是"把日志发给懂的人"，所以按环境选保存方式（见 saveExportText）；过滤与页面同一套（导出"看到的"），时刻带完整日期 —— 文件是拿走的，只看"今天几点"不够。
     async function exportLogs() {
         const meta = el('logPageMeta');
         const say = (t) => { if (meta) meta.textContent = t; };
@@ -309,8 +255,7 @@
             if (lv) params.set('level', lv);
             if (tag) params.set('tags', tag);
             if (search) params.set('search', search);
-            // 增量要用**两个**游标：时间戳 + 写入序号。只传时间戳会让同一毫秒里的
-            //   后续记录被永久跳过（一次启动就有一批同毫秒日志），表现是"面板刷过好几行、查看器少几行"。
+            // 增量要用两个游标（时间戳 + 写入序号）：只传时间戳会让同一毫秒里的后续记录被永久跳过（一次启动就有一批同毫秒日志）。
             if (!full && lastTs) {
                 params.set('since', String(lastTs));
                 if (lastSeq >= 0) params.set('sinceSeq', String(lastSeq));
@@ -345,11 +290,9 @@
             const entries = json.entries || [];
             if (!entries.length && !full && !wasUnavailable) return;   // 增量没有新东西，不动 DOM
 
-            // 顺序**与 bat 面板一致：旧在上、新在下**（服务端返回新→旧，这里翻过来）。
-            //   两个窗口顺序相反就无法逐行对照，用户会说"对不上"。
+            // 顺序与 bat 面板一致（旧在上、新在下）：服务端返回新→旧，这里翻过来；两个窗口顺序相反就无法逐行对照。
             const ordered = entries.slice().reverse();
-            // 前端这一侧再筛一遍（级别多选 / 排除对话）。
-            // 服务端已经按 level/tag/search 筛过，这里只处理它表达不了的两件事。
+            // 前端这一侧再筛一遍（级别多选 / 排除对话）—— 服务端已按 level/tag/search 筛过，这里只处理它表达不了的两件事。
             const visible = ordered.filter(passesLocalFilter);
 
             if (full) {
@@ -358,15 +301,13 @@
                 box.scrollTop = box.scrollHeight;
             } else {
                 if (visible.length) box.insertAdjacentHTML('beforeend', visible.map(renderEntry).join(''));
-                // 只在用户本来就贴着底部、且开了「自动滚动」时才滚 ——
-                // 他翻上去看历史时不该被拽回来
+                // 只在用户本来就贴着底部、且开了「自动滚动」时才滚 —— 他翻上去看历史时不该被拽回来。
                 if (el('logAutoScroll')?.checked) {
                     const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
                     if (nearBottom) box.scrollTop = box.scrollHeight;
                 }
             }
-            // 记录最新条目的游标（entries[0] 是最新的）。序号与时间戳必须**成对**更新 ——
-            // 只更新时间戳会让下一轮把同一毫秒的后续记录当成"已经见过"而丢掉。
+            // 游标要成对更新：只更新时间戳会让下一轮把同一毫秒的后续记录当成"已经见过"而丢掉。
             if (entries.length) {
                 lastTs = entries[0].ts;
                 lastSeq = Number(entries[0].seq ?? -1);
@@ -383,8 +324,7 @@
                 '完整历史在日志文件里',
             ]);
         } catch (e) {
-            // 服务不在（桌面服务挂了 / 手机端内嵌服务未就绪）时给可见的空态，而不是静默 return ——
-            // "这一页是死的还是没日志"必须一眼分得清；这里不做环境判断，两端共用同一表现。
+            // 服务不在时给可见的空态而不是静默 return："这一页是死的还是没日志"必须一眼分得清；不做环境判断，两端共用同一表现。
             showUnavailable();
         }
     }
@@ -402,11 +342,7 @@
         setMeta(['日志服务不可用']);
     }
 
-    /**
-     * 这一栏是否真的显示着（决定轮询要不要干活）。
-     * "可见"有两层条件：① 设置面板本身打开 ② 当前分栏是 tab-log。
-     * 漏掉 ① 会让"关掉设置后轮询还在跑"（服务端日志被自噪音刷屏）；漏掉 ② 会白耗流量。
-     */
+    // "可见"要同时满足：设置面板本身打开、当前分栏是 tab-log；漏掉前者会让关掉设置后轮询还在跑，服务端日志被自噪音刷屏。
     function isVisible() {
         const panel = el('tab-log');
         if (!panel || !panel.classList.contains('active-panel')) return false;
@@ -461,11 +397,7 @@
         return true;
     }
 
-    /**
-     * 进入这一栏（分栏切换时调用）：绑事件、首次全量拉、开轮询。
-     * 不需要 enterLogMode/exitLogMode 那类"独立全屏页"开关：面板打开时聊天区本来就藏着，
-     * rail 高亮本来就是「设置」。
-     */
+    // 进入这一栏：绑事件、首次全量拉、开轮询。不需要 enterLogMode 那类独立全屏开关 —— 面板打开时聊天区本来就藏着。
     function open() {
         if (!bind()) return;
         lastTs = 0; lastSeq = -1;
@@ -478,6 +410,5 @@
         stop();
     }
 
-    // 暴露给 settings / init：分栏进入与离开
     window.LogViewer = { open, close, refresh, isVisible };
 })();

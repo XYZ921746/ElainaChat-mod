@@ -1,16 +1,8 @@
-/* ============================================================================
- * 移动端界面层（窄屏专用）
- *
- * 窄屏与宽屏是两套信息架构、两套密度：底栏三格、回忆四页合并、设置走「我的」
- * 下钻、顶栏只留插件按钮与「更多」。这些都集中写在同一个文件里，好让人一眼
- * 看清"窄屏到底长什么样、动了哪些既有元素"。
- *
- * 三条边界：
- *   · 规则全部关在 @media (max-width: 980px) 下 —— 宽屏一条都不生效；
- *   · 只重排宿主自己的控件，业务逻辑仍由既有函数负责（脚本只点击既有按钮）；
- *   · 插件插槽容器（#headerModSlot / #composerModSlot / #sidebarModSlot）
- *     与 settings.tabs / settings.modal / chat.message.actions 一个都不动。
- * ========================================================================== */
+/* 移动端界面层（窄屏专用）：三条边界 ——
+   规则全部关在 @media (max-width: 980px) 下，宽屏一条都不生效；
+   只重排宿主自己的控件，业务逻辑仍由既有函数负责（脚本只点击既有按钮）；
+   #headerModSlot / #composerModSlot / #sidebarModSlot 与 settings.tabs / settings.modal /
+   chat.message.actions 一个都不动。 */
 
 #mobileNav,
 #mobileMoreBtn,
@@ -33,10 +25,9 @@ html.rd .conv-filter-btn { display: none; }
 
 @media (max-width: 980px) {
 
-    /* ---------- 0 · 窄屏密度令牌 ---------- */
+    /* 0 · 窄屏密度令牌 */
 
-    /* 外壳原本是一个 z-index 层；它会把「＋」弹层的固定定位关在里面，
-       导致弹层永远压不过 body 上的底栏。窄屏撤掉这层，各元素按同一套 z 比较。 */
+    /* 外壳的 z-index 层会把「＋」弹层的固定定位关在里面，窄屏撤掉这层，各元素按同一套 z 比较。 */
     html.rd #appShell { z-index: auto !important; }
 
     html.rd {
@@ -47,9 +38,8 @@ html.rd .conv-filter-btn { display: none; }
         --ms-nav: calc(58px + env(safe-area-inset-bottom));
     }
 
-    /* ---------- 1 · 顶栏统一成一条平栏 ---------- */
-    /* 宽屏那套「浮起来、圆角、留白」的头部在窄屏既占高度又与页面头重复，
-       窄屏统一成贴边的一条：左标题、右插件按钮与「更多」。 */
+    /* 1 · 顶栏统一成一条平栏 */
+    /* 宽屏那套浮起/圆角/留白在窄屏既占高度又与页面头重复，统一成贴边的一条。 */
 
     html.rd #chatHeader {
         margin: 0 !important;
@@ -64,24 +54,20 @@ html.rd .conv-filter-btn { display: none; }
         -webkit-backdrop-filter: none !important;
     }
 
-    /* 顶栏不画分割线（聊天 / 回忆共用这条顶栏）。redesign 里的
-       `html.rd #mainContent > header` 带 !important 且比 `html.rd #chatHeader` 多一个元素，
-       权重更高 —— 这里用两个 id 才压得住。 */
+    /* 顶栏不画分割线（聊天 / 回忆共用这条顶栏）。redesign 的 html.rd #mainContent > header
+       带 !important 且比 html.rd #chatHeader 多一个元素、权重更高，这里用两个 id 才压得住。 */
     html.rd #mainContent > #chatHeader { border-bottom: 0 !important; }
 
     /* 副标题（角色 · 模型）在窄屏保留：会话页需要它，和原型一致。 */
 
-    /* 宿主自己的顶栏按钮收进「更多」。插件按钮容器 #headerModSlot 不在列表里：
-       插件通过插槽注册的按钮继续留在顶栏，插件代码不需要任何改动。 */
+    /* 宿主自己的顶栏按钮收进「更多」；插件插槽容器 #headerModSlot 不在列表里，
+       插件注册的按钮继续留在顶栏，插件代码不需要任何改动。 */
     html.rd #headerMemoryBtn,
     html.rd #headerAnnounceBtn,
     html.rd #headerInstallBtn,
     html.rd #headerThemeBtn,
     html.rd #rdModelPill,
     html.rd #headerSettingsBtn { display: none !important; }
-
-    /* 旧的五格底栏由 #mobileNav 取代：窄屏同一时刻只保留一套导航。 */
-    html.rd .rd-bottom-nav { display: none !important; }
 
     html.rd #mobileMoreBtn {
         display: grid;
@@ -150,8 +136,8 @@ html.rd .conv-filter-btn { display: none; }
         touch-action: manipulation;
     }
 
-    /* 上传过头像时，两处"用户头像"用同一张图（桌面端已经把它下发成 --rd-user-avatar）：
-       首页顶栏那颗与「我的」资料卡那颗。图没设时仍退回首字，所以这里是并列关系不是替换。 */
+    /* 上传过头像时，首页顶栏那颗与「我的」资料卡那颗共用 --rd-user-avatar；
+       图没设时回落到首字，所以两处是并列关系不是替换。 */
     html.rd.rd-has-user-avatar #mobileHomeAvatar,
     html.rd.rd-has-user-avatar #mobileMine .mm-avatar {
         background-image: var(--rd-user-avatar) !important;
@@ -159,8 +145,7 @@ html.rd .conv-filter-btn { display: none; }
         background-position: center !important;
         background-repeat: no-repeat !important;
         color: transparent !important;
-        /* 形状只认「正圆」：光靠 border-radius 会被主题/原生按钮的圆角或描边带偏，
-           clip-path 兜一层底，任何继承来的圆角都压不出多边形。 */
+        /* 形状只认正圆：clip-path 兜一层底，任何继承来的圆角或描边都压不出多边形。 */
         border: 0 !important;
         border-radius: 50% !important;
         overflow: hidden !important;
@@ -197,7 +182,7 @@ html.rd .conv-filter-btn { display: none; }
     html.rd #chatHeader.is-home #mobileMoreBtn { display: none !important; }
 
     /* 回忆页（日记 / 记忆 / 语笺 / 成就）：顶栏只留「回忆 + 副标题」，
-       汉堡与「更多」都收走 —— 分类由下面的分段条承担，返回靠底栏。 */
+       分类由下面的分段条承担，返回靠底栏。 */
     html.rd #chatHeader.is-pages #showSidebar,
     html.rd #chatHeader.is-pages #mobileMoreBtn { display: none !important; }
     html.rd #chatHeader.is-pages #currentConversationTitle,
@@ -207,7 +192,7 @@ html.rd .conv-filter-btn { display: none; }
     html.rd .mht-title { font-size: 20px; font-weight: 700; line-height: 1.2; color: var(--rd-text); }
     html.rd .mht-sub { margin-top: 2px; font-size: 11px; color: var(--rd-text-3); }
 
-    /* ---------- 2b · 首页：问候 + 输入 + 最近对话 ---------- */
+    /* 2b · 首页：问候 + 输入 + 最近对话 */
 
     html.rd #initialState {
         justify-content: flex-start !important;
@@ -215,8 +200,7 @@ html.rd .conv-filter-btn { display: none; }
         padding: 22px 14px calc(24px + var(--ms-nav)) !important;
     }
 
-    /* 原型的首页只有「金句 + 输入 + 最近对话」三件事：那句大标题与副标题
-       占掉两行高度却不提供信息，窄屏不再重复。 */
+    /* 首页只保留「金句 + 输入 + 最近对话」：大标题与副标题占两行却不提供信息，窄屏不重复。 */
     html.rd #initialState > #greetingText,
     html.rd #initialState > .greeting-subtitle,
     html.rd #initialState > #statusText { display: none !important; }
@@ -271,7 +255,7 @@ html.rd .conv-filter-btn { display: none; }
     .mqc-act.is-on { color: var(--rd-accent); border-color: var(--rd-accent-border); background: var(--rd-accent-soft); }
     .mqc-act.is-on svg { fill: currentColor; }
 
-    /* 首页列表 = 完整对话列表（含文件夹）：分组头与抽屉那套同构，
+    /* 首页列表 = 完整对话列表（含文件夹）：分组头与抽屉同构，
        拖拽落点因此两处共用一份逻辑（见 conversations.js 的 convDropTargetAt）。 */
     /* 每个分组自成布局上下文：拖动时那条落点线只重排它所在的一组，不牵动整份列表。 */
     .mmc-section { margin-top: 16px; contain: layout style; }
@@ -299,8 +283,7 @@ html.rd .conv-filter-btn { display: none; }
 
     .mmc-folder-chev svg { width: 15px; height: 15px; }
     /* 收起 = 外层裁剪框收高度 + 内层内容上移（见 animateConvSection）。
-       这里刻意不写 margin / opacity：那两条会在动画开始的瞬间改变布局或透明度，
-       看起来就是"图标先跳一下、内容半路忽然没了"。 */
+       不能写 margin / opacity：它们会在动画开始的瞬间改变布局或透明度，看起来就是"图标先跳一下"。 */
     .mmc-rows { overflow: hidden; transition: height .28s cubic-bezier(.4, 0, .2, 1); }
     .mmc-rows-inner { transition: transform .28s cubic-bezier(.4, 0, .2, 1); }
     .mmc-section.is-collapsed .mmc-folder-chev { transform: rotate(-90deg); }
@@ -364,9 +347,8 @@ html.rd .conv-filter-btn { display: none; }
     .mmc-prev { font-size: 12px; color: var(--rd-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .mmc-time { flex: none; margin-left: auto; font-size: 10.5px; color: var(--rd-text-3); }
 
-    /* ---------- 首页多选（长按进入） ---------- */
-    /* 勾选圈压在头像上：未选 60% 透明度、选中点亮到实色。
-       两态只差透明度与底色，几何完全不变 —— 切换时行不会重排、也不会跳一下。 */
+    /* 首页多选（长按进入） */
+    /* 勾选圈压在头像上：两态只差透明度与底色，几何完全不变，切换时行不会重排。 */
     .mmc-avatar-wrap { position: relative; flex: none; display: block; line-height: 0; }
 
     .mmc-pick {
@@ -376,7 +358,7 @@ html.rd .conv-filter-btn { display: none; }
         place-items: center;
         border-radius: 14px;
         /* 白底 + 固定深色勾：头像底色三色轮换（还有深色主题），
-           跟着主题走的勾号会在浅底上糊掉；这个圆盘自己永远是浅色，勾号也就永远是深的。 */
+           跟着主题走的勾号会在浅底上糊掉；这个圆盘永远是浅色，勾号也就永远是深的。 */
         background: #fff;
         box-shadow: 0 1px 3px rgba(0, 0, 0, .18);
         color: #3d3418;
@@ -385,8 +367,7 @@ html.rd .conv-filter-btn { display: none; }
         transition: opacity .16s ease, background-color .16s ease, color .16s ease;
     }
 
-    /* 勾号两态都画出来：未选只是整体压到 60%，选中才换成实色底。
-       画不画勾号决定"看不看得出这行能选"，透明度决定"选没选中"。 */
+    /* 勾号两态都画出来，只有透明度不同：画不画勾号决定"看不看得出这行能选"。 */
     .mmc-pick svg {
         width: 22px;
         height: 22px;
@@ -403,7 +384,7 @@ html.rd .conv-filter-btn { display: none; }
     .mobile-conv-list.is-selecting .mmc-item.is-selected .mmc-pick svg { transform: scale(1.06); }
     .mobile-conv-list.is-selecting .mmc-item.is-selected { background: var(--rd-accent-soft); }
 
-    /* 多选条：贴在底栏上方。只放能一次处理一批的两个动作（分类 / 删除），
+    /* 多选条只放能一次处理一批的两个动作（分类 / 删除），
        收藏 / 置顶 / 重命名这类单条操作仍归抽屉那份长按菜单。 */
     #mmConvSelBar.is-open {
         display: flex;
@@ -411,8 +392,8 @@ html.rd .conv-filter-btn { display: none; }
         left: 12px;
         right: 12px;
         bottom: calc(var(--ms-nav, 58px) + 10px);
-        /* 与底栏同层（100002）：高于页面内容、低于 #customModal（100003）——
-           「取消多选」的确认框才能连它的按钮一起盖住，免得用户在确认框后面又点到分类 / 删除。 */
+        /* 与底栏同层（100002）：高于页面内容、低于 #customModal（100003），
+           「取消多选」的确认框才能连它的按钮一起盖住。 */
         z-index: 100002;
         align-items: center;
         gap: 6px;
@@ -486,13 +467,12 @@ html.rd .conv-filter-btn { display: none; }
         width: 7px;
         height: 7px;
         border-radius: 50%;
-        background: #ef5b73;
+        background: var(--rd-danger);
         box-shadow: 0 0 0 2px var(--rd-surface-2);
     }
 
-    /* 会话长按菜单：宿主给的是 z-index 900，窄屏底栏是 100002 ——
-       不抬起来，菜单就长在底栏下面，「删除对话」点不到。
-       底色也必须走主题变量：基础层那张纸白在深色下是白底白字。 */
+    /* 会话长按菜单（宿主给的是 z-index 900）必须抬到底栏（100002）之上，否则「删除对话」点不到；
+       底色也必须走主题变量，基础层那张纸白在深色下是白底白字。 */
     html.rd .conversation-context-menu {
         z-index: 100060 !important;
         width: 188px;
@@ -513,8 +493,8 @@ html.rd .conv-filter-btn { display: none; }
     html.rd .conversation-context-menu button:active { background: var(--rd-hover) !important; }
     html.rd .conversation-context-menu button.danger { color: var(--rd-danger) !important; }
 
-    /* 草稿态：首页那条输入框"飞"到底部位置时用的替身（见 mobile-shell.js 的 flyComposerToBottom）。
-       真框已经随首页一起隐藏，这里只留一个视觉连续体，动画结束即移除。 */
+    /* 草稿态：首页那条输入框"飞"到底部位置时用的替身（见 mobile-shell.js 的 flyComposerToBottom），
+       动画结束即移除。 */
     .mm-composer-ghost {
         position: fixed;
         z-index: 100070;
@@ -563,7 +543,7 @@ html.rd .conv-filter-btn { display: none; }
 
     html.rd #headerModSlot::-webkit-scrollbar { display: none; }
 
-    /* ---------- 2 · 底部导航 ---------- */
+    /* 2 · 底部导航 */
 
     #mobileNav {
         display: flex;
@@ -576,8 +556,7 @@ html.rd .conv-filter-btn { display: none; }
         padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
         box-sizing: border-box;
         border-top: 1px solid var(--rd-border);
-        /* 底栏不用毛玻璃：它是固定层，模糊会在每次页面切换/滚动时重绘，
-           中低端机上正是"点一下有点顿"的来源之一。实色更跟手。 */
+        /* 底栏不用毛玻璃：它是固定层，模糊会在每次页面切换/滚动时重绘，实色更跟手。 */
         background: var(--rd-surface);
         transition: opacity .16s ease;
     }
@@ -607,7 +586,7 @@ html.rd .conv-filter-btn { display: none; }
     /* 设置是整页覆盖层：它开着时底栏让位，避免"底栏还压着设置页"。 */
     #mobileNav.mobile-nav-hidden { opacity: 0; pointer-events: none; }
 
-    /* ---------- 3 · 次级页统一页头（语笺 / 日记 / 记忆 / 成就） ---------- */
+    /* 3 · 次级页统一页头（语笺 / 日记 / 记忆 / 成就） */
 
     html.rd .page-secondary-header {
         align-items: center !important;
@@ -638,8 +617,8 @@ html.rd .conv-filter-btn { display: none; }
     html.rd .page-secondary-back span { display: none !important; }
     html.rd .page-secondary-back svg { width: 17px; height: 17px; }
 
-    /* 「回忆」的分段条：一个胶囊装着四格，选中那一格的下面垫一个滑动的圆。
-       圆的直径取胶囊的内高、位置夹在内边之内 —— 选到首 / 末格时它就贴着胶囊那一侧的圆边。 */
+    /* 「回忆」的分段条：一个胶囊装着四格，滑块圆的直径取胶囊内高、位置夹在内边之内，
+       选到首 / 末格时就贴着胶囊那一侧的圆边。 */
     .mobile-hub-seg {
         position: relative;
         display: flex;
@@ -687,7 +666,7 @@ html.rd .conv-filter-btn { display: none; }
     .mobile-hub-seg button.active { color: var(--rd-accent-contrast); }
     .mobile-hub-seg button:active { color: var(--rd-accent); }
 
-    /* ---------- 4 · 一套卡片语言（语笺 / 日记 / 记忆 / 成就） ---------- */
+    /* 4 · 一套卡片语言（语笺 / 日记 / 记忆 / 成就） */
 
     html.rd .note-card,
     html.rd .diary-card,
@@ -708,8 +687,6 @@ html.rd .conv-filter-btn { display: none; }
     html.rd .diary-card-text,
     html.rd .memory-item-text { font-size: 12.5px !important; line-height: 1.65 !important; }
 
-    html.rd .memory-section-head { padding: 11px 12px 8px !important; }
-    html.rd .memory-section-title { font-size: 13px !important; font-weight: 600 !important; }
     html.rd .memory-item { padding: 10px 12px !important; border-top: 1px solid var(--rd-border) !important; }
 
     /* 空状态在窄屏是一句提示，不是一张海报：图标缩小、正文回到界面字号。 */
@@ -740,8 +717,7 @@ html.rd .conv-filter-btn { display: none; }
     html.rd .diary-toolbar,
     html.rd .memory-toolbar { padding: 12px 14px 8px !important; }
 
-    /* 窄屏原本把「消息收藏 / 金句收藏」两栏藏了（只留消息栏），金句收藏因此在手机上
-       够不到。这里放回来，并装进同一个胶囊：选中哪栏，滑块就贴到胶囊那一侧。 */
+    /* 「消息收藏 / 金句收藏」两栏装进同一个胶囊：选中哪栏，滑块就贴到胶囊那一侧。 */
     html.rd #notesPage .notes-toolbar { flex-wrap: wrap !important; gap: 10px !important; }
     html.rd #notesPage .notes-tabs {
         display: flex !important;
@@ -774,14 +750,14 @@ html.rd .conv-filter-btn { display: none; }
     }
     html.rd #notesPage .notes-tab:hover { background: transparent !important; }
 
-    /* 顶栏留给「返回 + 类名」：设置是从「我的」下钻进来的一页，左上角没有返回键的话，
-       退出就只能靠系统返回手势或底栏 —— 前者在桌面浏览器与部分 WebView 里不可靠，
-       后者不是每个人都会想到。按钮的几何在下面「设置：整页下钻」那一段统一给。 */
+    /* 顶栏留给「返回 + 类名」：设置是从「我的」下钻进来的一页，
+       退出若只能靠系统返回手势（在桌面浏览器与部分 WebView 里不可靠）或底栏都不够。
+       按钮的几何在下面「设置：整页下钻」那一段统一给。 */
     html.rd #settingsTopBar { min-height: 48px; padding: 0 16px !important; }
     /* 底栏留在设置页上，最后一行设置别被它盖住 */
     html.rd #settingsPanel #settingsContent { padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; }
 
-    /* ---------- 4.5 · 记忆 / 日记：页内「选择对话」 ---------- */
+    /* 4.5 · 记忆 / 日记：页内「选择对话」 */
     html.rd #diaryPage .diary-toolbar { display: flex !important; }
 
     html.rd .conv-filter-btn {
@@ -834,12 +810,11 @@ html.rd .conv-filter-btn { display: none; }
         font-size: 12.5px;
     }
 
-    /* ---------- 5 · 设置：整页下钻（「我的」已经是分类清单） ---------- */
-    /* 窄屏不再给 7 个分栏做一条横向图标栏：分类由「我的」负责，设置只显示
-       当前这一类，顶部换成「返回 + 类名」。 */
+    /* 5 · 设置：整页下钻 */
+    /* 窄屏不给 7 个分栏做一条横向图标栏：分类由「我的」负责，设置只显示当前这一类。 */
 
-    /* 窄屏设置是整页下钻：不再给外壳顶栏留那 58px（留着会露出「我的」那条栏）。
-       安全区内边距保持 pages-luxe 的写法，不改。 */
+    /* 窄屏设置是整页下钻，不再给外壳顶栏留那 58px（留着会露出「我的」那条栏）；
+       安全区内边距保持 pages-luxe 的写法。 */
     html.rd #settingsOverlay,
     html.rd #marketOverlay {
         inset: 0 !important;
@@ -847,8 +822,7 @@ html.rd .conv-filter-btn { display: none; }
         justify-content: stretch !important;
     }
 
-    /* 三个「看内容」的整页不再各写一遍页头：外壳顶栏已经写了标题，
-       分类交给回忆分段条，页内那条「英文眉题 + 大标题 + 返回」就是重复。 */
+    /* 三个「看内容」的整页不再各写一遍页头：外壳顶栏已经写了标题，分类交给回忆分段条。 */
     html.rd #notesPage > .page-secondary-header,
     html.rd #diaryPage > .page-secondary-header,
     html.rd #memoryPage > .page-secondary-header { display: none !important; }
@@ -907,9 +881,8 @@ html.rd .conv-filter-btn { display: none; }
         text-overflow: ellipsis;
     }
 
-    /* 设置二级页的视觉交还给宿主自己的样式（卡片 + 圆角输入框）。
-       这里只保留三件与"手机专有行为"有关的：让开底栏的内边距、滚到的那段闪一下、
-       换分栏时面板从右侧滑入。 */
+    /* 设置二级页的视觉交还给宿主样式（卡片 + 圆角输入框）；这里只保留三件手机专有行为：
+       让开底栏的内边距、滚到的那段闪一下、换分栏时面板从右侧滑入。 */
     html.rd #settingsPanel #settingsContent {
         padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important;
     }
@@ -930,9 +903,8 @@ html.rd .conv-filter-btn { display: none; }
         animation: mm-slide-in-right .32s cubic-bezier(.22, .7, .25, 1) both;
     }
 
-    /* 返回键在左、类名在右：设置是"下钻进来"的一页，与其他二级页同一个方位。
-       几何与会话页的 #mobileBackBtn 一致（34×34、描边方块、18px 箭头），
-       点击行为仍由既有 #closeSettings 的绑定负责 —— 关闭设置就是回到「我的」。 */
+    /* 返回键在左、类名在右，几何与会话页的 #mobileBackBtn 一致（34×34、描边方块、18px 箭头）；
+       点击行为仍由既有 #closeSettings 的绑定负责。 */
     html.rd #settingsPanel #settingsTopBar > #closeSettings {
         position: static !important;
         top: auto !important;
@@ -976,11 +948,10 @@ html.rd .conv-filter-btn { display: none; }
        一直亮着会盖住标题，操作仍走长按菜单。 */
     html.rd .conversation-item .conversation-inline-actions { display: none !important; }
 
-    /* 设置页的排版/配色交还宿主自己的样式（卡片 + 圆角输入框）；窄屏只补一条
-       "让开底栏"的底部内边距，见上面 #settingsPanel #settingsContent 那条。
-       分栏的显示/隐藏由 base.css 的 .settings-tab-panel 规则负责，这里不再重复。 */
+    /* 设置页的排版/配色交还宿主样式（卡片 + 圆角输入框）；窄屏只补一条"让开底栏"的底部内边距，
+       分栏的显示/隐藏由 base.css 的 .settings-tab-panel 规则负责。 */
 
-    /* ---------- 6 · 弹层：⋯ 与 ＋ 共用同一套底部弹层观感 ---------- */
+    /* 6 · 弹层：⋯ 与 ＋ 共用同一套底部弹层观感 */
 
     html.rd .composer-more-menu {
         position: fixed !important;
@@ -1011,7 +982,7 @@ html.rd .conv-filter-btn { display: none; }
         text-transform: uppercase;
     }
 
-    /* ---------- 7 · 底部弹层（宿主「更多」） ---------- */
+    /* 7 · 底部弹层（宿主「更多」） */
 
     #mobileShellSheet {
         display: block;
@@ -1119,7 +1090,7 @@ html.rd .conv-filter-btn { display: none; }
         color: var(--rd-text-3);
     }
 
-    /* ---------- 8 · 输入栏与消息（对齐原型：整条输入栏 + 独立输入框） ---------- */
+    /* 8 · 输入栏与消息 */
 
     /* 进会话后底栏收起（沉浸），主区不再给它留 58px。 */
     body.mm-in-conv #mainContent { padding-bottom: 0 !important; }
@@ -1166,17 +1137,16 @@ html.rd .conv-filter-btn { display: none; }
         outline: none !important;
     }
 
-    /* 首页那条输入框在窄屏只是一个"入口"：点一下就进对话，
-       所以这里的「＋」和麦克风都不会被用到 —— 前者里的「整理当前记忆 / 当前会话设定」
-       都要求已经有一段会话，后者在还没决定聊什么之前也没有语境。只留输入框本身；
-       会话页的输入栏不受影响（那里三件都留着）。 */
+    /* 首页那条输入框在窄屏只是一个"入口"：点一下就进对话，所以「＋」和麦克风都用不到 ——
+       前者里的「整理当前记忆 / 当前会话设定」都要求已经有一段会话，后者在还没决定聊什么之前也没有语境。
+       只留输入框本身；会话页的输入栏不受影响（那里三件都留着）。 */
     html.rd #initialState .composer-tools,
     html.rd #initialState .composer-image-preview,
     html.rd #initialState .mic-btn,
     html.rd #initialState #initialSendBtn { display: none !important; }
 
-    /* 触屏上点一下就把输入框（以及它所在那条栏）围上一圈金色光环，既不是"在输入中"
-       的有用信息、又非常抢眼；窄屏只留光标 —— 边框与阴影都保持未聚焦时的样子。 */
+    /* 触屏点一下就围上一圈金色光环既不是"在输入中"的有用信息、又非常抢眼；
+       窄屏只留光标，边框与阴影都保持未聚焦时的样子。 */
     html.rd .initial-composer-shell:focus-within,
     html.rd .conversation-composer:focus-within {
         border-color: var(--rd-border) !important;
@@ -1194,7 +1164,7 @@ html.rd .conv-filter-btn { display: none; }
 
     html.rd #conversationHistory { padding: 16px 0 6px !important; }
 
-    /* 原型：AI 消息是「圆头像 + 气泡」，气泡里不写名字与秒级时间；
+    /* AI 消息是「圆头像 + 气泡」，气泡里不写名字与秒级时间；
        朗读 / 收藏那排挂在气泡下方，而不是压在气泡标题行里。 */
     html.rd .message-item { padding: 0 !important; }
     html.rd .message-item-ai {
@@ -1212,11 +1182,9 @@ html.rd .conv-filter-btn { display: none; }
     html.rd .message-item-user > .flex { flex: 0 1 auto; max-width: 86%; }
     html.rd .message-item > .flex > .flex-1 { min-width: 0; }
 
-    /* AI 头像在桌面 rd 里是绝对定位、悬在 46px 左留白上；窄屏消息行 padding 归零、
-       行本身是 flex —— 伪元素必须改回**文档流里的第一个 flex 子项**才占得到位。
-       ≤620px 还有条旧规则把伪元素 display:none（旧设计靠 mobile-shell 的装饰节点
-       出头像，装饰节点已删），这里用 !important 顶回来，否则"进对话没有头像"。
-       尺寸贴原型 30px。 */
+    /* AI 头像在桌面 rd 里是绝对定位、悬在 46px 左留白上；窄屏消息行 padding 归零、行本身是 flex，
+       伪元素必须是文档流里的第一个 flex 子项才占得到位。
+       ≤620px 那条把伪元素 display:none 的规则（靠 mobile-shell 的装饰节点出头像）用 !important 顶回来。 */
     html.rd #conversationHistory .message-item-ai::before {
         position: static;
         display: grid !important;
@@ -1313,7 +1281,7 @@ html.rd .conv-filter-btn { display: none; }
     html.rd #initialSendBtn svg { width: 18px; height: 18px; }
 }
 
-/* ---------- 9 · 「我的」整页 ---------- */
+/* 9 · 「我的」整页 */
 
 #mobileMine { display: none; }
 
@@ -1449,15 +1417,14 @@ html.rd .conv-filter-btn { display: none; }
         height: 20px;
         padding: 0 6px;
         border-radius: 10px;
-        background: #ef5b73;
+        background: var(--rd-danger);
         color: #fff;
         font-size: 10.5px;
         font-weight: 700;
         display: grid;
         place-items: center;
     }
-    /* 原型里的清单是纯文字 + 箭头：图标方块会把每行压成"图标 + 小字"，
-       标题反而看不出来；这里只保留文字层级。 */
+    /* 纯文字 + 箭头：图标方块会把每行压成"图标 + 小字"，标题反而看不出来。 */
     #mobileMine .mm-ic { display: none; }
     #mobileMine .mm-ic svg { width: 19px; height: 19px; }
     #mobileMine .mm-copy { flex: 1; min-width: 0; }
@@ -1499,33 +1466,33 @@ html.rd .conv-filter-btn { display: none; }
     #mobileMine .mm-seg button.active { color: var(--rd-accent); }
     #mobileMine .mm-version { padding: 12px 0 4px; text-align: center; font-size: 10.5px; color: var(--rd-text-3); }
 
-    /* ---------- 浮层动效：菜单落下来 / 面板弹一下 / 整页淡入 ----------
-       直接 display 切换的浮层是"凭空出现"，眼睛跟不上它从哪儿来；统一给一小段位移 + 淡入。 */
+    /* 浮层动效：直接 display 切换的浮层是"凭空出现"，眼睛跟不上它从哪儿来，
+       统一给一小段位移 + 淡入。 */
     @keyframes mm-dialog-in {
         from { opacity: 0; transform: translateY(12px) scale(.97); }
         to { opacity: 1; transform: none; }
     }
-    @keyframes mm-page-in {
-        from { opacity: 0; }
-        to { opacity: 1; }
-    }
 
     .modal-overlay .modal-panel,
     .conversation-move-panel {
-        animation: mm-dialog-in .2s cubic-bezier(.16, 1, .3, 1) both;
+        animation: mm-dialog-in var(--motion-base) cubic-bezier(.16, 1, .3, 1) both;
     }
 
-    /* 成就那片是"整页浮层"（手机上铺满全屏），不做弹窗式的缩放 + 位移，
-       而且它自己带 animate-modal-pop —— 两套一起播就成了"闪一下"。 */
+    /* 弹窗面板在窄屏统一走 mm-dialog-in：markup 里的 animate-modal-pop 若同时播就是两套一起闪，
+       这里只把名字让出去，时长与缓动仍取上一条的。 */
+    .modal-overlay .modal-panel.animate-modal-pop { animation-name: mm-dialog-in; }
+
+    /* 成就那片是整页浮层（手机上铺满全屏），不做弹窗式的缩放 + 位移；
+       它自己带 animate-modal-pop，两套一起播就成了"闪一下"。 */
     html.rd #achievementsOverlay .modal-panel,
     html.rd #achievementsOverlay .modal-panel.animate-modal-pop {
         animation: none !important;
     }
-    /* 不要给整片浮层做透明度动画：面板还在半透明时，底下的日记 / 记忆会透上来，
-       两层内容叠在一起看着就是"花屏"。入场交给面板里的内容滑动（slideChildren）。 */
+    /* 不要给整片浮层做透明度动画：面板还在半透明时，底下的日记 / 记忆会透上来叠成"花屏"；
+       入场交给面板里的内容滑动（slideChildren）。 */
 
-    /* 注意：这三页**不要**整体淡入 —— 淡入会让内容先消失一帧再亮起来，
-       肉眼就是"闪一下"。切页的运动全交给下面那几段滑动。 */
+    /* 这三页不要整体淡入 —— 淡入会让内容先消失一帧再亮起来，肉眼就是"闪一下"；
+       切页的运动全交给下面那几段滑动。 */
 
     /* 分段条切页：内容从切换方向那一侧滑进来（只加在页面的非 fixed 子元素上，见 animateHubSwitch） */
     @keyframes mm-slide-in-right {
@@ -1548,6 +1515,66 @@ html.rd .conv-filter-btn { display: none; }
     html.rd ::-webkit-scrollbar-thumb { background: transparent !important; }
     html.rd .is-scrolling::-webkit-scrollbar-thumb { background: var(--rd-scroll) !important; }
 
+    /* 10 · 通用弹窗窄屏化（整页 sheet 化） */
+    /* 窄屏统一收成全屏 sheet：居中 max-width 弹窗在手机上会被压成窄条、四边露底；
+       占满安全区、圆角阴影归零、底色 --rd-bg 深浅主题都不透底。
+       层级取 100004：盖过底栏（100002，且 JS 后注入的它会赢下同层平局），低于
+       插件设置窗（100010）与确认框（customModal）。 */
+    html.rd #modSettingsOverlay,
+    html.rd #modReadmeOverlay,
+    html.rd #backendPanel,
+    html.rd #notesOverlay,
+    html.rd #categoriesModalOverlay,
+    html.rd #announcementOverlay,
+    html.rd #serverAnnounceOverlay,
+    html.rd #conversationPromptOverlay {
+        z-index: 100004 !important;
+        padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left) !important;
+        align-items: stretch !important;
+        justify-content: stretch !important;
+    }
+
+    html.rd #modSettingsOverlay .modal-panel,
+    html.rd #modReadmeOverlay .modal-panel,
+    html.rd #backendPanel .modal-panel,
+    html.rd #notesOverlay .modal-panel,
+    html.rd #categoriesModalOverlay .modal-panel {
+        width: 100% !important;
+        max-width: none !important;
+        max-height: none !important;
+        height: 100% !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        background: var(--rd-bg) !important;
+    }
+
+    /* 引导式面板（公告 / 会话人设）：同一套 sheet；面板改纵向 flex，滚动容器才有界。 */
+    html.rd #announcementOverlay .guide-modal-panel,
+    html.rd #serverAnnounceOverlay .guide-modal-panel,
+    html.rd #conversationPromptOverlay .guide-modal-panel {
+        display: flex;
+        flex-direction: column;
+        width: 100% !important;
+        max-width: none !important;
+        max-height: none !important;
+        height: 100% !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+    }
+
+    html.rd #announcementOverlay .guide-modal-scroll,
+    html.rd #serverAnnounceOverlay .guide-modal-scroll,
+    html.rd #conversationPromptOverlay .guide-modal-scroll {
+        flex: 1;
+        min-height: 0;
+        padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    }
+
+    /* 市场内容区在宽屏给 40px 左右留白，窄屏收窄成手掌握度。 */
+    html.rd #marketOverlay .modal-panel > div.flex-1 { padding: 14px 14px 24px !important; }
+
     @media (prefers-reduced-motion: reduce) {
         .modal-overlay .modal-panel,
         .conversation-move-panel,
@@ -1561,3 +1588,12 @@ html.rd .conv-filter-btn { display: none; }
         #mobileShellSheet .mss-panel { transition-duration: .01ms !important; }
     }
 }
+/* 记忆分层：窄屏单列 + 紧凑徽标（对齐上方记忆页窄屏规则的密度） */
+html.rd .memory-conv-head { padding: 0 2px; }
+html.rd .memory-tier-head { padding: 6px 10px; }
+html.rd .memory-tier-name { font-size: 11.5px !important; }
+html.rd .memory-tier-stat { font-size: 9px !important; }
+html.rd .memory-list { grid-template-columns: minmax(0, 1fr); }
+html.rd .memory-tier-input { width: 92px; }
+html.rd .memory-tier-settings-btn span { display: none; }
+html.rd .memory-tier-settings-btn { padding: 6px 9px; }

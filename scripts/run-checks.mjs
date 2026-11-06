@@ -1,21 +1,11 @@
-// 检查模块的**并行**运行器。
-// 为什么需要它：`npm run check` 原先是一条 `a && b && c …` 的串行链。各模块
-//   之间其实互不相干（端口向内核要、数据写临时目录），串行只是历史写法 ——
-//   代价是总耗时等于所有模块之和，而真正慢的只有少数几个（起服务、开浏览器）。
-//   串行的另一个毛病是**没有耗时信息**：跑很久时说不清是"某个模块卡住了"
-//   还是"模块本来就多"。
-// 这里做的事只有三件：
-//   ① 并行跑，并发数可调（默认 4）；
-//   ② 每个模块单独计时，末尾给一张按耗时排序的表；
-//   ③ 输出按模块分组打印（并行交错会读不懂），失败模块整段打出来。
+// 检查模块的并行运行器：并行可调并发、单模块计时（末尾按耗时排序）、输出按模块分组。
+// 清单只在这个文件里维护：package.json 的 check 脚本调它——两份清单必然漂移，漏跑查不出。
 // 用法：
 //   node scripts/run-checks.mjs                 全部，默认并发
 //   node scripts/run-checks.mjs --jobs 8        指定并发
 //   node scripts/run-checks.mjs --only mod      只跑名字含 mod 的模块
 //   node scripts/run-checks.mjs --serial        退回串行（排查互相干扰时用）
 //   node scripts/run-checks.mjs --bail          第一个失败就停（不启动后续模块）
-// 清单**只在这个文件里**维护：`package.json` 的 check 脚本调它，不再各写一份
-// （两份清单必然漂移，而"某个检查被悄悄漏跑"是查不出来的）。
 
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -26,11 +16,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 /**
  * 检查模块清单。
- *
- * `nodeArgs` 用于需要额外 Node 参数的模块：check-frontend 用 vm.SourceTextModule
- *   解析内联脚本，没有 `--experimental-vm-modules` 会抛
- *   "SourceTextModule is not a constructor" —— 那是**缺参数**，不是代码错，
- *   所以参数跟着模块走，而不是要求人记住怎么调。
+ * nodeArgs 让额外 Node 参数跟着模块走（如 check-frontend 需要 --experimental-vm-modules，
+ * 缺它是环境问题不是代码错），而不是要求人记住怎么调。
  */
 const MODULES = [
     { name: 'check-frontend', args: ['--experimental-vm-modules'] },
@@ -44,11 +31,9 @@ const MODULES = [
     { name: 'check-ui' },
     { name: 'check-pwa' },
     { name: 'check-system' },
-    // 版本检测（GitHub Releases）：版本比较 / 资产归类 / 失败分类 / 接线。
     { name: 'check-update' },
     { name: 'check-exe' },
-    // 浏览器能力（CDP）：协议帧、网址白名单、动作派发、安全接线、真浏览器端到端。
-    //   没装 Chrome/Edge 的机器上，需要真浏览器的用例按环境性跳过（不判红）。
+    // 浏览器能力（CDP）：没装 Chrome/Edge 的机器上，真浏览器用例按环境性跳过（不判红）
     { name: 'check-browser' },
 ];
 
@@ -56,10 +41,7 @@ function parseArgs(argv) {
     const out = {
         jobs: Math.max(2, Math.min(6, os.cpus().length - 1)),
         only: '', serial: false, bail: false,
-        // 单模块硬超时：检查脚本内部有大量"等服务/等页面"的轮询，一旦某处漏了
-        //   单次超时（连接建立了但对方不回包），进程会**永远挂着**而不报错。
-        //   那种情况下人的观感是"跑了半小时没动静"，且没有任何可查的线索。
-        //   这里给每个模块一个上限，超时即杀掉并明确报成失败。
+        // 单模块硬超时：轮询漏带单次超时会让进程永远挂着不报错，超时即杀并报失败
         timeoutMs: 300000,
     };
     for (let i = 0; i < argv.length; i++) {
@@ -178,7 +160,7 @@ async function main() {
     }
     await Promise.all(Array.from({ length: Math.min(opts.jobs, list.length) }, worker));
 
-    // ---- 汇总：按耗时排序，一眼看出谁在拖时间 ----
+    // 汇总：按耗时排序，一眼看出谁在拖时间
     const totalMs = Date.now() - startedAll;
     const failed = results.filter((r) => r.code !== 0);
     const timedOut = failed.filter((r) => r.timedOut);

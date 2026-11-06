@@ -1,18 +1,4 @@
-/* ============================================================================
- * Markdown 渲染（两处共用：聊天消息、插件 README / 技能说明）
- *
- * 为什么自己写而不引 marked / markdown-it：
- *   本体零构建、零依赖，为渲染拉一个几十 KB 的解析库不划算；这里覆盖
- *   实际会用到的子集（标题 / 段落 / 列表 / 表格 / 代码 / 引用 / 分隔线 /
- *   行内强调与链接 / 任务列表）。
- *
- * ★ 安全边界：输入是**第三方内容**（模型回复、插件作者写的 README）。
- *   所以这里**不保留任何原始 HTML** —— 所有文本都先 escape 再拼标签，
- *   渲染结果是宿主自己拼出来的一棵已知标签树，不存在注入路径。
- *   链接只放行 http / https / mailto / 页内锚点，其余（javascript: / data:）
- *   降级成纯文本。这与"先 escapeHtml 再交给 marked"是同一个思路，
- *   只是这里连 marked 那一层也省掉了。
- * ========================================================================== */
+/* Markdown 渲染（两处共用：聊天消息、插件 README / 技能说明），自写而不引 marked / markdown-it，覆盖实际会用到的子集。安全边界：输入是第三方内容（模型回复、插件作者写的 README），不保留任何原始 HTML（先 escape 再拼标签）；链接只放行 http / https / mailto / 页内锚点，其余（javascript: / data:）降级成纯文本。 */
 (function () {
     'use strict';
 
@@ -31,27 +17,18 @@
         return null;
     }
 
-    /**
-     * 行内渲染：代码 → 链接 → 强调。
-     *
-     * 顺序要紧：先把反引号里的内容换成占位符，避免 `**不**是强调` 这种
-     * 代码里的星号被当成强调；最后再把占位符换回来（已是 escape 过的文本）。
-     * 链接 → 强调的顺序也有讲究：地址里含 `_` / `*` 的（例如带下划线的路径）
-     * 若先跑强调正则，会被改写成 `<em>` 塞进 href，链接就断了。
-     */
+    /** 行内渲染：代码 → 链接 → 强调。顺序要紧：先把反引号里的内容换成占位符，避免 `**不**是强调` 这种代码里的星号被当成强调；链接先于强调，否则地址里含 `_` / `*` 的会被改写成 `<em>` 塞进 href。 */
     function inline(text) {
         const codes = [];
         let s = esc(text).replace(/`([^`]+)`/g, (_, code) => {
             codes.push(code);
             return '\u0000' + (codes.length - 1) + '\u0000';
         });
-        // 链接：[文本](地址) —— 地址不允许出现空格，够覆盖 README 的实际用法
         s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, label, href) => {
             const url = safeHref(href.replace(/&amp;/g, '&'));
             if (!url) return label;
             return '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + inlineEmphasis(label) + '</a>';
         });
-        // 裸网址（README 里常直接写地址）：只处理还没被上面的链接吃掉的
         s = s.replace(/(^|[\s（(])(https?:\/\/[^\s<)）]+)/g, (m, pre, url) =>
             pre + '<a href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + url + '</a>');
         s = inlineEmphasis(s);
@@ -80,8 +57,7 @@
     function render(text) {
         const lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
         const out = [];
-        // 开放中的列表：标签 + 是否有序。Markdown 的列表可以嵌套，但 README 里
-        //   基本都是单层；这里按"缩进变化就闭合重开"处理，够用且不会串层。
+        // 开放中的列表：标签 + 是否有序。Markdown 列表可以嵌套，但 README 里基本都是单层；按"缩进变化就闭合重开"处理，够用且不会串层。
         let listTag = null;
         let i = 0;
 
@@ -97,10 +73,8 @@
             const raw = lines[i];
             const line = raw.replace(/\s+$/, '');
 
-            // 空行：结束当前列表，段落由块级元素自然分隔
             if (!line.trim()) { closeList(); i++; continue; }
 
-            // ---- 代码块 ----
             const fence = /^\s*(```|~~~)\s*([\w+-]*)\s*$/.exec(line);
             if (fence) {
                 closeList();
@@ -119,19 +93,16 @@
                 continue;
             }
 
-            // ---- 标题（# 1-6）----
             const h = /^(#{1,6})\s+(.*)$/.exec(line);
             if (h) {
                 closeList();
                 const level = h[1].length;
-                // 一级标题就是窗口标题已经写过的插件名，正文里不再重复放大
                 const tag = level === 1 ? 'h2' : 'h' + Math.min(level, 6);
                 out.push('<' + tag + ' class="rmd-h rmd-h' + level + '">' + inline(h[2].replace(/\s+#+\s*$/, '')) + '</' + tag + '>');
                 i++;
                 continue;
             }
 
-            // ---- 分隔线 ----
             if (/^\s{0,3}([-*_])\s*(\1\s*){2,}$/.test(line)) {
                 closeList();
                 out.push('<hr class="rmd-hr">');
@@ -139,7 +110,6 @@
                 continue;
             }
 
-            // ---- 表格：当前行像表头、下一行是分隔行 ----
             if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
                 closeList();
                 const head = splitRow(line);
@@ -157,7 +127,6 @@
                 continue;
             }
 
-            // ---- 引用块：连续的 > 行合为一段 ----
             if (/^\s*>\s?/.test(line)) {
                 closeList();
                 const buf = [];
@@ -171,11 +140,9 @@
                 continue;
             }
 
-            // ---- 列表项（- / * / + / 1.）----
             const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(raw);
             if (li) {
                 openList(/^\d/.test(li[2]) ? 'ol' : 'ul');
-                // 任务列表：- [ ] / - [x]
                 const task = /^\[( |x|X)\]\s+(.*)$/.exec(li[3]);
                 if (task) {
                     const done = task[1].toLowerCase() === 'x';
@@ -189,7 +156,6 @@
                 continue;
             }
 
-            // ---- 普通段落：合并连续的普通行（Markdown 里单个换行不换段）----
             closeList();
             const buf = [line];
             i++;
@@ -208,10 +174,7 @@
         return out.join('\n');
     }
 
-    /**
-     * 从 Markdown 里抽一个目录：标题（h2/h3）+ 数量。用于窗口顶部的「在本页」。
-     * 只取二级/三级，一级是插件名本身，过多会让目录变成噪音。
-     */
+    /** 从 Markdown 里抽一个目录（标题 h2/h3 + 数量），用于窗口顶部的「在本页」；只取二/三级，一级是插件名本身，过多会让目录变成噪音。 */
     function outline(text) {
         const items = [];
         const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
@@ -227,7 +190,6 @@
         return items;
     }
 
-    /** 一句话统计：给窗口头部显示"多长"，让用户在打开前就有个预期 */
     function stats(text) {
         const s = String(text || '');
         const lines = s ? s.split('\n').length : 0;
@@ -236,21 +198,7 @@
         return { lines, chars: s.length, reading: cn + words };
     }
 
-    /**
-     * 聊天消息的 HTML 渲染：**替换掉原先"先 escapeHtml 再交给 marked"那条路**。
-     *
-     * 为什么换：vendor 里的 marked 与页面其它脚本跑在同一个作用域，
-     *   它一律把输入当 HTML 解析 —— 上游那套"先转义"只是把风险推给顺序，
-     *   任何一处调用忘了先转义就漏；而聊天内容来自模型，模型输出可被对话内容影响。
-     *   这里输入一律当**纯文本 Markdown**，原始 HTML 只会以字面量显示。
-     *
-     * 与原来的约定保持一致：没有 Markdown 特征时直接纯文本转义（长回复省一次解析），
-     * 公式（$…$ / $$…$$）原样保留 —— escapeHtml 的职责交回宿主那一份，
-     * 这样 &#96; 之类的实体不会被二次处理。
-     *
-     * @param {string} text 原始文本
-     * @returns {string} 可安全插入 innerHTML 的 HTML
-     */
+    /** 聊天消息的 HTML 渲染：输入一律当**纯文本 Markdown**、原始 HTML 只以字面量显示（聊天内容来自模型，输出可被对话内容影响，不能按 HTML 解析）；无 Markdown 特征时直接转义（长回复省一次解析），公式与实体原样保留。 */
     const HAS_MD = /(^|\n)\s*(#{1,6}\s|[-*+]\s|>\s|\u0060\u0060\u0060|---|\d+\.\s|\|)|(\*\*[^*]+\*\*|\u0060[^\u0060]+\u0060|\[[^\]]+\]\([^)]+\))/;
     function renderChat(text) {
         const raw = String(text == null ? '' : text);

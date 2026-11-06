@@ -1,9 +1,5 @@
-/* ============================================================================
- * 联网搜索：服务商清单与宽松解析（从 core.js 拆出）
- *
- * SEARCH_PROVIDERS / DEFAULT_SEARCH_PROVIDER / resolveSearchEndpoint /
- * parseLooseSearchPayload。纯数据与纯解析，无 state / DOM / 网络副作用。
- * ========================================================================== */
+// 联网搜索：服务商清单与宽松解析。SEARCH_PROVIDERS / DEFAULT_SEARCH_PROVIDER / resolveSearchEndpoint /
+// parseLooseSearchPayload。纯数据与纯解析，无 state / DOM / 网络副作用。
 'use strict';
 
 const SEARCH_PROVIDERS = Object.freeze({
@@ -39,8 +35,7 @@ const SEARCH_PROVIDERS = Object.freeze({
         maxResultsLimit: 100,
         freeNote: '用你自己的搜索服务，额度与计费由那边决定。',
         quotaHint: '到你所用的搜索服务控制台查看额度。',
-        // 请求体可覆盖：不同家字段名不一样（query / q、count / num / max_results）。
-        //   留空时用一份"最常见的写法"，至少能跑通多数自建服务。
+        // 请求体可覆盖：不同家字段名不一样（query / q、count / num / max_results），留空时用最常见的写法。
         buildBody: (query, opts) => {
             const tpl = String(state.settings.searchCustomBody || '').trim();
             if (tpl) {
@@ -53,8 +48,7 @@ const SEARCH_PROVIDERS = Object.freeze({
             return { query, count: opts.maxResults };
         },
         buildHeaders: (key) => {
-            // 鉴权头可覆盖：有的家要 Authorization: Bearer，有的要 x-api-key，
-            //   还有的要塞进 body。这里只覆盖**头**，body 走 buildBody。
+            // 鉴权头可覆盖：有的家要 Authorization: Bearer，有的要 x-api-key，还有的要塞进 body。
             const style = String(state.settings.searchCustomAuth || 'bearer');
             if (style === 'x-api-key') return { 'x-api-key': key, 'Content-Type': 'application/json' };
             if (style === 'none') return { 'Content-Type': 'application/json' };
@@ -74,17 +68,10 @@ function resolveSearchEndpoint(def) {
     return String(raw || '').trim();
 }
 
-/**
- * 从"结构未知"的返回里找出结果数组与各字段。
- *
- * 为什么要这么宽松：自定义源可能是博查、Serper、自建服务或别的什么，
- *   字段名从 title/name 到 url/link 都有可能。要求用户手写 JSONPath 太劝退，
- *   而"找数组 + 按别名找字段"能覆盖绝大多数真实接口 —— 找错了也有
- *   resultsPath 这一个逃生口。
- *
- * @param {object} payload 解析后的 JSON
- * @param {string} pathHint 用户指定的结果数组路径（点号分隔），空则自动找
- */
+// 从"结构未知"的返回里找出结果数组与各字段。自定义源可能是博查、Serper、自建服务，
+// 字段名从 title/name 到 url/link 都有可能：要求用户手写 JSONPath 太劝退，而"找数组 + 按别名找字段"
+// 能覆盖绝大多数真实接口，找错了还有 resultsPath 这个逃生口。
+// @param {string} pathHint 用户指定的结果数组路径（点号分隔），空则自动找
 function parseLooseSearchPayload(payload, pathHint) {
     const TITLE_KEYS = ['title', 'name', 'headline', 'subject'];
     const URL_KEYS = ['url', 'link', 'href', 'uri', 'sourceUrl'];
@@ -150,8 +137,7 @@ function parseLooseSearchPayload(payload, pathHint) {
         })),
     };
 }
-// 密钥名清单。**加一个就要同步三处**（AGENTS.md D13 / 契约表 A21）：
-//   ① 这里；② android-app 的 ByokSecretsPlugin.ALLOWED_NAMES（D10 已登记例外）；
-//   ③ 开发文档 表 A11。漏了 ② 的表现是"手机上填好的 Key 退出应用就没了"——
-//   因为 loadApiSecrets 读不到值会把内存里的 Key 覆盖成空串。
+// 密钥名清单，加一个就要同步三处（AGENTS.md D13 / 契约表 A21）：① 这里；② android-app 的
+// ByokSecretsPlugin.ALLOWED_NAMES（D10 已登记例外）；③ 开发文档 表 A11。漏了 ② 的表现是
+// "手机上填好的 Key 退出应用就没了"—— loadApiSecrets 读不到值会把内存里的 Key 覆盖成空串。
 

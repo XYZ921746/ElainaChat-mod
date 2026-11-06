@@ -1,28 +1,10 @@
-//  ZIP 读写（零依赖，只用 Node 内置 zlib）
-//  为什么要自己写：备份导出需要打包成标准 zip（用户能用任何解压工具打开、
-//  也方便一次拖进来看全部数据）。引第三方 zip 库会破坏"零依赖、双击即用"这个前提，
-//  而 zip 的格式足够简单 —— 写一个只有几百行，读一个已有的实现（模型上传用的）也在。
-//  写：deflateRawSync + crc32（都是 node:zlib 内置）
-//  读：完整解析中央目录（zip 的权威元数据），兼容 GBK 文件名
-//  标准兼容性：生成的是最保守的 zip ——
-//    · 只用 deflate(8) 与 store(0) 两种方法
-//    · 文件名统一 UTF-8，并置 bit 11（EFS）标志，让 Windows 资源管理器正确显示中文
-//    · 不写 data descriptor（长度在 local header 里直接给出）
-//    · 不写 zip64（备份超过 4GB 才需要，数据目录远达不到）
-//  这样 7-Zip / WinRAR / Windows 自带解压 / Python zipfile 都能正确打开。
+//  ZIP 读写（零依赖，只用 Node 内置 zlib）：引第三方 zip 库会破坏"零依赖、双击即用"，而 zip 格式足够简单。写用 deflateRawSync + crc32，读完整解析中央目录并兼容 GBK 文件名。
+//  生成的是最保守的 zip：只用 deflate(8)/store(0)、文件名统一 UTF-8 并置 bit 11（EFS）、不写 data descriptor 与 zip64 —— 7-Zip / WinRAR / Windows 自带解压 / Python zipfile 都能正确打开。
 
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import path from 'node:path';
 
-/**
- * CRC-32（IEEE 802.3，zip 用的那个）。
- *
- * <p>★ 为什么不 from 'node:zlib' import：{@code zlib.crc32} 是 **Node 20.15+**
- * 才加的 API，而手机端内嵌的是 nodejs-mobile **v18.20.4** —— 从 zlib 解构它会在
- * 模块求值阶段就抛 {@code SyntaxError: The requested module 'node:zlib' does not
- * provide an export named 'crc32'}，整个 bootstrap 起不来（表现是 :node 进程
- * 起来后 250ms 静默退出）。这个模块是零依赖设计，自己算一遍最稳，也不挑运行时版本。
- */
+/** CRC-32（IEEE 802.3，zip 用的那个）：不用 zlib.crc32 —— 它是 Node 20.15+ 的 API，而手机端内嵌的 nodejs-mobile 是 v18.20.4，从 node:zlib 解构它会在模块求值阶段抛 SyntaxError，整个 bootstrap 起不来（:node 进程起来后 250ms 静默退出） */
 const CRC_TABLE = (() => {
     const table = new Int32Array(256);
     for (let i = 0; i < 256; i++) {
@@ -39,10 +21,7 @@ function crc32(buf) {
     return (c ^ -1) >>> 0;
 }
 
-//  危险扩展名（解压落盘的安全底线）
-//  这份清单原来在 web/serve.mjs 里。合并解压实现时一起搬到这里 ——
-//  它属于"解压"这件事的安全约束，跟着实现走才能保证所有调用方都受保护。
-//  serve.mjs 仍然从这里 import 使用（agentWrite 也要用它）。
+//  危险扩展名（解压落盘的安全底线）：它属于"解压"这件事的安全约束，跟着实现走才能保证所有调用方都受保护；serve.mjs 仍从这里 import（agentWrite 也要用它）。
 export const BLOCKED_EXT = new Set([
     '.html', '.htm', '.xhtml', '.shtml', '.hta', '.mhtml',
     '.js', '.mjs', '.cjs', '.jsx', '.ts',
@@ -50,33 +29,15 @@ export const BLOCKED_EXT = new Set([
     '.exe', '.dll', '.com', '.scr', '.msi', '.bat', '.cmd', '.ps1', '.psm1', '.vbs', '.wsf', '.jar', '.sh',
 ]);
 
-/**
- * 插件安装时**允许**落盘的危险扩展名（`allowScripts: true` 才生效）。
- *
- * 为什么插件要单独一组而不是"整份黑名单都不查"：插件确实需要 .js（它的本质
- * 就是 JS）和 .html（有些插件带自己的面板页，例如 live2d 的 panel.html），
- * 但**不需要** .exe / .dll / .bat 这类本机可执行文件 —— 那些对插件毫无用途，
- * 落盘只会在用户误双击时变成风险。
- *
- * 所以这一组是**白名单语义**：只放行"插件真的会用到的危险类型"，
- * 其余危险类型在插件安装路径上照样拦。
- */
+/** 插件安装时允许落盘的危险扩展名（allowScripts: true 才生效）：插件确实需要 .js（本质就是 JS）和 .html（自带面板页），但不需要 .exe / .dll / .bat —— 那些落盘只会在误双击时变成风险；这一组是白名单语义，其余危险类型在插件安装路径上照样拦 */
 export const PLUGIN_EXTS = new Set([
     '.js', '.mjs', '.cjs', '.jsx', '.ts',
     '.html', '.htm',
 ]);
 
 /**
- * 取「最终落盘名」的扩展名。
- *
- * 为什么不能直接用 path.extname：Windows 上有三种写法，extname 看到的和真正落盘的
- * **不是同一个名字**，于是黑名单被绕过（实测均可复现）：
- *
- *   x.html::$DATA   → extname 得到 ".html::$data"，但 NTFS 交换数据流语法下
- *                     写它等于写默认流，**落盘就是 x.html**，静态服务照样当 HTML 执行
- *   x.html.         → extname 得到 "."，Windows 会丢掉尾随点，落盘仍是 x.html
- *   x.html␠        → extname 得到 ".html "，尾随空格同样被丢掉
- *
+ * 取「最终落盘名」的扩展名，不能直接用 path.extname：Windows 上有三种写法会让 extname 看到的和真正落盘的不是同一个名字，于是黑名单被绕过。
+ *   x.html::$DATA → extname 得到 ".html::$data"，但 NTFS 交换数据流语法下写它等于写默认流，落盘就是 x.html；x.html.（尾随点）与 x.html␠（尾随空格）同样被 Windows 丢掉。
  * 所以先把这些"看不见的尾巴"剥干净，再取扩展名。
  */
 export function effectiveExt(name) {
@@ -88,12 +49,7 @@ export function effectiveExt(name) {
 }
 
 /**
- * 条目名是否不安全（绝对路径 / 路径穿越）。
- *
- * 从这里导出给所有"解压落盘"的调用方（含 serve.mjs 与手机端 bootstrap 的
- * hostUtils）。理由与 BLOCKED_EXT 相同：它属于"解压/落盘"的安全约束，跟着
- * 实现走才能保证所有调用方受同一份判定 —— 各留一份本地实现的话，"同一个
- * 恶意 zip 在电脑被拦、在手机落盘"这种分叉只是时间问题。
+ * 条目名是否不安全（绝对路径 / 路径穿越）。导出给所有"解压落盘"的调用方（含 serve.mjs 与手机端 bootstrap 的 hostUtils）：各留一份本地实现的话，"同一个恶意 zip 在电脑被拦、在手机落盘"只是时间问题。
  */
 export function isUnsafeEntryName(name) {
     if (!name) return true;
@@ -103,23 +59,11 @@ export function isUnsafeEntryName(name) {
     return name.split(/[\\/]+/).some((seg) => seg === '..');
 }
 
-/**
- * 上传的压缩包大小上限（200MB）。
- *
- * 从这里导出：所有调用方（桌面 serve.mjs、手机端 bootstrap 的
- * hostUtils、插件的 ctx.utils.MAX_UPLOAD）必须吃**同一个数** —— 数字一旦
- * 分叉就是"同一个接口在电脑上能传、在手机上 413"，这类问题最难查。
- * 单文件 / 总量上限（maxEntry/maxTotal）不导出：那是 readZip 的参数默认值，
- * 已在本模块内。
- */
+/** 上传的压缩包大小上限（200MB）：所有调用方（桌面 serve.mjs、手机端 bootstrap 的 hostUtils、插件的 ctx.utils.MAX_UPLOAD）必须吃同一个数 —— 分叉就是"同一接口在电脑上能传、在手机上 413"，最难查；单文件 / 总量上限（maxEntry/maxTotal）不导出，那是 readZip 的参数默认值 */
 export const MAX_UPLOAD = 200 * 1024 * 1024;
 
-// ---------------------------------------------------------------------- 写
-/**
- * 打包成 zip。
- * @param entries [{ name: 'a/b.json', data: Buffer|string }]
- * @returns Buffer
- */
+// 写
+/** 打包成 zip。entries = [{ name: 'a/b.json', data: Buffer|string }]，返回 Buffer */
 export function createZip(entries) {
     const localParts = [];
     const centralParts = [];
@@ -143,7 +87,7 @@ export function createZip(entries) {
         const size = raw.length;
         const compSize = finalData.length;
 
-        // ---- local file header (30 字节 + 文件名) ----
+        // local file header (30 字节 + 文件名)
         const local = Buffer.alloc(30);
         local.writeUInt32LE(0x04034b50, 0);        // 签名
         local.writeUInt16LE(20, 4);                // 需要版本 2.0
@@ -158,7 +102,7 @@ export function createZip(entries) {
         local.writeUInt16LE(0, 28);                // extra 长度
         localParts.push(local, nameBuf, finalData);
 
-        // ---- central directory header (46 字节 + 文件名) ----
+        // central directory header (46 字节 + 文件名)
         const central = Buffer.alloc(46);
         central.writeUInt32LE(0x02014b50, 0);      // 签名
         central.writeUInt16LE(20, 4);              // 创建版本
@@ -185,7 +129,7 @@ export function createZip(entries) {
     const centralBuf = Buffer.concat(centralParts);
     const localBuf = Buffer.concat(localParts);
 
-    // ---- end of central directory (22 字节) ----
+    // end of central directory (22 字节)
     const eocd = Buffer.alloc(22);
     eocd.writeUInt32LE(0x06054b50, 0);
     eocd.writeUInt16LE(0, 4);
@@ -199,7 +143,7 @@ export function createZip(entries) {
     return Buffer.concat([localBuf, centralBuf, eocd]);
 }
 
-// ---------------------------------------------------------------------- 读
+// 读
 /** 在 buffer 里找 EOCD（从尾部往前扫，最多 64KB 注释） */
 function findEocd(buf) {
     const min = Math.max(0, buf.length - 22 - 0xFFFF);
@@ -209,7 +153,7 @@ function findEocd(buf) {
     return -1;
 }
 
-/** GBK → UTF-8 的兜底解码（老工具打的 zip 文件名不是 UTF-8） */
+/** GBK → UTF-8 的兜底解码（非 UTF-8 工具打的 zip，文件名不是 UTF-8） */
 function gbkDecode(buf) {
     // 用 TextDecoder 的 gbk 支持（Node 18+ 内置完整 ICU 时可用）
     try {
@@ -272,8 +216,7 @@ function readLocalEntries(buf, decodeName) {
 }
 
 /**
- * 取出一个条目的内容。local header 不合法时返回 null（调用方跳过该条）；
- * 体积超限 / 压缩方式不支持 / 解压失败都抛错 —— 这些是整包拒绝的理由。
+ * 取出一个条目的内容：local header 不合法时返回 null（调用方跳过该条）；体积超限 / 压缩方式不支持 / 解压失败都抛错 —— 这些是整包拒绝的理由。
  */
 function extractEntryContent(buf, e, name, maxEntry, maxTotal, total) {
     if (e.localOff + 30 > buf.length || buf.readUInt32LE(e.localOff) !== 0x04034b50) return null;
@@ -298,28 +241,9 @@ function extractEntryContent(buf, e, name, maxEntry, maxTotal, total) {
 }
 
 /**
- * 解压 zip。
- *
- * @param buf zip 内容
- * @param opts {
- *   maxTotal,       解压后总大小上限（防压缩炸弹）
- *   maxEntry,       单文件上限
- *   allowScripts,   是否允许 .js/.mjs 等脚本落盘（默认 false）
- *   blockExts,      额外要拦的扩展名集合（可选）
- *   returnBlocked,  true 时返回 { files, blocked }，否则只返回数组（兼容旧调用）
- * }
- * @returns [{ name, data }] 或 { files, blocked }
- *
- * ── 为什么危险类型拦截放在这里（而不是各调用方自己写）──────────────────
- *
- * 这个函数是**服务端唯一的 zip 解压实现**：两份几乎相同的 unzip 各存在时，
- * 安全修复必须改两处，漏一处就是个洞。危险扩展名拦截属于"解压这件事"的安全底线，
- * 放在实现内部才能保证每个调用方都受保护 —— 若只在某个调用方里拦，
- * 数据导入路径就成了绕过点（虽然导入的键名受白名单限制，风险低，但没必要留口子）。
- *
- * **默认拦脚本**是因为本函数的主要调用方是"导入用户备份"，而备份里不该有 .js。
- * 但 mod（插件）安装必须允许脚本（mod 的本质就是 JS），所以给了 allowScripts 开关。
- * 开了之后路径穿越/绝对路径/体积上限仍然全部拦截。
+ * 解压 zip。opts：maxTotal（解压后总大小上限，防压缩炸弹）、maxEntry（单文件上限）、allowScripts（默认 false）、blockExts（额外要拦的扩展名）、returnBlocked（true 时返回 { files, blocked }）。
+ * 这是服务端唯一的 zip 解压实现：危险扩展名拦截必须放在实现内部，两份 unzip 并存时安全修复要改两处、漏一处就是个洞；只在某个调用方拦则数据导入路径成了绕过点。
+ * 默认拦脚本是因为主要调用方是导入用户备份；mod 安装必须允许脚本，所以给了 allowScripts —— 开了之后路径穿越 / 绝对路径 / 体积上限仍然全部拦截。
  */
 export function readZip(buf, opts = {}) {
     const maxTotal = opts.maxTotal ?? 512 * 1024 * 1024;

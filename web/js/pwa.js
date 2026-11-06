@@ -1,25 +1,5 @@
-/* ========================================================================
- * 桌面应用化：把网页版「安装」成独立窗口的桌面应用。
- *
- * 做两件事，都不碰业务逻辑：
- *   ① 注册一个**不缓存任何东西**的 Service Worker（web/sw.js）——
- *      可安装性判据要求站点有 SW 处理 fetch，这一条只是为了让安装入口出现；
- *   ② 在**浏览器自己不给安装入口**的少数环境里，接住 `beforeinstallprompt`，
- *      用顶栏那个按钮补一个入口。Chrome / Edge 这类地址栏本来就有安装图标的
- *      浏览器整段跳过 —— 同一件事给两遍，主界面就变成了"装我"的广告位。
- *      「这次要不要给」由 `window.ElainaRuntime.canInstallAsApp` 决定
- *      （判断住在 core.js 的原生适配段，见 AGENTS.md D5）。
- *
- * 按钮的显隐完全由浏览器事件驱动，**没有一个自己编的判据**：
- *   · 事件没来（不支持 / 已安装 / 非安全上下文 / 用局域网 IP 访问）→ 按钮一直
- *     `hidden`，用户一个字都看不到；
- *   · `appinstalled` 或已处于 `display-mode: standalone` → 隐藏并永不再显示。
- * 「什么时候该给安装入口」这件事只有一个裁判：浏览器自己。
- *
- * 事件监听必须在**脚本求值阶段**就挂上（不能等 DOMContentLoaded）：
- * beforeinstallprompt 可能早于就绪事件触发，晚挂一步就永远等不到按钮。
- * DOM 相关的事（找按钮、点按钮）才留到就绪之后。
- * ======================================================================== */
+/* 桌面应用化：注册一个不缓存任何东西的 SW（web/sw.js）以满足可安装性判据，并在浏览器不给安装入口的环境里接住 `beforeinstallprompt`
+ * 补一个顶栏入口。开关由 `window.ElainaRuntime.canInstallAsApp` 决定（见 AGENTS.md D5）；监听必须在脚本求值阶段挂上，按钮显隐由浏览器事件驱动。 */
 
 (function () {
     'use strict';
@@ -59,16 +39,8 @@
         if (btn) btn.classList.add('hidden');
     }
 
-    /**
-     * 注册 SW。
-     *
-     * 只在安全上下文里注册：局域网 IP 走 http 时 `navigator.serviceWorker`
-     * 不存在或注册即抛 —— 那种情况下安装本来就不可能，静默跳过比报错更符合
-     * 用户预期（这条路看不到任何提示，也不该看到）。
-     *
-     * 失败一律吞掉、只打 debug：SW 起不来只损失「安装按钮」，聊天本身不受影响，
-     * 非核心路径不该在控制台里刷成一片红色报错。
-     */
+    /** 注册 SW：只在安全上下文注册（局域网 IP 走 http 时 serviceWorker 不存在或注册即抛，那时安装本来就不可能）。
+     *  失败一律吞掉只打 debug —— SW 起不来只损失「安装按钮」，聊天本身不受影响。 */
     function registerServiceWorker() {
         if (!('serviceWorker' in navigator)) return;
         if (!window.isSecureContext) return;
@@ -98,15 +70,13 @@
         })();
     }
 
-    // ── 事件监听：立即挂上，不等 DOM 就绪（理由见文件头）──
-    // 安卓壳里页面已经是 APK 了，这一整套没有意义，直接不进这条分支
+    // 事件监听：立即挂上，不等 DOM 就绪（理由见文件头）；安卓壳里页面已是 APK，这一整套没有意义，不进这条分支。
     const runtime = window.ElainaRuntime;
     const enabled = !(runtime && runtime.canInstallAsApp === false);
 
     if (enabled) {
         window.addEventListener('beforeinstallprompt', (event) => {
-            // 必须阻止默认：否则 Chrome 会在某些时机自己弹一个小气泡，
-            // 与顶栏那个按钮形成两个入口
+            // 必须阻止默认：否则 Chrome 会在某些时机自己弹一个小气泡，与顶栏那个按钮形成两个入口
             event.preventDefault();
             deferredPrompt = event;
             showButton();

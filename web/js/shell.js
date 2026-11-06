@@ -1,13 +1,7 @@
-/* ============================================================================
- * 启动后的界面辅助（从 init.js 拆出）
- *
- * 公告延迟、侧栏开关、视口高度、设置分栏切换、自定义下拉。
- * 依赖 DOM 与宿主插槽（运行时才调用）。
- * ========================================================================== */
+/* 启动后的界面辅助：公告延迟、侧栏开关、视口高度、设置分栏切换、自定义下拉。 */
 'use strict';
 
 function openAnnouncementDeferred() {
-    // 已经同意过 → 不会再弹，连广播都不需要
     try {
         if (typeof hasAgreedAnnouncement === 'function' && hasAgreedAnnouncement()) return false;
     } catch (e) { /* 判断出错时按"没同意过"处理，宁可多弹一次也不该永远不弹 */ }
@@ -50,10 +44,7 @@ function keepFocusedComposerVisible(input) {
     setTimeout(align, 360);
 }
 
-
-// ===== 宽屏：对话面板的展开 / 收起 =====
-// 只收起「对话列表 + 分类」这一栏，76px 竖栏保留 —— 记忆 / 成就 / 设置和对话页
-//   因此都能拿到整幅宽度，导航仍在原处。窄屏是抽屉，本来就不参与布局，不走这套。
+// 宽屏：对话面板的展开 / 收起 —— 只收起「对话列表 + 分类」栏，76px 竖栏保留；窄屏是抽屉，不参与布局。
 function setSidebarCollapsed(collapsed) {
     if (window.innerWidth <= 980) return;
     const on = document.documentElement.classList.toggle('rd-sidebar-collapsed', Boolean(collapsed));
@@ -70,10 +61,7 @@ function toggleSidebarPanel() {
     setSidebarCollapsed(!document.documentElement.classList.contains('rd-sidebar-collapsed'));
 }
 
-/**
- * 面板该不该收起由"当前在看什么"决定：只有首页展开（要挑对话），
- * 对话、三个回忆整页、设置 / 成就 / 市场都收起。
- */
+/** 只有首页展开（要挑对话），对话、回忆整页、设置 / 成就 / 市场都收起。 */
 function syncSidePanelForView() {
     if (window.innerWidth <= 980) return;
     const initEl = document.getElementById('initialState');
@@ -88,10 +76,7 @@ function syncSidePanelForView() {
     setSidebarCollapsed(overlayOpen || onPage || !home);
 }
 
-/**
- * 用观察几个整页容器的显隐来同步面板，而不是在每个 enter/exit 里各补一句 ——
- * 入口太多（竖栏、设置分栏、插件跳转、系统返回），漏一处就有一条路径不收起。
- */
+/** 用观察整页容器的显隐来同步面板，而不是在每个 enter/exit 里各补一句：入口太多（竖栏、设置分栏、插件跳转、系统返回），漏一处就有一条路径不收起。 */
 function watchSidePanel() {
     if (window.MutationObserver) {
         let scheduled = false;
@@ -118,39 +103,49 @@ function closeSidebarDrawer() {
     if (window.innerWidth > 980) return;
     closeConversationContextMenu();
     document.body.classList.remove('sidebar-open');
-    elements.sidebarOverlay.classList.add('hidden');
+    closeOverlayPanel(elements.sidebarOverlay);
     elements.initialState.classList.remove('sidebar-underlay-hidden');
     elements.floatingMic.classList.remove('sidebar-underlay-hidden');
 }
 
-
-
-// ===== 设置分栏 Tab 切换 =====
+// 设置分栏 Tab 切换
 function switchSettingsTab(name) {
-    // 注意选择器要用 `:scope` 之外的方式限定到**主导航**：子分栏按钮虽然不同类名，
-    //   但插件注册的分栏按钮也带 .settings-tab-btn，必须一视同仁（它们都算主分栏）。
+    const extWasActive = Boolean(document.getElementById('tab-mods')?.classList.contains('active-panel'));
+    const extNavVisible = Boolean(document.getElementById('settingsTabNav')?.getClientRects().length);
+    // 二级页只属于当前分栏：切栏时先退回卡片，避免内容留在原页面。
+    if (typeof closeSettingsSubpage === 'function') closeSettingsSubpage();
+    // 选择器不能用 `:scope` 之类只限**主导航**：插件注册的分栏按钮也带 .settings-tab-btn，必须一视同仁。
     document.querySelectorAll('.settings-tab-btn').forEach(b => b.classList.toggle('active', b.dataset.settingsTab === name));
     document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.toggle('active-panel', p.id === name));
-    // 进入「扩展」时保证里面恰好有一个子面板可见（见 ensureExtTab 的说明）。
-    //   放在这里而不是只在 openSettings 里：分栏可以从很多路径切进来
-    //   （导航点击、程序化切栏、恢复上次分栏、插件跳转），漏一条就是整页空白。
-    if (name === 'tab-mods' && typeof ensureExtTab === 'function') ensureExtTab();
-    // 切到**别的**分栏时收起扩展下拉：展开态由 .is-open 唯一维护（见 switchExtTab），
-    //   而切栏会清掉父项的 active —— 若不同步清掉 .is-open，菜单会留在原地，
-    //   看起来像"菜单浮在一个不相干的分栏上"。
-    if (name !== 'tab-mods') {
-        // 走 switchExtTab 的收起分支，才能播反向动画（直接摘类会瞬间消失）
-        const extMenu = document.querySelector('.ext-nav-children.ext-menu-floating');
-        if (extMenu && extMenu.classList.contains('is-open') && typeof switchExtTab === 'function') {
-            switchExtTab('ext-mod', { forceClose: true });
+    // 宽屏分栏切换给一次轻入场；窄屏由 mobile-shell 的观察者走 mm-slide-in-right，两边各一套不叠加。
+    if (window.innerWidth > 980) {
+        const activePanel = document.querySelector('.settings-tab-panel.active-panel');
+        if (activePanel) {
+            activePanel.classList.remove('settings-panel-in');
+            void activePanel.offsetWidth;
+            activePanel.classList.add('settings-panel-in');
         }
     }
-    // 让选中的分栏**滚进可视区**（手机必需）。
-    //   手机上 9 个分栏放不下，导航是横向滚动的：靠后的「日志」「插件」初始时
-    //   在屏幕外。如果用户是通过别的方式切过去的（程序化切栏、恢复上次分栏、
-    //   插件注册的新分栏），导航还停在最左边 —— 看起来像"没有选中任何分栏"。
-    //   点击切换时浏览器会自动滚（:focus），但**程序化切换不会**，所以这里显式做。
-    //   behavior:'smooth' 在部分旧 WebView 上不支持 → 用 try 兜底成瞬时滚动。
+    // 进入「扩展」时保证里面恰好有一个子面板可见：分栏可从多条路径切进来（导航点击、程序化切栏、恢复上次分栏、插件跳转）。
+    if (name === 'tab-mods' && typeof ensureExtTab === 'function') {
+        ensureExtTab();
+        // 从别的分栏进来时展开一次子分栏；本来就停在扩展页时不抢用户的收起动作（父项自己是 toggle）。
+        if (!extWasActive && extNavVisible && typeof switchExtTab === 'function') {
+            let wanted = 'ext-mod';
+            try { if (typeof state !== 'undefined' && state && state._extTab) wanted = state._extTab; } catch (e) { /* 状态未就绪时回插件页 */ }
+            switchExtTab(wanted, { forceOpen: true, noScroll: true });
+        }
+    }
+    // 「模型」分栏每次切进来都回到入口列表；具体分页由 openSettingsAt 的深链再切。
+    if (name === 'tab-model' && typeof resetModelSectionPage === 'function') resetModelSectionPage();
+    // 切到别的分栏时收起扩展子分栏：菜单留在原地会像"浮在一个不相干的分栏上"。
+    if (name !== 'tab-mods') {
+        const extGroup = document.getElementById('settingsExtNav');
+        const extMenu = document.querySelector('.ext-nav-children.ext-menu-floating');
+        const extOpen = Boolean((extGroup && extGroup.classList.contains('is-open')) || (extMenu && extMenu.classList.contains('is-open')));
+        if (extOpen && typeof switchExtTab === 'function') switchExtTab('ext-mod', { forceClose: true });
+    }
+    // 让选中的分栏滚进可视区（手机必需：程序化切换不会自动滚）；'smooth' 在部分旧 WebView 不支持，用 try 兜底。
     try {
         const nav = document.getElementById('settingsTabNav');
         const btn = nav && nav.querySelector(`.settings-tab-btn[data-settings-tab="${name}"]`);
@@ -164,29 +159,20 @@ function switchSettingsTab(name) {
             if (btn) btn.scrollIntoView();
         } catch (e2) { /* 滚不动也不影响切栏本身 */ }
     }
-    // 日志分栏：进来时开始拉取与轮询，离开时停掉。
-    //   为什么必须停：它每 2 秒打一次 /api/logs/tail，不停的话"停在别的分栏"
-    //   也在拉；而服务端若把它记进日志就是自噪音（log-buffer.mjs 的注释里有来龙去脉）。
+    // 日志分栏：进来时开始拉取与轮询，离开时停掉 —— 它每 2 秒打一次 /api/logs/tail，不停的话停在别的分栏也在拉。
     try {
         if (window.LogViewer) {
             if (name === 'tab-log') window.LogViewer.open();
             else window.LogViewer.close();
         }
     } catch (e) { /* 日志模块出问题不该影响切栏 */ }
-    // 通知插件：某个分栏被显示了。
-    // 为什么要广播：插件分栏的 render(container) 是**延迟调用**的 ——
-    // 挂载时只建空壳，真被点开才渲染，没打开过的分栏不白做初始化。
+    // 通知插件：某个分栏被显示了。插件分栏的 render(container) 是**延迟调用**的 —— 挂载时只建空壳，真被点开才渲染。
     try {
         document.dispatchEvent(new CustomEvent('elaina:settings-tab', { detail: { name } }));
     } catch (e) { /* 环境不支持 CustomEvent 也不该影响切栏 */ }
 }
 
-// 点击走**事件委托**，而不是"查一遍现有按钮再逐个绑"。
-//   为什么必须这样（这是插件分栏能不能用的关键）：插件分栏的按钮是页面加载
-//   **之后**才由 mods.js 插进来的（要等 /mods/index.json 拉回来再逐个注册）。
-//   逐按钮绑定的写法对它们完全无效 —— 表现是"插件分栏出现了，点了没反应"，
-//   而且刷新也未必复现（取决于清单回来的快慢），属于最难查的一类。
-//   委托给容器就没有这个问题：此后无论何时插入按钮，点击都有人管。
+// 点击走**事件委托**，而不是"查一遍现有按钮再逐个绑"：插件分栏的按钮是页面加载**之后**才由 mods.js 插进来的，逐按钮绑定对它们完全无效 —— 表现是"插件分栏出现了，点了没反应"。
 (function bindSettingsTabNav() {
     const nav = document.getElementById('settingsTabNav');
     if (!nav) return;
@@ -196,24 +182,8 @@ function switchSettingsTab(name) {
     });
 })();
 
-// ===== 宿主插槽已移到 web/js/host-slots.js =====
-// 全部插槽（settings.tabs / header.actions / sidebar.footer / composer.actions /
-// chat.message.actions）集中在那一个文件里 —— 那是插件作者唯一需要看的契约面。
-// 本文件只负责分栏**行为**（切换函数与事件委托），不负责挖插槽。
-
-
-// ===== Live2D 设置逻辑已搬进 mods/live2d/settings-panel.js =====
-// 模型列表 / 上传 / 重命名 / 删除 / 背景 / 鼠标跟随都随插件走，
-// 由 settings.tabs 插槽在被点开时渲染（见那个插件的 register）。
-
-//  设置下拉：自绘弹出面板
-//  用户要求"改下拉"：把原生 <select> 的**弹出面板**换成主题化列表，
-//  对齐「模型名」组合框。原生面板由系统绘制、CSS 选不中它，只能自己弹一个。
-//  ── 与既有代码的关系（不动取值逻辑）─────────────────────────────────────
-//  `select` 元素**原样保留**（它仍是取值来源、仍显示当前值），既有 `change`
-//  监听器也不动 —— 只是拦截它的 `mousedown` 阻止原生面板，改弹自绘列表；
-//  用户点选项时写回 `select.value` 并派发冒泡的 `change`，
-//  所以 `settingApiFormat` 等既有处理逻辑照常触发。
+// 宿主插槽集中在 web/js/host-slots.js —— 那是插件作者唯一需要看的契约面；本文件只负责分栏**行为**（切换函数与事件委托），不负责挖插槽。
+// 设置下拉（含「当前会话设定」弹窗里的两个）：原生 <select> 的面板由系统绘制、CSS 选不中它，故自绘一个主题化列表；select **原样保留**（仍是取值来源），只拦 mousedown，点选项时写回 value 并派发冒泡 change。
 let cselectPanel = null;
 let cselectOwner = null;
 
@@ -270,7 +240,7 @@ function openCselect(select) {
 }
 
 function initSettingsDropdowns() {
-    document.querySelectorAll('#settingsPanel select.modal-input, #settingsPanel select.log-select').forEach((select) => {
+    document.querySelectorAll('#settingsPanel select.modal-input, #settingsPanel select.log-select, #conversationPromptOverlay select.modal-input').forEach((select) => {
         if (select.dataset.cselect) return;
         select.dataset.cselect = '1';
         select.addEventListener('mousedown', (ev) => {
@@ -285,7 +255,6 @@ function initSettingsDropdowns() {
     });
 }
 
-// 点击别处 / Esc / 滚动 / 缩放都收起面板
 document.addEventListener('mousedown', (ev) => {
     if (!cselectPanel) return;
     const t = ev.target;

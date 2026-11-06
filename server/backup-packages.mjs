@@ -1,17 +1,6 @@
-// 备份里的插件与技能：把安装目录按原样收进数据备份 zip，并在导入时写回。
-// 为什么不放进 store.mjs：store 管的是 data/ 下的键值，插件与技能是**安装目录**，
-// 两者生命周期不同（卸载插件是删目录，不是删键）。让 store 认识它们会把两种
-// 语义混在一处；但用户备份时只想拿一个 zip，所以由 serve.mjs 把两边的条目
-// 合进同一个包，本模块只负责"目录 ↔ zip 条目"的转换与落盘安全。
-// 备份 zip 的顶层三件（解压后与项目根一一对应）：
-//   data/…    聊天数据（由 server/store.mjs 写，本模块不碰）
-//   mods/…    已安装插件
-//   skills/…  本地技能
-// 安全边界与安装接口保持一致：
-//   · 条目名先过 isUnsafeEntryName（绝对路径 / .. 穿越）
-//   · 目录名过各自的宽松白名单（允许中文，但挡掉分隔符与隐藏目录）
-//   · 落盘类型过各自的危险扩展名清单（.exe/.dll/.bat…；插件仍允许 .js/.html）
-//   · 先写 .restoring-* 临时目录，校验完整后再改名，避免留下半个插件
+// 备份里的插件与技能：把安装目录按原样收进数据备份 zip，并在导入时写回（顶层 mods/ 与 skills/；data/ 由 server/store.mjs 写）。
+// 不放进 store.mjs：store 管的是 data/ 下的键值，插件与技能是安装目录，两者生命周期不同（卸载插件是删目录，不是删键）。
+// 安全边界与安装接口一致：条目名先过 isUnsafeEntryName，目录名过各自的宽松白名单，落盘类型过危险扩展名清单，先写 .restoring-* 临时目录、校验完整后再改名。
 
 import { readdir, readFile, stat, mkdir, writeFile, rm, rename } from 'node:fs/promises';
 import path from 'node:path';
@@ -30,16 +19,7 @@ const STAGING_PREFIX = '.restoring-';
 /** 超过这个年龄的临时目录视为上次中断的残留（避免误删另一个正在进行的导入） */
 const STAGING_STALE_MS = 10 * 60 * 1000;
 
-/**
- * 插件与技能的备份读写器。
- *
- * @param {object} opts
- * @param {string} opts.modsDir   插件根目录
- * @param {string} opts.skillsDir 技能根目录
- * @param {(name:string)=>boolean} [opts.isUnsafeEntryName]
- * @param {(name:string)=>string} [opts.effectiveExt]
- * @param {(msg:string)=>void} [opts.log]
- */
+/** 插件与技能的备份读写器。opts：modsDir / skillsDir / isUnsafeEntryName / effectiveExt / log（后三项可注入，便于单测） */
 export function createPackageBackup({
     modsDir,
     skillsDir,
@@ -97,10 +77,7 @@ export function createPackageBackup({
     }
 
     /**
-     * 收集所有已安装插件与本地技能，返回可直接并入备份 zip 的条目。
-     *
-     * 只收"目录存在 = 已安装"的包；mods/index.json（扫描生成）与待安装的
-     * *.zip 都不收 —— 前者导入后会自动重建，后者是安装源而不是已装内容。
+     * 收集所有已安装插件与本地技能，返回可直接并入备份 zip 的条目。只收"目录存在 = 已安装"的包：mods/index.json（扫描生成）与待安装的 *.zip 都不收 —— 前者导入后会自动重建，后者是安装源而不是已装内容。
      * 插件随附技能住在插件目录内，会随插件一起进包，不在这里单独复制一份。
      */
     async function collectPackage(rootDir, isSafeName, prefix, requireSkill = false) {
@@ -147,10 +124,7 @@ export function createPackageBackup({
     }
 
     /**
-     * 把 zip 里的 mods/ 与 skills/ 条目按顶层目录分组。
-     *
-     * files 可能是**全量**条目（含 data/ 与 manifest.json）：不认识的顶层一律跳过，
-     * 所以同一个 readZip 结果既能恢复插件，也不会把聊天数据写进 mods/。
+     * 把 zip 里的 mods/ 与 skills/ 条目按顶层目录分组：files 可能是全量条目（含 data/ 与 manifest.json），不认识的顶层一律跳过 —— 同一个 readZip 结果既能恢复插件，也不会把聊天数据写进 mods/。
      */
     function groupEntries(files, allowScripts = false) {
         const groups = new Map();   // "mods/<目录>" → { kind, name, files: [{rel,data}] }
@@ -260,19 +234,9 @@ export function createPackageBackup({
     }
 
     /**
-     * 从备份 zip 的条目写回插件与技能。
-     *
-     * 按**包**替换：同名目录先删后写（写入前先落到临时目录），这样升级/降级
-     * 都不会留下上一次版本多出来的文件。单个包失败只记在 errors 里，不影响
-     * 其它包与数据导入 —— 一个坏插件不该让整份备份报废。
-     *
-     * @param {Array<{name:string,data:Buffer}>} files readZip 的输出
-     * @param {{ allowScripts?: boolean, dryRun?: boolean }} [options]
-     *   allowScripts：是否放行 .js/.html 等安装接口白名单里的"危险类型"。
-     *   恢复插件必须开（入口就是 .js）；**只在纯恢复路径上开**，
-     *   绝不能把这个口子开给任意解压（见 serve.mjs 的两处调用）。
-     *   dryRun：只分组计数、不碰磁盘 —— 调用方据此判断"这个包里有没有
-     *   值得恢复的插件 / 技能"，再决定是报成功还是"没有可导入的数据"。
+     * 从备份 zip 的条目写回插件与技能。按包替换：同名目录先删后写（写入前先落到临时目录），升级/降级都不会留下上一次多出来的文件；单个包失败只记在 errors 里，不影响其它包与数据导入。
+     * options.allowScripts：是否放行 .js/.html 等安装接口白名单里的"危险类型" —— 恢复插件必须开（入口就是 .js），但只在纯恢复路径上开，绝不能把这个口子开给任意解压（见 serve.mjs 的两处调用）。
+     * options.dryRun：只分组计数、不碰磁盘，调用方据此判断"包里有没有值得恢复的插件/技能"，再决定报成功还是"没有可导入的数据"。
      */
     async function restore(files, options = {}) {
         const { groups, skipped } = groupEntries(files || [], options.allowScripts === true);

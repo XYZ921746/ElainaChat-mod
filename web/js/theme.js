@@ -1,13 +1,5 @@
-/* ============================================================================
- * 主题系统：CSS 变量 + !important 覆盖层
- *
- * 只改变量不够 —— 界面大量颜色是写死的 Tailwind 类名；而 Tailwind 运行时
- * 才注入 <style>，覆盖规则必须用 !important 才压得住。两者缺一都会出现
- * "部分元素变色、部分不变"。
- *
- * 所有覆盖规则都挂在 html[data-theme-template="..."] 下，不设该属性时一条
- * 都不生效；默认主题（elaina）即 index.html 的 :root。
- * ========================================================================== */
+// 主题系统：CSS 变量 + !important 覆盖层。界面大量颜色写死在 Tailwind 类名里，只改变量不够。
+// 所有覆盖规则挂在 html[data-theme-template="..."] 下；默认主题（elaina）即 index.html 的 :root。
 
 (function () {
     'use strict';
@@ -24,8 +16,6 @@
         try { return window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null; }
         catch (e) { return null; }
     })();
-
-    //  颜色工具（DIY 主题要用来推导派生色）
 
     /** '#rrggbb' → [r,g,b]；解析失败返回 null */
     function hexToRgb(hex) {
@@ -63,10 +53,6 @@
         return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
     }
 
-    /**
-     * DIY 主题的默认值（用户没改过时用它）。
-     * 取一套中性偏冷的底，避免一上来就是奇怪的颜色。
-     */
     const DEFAULT_CUSTOM = {
         primary: '#007aff',
         canvas: '#eef1f5',
@@ -88,62 +74,35 @@
         } catch (e) { return { ...DEFAULT_CUSTOM }; }
     }
 
-    /**
-     * 由 3 个关键色推导出全套变量。
-     *
-     * 为什么只让用户选 3 个：整套配色有 10+ 个变量，全让用户填既麻烦又容易
-     * 配出难看的组合（比如面板底比页面底还深、边框和背景同色看不见）。
-     * 让用户定"主色 / 背景 / 文字"这三个最有决定性的，其余按色彩关系推导 ——
-     * 这样怎么选都不会太离谱。
-     *
-     * 推导规则（都基于"深底还是浅底"自适应）：
-     *   cream/panel  —— 卡片与面板底：浅底时比页面**更亮**，深底时**更亮一点点**
-     *   brown-dark   —— 标题：比正文更强调
-     *   brown-soft   —— 次要文字：正文向背景混一点，保证层次但不过淡
-     *   line         —— 边框：背景向文字方向混一点点，能看见但不抢眼
-     *   green        —— 主按钮渐变**起点**：主色稍向背景混，柔和一点
-     *   green-dark   —— 渐变终点/悬停：主色压暗
-     */
+    // 由 3 个关键色推导全套变量：用户只定主色 / 背景 / 文字，其余按色彩关系推导（深底/浅底自适应）。
     function deriveCustomVars(c) {
         const { primary, canvas, ink } = c;
         const dark = luminance(canvas) < 0.45;   // 深底主题
 
-        // 左侧竖栏的颜色。
-        // 本项目的既有设计是"深色竖栏 + 浅色内容"（用户明确说要保留这个观感）。
-        // 宿主里竖栏用的是 var(--pixso-brown)，浅底时它=深色文字 → 正好是深竖栏。
-        // 但**深底 DIY 时 --pixso-brown 是浅色**，竖栏会跟着变浅，与内容区
-        // 形成"浅条+深底"的突兀效果。所以深底时单独给一个略亮的表面色，
-        // 保持"竖栏与内容区有层次、但都在深色域内"。
+        // 左侧竖栏：深底 DIY 时 --pixso-brown 是浅色，需单独给略亮的表面色保持层次。
         const rail = dark ? lighten(canvas, 0.07) : ink;
 
         return {
-            // 页面与面板
             '--pixso-canvas': canvas,
             '--pixso-cream': dark ? lighten(canvas, 0.08) : lighten(canvas, 0.62),
             '--pixso-panel': dark ? lighten(canvas, 0.05) : lighten(canvas, 0.40),
             '--pixso-panel-soft': dark ? lighten(canvas, 0.07) : lighten(canvas, 0.50),
             '--pixso-surface': dark ? lighten(canvas, 0.08) : lighten(canvas, 0.62),
-            // 竖栏专用（themes.css 里 DIY 那段会用它）
             '--tpl-rail': rail,
-            // 文字
             '--pixso-brown': ink,
             '--pixso-brown-dark': dark ? lighten(ink, 0.12) : darken(ink, 0.16),
             '--pixso-brown-soft': mix(ink, canvas, dark ? 0.30 : 0.34),
-            // 主色（按钮/强调/激活态）
             '--pixso-green': mix(primary, canvas, 0.22),
             '--pixso-green-dark': dark ? darken(primary, 0.10) : darken(primary, 0.20),
             '--pixso-orange': primary,
-            // 边框
             '--pixso-line': dark ? lighten(canvas, 0.16) : darken(canvas, 0.14),
             '--pixso-shadow': dark
                 ? '0 30px 80px rgba(0, 0, 0, 0.5), 0 6px 18px rgba(0, 0, 0, 0.3)'
                 : '0 30px 80px rgba(18, 30, 50, 0.16), 0 6px 18px rgba(18, 30, 50, 0.08)',
-            // 本文件内部用
             '--tpl-primary': primary,
             '--tpl-primary-deep': darken(primary, 0.22),
             '--tpl-primary-soft': lighten(primary, 0.28),
             '--tpl-tint': primary + '1f',   // 约 12% 透明度
-            // 兼容宿主的 --color-* / --text-*
             '--color-primary': primary,
             '--color-primary-soft': lighten(primary, 0.28),
             '--text-heading': ink,
@@ -157,17 +116,12 @@
         };
     }
 
-    /**
-     * 把 DIY 主题落成一条注入样式。
-     *
-     * 为什么用注入 <style> 而不是像预设那样写在 themes.css 里：
-     * 预设的颜色是固定的，能写死；DIY 的颜色在运行时才知道。
-     * 注入的样式放在 <head> 末尾，天然晚于 themes.css，同权重下它胜出。
-     */
+    // DIY 落成注入 <style>：颜色运行时才知道，放 <head> 末尾天然晚于 themes.css，同权重下胜出。
     function applyCustomTheme() {
         let el = document.getElementById('elainaCustomTheme');
         if (currentTemplate() !== 'custom') {
             if (el) el.remove();
+            saveBootSnapshot();
             return;
         }
         if (!el) {
@@ -178,6 +132,7 @@
         const vars = deriveCustomVars(customTheme());
         const body = Object.entries(vars).map(([k, v]) => '  ' + k + ': ' + v + ';').join('\n');
         el.textContent = 'html[data-theme-template="custom"] {\n' + body + '\n}\n';
+        saveBootSnapshot();
     }
 
     /** 保存 DIY 主题设置并立即生效 */
@@ -186,53 +141,27 @@
         try { Store.setItem(CUSTOM_KEY, JSON.stringify(next)); } catch (e) { /* 忽略 */ }
         if (currentTemplate() !== 'custom') setTemplate('custom');
         else applyCustomTheme();
-        // 必须同步编辑区：否则改了颜色后，对比度提示还是旧的 ——
-        //   那正好让"字不清晰"的防线失效（提示说清晰、实际已配坏）。
+        // 必须同步编辑区，否则对比度提示还是旧的，防线失效。
         syncCustomEditor();
         return next;
     }
 
     /** 可选模板（顺序即设置里的显示顺序） */
     const TEMPLATES = [
-        // 默认主题不设 data-theme-template，直接落到 index.html 的 :root；
-        // 色点必须与 :root / themes.css 的真实值一致，否则主题选择器会与界面不符。
+        // 默认主题不设 data-theme-template；色点必须与 :root / themes.css 的真实值一致。
         { id: 'majo', name: '暗夜魔女书房', dots: ['#f4eee1', '#8a6a1f', '#fbf7ee'], desc: '羊皮纸 · 金线 · 夜航星点' },
         { id: 'olive', name: '暖米绿', dots: ['#a8b974', '#738746', '#f8f5f2'], desc: '橄榄绿画布 · 奶油纸面 · 原版本色' },
         { id: 'mist', name: '雾蓝日系', dots: ['#eef5fa', '#4d8fb4', '#ffffff'], desc: '雾面 · 柔蓝 · 轻小说' },
         { id: 'glass', name: '石墨玻璃', dots: ['#0b0d12', '#a4b8ff', '#151d27'], desc: '深灰 · 玻璃 · 冷光' },
     ];
 
-    //  插件注册的主题（host.theme）
-    //  ── 为什么需要 ────────────────────────────────────────────────────────
-    //  主题只认 TEMPLATES 里写死的这几套时，`currentTemplate()` 会拿属性值去
-    //  清单里校验，不在清单里的 id 一律回落 elaina。于是"插件想加一套配色"
-    //  根本无从下手（设了没反应）。插件化的生日模块（「星屑之日」）就是
-    //  需要这个能力的典型用户 —— 它不能靠往 TEMPLATES 里塞 id 来实现。
-    //  ── 变量从哪来 ────────────────────────────────────────────────────────
-    //  宿主模板的颜色写在 themes.css 里；插件主题的颜色由
-    //  `host.theme({ id, name, dots, vars })` 在运行时给。这里把 vars 落成
-    //  一条注入样式：
-    //      html[data-theme-template="<id>"]:not([data-theme="dark"]) { --x: y; }
-    //  那个 `:not([data-theme="dark"])` 是关键：注入样式比 themes.css 晚，
-    //    若不带这个守卫，同权重下它会**盖掉深色块** —— 表现为"深色模式下
-    //    插件主题仍是浅色的"。加上守卫后，深色时它不匹配，深色块照常生效。
-    //    （内置模板靠"写在 themes.css 前半段、深色块在后"达到同样效果。）
-    //  ── 生命周期 ──────────────────────────────────────────────────────────
-    //  registerTemplate / unregisterTemplate 由 mods.js 的 host.theme 在插件
-    //  启用/停用时调用；unregister 时若用户正停在那套配色上，会回落默认主题 ——
-    //  否则会停在一套"变量已经被摘掉"的配色上（看起来像界面坏了）。
+    // 插件注册的主题（host.theme）：颜色由插件运行时给，落成 html[data-theme-template="<id>"]:not([data-theme="dark"]) 注入样式。
+    // 那个 :not([data-theme="dark"]) 是关键：注入样式晚于 themes.css，不带守卫会盖掉深色块；unregister 时正停在这套配色上会回落默认。
     const MOD_TEMPLATES = [];
-    /** 全部可选模板 = 内置 + 插件注册的（顺序即选择器里的显示顺序） */
     function allTemplates() { return TEMPLATES.concat(MOD_TEMPLATES); }
 
-    /** 插件主题那条注入样式的元素（按 id 精确定位，便于摘除） */
     function modThemeStyle(id) { return document.getElementById('elainaModTheme-' + id); }
 
-    /**
-     * 注册一个插件主题模板。
-     * @param {{id:string,name?:string,dots?:string[],vars?:object}} tpl
-     * @returns {boolean} 是否注册成功（id 非法 / 重复时 false）
-     */
     function registerTemplate(tpl) {
         try {
             const id = String(tpl && tpl.id || '').trim();
@@ -263,8 +192,7 @@
         try {
             const i = MOD_TEMPLATES.findIndex((t) => t.id === id);
             if (i < 0) return false;
-            // "是否正停在这套配色上"必须在**摘除之前**判定：摘完之后 currentTemplate()
-            // 已经拿不到它，条件恒为 false，用户就会停在"变量已失效"的那套主题上。
+            // 必须在摘除之前判定用户是否正停在这套配色上，摘完 currentTemplate() 就拿不到它了。
             const wasCurrent = currentTemplate() === id;
             MOD_TEMPLATES.splice(i, 1);
             const el = modThemeStyle(id);
@@ -275,11 +203,6 @@
         } catch (e) { return false; }
     }
 
-    /**
-     * 重建主题选择器。
-     * 模板清单变了（插件注册/摘除）时要重建；选择器只在设置面板里，
-     * 没渲染过就跳过 —— 下次打开设置时 renderPicker 会用新清单渲染。
-     */
     function refreshPicker() {
         const box = document.getElementById('themePickerBox');
         if (!box) return;
@@ -287,8 +210,6 @@
         box.innerHTML = '';
         renderPicker();
     }
-
-    //  应用 / 读取
 
     function currentTemplate() {
         try {
@@ -302,11 +223,7 @@
     let lastPointer = null;
     window.addEventListener('pointerdown', (e) => { lastPointer = { x: e.clientX, y: e.clientY }; }, true);
 
-    /**
-     * 圆形主题切换：新主题从最近一次点击处圆形铺开盖住旧主题（View Transitions API）。
-     * 没有手势上下文（启动时刻、系统自动切换）、用户开了"减少动态效果"、
-     * 或浏览器不支持该 API 时，退回瞬时切换 —— 动效只在它能表达"从哪来"时出现。
-     */
+    // 圆形主题切换：从最近一次点击处铺开（View Transitions）；没有手势上下文、减少动态效果或浏览器不支持时退回瞬时切换。
     function radialTransition(mutate) {
         const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         if (!document.startViewTransition || reduce || !lastPointer) { mutate(); return; }
@@ -323,41 +240,24 @@
         try {
             const prevTpl = document.documentElement.getAttribute('data-theme-template') || 'majo';
             const mutate = () => {
-                // majo 是默认主题，**不设属性** —— 这样"没选过主题"与"选了它"
-                // 走的是同一条路径，不会因为属性存在与否产生细微差异
+                // majo 是默认主题，不设属性，让"没选过"与"选了它"走同一条路径。
                 if (tpl === 'majo') document.documentElement.removeAttribute('data-theme-template');
                 else document.documentElement.setAttribute('data-theme-template', tpl);
-                // DIY 主题的变量是运行时算的，切走时要清掉注入的样式、切回来要重新注入
                 applyCustomTheme();
-                // 选中框必须在这里更新：走 View Transitions 时 mutate 是异步执行的，
-                //   在外面同步调 markPicker 读到的还是旧主题的属性 —— 表现就是
-                //   "颜色变了、框还停在上一张卡"，快速连点时框还会错位。
+                // 选中框必须在这里更新：View Transitions 下 mutate 是异步的，外面同步读到的还是旧主题。
                 markPicker();
+                saveBootSnapshot();
             };
             if (prevTpl !== tpl) radialTransition(mutate);
             else mutate();
             Store.setItem(TPL_KEY, tpl);
-            // View Transitions 在快速连点时的跳过语义不一致：被跳过的过渡其回调
-            //   执行与否、与后一个过渡回调的先后都可能变 —— 实测会出现"颜色已切到
-            //   最后点的那套、选中框停在倒数第二套"。属性写入与 markPicker 都可能
-            //   落在中间态，所以在动画时窗（.42s 揭示）内外各补一次同步，
-            //   保证 UI 必然收敛到最后一次点击的主题。markPicker 幂等，重复调用无副作用。
             requestAnimationFrame(markPicker);
             window.setTimeout(markPicker, 520);
         } catch (e) { /* 忽略 */ }
         return tpl;
     }
 
-    /**
-     * 临时把主题切到 id，并记住"切换前那套"。
-     *
-     * 与 setTemplate 的区别：setTemplate 是"**用户**选了这套"（会持久化，
-     *   这就是新的偏好）；useTemplate 是"某个功能临时占用一下界面"—— 例如生日
-     *   当天的星屑配色。之后必须能一键回到用户先前选的那套，所以这里把"切换前"
-     *   记在一个槽里，restoreTemplate() 用它还原。
-     *   （这个槽由主题系统自己持有，插件不必把 prevTheme 存进自己的 Store 键 ——
-     *    少一处"哪份才是权威"的可能。）
-     */
+    // 与 setTemplate 的区别：setTemplate 是用户选了这套（持久化）；useTemplate 是功能临时占用界面，切换前那套由主题系统自己记。
     let preUseTemplate = '';
 
     function useTemplate(id) {
@@ -383,12 +283,7 @@
         return darkMedia ? darkMedia.matches : false;
     }
 
-    /**
-     * 读取深色模式设置（三态）。
-     *
-     * 兼容旧值：老安装里只存 'dark' / 'light' 两种，现在还有 'system'。
-     * 读不到或值非法时回落到 'light' —— 不会因为读失败就突然变深。
-     */
+    // 深色模式三态；兼容只存 dark/light 的老安装，读不到或非法回落 light。
     function darkMode() {
         try {
             const v = Store.getItem(DARK_KEY);
@@ -397,14 +292,34 @@
         } catch (e) { return 'light'; }
     }
 
-    /**
-     * 把"深色模式设置"落到 DOM 上。
-     *
-     * 单独抽出来是因为它有两个触发源：
-     *   ① 用户改设置
-     *   ② **系统主题变化**（选了"跟随系统"时）
-     * 两条路都要走同一段逻辑，否则会出现"系统切了但界面没跟上"。
-     */
+    /** meta theme-color 只认这里：不跟随主题的话 PWA 标题栏 / 移动端地址栏会一直停在 HTML 里写死的浅色值。 */
+    function syncThemeColorMeta() {
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (!meta) return;
+        let canvas = '';
+        try {
+            canvas = getComputedStyle(document.documentElement).getPropertyValue('--pixso-canvas').trim();
+        } catch (e) { /* 读不到就保持原值 */ }
+        if (canvas) meta.setAttribute('content', canvas);
+    }
+
+    // 启动快照：把算好的呈现结果（属性 + 自定义变量文本）存进 sessionStorage，供 index.html 的内联脚本在首帧渲染前回放。
+    // 快照只在这里维护，内联脚本机械回放、不含主题逻辑 —— 避免主题推导逻辑出现两份。
+    const BOOT_KEY = 'elaina_theme_boot';
+    function saveBootSnapshot() {
+        try {
+            const root = document.documentElement;
+            const custom = document.getElementById('elainaCustomTheme');
+            sessionStorage.setItem(BOOT_KEY, JSON.stringify({
+                template: root.getAttribute('data-theme-template') || null,
+                dark: root.getAttribute('data-theme') || null,
+                colorScheme: root.style.colorScheme || null,
+                css: custom ? custom.textContent : '',
+            }));
+        } catch (e) { /* sessionStorage 不可用（隐私模式等）只损失首帧回放，不影响正常使用 */ }
+    }
+
+    // 两个触发源（用户改设置、系统主题变化）必须走同一段逻辑。
     function applyDarkMode(mode) {
         const m = DARK_MODES.includes(mode) ? mode : 'light';
         const dark = m === 'dark' || (m === 'system' && systemPrefersDark());
@@ -413,32 +328,16 @@
             const mutate = () => {
                 if (dark) document.documentElement.setAttribute('data-theme', 'dark');
                 else document.documentElement.removeAttribute('data-theme');
-                // 必须**同时**设 CSS `color-scheme` —— 这是"深色下原生控件仍是白的"的根因。
-            //   症状（用户截图）：「设置 → 模型」 里点开「模型名」下面那个下拉，
-            //   弹出来的候选列表是**白底黑字**，与深色界面割裂。
-            //   为什么只改 CSS 没用：那个下拉弹层是**浏览器原生绘制**的
-            //   （Chromium 的 select popup 不在 DOM 里，CSS 选不中它）。
-            //   决定它按哪套配色画的只有 `color-scheme`。实测深色下它算出来是
-            //   `normal`（从没被设置过）→ 浏览器按浅色画 → 白底。
-            //   同一件事还影响：滚动条、复选框/单选框、日期选择器、自动填充背景。
-            //   所以这里在**主题层**统一设，一处覆盖全站 12 个 select 与所有原生控件，
-            //   而不是给每个下拉写 ::-webkit-scrollbar 之类的补丁。
-            //   `dark` / `light` 让浏览器把原生控件按对应模式渲染；
-            //   设成 `light` 而不是删掉，是因为"跟随系统但当前判为浅色"时
-            //   用户的系统偏好可能仍是深色 —— 显式写 light 才能压住它。
+                // 必须同时设 CSS color-scheme：原生控件（select 弹层、滚动条、日期选择器）只认它，改 CSS 选不中。
+                // 显式写 light 而不是删掉，才能压住"跟随系统但当前判为浅色"时的系统深色偏好。
             document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+                syncThemeColorMeta();
+                saveBootSnapshot();
             };
-            // 深浅切换同样是全屏变色：有手势上下文时从点击处圆形揭示，
-            // 启动时刻与"跟随系统"的自动变化保持瞬时切换
             if (wasDark !== dark) radialTransition(mutate);
             else mutate();
         } catch (e) { /* 忽略 */ }
-        // 不要在这里同步「外观 → 深色模式」下拉（#themeDarkMode）与它的提示
-        //   （#themeDarkHint）：深色切换在顶栏，这两个元素不存在，
-        //   对它们 getElementById 会变成**悬空引用**（check-dom-refs 报"HTML 里没有这个 id"）。
-        //   顶栏那个三段开关由 init.js 的 markThemeSeg 同步：它监听
-        //   documentElement 的 data-theme 变化，applyDarkMode 一落 DOM 它就跑，
-        //   所以"跟随设备"时系统切换、以及别处改主题，选中态都能自动跟上。
+        // 不要在这里同步 #themeDarkMode / #themeDarkHint：深色切换在顶栏，这两个元素不存在，顶栏开关由 init.js 的 markThemeSeg 同步。
         return dark;
     }
 
@@ -451,12 +350,10 @@
         return applyDarkMode(mode);
     }
 
-    // 系统主题变化时，只有"跟随系统"才需要响应
     if (darkMedia) {
         const onSystemChange = () => {
             if (darkMode() === 'system') applyDarkMode('system');
         };
-        // addEventListener 是标准；老 Safari 只有 addListener
         if (darkMedia.addEventListener) darkMedia.addEventListener('change', onSystemChange);
         else if (darkMedia.addListener) darkMedia.addListener(onSystemChange);
     }
@@ -464,25 +361,24 @@
     /** 启动时尽早应用（避免闪一下默认色再切换） */
     function applyStored() {
         try {
-            // 深色：走统一入口（含"跟随系统"的判定）
             applyDarkMode(darkMode());
             const tpl = Store.getItem(TPL_KEY);
             if (tpl && tpl !== 'majo' && allTemplates().some((t) => t.id === tpl)) {
                 document.documentElement.setAttribute('data-theme-template', tpl);
+            } else if (!tpl) {
+                // Store 里没有模板键（删库重置等）时必须摘掉回放残留，否则首帧后的页面停在快照那套模板而非默认。
+                document.documentElement.removeAttribute('data-theme-template');
             }
-            // DIY 主题的变量要在启动时就注入，否则会先闪一下预设配色
             applyCustomTheme();
+            saveBootSnapshot();
         } catch (e) { /* 忽略 */ }
     }
-
-    //  设置界面里的选择器
 
     function markPicker() {
         const cur = currentTemplate();
         document.querySelectorAll('.theme-tpl-card').forEach((c) => {
             c.classList.toggle('is-active', c.getAttribute('data-tpl') === cur);
         });
-        // DIY 编辑区只在选中「自定义」时显示 —— 不选它却摆一堆取色器会让人困惑
         const editor = document.getElementById('themeCustomEditor');
         if (editor) {
             editor.style.display = cur === 'custom' ? 'block' : 'none';
@@ -490,13 +386,7 @@
         }
     }
 
-    /**
-     * 把主题选择器渲染进「设置 → 外观」里的容器。
-     *
-     * 为什么用 JS 渲染而不是写死在 HTML 里：模板清单是这一份数据，
-     * 写死会出现"改了 TEMPLATES 但界面没变"。而且这样宿主 HTML 不用知道
-     * 有几个主题。
-     */
+    // 用 JS 渲染选择器：模板清单只有这一份，写死在 HTML 里会出现"改了 TEMPLATES 但界面没变"。
     function renderPicker() {
         const box = document.getElementById('themePickerBox');
         if (!box || box.dataset.filled === '1') return;
@@ -506,12 +396,9 @@
             const dots = Array.isArray(t.dots) && t.dots.length >= 3
                 ? t.dots
                 : ['#8a8f98', '#b8bcc4', '#f4f4f5'];
-            // 和根目录原型一致：预览是一张迷你界面（竖栏 / 列表 / 内容线），
-            // 而不是三根色条。内置主题用固定配色，插件主题回落到它声明的三个色点。
             const previewClass = ['majo', 'olive', 'mist', 'glass'].indexOf(t.id) >= 0
                 ? ' rd-pv-' + t.id
                 : '';
-            // 内置主题由 CSS 给出与原型一致的完整预览色；插件主题才用声明的色点兜底。
             const previewStyle = previewClass
                 ? ''
                 : '--pv-bg:' + dots[0] + ';--pv-accent:' + dots[1] + ';--pv-list:' + dots[2];
@@ -531,22 +418,13 @@
             el.addEventListener('click', () => setTemplate(el.getAttribute('data-tpl')));
         });
 
-        // DIY 编辑区（默认折叠，选自定义时才显示）
         const editor = document.getElementById('themeCustomEditor');
         if (editor) renderCustomEditor(editor);
 
         markPicker();
     }
 
-    /**
-     * 渲染 DIY 编辑区：3 个取色器 + 实时对比度提示。
-     *
-     * 只让用户选 3 个关键色（主色 / 背景 / 文字）—— 全套有 10+ 变量，
-     * 全让填既麻烦又容易配出难看的组合。其余按色彩关系推导（见 deriveCustomVars）。
-     *
-     * 对比度提示是刻意加的：用户反馈过"字不清晰"，而那是**可以算出来**的
-     * （WCAG 对比度）。与其让他试出来，不如直接标红提示。
-     */
+    // DIY 编辑区：3 个取色器 + 实时对比度提示（WCAG），只让选 3 个关键色。
     function renderCustomEditor(editor) {
         if (editor.dataset.filled === '1') { syncCustomEditor(); return; }
         editor.dataset.filled = '1';
@@ -578,7 +456,6 @@
         editor.querySelector('#themeCustomReset')?.addEventListener('click', () => {
             setCustomTheme({ ...DEFAULT_CUSTOM });
             syncCustomEditor();
-            // 色点也要跟着变
             const box = document.getElementById('themePickerBox');
             if (box) { box.dataset.filled = ''; box.innerHTML = ''; renderPicker(); }
         });
@@ -597,7 +474,6 @@
         const warn = editor.querySelector('#themeCustomWarn');
         if (!warn) return;
         const vars = deriveCustomVars(c);
-        // 正文色 vs 卡片底 —— 这是"看不看得清"的关键一对
         const rText = contrast(vars['--pixso-brown'], vars['--pixso-cream']);
         const rBtn = contrast('#ffffff', vars['--pixso-green']);
         const msgs = [];
@@ -613,31 +489,24 @@
         warn.innerHTML = msgs.join('<br>');
     }
 
-    //  对外接口
-
     window.ElainaTheme = {
         TEMPLATES,
-        // 内置清单（不含插件注册的）；`templates()` 给的是**全部**
         templates: () => allTemplates(),
         allTemplates,
-        // 插件主题注册：由 mods.js 的 host.theme 在启用/停用时调用
         registerTemplate,
         unregisterTemplate,
-        // 临时切换 / 还原（供插件"占用一下界面再还回来"，见它们的说明）
         useTemplate,
         restoreTemplate,
         current: currentTemplate,
         set: setTemplate,
         isDark,
         setDark,
-        // 深色三态：'light' | 'dark' | 'system'
         darkMode,
         setDarkMode: setDark,
         systemPrefersDark,
         applyStored,
         renderPicker,
         markPicker,
-        // DIY 自定义主题
         custom: customTheme,
         setCustom: setCustomTheme,
         deriveCustom: deriveCustomVars,
@@ -646,12 +515,15 @@
         DEFAULT_CUSTOM,
     };
 
-    applyStored();
-    // 设置面板可能是懒加载/后插入的，DOM 就绪后再填一次
+    // 求值阶段 Store 缓存还是空的（bootstrap 在 init.js 里才跑）：此时应用只会把内联脚本回放好的首帧外观拉回默认值。
+    // 真实应用由 init.js 在 bootstrap 之后调 applyStored 负责；首次访问没有快照时，首帧仍走默认主题，读完数据即校准。
+    if (window.Store && typeof Store.isBooted === 'function' && Store.isBooted()) {
+        applyStored();
+    }
+    // 设置面板可能是懒加载/后插入的，DOM 就绪后再填一次。
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => { renderPicker(); });
     } else {
         renderPicker();
     }
 })();
-

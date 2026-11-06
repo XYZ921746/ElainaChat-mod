@@ -1,9 +1,4 @@
-/* ============================================================================
- * 核心常量 / 对话格式 / 提示词 / 默认设置（从 core.js 拆出）
- *
- * 纯数据：对话 API 格式表、秘钥名、角色提示词、输出上限、默认人设与设置。
- * 加载顺序：core-config.js 在 core.js 之前（core.js 的 state/elements 依赖这些默认值）。
- * ========================================================================== */
+// 核心常量 / 对话格式 / 提示词 / 默认设置。加载顺序在 core.js 之前（state/elements 依赖这些默认值）。
 'use strict';
 
 const DEEPSEEK_DIRECT_BASE_URL = 'https://api.deepseek.com/v1';
@@ -29,7 +24,7 @@ const CHAT_API_FORMATS = Object.freeze({
     }
 });
 
-/* 老格式 id → 新格式 id。改格式表时必须同步维护这里，否则老用户一升级就被重置成默认值。 */
+// 老格式 id → 新格式 id：改格式表时必须同步维护，否则老用户升级即被重置。
 const LEGACY_API_FORMAT_ALIASES = Object.freeze({
     openai: 'openai-compatible',
     dashscope: 'openai-compatible',
@@ -37,45 +32,16 @@ const LEGACY_API_FORMAT_ALIASES = Object.freeze({
     gemini: 'openai-compatible'
 });
 
-/* 格式合并后，指向"原生协议"的默认地址要改写成对应的 OpenAI 兼容端点。
-   不改的话地址还停在 /v1beta、/ 这种原生路径上，请求必然 404 —— 而用户会以为是自己填错了。 */
 const LEGACY_BASE_URL_REWRITE = Object.freeze({
     'https://generativelanguage.googleapis.com/v1beta': 'https://generativelanguage.googleapis.com/v1beta/openai',
     'http://127.0.0.1:11434': 'http://127.0.0.1:11434/v1'
 });
 const MINIMAX_TTS_HTTP = 'https://api.minimaxi.com/v1/t2a_v2';
 const DASHSCOPE_SYNC_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-/**
- * 联网搜索的服务商清单 —— **唯一的一份**。
- *
- * 为什么要有这张表而不是一堆 if：加一家、删一家、换鉴权头都只该动一处。
- *   执行器、设置页下拉、检查脚本全部从这张表读，不会出现"加了服务商但某个下拉里没有它"。
- *
- * 内置只留 **Tavily**（每月 1000 次、无需绑卡）。其余一律走 `custom`：
- *   用户填自己的端点与 Key，返回结构**自动识别**（见 parseLooseSearchPayload）。
- *   这样"我想用博查 / Serper / 自建服务"都能接，而不必把每家的付费套餐内置进代码。
- *
- * 不内置的服务商与理由（写在这里，免得又被加回来）：
- *   · **Exa**：$10/月额度看着够用，但实测新账号一上手就 402
- *     （团队额度耗尽或 Key 花费上限被触发，两者报同一个错），排查成本高。
- *   · **博查**：按次付费，价格与文档锁在飞书里，免费额度撑不了多久。
- *   · **Serper**：一次性 2500 次免费额度，用完即付费。
- *   · **Brave**：国内实测 10 秒超时（被墙），连不上。
- *
- * 字段差异（实测）：tavily —— POST JSON，Authorization: Bearer；
- *   { answer, results[{title,url,content}] }。
- *   自定义源的结构未知，由 parseLooseSearchPayload 逐层找数组、逐字段找别名。
- */
 const API_SECRET_NAMES = Object.freeze([
     'apiKey', 'minimaxApiKey', 'dashscopeApiKey', 'asrApiKey', 'mimoApiKey', 'mimoTtsApiKey', 'openaiTtsApiKey',
-    // 联网搜索的凭据：**按服务商分开存**。
-    //   为什么不是共用一个 searchApiKey：内置的 Tavily 与自定义源是两个完全不同的账号，
-    //   共用一格会让"切到自定义源试试"必须先把 Tavily 的 Key 抄下来。
     'searchApiKey_tavily',
     'searchApiKey_custom',
-    // 多提供商对话模型的 Key 集合（{ providerId: apiKey }）。为什么不按家拆成
-    //   providerApiKey_<id>：密钥名单是写死的（Android 密钥库白名单同样写死），
-    //   动态 id 没法预登记；整包一个名字，进出都走 JSON 串（见 persistence.js）。
     'chatProviderKeys',
 ]);
 const LEGACY_DEFAULT_GREETING = '欢迎。先说明一下，我是伊蕾娜，正在旅行的灰之魔女。您似乎来自一个没有魔法的世界——那么，今天想和我聊些什么？';
@@ -127,22 +93,7 @@ const ROLEPLAY_HALLUCINATION_GUARD = `
 - 只使用角色卡、世界观、用户明确说明、最近对话与已注入记忆作为事实来源；不确定就说不确定，不要编造。
 - 始终以角色本人身份直接回应，不在回复中承认自己是 AI、模型或助手。`;
 
-// 宿主自己的操作标签指南（注入系统提示词，标签不会显示给用户）。
-// 只写宿主**自己就能执行**的标签：标签的**执行**归 live2d mod
-//   （`drivePresentation` / `registerOperationHandler`），宿主不该替它写说明书。
-//   否则纯净版 clone（一个插件都没装）也会收到上千字的 Live2D 说明书，
-//   里面还教模型输出 `[表情:happy]`、`[操作:隐藏水印]` 这些根本没东西去执行的标签
-//   —— 这就是"能力寄生"。
-//   按归属切开的理由：
-//     · 本常量（宿主）：宿主自己就能执行的操作 + 定时任务。
-//       这几个动作由 web/js/agent-tags.js 直接分发、agent.js 执行，
-//       与 Live2D 无关 —— 卸掉 Live2D 它们照常可用。
-//     · 表现类（情绪/表情/动作/位置/大小/背景 + 静音/水印）→ 由
-//       mods/live2d/ 走 `host.setPromptHint()` 注入。于是**停用插件就自动不注入**
-//       （setPromptHint 的停用摘除机制是现成的）。
-//   定时任务（[任务:]）特意留在宿主这边：它是宿主的主动行为能力
-//     （见 agent.js 的 extractAndCreateTasks），跟 Live2D 毫无关系。
-//     跟着表现类一起搬走就会变成"关掉 Live2D 就没法定时提醒"。
+// 宿主自己的操作标签指南：只写宿主自己就能执行的标签与定时任务；表现类标签由插件走 host.setPromptHint 注入（停用即不注入）。
 const HOST_ACTION_TAG_GUIDE = `# Agent Skill：应用操作与定时任务
 你可以用 [操作:…] 标签触发应用功能（标签不会显示给用户）：
 
@@ -155,87 +106,46 @@ const HOST_ACTION_TAG_GUIDE = `# Agent Skill：应用操作与定时任务
 
 const ROLEPLAY_TURN_ANCHOR = `# 本轮角色锚点
 继续以角色卡中的人物本人自然回应。保持其既有好恶、习惯、知识边界、关系边界和说话方式；遵守本轮图片或配音格式要求，但不要让格式任务取代角色本身。${ROLEPLAY_HALLUCINATION_GUARD}`;
-// Emergency rollback: change only this constant to 'legacy-v1' and rebuild.
-// The legacy builder below preserves the pre-layering single-system-message structure.
 const ROLEPLAY_PROMPT_STRUCTURE_MODE = 'layered-v2';
 const ROLEPLAY_OUTPUT_TOKEN_LIMITS = Object.freeze({
     text: 900,
     withVoice: 1400
 });
 
-/**
- * 思考链路的 max_tokens 下限（三种对话格式共用）。
- *
- * Claude 的 extended thinking 要求 `1024 <= budget_tokens < max_tokens`，
- * 所以**只要这条链路上开了 thinking，max_tokens 就必须大于 1024**。
- *
- * 问题在于"有没有开 thinking"不完全由我们决定 —— 中转站（new-api）会看**模型名的后缀**
- * （`relaykit/relayconvert/reasoning/suffix.go`）：
- *   `claude-sonnet-4-5-thinking`      → 开 thinking，预算取 max_tokens 的 80%
- *   `claude-sonnet-4-5-thinking-2000` → 开 thinking，预算固定 2000
- *   `claude-sonnet-4-5-nothinking`    → 显式关闭
- * 于是用户只是照着中转站的说明填了个带 `-thinking` 的模型名，请求就被拒了：
- *   400 "max_tokens must be greater than 1024 for manual Claude thinking"
- *
- * 服务商自己遇到这种情况会把 max_tokens 抬到 1280，有的则直接报错。
- * 我们做同一件事，但抬得更高 —— **预算和正文吃的是同一个 max_tokens 额度**：
- * 抬到 1280 的话思考占掉 1024，正文只剩 256 token，角色扮演必然被截断。
- * 取 4096 是让思考有 3276、正文还有 820 的空间。
- *
- * 抬高没有副作用：`max_tokens` 只是**上限**，没开 thinking 时模型该多短还是多短。
- * 4096 也是 Claude 各代模型都接受的安全值（claude-3-haiku 的输出上限正好是 4096）。
- */
+// 思考链路的 max_tokens 下限（三种格式共用）：Claude extended thinking 要求 1024 <= budget < max_tokens；中转站按 -thinking 后缀替客户端开思考，故抬到 4096。
 const ANTHROPIC_MIN_MAX_TOKENS = 4096;
 
-/**
- * 对话请求的**空闲**超时（毫秒）。
- *
- * 语义是"多久没有动静算死"，不是"整个请求最多花多久" —— 服务端
- *   /api/relay 每收到一块上游数据就把计时器续一次（见 serve.mjs 的 armIdleTimer），
- *   所以长回复（几分钟）不会被它砍断，只有真正卡住的连接才会。
- *
- * 为什么开思考要单独一档：思考型模型在吐第一个 token 前会先推理很久
- * （thinkingEffort=high 时实测可超过 120 秒），而流式对"首字延迟"毫无帮助 ——
- * 那段时间本来就没有增量可回调。旧代码统一用 120 秒，于是高思考强度下
- * 请求会在等待期被本地掐掉，界面表现为"没有流式、等半天还失败"。
- *
- * 为什么不上不封顶：连接真断在半路时（拔网线、服务商挂掉）必须有个了结，
- * 否则"正在输入…"会永远转下去。服务端 RELAY_TIMEOUT_MAX = 10 分钟是硬上限。
- */
+// 对话请求的空闲超时：多久没动静算死，不是整请求上限；服务端每收到一块就续期，RELAY_TIMEOUT_MAX 10 分钟是硬上限。
 const CHAT_TIMEOUT_DEFAULT_MS = 120000;   // 普通对话：2 分钟没动静就算死
 const CHAT_TIMEOUT_THINKING_MS = 300000;  // 开思考：5 分钟（首字延迟经常 >2 分钟）
 
-/**
- * 模型名后缀要求的输出上限下限（0 = 这个模型名没提任何要求，别动调用方的值）。
- *
- * 上面那条注释说的「中转站按后缀替客户端开思考」**不只影响 Anthropic 格式**：
- * new-api 的 `ApplyReasoning()` 里，跨协议（OpenAI → Claude）一定会走 `RenderClaude`，
- * 所以用 OpenAI 兼容格式调一个 `…-thinking` 的模型名会踩同一个坑。
- * 判据抽在这里，三种格式共用。
- *
- * 只认结尾的 `-thinking` / `-thinking-<数字>`；`-nothinking` 里没有 `-thinking`
- * 这个子串（它前面是 o），天然不会命中。
- */
+// 采样参数定义表：范围、UI、保存解析、请求注入都从这一份读；开关关 = 不发该字段（滑杆无法表达"不发送"），打开时落在 defaultValue。
+const CHAT_SAMPLING_FIELDS = Object.freeze([
+    { setting: 'optTemperature', element: 'settingOptTemperature', enableElement: 'settingOptTemperatureOn', valueElement: 'settingOptTemperatureValue', optsKey: 'temperature', bodyKey: 'temperature', min: 0, max: 2, step: 0.1, integer: false, decimals: 1, defaultValue: 1 },
+    { setting: 'optTopP', element: 'settingOptTopP', enableElement: 'settingOptTopPOn', valueElement: 'settingOptTopPValue', optsKey: 'topP', bodyKey: 'top_p', min: 0, max: 1, step: 0.05, integer: false, decimals: 2, defaultValue: 1 },
+]);
+
+// 解析采样参数：留空 / 不合法 / 超范围返回 ''，语义是"没填"；保存（save.js）与请求注入（chat.js）必须走同一个解析。
+function normalizeSamplingInput(raw, field) {
+    const text = String(raw ?? '').trim();
+    if (!text) return '';
+    const n = Number(text);
+    if (!Number.isFinite(n)) return '';
+    if (field.integer && !Number.isInteger(n)) return '';
+    if (n < field.min || n > field.max) return '';
+    return n;
+}
+
+// 模型名后缀要求的输出上限下限（0 = 没要求）：只认结尾的 -thinking / -thinking-<数字>，后者要求 max_tokens 严格大于它。
 function thinkingSuffixTokenFloor(modelName) {
     const name = String(modelName || '').trim();
     if (!/-thinking(?:$|-)/i.test(name)) return 0;
-    // `-thinking-<数字>` 指定了预算，max_tokens 必须**严格大于**它 ——
-    // 否则中转站把预算压到 max_tokens-1，正文一个 token 都不剩。
     const explicit = /-thinking-(\d+)\s*$/i.exec(name);
     if (explicit) return Math.max(ANTHROPIC_MIN_MAX_TOKENS, Number(explicit[1]) + 1);
     return ANTHROPIC_MIN_MAX_TOKENS;
 }
 
-/**
- * 三种对话格式共用的「输出上限」决策。在 `callChatAPI` 分发之前算一次。
- *
- * @param {string} model 用户填的模型名（判据只看它）
- * @param {*} requested 调用方要求的上限，可能是 undefined / NaN
- * @param {boolean} required Anthropic 原生格式传 true —— 它的 `max_tokens` 是必填字段，
- *        而且那条链路**永远**要按"可能开思考"保底（用户可以在设置里直接指定 thinking），
- *        所以下限是无条件的；OpenAI 系两种格式只在模型名带后缀时才抬。
- * @returns {number|null} null = 不发送这个字段，让服务商用默认值
- */
+// 三种格式共用的输出上限决策；required（Anthropic）时无条件保底，OpenAI 系只在模型名带后缀时抬。
 function resolveOutputTokenLimit(model, requested, required = false) {
     const floor = required
         ? Math.max(ANTHROPIC_MIN_MAX_TOKENS, thinkingSuffixTokenFloor(model))
@@ -293,36 +203,23 @@ const DEFAULT_SETTINGS = {
     baseUrl: DEEPSEEK_DIRECT_BASE_URL,
     apiKey: '',
     model: 'deepseek-chat',
-    // ===== 多提供商对话模型 =====
-    //   每张卡一套凭据（名称 / 格式 / 地址 / 调用模型 / 模型候选列表），
-    //   「默认模型」「失败回退模型」按卡 id 指向。老的单模型配置由 data.js 的
-    //   一次性迁移合成第一张卡；baseUrl/apiKey/model 这三个旧字段保留作迁移源，
-    //   请求链路只读 chatProviders（见 core-chat.js 的 activeChatSettings）。
+    // 每张卡一套凭据，可勾选多个模型；baseUrl/apiKey/model 只作老单模型配置的一次性迁移源，请求链路不读。
     chatProviders: [],
-    defaultChatProviderId: '',
-    fallbackChatProviderId: '',
+    defaultChatModel: { providerId: '', model: '' },
+    fallbackChatModels: [],
     chatProviderKeys: {},
     minimaxApiKey: '',
     minimaxVoice: '',
     minimaxModel: 'speech-2.8-hd',
     ttsProvider: 'mimo',
-    // MiMo TTS（小米，OpenAI 兼容）：**凭据独立于 ASR**（ASR 仍用 mimoApiKey / mimoBaseUrl）。
-    // 两者共用一套 Key/地址时无法分别配置，所以由 data.js 的一次性迁移把旧值搬过来。
     mimoTtsApiKey: '',
-    // 接口地址预填小米官方地址（非密钥，预填更直观；留空时运行时同样会回退到这个地址）。
     mimoTtsBaseUrl: 'https://api.xiaomimimo.com',
-    // 「TTS / ASR 共用 MiMo 凭据」→ TTS 独立键 的一次性迁移标记。
-    //   落盘保存（persistSettings 不剥离这个非密钥键），用来保证迁移**只跑一次**：
-    //   迁移过之后再怎么启动都不再复制（见 data.js 的 migrateLegacySharedMimoCredentials）。
     mimoCredsSplitMigrated: false,
     mimoTtsModel: 'mimo-v2.5-tts',
     mimoTtsVoice: 'mimo_default',
-    // voicedesign 模型必填：user 消息里的音色描述文本
     mimoTtsVoiceDesignPrompt: '',
-    // voiceclone 模型必填：参考音频样本（存为 base64 data URL，含原始文件名），随设置一起落盘
     mimoTtsCloneSample: '',
     mimoTtsCloneSampleName: '',
-    // 通用 OpenAI TTS（标准 /audio/speech 接口）
     openaiTtsBaseUrl: 'https://api.openai.com/v1',
     openaiTtsApiKey: '',
     openaiTtsModel: 'tts-1',
@@ -333,81 +230,48 @@ const DEFAULT_SETTINGS = {
     ttsVolume: 1.5,
     ttsLang: 'japanese',
     replyDisplayMode: 'text-first',
-    asrProvider: 'browser',
+    asrProvider: '',
     dashscopeApiKey: '',
-    // 阿里百炼 ASR 的 Key：**独立于**语音输出的 dashscopeApiKey（分开才能各配各的，迁移见 data.js）
+    // 阿里百炼 ASR 的 Key，独立于语音输出的 dashscopeApiKey。
     asrApiKey: '',
     asrKeySplitMigrated: false,
     dashscopeAsrBaseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
     dashscopeAsrModel: 'qwen3-asr-flash',
     mimoApiKey: '',
-    // 接口地址**预填小米官方地址**（非密钥，预填更直观；留空时运行时同样会回退到这个地址）。
     mimoBaseUrl: 'https://api.xiaomimimo.com',
     mimoAsrModel: 'mimo-v2.5-asr',
-    // 思考：UI 上只有**一个"思考强度"四档下拉** ——
-    //   off（不思考，默认）/ low（快速）/ high（均衡）/ max（深度，慢但更贵）。
-    //   `thinkingMode` 是**派生**布尔量（off ⇒ false，其余 ⇒ true）：
-    //   请求层与「思考」折叠栏都读它，单独留个字段比到处改判据稳得多。
-    //   两者的一致性由 loadSettings 的归一 + 控件 change 监听共同保证。
+    // 思考强度四档（off / low / high / max）；thinkingMode 是派生布尔量，由 loadSettings 归一与控件监听保证一致。
     thinkingMode: false,
     thinkingEffort: 'off',
-    // 「对话优化 → 第三人称」：开启后一轮对话走两段式生成
-    //   （先 GM 第三人称推进剧情 → 再转成第一人称展示），见 data.js。
-    //   默认关闭：它会多花一次模型调用（费用与延迟翻倍），不该默认替用户打开。
     thirdPerson: false,
+    // 采样参数存字符串：'' = 未启用 = 请求里不发该字段；合法范围见 CHAT_SAMPLING_FIELDS，解析统一走 normalizeSamplingInput。
+    optTemperature: '',
+    optTopP: '',
     autoMemory: false,
-    memoryEvery: 6,
-    // 权限模型只有**一个档位设置** `agentAccess`（`agentPermission` + `agentApproval`
-    //    那套拆分已合并进来）：
-    //      'off'    关闭
-    //      'strict' 逐条确认 · 'auto' 自动通过（禁删除） · 'full' 完全访问（含删除）
-    //    前三档同时管电脑与手机；'off' 只关电脑侧（手机另有 agentPhoneEnabled）——
-    //    见 开发文档 里关于权限分档的说明。
-    //    两个旧字段保留在下面只作**迁移输入**，迁移完成后由 data.js 删掉。
+    memoryEvery: 15,
+    // 权限只有一个档位 agentAccess：off / strict / auto / full（前三档同时管电脑与手机）；agentPermission / agentApproval 只作迁移输入，迁移一完成就由 data.js 删掉。
     agentAccess: 'strict',
     agentPhoneEnabled: true,
     agentBackend: '',   // 空 = 还没选过实现方式（此时不启用手机操作，入口按钮灰显）
-    // AI 联网搜索。默认关闭 —— 它要花用户自己的搜索额度，
-    //   而且没填 Key 时本来也用不了。开关与 Key 分开，是为了"先停用、保留 Key"。
     tavilySearchEnabled: false,
-    // 用哪家搜索（键名见 SEARCH_PROVIDERS）。内置只有 Tavily，另有 custom 自定义源。
     searchProvider: 'tavily',
-    // 各家的 Key 分开存（API_SECRET_NAMES），不落 elaina_open_settings
+    // 各家的 Key 分开存（API_SECRET_NAMES），不落 elaina_open_settings。
     searchApiKey_tavily: '',
     searchApiKey_custom: '',
-    // ---- 自定义搜索源（searchProvider === 'custom' 时才用）----
-    // 端点必须 https：Key 会随请求发出去，明文 http 等于把 Key 交给链路上的任何人。
+    // 自定义搜索源：端点必须 https（Key 随请求发出，明文 http 等于交给链路上的任何人）；鉴权四档见 searchCustomAuth，请求体模板支持 {{query}} / {{count}}。
     searchCustomEndpoint: '',
-    // 鉴权方式：bearer（Authorization: Bearer xxx）/ raw（自定义头，值就是 Key 本身）
-    //   / x-api-key / none（Key 放在 body 里时选它，再用下面的请求体模板配）
     searchCustomAuth: 'bearer',
     searchCustomAuthHeader: 'Authorization',
-    // 请求体模板（JSON，支持 {{query}} 与 {{count}}）。留空用 {query, count}。
     searchCustomBody: '',
-    // 结果数组的位置（点号路径，如 data.webPages.value）。留空自动识别。
     searchCustomResultsPath: '',
     tavilyMaxResults: 5,     // 一次搜索返回几条（各家上限不同，见 SEARCH_PROVIDERS 的 maxResultsLimit）
     tavilySearchDepth: 'basic',   // basic | advanced（advanced 更慢、更贵、更全）
-    // MCP 服务器清单（外部工具服务）。每项：{ id, name, command, args[], env{}, cwd, enabled }。
-    //   默认空数组 —— 一个都不配，等于这个能力不存在。配了也要 enabled:true 才生效：
-    //   "先停用、保留配置"和搜索那边的开关是同一个理由。
+    // MCP 服务器清单：默认空数组（不配即能力不存在）；配了也要 enabled:true 才生效。
     mcpServers: [],
-    // 图片转述（视觉模型）：用一个**额外的**多模态模型把图片转成文字，再交给主模型。
-    //   默认关闭 —— 主模型自己就能看图时（多模态），转述只会丢细节、多一次请求。
     visionEnabled: false,
-    // 浏览器（AI 用浏览器查资料 / 走网页流程）。默认关闭：
-    //   它会在这台电脑上弹出浏览器窗口、并以用户身份在网站上操作，属于"要用户主动
-    //   打开"的能力，而不是装好就默认生效的东西。与 agentAccess 是两层：
-    //   agentAccess 的 off 是"整块关掉电脑操作"，这里是"电脑操作开着，但不用浏览器"。
+    // 浏览器默认关闭：会弹窗并以用户身份操作网站；与 agentAccess 是两层：off 整块关电脑操作，这里只是"不用浏览器"。
     agentBrowserEnabled: false,
-    // 手机「读取信息」的隐私开关。
-    //   关掉后 AI 连对应标签都不会看到（见 agent.js 的 agentPhoneSkillText
-    //   与手机读信息的分发），不是"读了不说"。
-    //   默认**全关**：这些都是隐私数据，"用户没表态就当同意"不是个好默认。
-    //     要用哪一项，由用户自己在设置里打开 ——
-    //     每一项旁边都标着它在系统里的权限现状（见 renderAgentPermBadges）。
-    //   ⚠️ 这些开关只控制**应用层**是否允许读；系统层权限（通知/短信/通讯录/日历）
-    //   仍由 Android 自己的运行时权限把关，两者缺一不可。
+    // 手机隐私开关：关掉后 AI 连对应标签都看不到，不是"读了不说"；只控制应用层，系统层权限仍由 Android 运行时权限把关。
     agentReadApps: false,
     agentReadNotifications: false,
     agentReadDevice: false,
@@ -417,21 +281,15 @@ const DEFAULT_SETTINGS = {
     // 用户通过系统文件选择器授权的文件夹（SAF 持久化 URI）。空 = 没授权。
     agentFolderUri: '',
     agentFolderName: '',
+    // 图片转述用哪个对话模型提供商（'' 表示不选，走单独填写的地址与 Key）。
+    visionProviderId: '',
     visionBaseUrl: '',
     visionApiKey: '',
     visionModel: '',
-    // 对话模型「能不能收图片」的结论（真实使用中自动学习，见 chat.js 的 callAI）。
-    //   null = 还没遇到过/结论已过期；true/false = 实际收发过一次得出的。key 一起存，模型名或地址一变就作废。
+    // 对话模型能否收图片的结论（自动学习）；key 一起存，模型名或地址一变就作废。
     chatModelVision: null,
     chatModelVisionKey: '',
-    // 首次运行的「欢迎使用独立开源版」公告**是否已同意过**。
-    //   语义是"同意一次，之后不再出现"（生日版与普通版一致）。
-    //   为什么存进 settings 而不是单开一个 Store 键：
-    //     · settings 本来就随 data/ 落盘、跨设备同步，语义正好是"这个用户的偏好"；
-    //     · 单开一个键就要同步加进 store.js 的 DATA_KEYS 白名单，漏了会
-    //       **写入只进内存缓存、刷新即丢** —— 那正是"每次都弹"的成因。
-    //   ⚠️ 老用户升级上来时这个字段是 undefined（≠ true），所以**会看到一次**
-    //     然后点同意就再也不出现 —— 这符合"第一次弹出同意后即消失"的要求。
+    // 公告是否已同意过：存进 settings 而不单开 Store 键（单开键要同步进 DATA_KEYS，漏了会每次弹）。
     announcementAgreed: false
 };
     const ELENA_QUOTES = [
@@ -458,5 +316,4 @@ const DEFAULT_SETTINGS = {
 { text: '旅途教会我的第一件事：别轻易相信路人的话——当然，我是例外。', source: '《魔女之旅》' },
 { text: '所谓魔法，不过是把"愿意"变成"做到"的勇气。', source: '《魔女之旅》' }
     ];
-
 

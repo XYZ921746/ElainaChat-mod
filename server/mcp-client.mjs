@@ -1,21 +1,6 @@
-// MCP（Model Context Protocol）**客户端**：把外部 MCP 服务器提供的工具接进宿主。
-// ── 为什么只做客户端 ────────────────────────────────────────────────
-// MCP 有两个方向：
-//   ① **客户端**：本应用去连别人的 MCP 服务器，把它的工具当成自己的可用能力；
-//   ② **服务端**：把本应用的能力暴露成 MCP 服务器，供 Claude Desktop / Cursor 调用。
-// ①是"接入外部能力"，和"装一个插件"同性质，风险面就是本机多跑几个子进程。
-// ②等于把**本机的文件读写与命令执行**开放给任何能连上它的 MCP 客户端 ——
-//   这与本项目"BYOK、不连作者服务器、每个动作都要过权限闸"的定位直接冲突。
-// 所以只做①。
-// ── 为什么是 stdio ──────────────────────────────────────────────────
-// 绝大多数 MCP 服务器（npx 包、本地脚本）都讲 stdio。它的连接语义也最干净：
-//   子进程活着 = 连着，子进程退出 = 断开，没有重连与心跳要处理。
-// HTTP/SSE 传输另有一套（鉴权、会话 id、断流重连），要做得对是另一个量级的活。
-// ── 协议：JSON-RPC 2.0，**按行分隔** ────────────────────────────────
-// MCP 的 stdio 传输规定"一条消息一行 JSON"，不是 LSP 那种 Content-Length 头。
-//   所以这里用 \n 切分而不是计数帧。⚠️ 但子进程如果把日志打到 stdout 就会污染
-//   这条流（那是它的 bug，不是我们的），所以解析失败的行要**跳过**而不是让整个连接崩掉
-//   —— 否则一个 print 语句就能让整个 MCP 服务器不可用。
+// MCP 客户端：把外部 MCP 服务器提供的工具接进宿主。只做客户端 —— 做服务端等于把本机的文件读写与命令执行开放给任何能连上它的 MCP 客户端，与"BYOK、不连作者服务器、每个动作都要过权限闸"直接冲突。
+// 传输用 stdio：绝大多数 MCP 服务器（npx 包、本地脚本）都讲它，连接语义也最干净（子进程活着 = 连着，退出 = 断开）。
+// 协议是 JSON-RPC 2.0、按行分隔（不是 LSP 那种 Content-Length 头）：子进程往 stdout 打日志会污染这条流，解析失败的行要跳过而不是让整个连接崩掉。
 import { spawn } from 'node:child_process';
 import { buildInitializeParams, flattenToolResult } from './mcp-shared.mjs';
 
@@ -30,11 +15,7 @@ const PROTOCOL_VERSION = '2025-06-18';
 const MAX_LINE_BYTES = 8 * 1024 * 1024;
 
 /**
- * 把 stdio 上的字节流切成"一行一条 JSON"。
- *
- * 为什么单独抽出来：这是唯一一处"协议边界"，切错了表现为
- * "请求永远等不到回应"或"JSON 解析错误"，而两者的现场都看不出来是切分的问题。
- * 抽成纯函数就能不启进程穷举断言。
+ * 把 stdio 上的字节流切成"一行一条 JSON"。单独抽成纯函数是因为这是唯一一处"协议边界"：切错了表现为"请求永远等不到回应"或"JSON 解析错误"，两者的现场都看不出是切分的问题 —— 抽出来才能不启进程穷举断言。
  */
 export function createLineSplitter({ onMessage, onError }) {
     let buf = '';
@@ -65,12 +46,7 @@ export function createLineSplitter({ onMessage, onError }) {
     };
 }
 
-/**
- * 一个 MCP 服务器连接。
- *
- * @param {object} def  { id, name, command, args, env, cwd }
- * @param {object} opts { log }
- */
+/** 一个 MCP 服务器连接。def = { id, name, command, args, env, cwd }，opts = { log } */
 export function createMcpClient(def, opts = {}) {
     const log = typeof opts.log === 'function' ? opts.log : () => {};
     const id = String(def.id || '');
@@ -142,8 +118,7 @@ export function createMcpClient(def, opts = {}) {
     }
 
     /**
-     * 把子进程的三条流接到协议层：stdout 走行切分器，stderr 只当日志。
-     * exit / error 都要把待决请求一次性 reject —— 否则每个调用方要各自等到超时。
+     * 把子进程的三条流接到协议层：stdout 走行切分器，stderr 只当日志。exit / error 都要把待决请求一次性 reject —— 否则每个调用方要各自等到超时。
      */
     function wireChildProcess() {
         splitter = createLineSplitter({
@@ -174,25 +149,18 @@ export function createMcpClient(def, opts = {}) {
     }
 
     /**
-     * 启动子进程并完成 initialize 握手。
-     *
-     * 握手必须做：MCP 规定客户端在拿到服务器的 capabilities 之前不能发别的请求。
-     *   tools/list 发早了会被合规的服务器拒绝，而报错看起来像"这个服务器没有工具"。
+     * 启动子进程并完成 initialize 握手：MCP 规定客户端在拿到服务器的 capabilities 之前不能发别的请求，tools/list 发早了会被合规的服务器拒绝，而报错看起来像"这个服务器没有工具"。
      */
     async function start() {
         if (child) return;
         const command = String(def.command || '').trim();
         if (!command) throw new Error('MCP 服务器「' + id + '」没有配置启动命令');
         const args = Array.isArray(def.args) ? def.args.map(String) : [];
-        // 环境变量与宿主合并而不是替换：子进程往往依赖 PATH / HOME，
-        //   只给自定义的那几个会让 npx / node 直接找不到。
+        // 环境变量与宿主合并而不是替换：子进程往往依赖 PATH / HOME，只给自定义的那几个会让 npx / node 直接找不到
         const env = { ...process.env, ...(def.env && typeof def.env === 'object' ? def.env : {}) };
         log('MCP 启动：' + command + (args.length ? ' ' + args.join(' ') : ''));
-        // ⚠️ **不能**用 shell:true 来启动 .cmd：那会把 args 当字符串拼接，
-        //   路径里有空格就断（实测：临时目录路径含空格 → 子进程立刻 exit 1，
-        //   而报错只说"已退出"，看不出是启动方式的问题）。Node 20 起会为这种
-        //   用法打 DEP0190 警告，理由正是"参数没转义，只是拼接"。
-        //   Windows 上正确做法是显式走 cmd.exe /c 并把它需要的参数原样传给 args。
+        // 不能用 shell:true 启动 .cmd：那会把 args 当字符串拼接，路径里有空格就断（子进程立刻 exit 1，而报错只说"已退出"）；Node 20 起对这种用法打 DEP0190 警告，理由正是"参数没转义，只是拼接"。
+        // Windows 上正确做法是显式走 cmd.exe /c 并把它需要的参数原样传给 args。
         const isWinCmd = process.platform === 'win32' && /\.(cmd|bat)$/i.test(command);
         child = spawn(
             isWinCmd ? 'cmd.exe' : command,
@@ -207,8 +175,7 @@ export function createMcpClient(def, opts = {}) {
         wireChildProcess();
 
         const result = await request('initialize', buildInitializeParams({ protocolVersion: PROTOCOL_VERSION, version: opts.version }), INIT_TIMEOUT_MS);
-        // 版本不匹配时**不拒绝**：MCP 1.x 的工具语义在 2024-11 / 2025-06 之间没有
-        //   破坏性变化，硬拒等于"能用却不让用"。只记一条日志。
+        // 版本不匹配时不拒绝：MCP 1.x 的工具语义没有破坏性变化，硬拒等于"能用却不让用"，只记一条日志
         const negotiated = String(result?.protocolVersion || '');
         if (negotiated && negotiated !== PROTOCOL_VERSION) {
             log('MCP ' + id + ' 协商到协议版本 ' + negotiated + '（本客户端为 ' + PROTOCOL_VERSION + '），按兼容处理');
@@ -240,11 +207,7 @@ export function createMcpClient(def, opts = {}) {
     }
 
     /**
-     * 调一个工具，把 MCP 的 content 数组拍平成一段文本。
-     *
-     * 为什么拍平：宿主的工具通道只接受"一段结果文本"（回灌成 role:'tool'）。
-     *   MCP 允许多种 content（text / image / resource），模型读得了的只有文本，
-     *   所以图片与资源在这里降级成一句说明 —— 直接丢 JSON 会让模型对它做二次猜测。
+     * 调一个工具，把 MCP 的 content 数组拍平成一段文本：宿主的工具通道只接受"一段结果文本"（回灌成 role:'tool'），而 MCP 允许 text / image / resource 多种 content，模型读得了的只有文本 —— 图片与资源降级成一句说明，直接丢 JSON 会让模型对它做二次猜测。
      */
     async function callTool(name, args) {
         await start();

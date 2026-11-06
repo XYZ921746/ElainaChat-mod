@@ -1,15 +1,6 @@
-// 版本检测（GitHub Releases）—— 设置 → 高级「版本与更新」的数据来源。
-//
-// 单独成模块的理由与 relay / mcp-http-client 一致：纯逻辑、可注入 fetch / DNS / 时钟、
-// 能穷举断言。它放在服务端而不是前端是为了几件事：
-//   ① 带 User-Agent 发请求（浏览器 fetch 不能设 UA，GitHub API 缺 UA 会被拒）；
-//   ② 十分钟缓存 —— 未登录的 GitHub 接口每小时只有 60 次，手动点几次不该把它用完；
-//   ③ 把网络失败的英文错误翻成可操作的中文原因（DNS / 超时 / TLS / 限流）；
-//   ④ 直连失败时用**公共 DNS 解析真实 IP 后直连**，绕开 hosts 劫持，且不改系统设置。
-//
-// 它只做**检测**，不做自我更新：三个运行形态（安卓 APK / 桌面版 exe 壳 / 电脑版源码）
-// 的安装方式各不相同，由前端按运行形态给出对应安装包的下载入口。
-// 详情见 web/js/update-check.js。
+// 版本检测（GitHub Releases）—— 设置 → 高级「版本与更新」的数据来源。纯逻辑、可注入 fetch / DNS / 时钟，能穷举断言。
+// 放在服务端是为了：带 User-Agent 发请求（浏览器 fetch 不能设 UA，GitHub API 缺 UA 会被拒）；十分钟缓存（未登录每小时只有 60 次）；把网络失败的英文错误翻成可操作的中文；直连失败时用公共 DNS 解析真实 IP 后直连，绕开 hosts 劫持且不改系统设置。
+// 它只做检测、不做自我更新：三个运行形态（安卓 APK / 桌面版 exe 壳 / 电脑版源码）安装方式各不相同，由前端按运行形态给出对应安装包的下载入口（见 web/js/update-check.js）。
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -30,9 +21,7 @@ export const DEFAULT_TIMEOUT_MS = 8000;
 export const PUBLIC_DNS_SERVERS = ['223.5.5.5', '119.29.29.29', '1.1.1.1'];
 
 /**
- * 校验 owner/repo 形状。
- * 必须校验而不是拼字符串硬发：它最终会成为请求 URL 的一部分，
- * 一段 ../../ 之类就能把请求带到别的接口上。
+ * 校验 owner/repo 形状。必须校验而不是拼字符串硬发：它最终会成为请求 URL 的一部分，一段 ../../ 之类就能把请求带到别的接口上。
  */
 export function isValidRepo(repo) {
     const parts = String(repo || '').trim().split('/');
@@ -42,9 +31,7 @@ export function isValidRepo(repo) {
 }
 
 /**
- * 保留给"直连 IP"用的公网 IPv4 判定。
- * 为什么必须过滤：公共 DNS 也可能被污染成 127.0.0.1 / 内网地址，
- * 那样直连就变成打本机服务，比"检测失败"更糟（会把本地服务的响应当成 GitHub 的回包）。
+ * 保留给"直连 IP"用的公网 IPv4 判定：公共 DNS 也可能被污染成 127.0.0.1 / 内网地址，那样直连就变成打本机服务，比"检测失败"更糟（会把本地服务的响应当成 GitHub 的回包）。
  */
 export function isPublicIPv4(ip) {
     const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(String(ip || '').trim());
@@ -60,9 +47,7 @@ export function isPublicIPv4(ip) {
 }
 
 /**
- * 在 hosts 文本里找"把某个主机名指到本机/黑洞"的行。
- * 纯函数：检查脚本直接喂文本断言，不去碰真实系统文件。
- *
+ * 在 hosts 文本里找"把某个主机名指到本机/黑洞"的行。纯函数：检查脚本直接喂文本断言，不去碰真实系统文件。
  * @returns {null | {line:number, ip:string, text:string}}
  */
 export function findHostsHijack(text, host) {
@@ -94,13 +79,7 @@ export function readHostsFile(filePath) {
 }
 
 /**
- * 把 GitHub 的 release 对象收敛成前端要用的最小形状。
- *
- * 为什么先收敛再返回：GitHub 的 release JSON 有 40+ 字段（作者对象、上传者、
- * reactions…），其中很多带用户可控文本。前端只渲染我们点名保留的字段，
- * 就不会因为 GitHub 哪天往响应里加东西而多出一块没审查过的渲染面。
- *
- * @returns {null | {tag,name,url,publishedAt,notes,prerelease,sourceZip,assets}}
+ * 把 GitHub 的 release 对象收敛成前端要用的最小形状：release JSON 有 40+ 字段（作者对象、上传者、reactions…），很多带用户可控文本 —— 前端只渲染我们点名保留的字段，GitHub 哪天往响应里加东西也不会多出一块没审查过的渲染面。
  */
 export function sanitizeRelease(raw) {
     if (!raw || typeof raw !== 'object') return null;
@@ -124,11 +103,7 @@ export function sanitizeRelease(raw) {
 }
 
 /**
- * 把网络层失败翻成用户能照着做的中文原因。
- *
- * 为什么不能直接把 err.message 给用户：Node 的 fetch 失败顶层只有
- * fetch failed 四个字，真正的原因在 err.cause 里（undici 的包装）。
- * 用户看到这四个字既不知道是 DNS、证书还是超时，也不知道下一步做什么。
+ * 把网络层失败翻成用户能照着做的中文原因：Node 的 fetch 失败顶层只有 "fetch failed"，真正原因在 err.cause 里（undici 的包装），用户看到这四个字既不知道是 DNS、证书还是超时，也不知道下一步做什么。
  */
 export function describeFetchError(err) {
     const name = String((err && err.name) || '');
@@ -167,8 +142,7 @@ function rateLimitMessage(headers, nowMs) {
 function withTimeout(promise, ms) {
     let timer = null;
     const timeout = new Promise((_, reject) => {
-        // 定时器不能 unref：等待期间没有别的句柄时事件循环会直接退出，
-        // 表现成 Detected unsettled top-level await（见 MCP 客户端踩过的同一个坑）。
+        // 定时器不能 unref：等待期间没有别的句柄时事件循环会直接退出，表现成 Detected unsettled top-level await（与 MCP 客户端同一个原因）
         timer = setTimeout(() => {
             const e = new Error('timeout');
             e.name = 'TimeoutError';
@@ -193,11 +167,7 @@ export async function resolvePublicIPv4(host, servers = PUBLIC_DNS_SERVERS, time
 }
 
 /**
- * 用 https.request + 自定义 lookup 直连指定 IP。
- *
- * lookup 被替换成"直接返回这个 IP"，于是系统 hosts / 系统 DNS 都不参与；
- * servername 仍是 api.github.com，证书按它校验 —— 公共 DNS 返回假 IP 时 TLS 会失败，
- * 不会把假 IP 的响应当成 GitHub 的数据。
+ * 用 https.request + 自定义 lookup 直连指定 IP：lookup 直接返回这个 IP，系统 hosts / 系统 DNS 都不参与；servername 仍是 api.github.com、证书按它校验 —— 公共 DNS 返回假 IP 时 TLS 会失败，不会把假 IP 的响应当成 GitHub 的数据。
  */
 export function requestReleaseByIp(ip, url, options = {}) {
     const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : DEFAULT_TIMEOUT_MS;
@@ -253,19 +223,8 @@ function responseFromText(status, headers, text) {
 }
 
 /**
- * 创建一个带缓存的检测器。
- *
- * @param {object} [options]
- * @param {string} [options.repo] owner/repo（默认 DEFAULT_REPO）
- * @param {Function} [options.fetchImpl] 注入用（检查脚本传假 fetch，穷举失败分支）
- * @param {number} [options.ttlMs] 成功结果缓存时长
- * @param {number} [options.timeoutMs] 单次请求上限
- * @param {Function} [options.now] 注入时钟（缓存过期断言用）
- * @param {string} [options.userAgent] GitHub 要求的 UA；缺了会被 403
- * @param {boolean} [options.bypass] 直连失败后是否换公共 DNS 重试（默认 true）
- * @param {Function} [options.resolveIp] 注入解析（默认查公共 DNS）
- * @param {Function} [options.requestByIp] 注入直连请求（默认 https.request）
- * @param {Function} [options.readHosts] 注入 hosts 读取（默认读系统文件）
+ * 创建一个带缓存的检测器。options：repo（默认 DEFAULT_REPO）/ fetchImpl / ttlMs / timeoutMs / now / userAgent（缺了会被 403）/ bypass / resolveIp / requestByIp / readHosts。
+ * 后几项都可注入，检查脚本据此传假 fetch 与假时钟穷举失败分支。
  */
 export function createUpdateChecker(options = {}) {
     const repo = String(options.repo || process.env.ELAINA_UPDATE_REPO || DEFAULT_REPO).trim();
@@ -348,8 +307,7 @@ export function createUpdateChecker(options = {}) {
             normalError = describeFetchError(err);
         }
 
-        // 直连失败：换公共 DNS 解析真实 IP 再直连一次。
-        // 只在网络层失败时做（HTTP 层错误说明连接是通的，重试没意义）；
+        // 直连失败：换公共 DNS 解析真实 IP 再直连一次，只在网络层失败时做（HTTP 层错误说明连接是通的，重试没意义）。
         // 不改 hosts、不改系统 DNS —— 这正是"本机环境限制"下不改设置也能继续的办法。
         if (bypass && BYPASSABLE.has(normalError.code)) {
             try {

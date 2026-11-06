@@ -1,27 +1,14 @@
-// AI 联网搜索：服务商调用、失败分类、自动换家与结果格式化。
-// 与「浏览器」的分工：浏览器要开窗口交互，搜索只取一次 API 结果。
-// 这些函数仍是全局函数（非模块），由 index.html 在 agent.js 之后加载。
-// ===== AI 联网搜索 =====
-// 与「浏览器」的分工：浏览器是**看见页面、点东西**（要交互的站点），
-//   搜索是**一问一答地取资料**（查最新消息、某个东西是什么）。两者都"上网"，
-//   但一个要开窗口、一个只要一次 API 调用 —— 后者更快、更省，所以默认先走它。
-// 为什么放在前端而不是服务端：Key 是用户的（BYOK），而 /api/relay 只做转发、
-//   不持有任何凭据 —— 与服务商请求一样走同一条路（浏览器里绕 CORS、APK 走原生）。
-//   服务端因此完全不知道任何搜索服务商的存在，也就没有"服务器上存着用户搜索 Key"这回事。
+// AI 联网搜索：服务商调用、失败分类、自动换家与结果格式化。与「浏览器」的分工：
+// 搜索是一问一答地取资料，只发一次 API（更快更省）；浏览器要开窗口交互。
+// 放在前端是因为 Key 是用户的（BYOK），/api/relay 只转发、不持有凭据，服务端不知道任何搜索服务商。
 
 /** 搜索结果里单条摘要的截断长度 —— 太长会把提示词撑爆，模型也读不完 */
 const TAVILY_SNIPPET_MAX = 500;
 /** 一次搜索最多回灌多少字（含标题与网址） */
 const TAVILY_OUTPUT_MAX = 6000;
 
-/**
- * 把某家的响应整理成回灌给 AI 的一段话（四家的形状已由 SEARCH_PROVIDERS 的 parse 拍平）。
- *
- * 为什么在客户端拼：两条通道（工具 / 标签）最终拿到同一个字符串，
- *   形状一致才不会出现"工具通道看到的东西和标签通道不一样"。
- *
- * **结果里必须带网址**：模型被要求"引用来源"，没有 URL 它只能编一个。
- */
+// 把某家的响应整理成回灌给 AI 的一段话（各家的形状已由 SEARCH_PROVIDERS 的 parse 拍平）。
+// 在客户端拼：两条通道拿到同一个字符串，形状才一致。结果里必须带网址，否则模型只能编一个。
 function formatSearchResult(query, parsed, providerLabel) {
     const lines = [];
     const answer = String(parsed?.answer || '').trim();
@@ -52,25 +39,14 @@ function currentSearchProvider() {
     return { id: SEARCH_PROVIDERS[id] ? id : DEFAULT_SEARCH_PROVIDER, def };
 }
 
-/**
- * 哪些失败值得"换一家再试"。
- *
- * 判据是"这家账号本身用不了"，而不是"这次请求写错了"：
- *   · 401/403 Key 无效或没权限 —— 换一家能用；
- *   · 402 额度 / 付费额度用完 —— 换一家能用（这是最常见的那个）；
- *   · 429 限流 —— 换一家能用。
- * 400 之类**不**回退：那是请求构造的问题，换一家会以另一种方式失败，
- *   掩盖真正的原因。
- */
+// 哪些失败值得"换一家再试"。判据是"这家账号本身用不了"，而不是"这次请求写错了"：
+// 401/403 Key 无效、402 额度用完、429 限流 —— 换一家能用。
+// 400 之类不回退：那是请求构造的问题，换一家会以另一种方式失败，掩盖真正的原因。
 const SEARCH_SWITCHABLE_STATUS = new Set([401, 402, 403, 429]);
 
-/**
- * 失败原因翻译成一句用户能照做的话（不暴露内部字段名）。
- *
- * 为什么要带上 `def`：402 的原因各家不同（Exa 可能是"Key 的花费上限"而不是"余额不足"），
- *   而这些话写在 SEARCH_PROVIDERS 的 quotaHint 里 —— 只在这里加通用文案的话，
- *   用户会被指向错误的排查方向（新账号明明有免费额度，却被叫去充值）。
- */
+// 失败原因翻译成一句用户能照做的话（不暴露内部字段名）。
+// 带上 def 是因为 402 的原因各家不同（有的是 Key 花费上限而非余额不足），
+// 这些话写在 SEARCH_PROVIDERS 的 quotaHint 里，只加通用文案会把用户指向错误的排查方向。
 function describeSearchFailure(status, detail, def) {
     const tail = detail ? '：' + detail : '';
     const quota = (def && def.quotaHint) ? ' ' + def.quotaHint : '';
@@ -93,14 +69,9 @@ function describeSearchFailure(status, detail, def) {
     return { hint: '', switchable: false, tail };
 }
 
-/**
- * 用**指定的**一家发一次搜索。
- *
- * 单独拆出来是为了让"换一家再试"能复用同一段逻辑 —— 回退时除了 id 以外
- *   什么都不该变（同样的查询、同样的条数与深度）。
- *
- * @returns {Promise<{ok:boolean, text:string, status:number, switchable:boolean}>}
- */
+// 用指定的一家发一次搜索。单独拆出来让"换一家再试"复用同一段逻辑 ——
+// 回退时除 id 外什么都不该变（同样的查询、条数与深度）。
+// @returns {Promise<{ok:boolean, text:string, status:number, switchable:boolean}>}
 async function searchOnProvider(id, query, maxResults, depth) {
     const def = SEARCH_PROVIDERS[id];
     if (!def) return { ok: false, text: '未知的搜索服务商：' + id, status: 0, switchable: false };
@@ -174,16 +145,10 @@ function alternateSearchProviderId(primaryId) {
     return '';
 }
 
-/**
- * 真发一次搜索。**服务商由设置决定**，执行器只认这张表（见 SEARCH_PROVIDERS）。
- *
- * 失败一律返回 {ok:false, text}，不抛 —— 调用方（工具通道）需要把原因原样回灌给模型，
- *   它才能决定"换个说法再搜"还是"如实告诉用户搜不到"。
- *
- * 自动换一家：主服务商"账号本身用不了"（Key 失效 / 额度用完 / 限流）时，
- *   若另一家也填了 Key 就直接用它再搜一次，并在结果开头如实说明换了谁、为什么 ——
- *   对用户来说"搜到了"远好过"额度用完了"，但不能悄悄换：额度是花在另一家账号上的。
- */
+// 真发一次搜索。服务商由设置决定，执行器只认 SEARCH_PROVIDERS 这张表。
+// 失败一律返回 {ok:false, text}，不抛 —— 调用方要把原因原样回灌给模型。
+// 自动换一家：主服务商账号本身用不了时，另一家也填了 Key 就直接再搜一次，并在结果开头
+// 如实说明换了谁、为什么 —— 额度花在另一家账号上，不能悄悄换。
 async function webSearchQuery(query) {
     const q = String(query || '').trim();
     if (!q) return { ok: false, text: '没有给出要搜索的内容' };
@@ -217,12 +182,8 @@ async function webSearchQuery(query) {
     return first;
 }
 
-/**
- * 执行一次「联网搜索」操作（两条通道共用）。
- *
- * 与 runAgentBrowserOperation 同一套约定：结果按当前通道送达，
- *   工具通道由 runToolCalls 回灌 role:'tool'，标签通道自己插 + 续跑。
- */
+// 执行一次「联网搜索」操作（两条通道共用），约定同 runAgentBrowserOperation：
+// 工具通道由 runToolCalls 回灌 role:'tool'，标签通道自己插 + 续跑。
 async function runAgentWebSearch(args, traceItem) {
     const query = String((args && args.query) || '').trim();
     const ownTrace = !traceItem;
