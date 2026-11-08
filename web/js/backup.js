@@ -16,8 +16,8 @@ async function refreshDataSettings() {
             try { cards = JSON.parse(Store.getItem('elaina_open_character_cards') || '[]').length; } catch { /* 忽略 */ }
             try { convs = JSON.parse(Store.getItem('elaina_open_conversations') || '[]').length; } catch { /* 忽略 */ }
             try { mem = (JSON.parse(Store.getItem('elaina_open_memory_core') || '{}').diary || []).length; } catch { /* 忽略 */ }
-            box.innerHTML = '数据位置：<code class="text-indigo-500">应用私有目录</code>'
-                + '<span class="text-indigo-300">（安卓应用数据，卸载会一并删除）</span><br>'
+            box.innerHTML = '数据位置：<code class="text-dim">应用私有目录</code>'
+                + '<span class="text-dim">（安卓应用数据，卸载会一并删除）</span><br>'
                 + '人设卡 <b>' + escapeHtml(String(cards)) + '</b> 张'
                 + ' · 对话 <b>' + escapeHtml(String(convs)) + '</b> 个'
                 + ' · 记忆 <b>' + escapeHtml(String(mem)) + '</b> 条';
@@ -35,7 +35,7 @@ async function refreshDataSettings() {
         const json = await res.json();
         if (!json.ok) { if (section) section.classList.add('hidden'); return; }
         const c = json.counts || {};
-        box.innerHTML = '数据位置：<code class="text-indigo-500">' + escapeHtml(json.dir || 'data')
+        box.innerHTML = '数据位置：<code class="text-dim">' + escapeHtml(json.dir || 'data')
             + '</code><br>'
             + '人设卡 <b>' + escapeHtml(String(c.characters || 0)) + '</b> 张'
             + ' · 对话 <b>' + escapeHtml(String(c.conversations || 0)) + '</b> 个'
@@ -52,7 +52,7 @@ function setDataHint(text, isError) {
     const hint = document.getElementById('dataActionHint');
     if (!hint) return;
     hint.textContent = text || '';
-    hint.className = isError ? 'text-[11px] text-red-500' : 'text-[11px] text-indigo-300';
+    hint.className = isError ? 'text-[11px] text-danger' : 'text-[11px] text-dim';
 }
 
 async function exportDataBackup() {
@@ -290,29 +290,29 @@ function openLanReceiveDialog() {
             '<div class="modal-panel w-full max-w-md">',
             '<div class="p-5">',
             '<div class="flex items-center justify-between mb-1">',
-            '<h3 class="text-base font-bold text-indigo-900">局域网接收共享</h3>',
-            '<button type="button" id="lanReceiveClose" class="text-indigo-400 hover:text-indigo-600" aria-label="关闭">✕</button>',
+            '<h3 class="text-base font-bold text-ink">局域网接收共享</h3>',
+            '<button type="button" id="lanReceiveClose" class="text-dim hover:text-soft" aria-label="关闭">✕</button>',
             '</div>',
-            '<p class="text-[12px] text-indigo-400 leading-relaxed mb-4">填对方「开启局域网共享」时给出的地址，以及对方登录用的访问密码。</p>',
+            '<p class="text-[12px] text-dim leading-relaxed mb-4">填对方「开启局域网共享」时给出的地址，以及对方登录用的访问密码。</p>',
             '<div class="flex items-start gap-2 mb-3">',
             '<div class="flex-1">',
-            '<label class="text-[11px] text-indigo-400">对方 IP</label>',
+            '<label class="text-[11px] text-dim">对方 IP</label>',
             '<input id="lanReceiveIp" class="modal-input w-full text-sm py-1.5" placeholder="如 192.168.1.5" autocomplete="off">',
             '</div>',
             '<div class="w-24">',
-            '<label class="text-[11px] text-indigo-400">端口</label>',
+            '<label class="text-[11px] text-dim">端口</label>',
             '<input id="lanReceivePort" class="modal-input w-full text-sm py-1.5" placeholder="如 3999" autocomplete="off" inputmode="numeric">',
             '</div>',
             '</div>',
             '<div class="mb-4">',
-            '<label class="text-[11px] text-indigo-400">对方访问密码（对方登录用的密码）</label>',
+            '<label class="text-[11px] text-dim">对方访问密码（对方登录用的密码）</label>',
             '<input id="lanReceivePwd" class="modal-input w-full text-sm py-1.5" type="password" autocomplete="off">',
             '</div>',
             '<div class="flex items-center justify-end gap-2">',
             '<button type="button" id="lanReceiveCancel" class="btn-secondary text-xs">取消</button>',
             '<button type="button" id="lanReceiveOk" class="btn-secondary text-xs">开始导入</button>',
             '</div>',
-            '<p id="lanReceiveErr" class="text-[11px] text-red-500 mt-2"></p>',
+            '<p id="lanReceiveErr" class="text-[11px] text-danger mt-2"></p>',
             '</div>',
             '</div>',
         ].join('\n');

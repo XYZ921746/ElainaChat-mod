@@ -1,5 +1,8 @@
-// 主题系统：CSS 变量 + !important 覆盖层。界面大量颜色写死在 Tailwind 类名里，只改变量不够。
-// 所有覆盖规则挂在 html[data-theme-template="..."] 下；默认主题（elaina）即 index.html 的 :root。
+// 主题系统：CSS 变量层。唯一 token 源是 themes.css 的 --rd-*（挂在 html.rd 下），
+// 旧名（--pixso-* / --color-* / --text-* / --tpl-*）只是 themes.css 里的 var(--rd-*) 别名；
+// 本文件负责切换 html 上的 data-theme-template / data-theme 属性。模板 id 为 custom 时还会按三个关键色
+// 推导 --rd-* 并注入覆盖块 —— 选择器里已没有这一项，该分支只在旧偏好残留的那一帧起作用。
+// 默认模板 majo 不设属性 —— 覆盖规则一条都不生效，直接用 themes.css 的基准值。
 
 (function () {
     'use strict';
@@ -74,49 +77,98 @@
         } catch (e) { return { ...DEFAULT_CUSTOM }; }
     }
 
-    // 由 3 个关键色推导全套变量：用户只定主色 / 背景 / 文字，其余按色彩关系推导（深底/浅底自适应）。
+    // 由 3 个关键色推导全套 --rd-* 变量：用户只定主色 / 背景 / 文字，其余按色彩关系推导（深底/浅底自适应）。
+    // 只推 --rd-*：旧名（--pixso-* / --color-* / --text-* / --tpl-*）在 themes.css 里全部是 var(--rd-*) 别名，
+    // 会自动跟随；这里再写旧名就会和别名形成两套事实源。
+    // 深浅只看画布亮度、不联动深色模式开关：DIY 主题的气质由用户选定的画布决定，开关只影响内置模板。
     function deriveCustomVars(c) {
         const { primary, canvas, ink } = c;
         const dark = luminance(canvas) < 0.45;   // 深底主题
 
-        // 左侧竖栏：深底 DIY 时 --pixso-brown 是浅色，需单独给略亮的表面色保持层次。
+        // 带透明度的颜色（边框 / 悬浮态按内置主题的透明度档取值）
+        const rgba = (hex, a) => {
+            const rgb = hexToRgb(hex);
+            return rgb ? 'rgba(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ', ' + a + ')' : hex;
+        };
+
+        // 左侧竖栏：深底 DIY 时文字色是浅色，需单独给略亮的表面色保持层次。
         const rail = dark ? lighten(canvas, 0.07) : ink;
+        const accent = mix(primary, canvas, 0.22);
 
         return {
-            '--pixso-canvas': canvas,
-            '--pixso-cream': dark ? lighten(canvas, 0.08) : lighten(canvas, 0.62),
-            '--pixso-panel': dark ? lighten(canvas, 0.05) : lighten(canvas, 0.40),
-            '--pixso-panel-soft': dark ? lighten(canvas, 0.07) : lighten(canvas, 0.50),
-            '--pixso-surface': dark ? lighten(canvas, 0.08) : lighten(canvas, 0.62),
-            '--tpl-rail': rail,
-            '--pixso-brown': ink,
-            '--pixso-brown-dark': dark ? lighten(ink, 0.12) : darken(ink, 0.16),
-            '--pixso-brown-soft': mix(ink, canvas, dark ? 0.30 : 0.34),
-            '--pixso-green': mix(primary, canvas, 0.22),
-            '--pixso-green-dark': dark ? darken(primary, 0.10) : darken(primary, 0.20),
-            '--pixso-orange': primary,
-            '--pixso-line': dark ? lighten(canvas, 0.16) : darken(canvas, 0.14),
-            '--pixso-shadow': dark
+            // 背景 / 表面
+            '--rd-bg': canvas,
+            '--rd-body-bg': canvas,
+            '--rd-frame-bg': canvas,
+            '--rd-frame-border': dark ? lighten(canvas, 0.16) : darken(canvas, 0.14),
+            '--rd-topbar-bg': rgba(canvas, dark ? 0.85 : 0.9),
+            '--rd-surface': dark ? lighten(canvas, 0.08) : lighten(canvas, 0.62),
+            '--rd-surface-2': dark ? lighten(canvas, 0.05) : lighten(canvas, 0.40),
+            '--rd-surface-3': dark ? lighten(canvas, 0.12) : lighten(canvas, 0.30),
+            '--rd-panel': dark ? lighten(canvas, 0.05) : lighten(canvas, 0.40),
+            '--rd-list-bg': dark ? lighten(canvas, 0.03) : lighten(canvas, 0.40),
+            '--rd-input': dark ? 'rgba(255, 255, 255, .03)' : 'rgba(255, 255, 255, .55)',
+            // 文字
+            '--rd-text': ink,
+            '--rd-text-2': mix(ink, canvas, 0.34),
+            '--rd-text-3': mix(ink, canvas, 0.52),
+            // 主色系（主色向画布收 22% 再上场：纯主色在浅底上过艳，与内置主题同档）
+            '--rd-accent': accent,
+            '--rd-accent-strong': dark ? darken(primary, 0.10) : darken(primary, 0.20),
+            '--rd-accent-soft': rgba(primary, 0.12),
+            '--rd-accent-border': rgba(primary, 0.22),
+            '--rd-accent-contrast': dark ? '#191307' : '#fff9ec',
+            '--rd-accent-2': primary,
+            '--rd-accent-2-soft': rgba(primary, 0.12),
+            // 描边 / 交互态
+            '--rd-border': dark ? lighten(canvas, 0.16) : darken(canvas, 0.14),
+            '--rd-border-strong': dark ? lighten(canvas, 0.28) : darken(canvas, 0.26),
+            '--rd-hover': dark ? 'rgba(255, 255, 255, .04)' : 'rgba(0, 0, 0, .045)',
+            '--rd-active': rgba(primary, 0.08),
+            '--rd-active-border': rgba(primary, 0.16),
+            // 气泡
+            '--rd-user-bubble': dark
+                ? 'linear-gradient(135deg, ' + lighten(primary, 0.08) + ', ' + darken(primary, 0.15) + ')'
+                : 'linear-gradient(135deg, ' + lighten(ink, 0.10) + ', ' + darken(ink, 0.12) + ')',
+            '--rd-user-text': dark ? '#1a1408' : '#f6efdf',
+            '--rd-user-border': 'rgba(255, 255, 255, .08)',
+            '--rd-ai-bubble': dark ? 'rgba(255, 255, 255, .045)' : 'rgba(255, 255, 255, .64)',
+            '--rd-ai-border': dark ? 'rgba(255, 255, 255, .06)' : rgba(darken(canvas, 0.14), 0.35),
+            // 竖栏
+            '--rd-rail-bg': rail,
+            '--rd-rail-bg-2': dark ? canvas : darken(ink, 0.12),
+            '--rd-rail-text': dark ? 'rgba(240, 232, 216, .48)' : 'rgba(255, 255, 255, .55)',
+            '--rd-rail-active': rgba(primary, 0.16),
+            '--rd-rail-active-text': dark ? lighten(primary, 0.20) : lighten(primary, 0.35),
+            // 阴影 / 光晕 / 遮罩
+            '--rd-shadow-1': dark
+                ? '0 1px 2px rgba(0, 0, 0, .2), 0 6px 18px rgba(0, 0, 0, .14)'
+                : '0 1px 2px rgba(18, 30, 50, .05), 0 6px 18px rgba(18, 30, 50, .045)',
+            '--rd-shadow-2': dark
                 ? '0 30px 80px rgba(0, 0, 0, 0.5), 0 6px 18px rgba(0, 0, 0, 0.3)'
                 : '0 30px 80px rgba(18, 30, 50, 0.16), 0 6px 18px rgba(18, 30, 50, 0.08)',
-            '--tpl-primary': primary,
-            '--tpl-primary-deep': darken(primary, 0.22),
-            '--tpl-primary-soft': lighten(primary, 0.28),
-            '--tpl-tint': primary + '1f',   // 约 12% 透明度
-            '--color-primary': primary,
-            '--color-primary-soft': lighten(primary, 0.28),
-            '--text-heading': ink,
-            '--text-body': mix(ink, canvas, 0.25),
-            '--text-secondary': mix(ink, canvas, 0.34),
-            '--text-muted': mix(ink, canvas, 0.52),
-            '--text-glass-heading': ink,
-            '--text-glass-body': mix(ink, canvas, 0.25),
-            '--text-glass-muted': mix(ink, canvas, 0.34),
-            '--ink': ink,
+            '--rd-btn-shadow': '0 2px 8px ' + rgba(primary, 0.18),
+            '--rd-glow-1': rgba(primary, 0.2),
+            '--rd-glow-2': rgba(mix(ink, canvas, 0.52), 0.1),
+            '--rd-overlay': dark ? 'rgba(0, 0, 0, .55)' : 'rgba(20, 15, 8, .35)',
+            // 提示条 / 选中 / 滚动条
+            '--rd-toast-bg': dark ? lighten(canvas, 0.15) : darken(ink, 0.10),
+            '--rd-toast-fg': dark ? ink : '#f6efdf',
+            '--rd-selection': rgba(primary, 0.24),
+            '--rd-scroll': dark ? 'rgba(255, 255, 255, .18)' : rgba(darken(canvas, 0.2), 0.4),
+            // 头像
+            '--rd-avatar-ai-bg': dark ? lighten(canvas, 0.15) : darken(ink, 0.10),
+            '--rd-avatar-ai-fg': accent,
+            '--rd-avatar-ai-border': rgba(primary, 0.3),
+            '--rd-avatar-user-bg': dark ? lighten(canvas, 0.12) : lighten(canvas, 0.30),
+            '--rd-avatar-user-fg': mix(ink, canvas, 0.34),
+            '--rd-avatar-user-border': dark ? lighten(canvas, 0.28) : darken(canvas, 0.26),
         };
     }
 
-    // DIY 落成注入 <style>：颜色运行时才知道，放 <head> 末尾天然晚于 themes.css，同权重下胜出。
+    // DIY 落成注入 <style>：颜色运行时才知道，放 <head> 末尾天然晚于 themes.css。
+    // 选择器必须带 .rd（与 html.rd[data-theme="dark"] 同为 0-2-1）：不带会被深色块按特异性压过，
+    // DIY 主题一开深色就退回内置深色配色。
     function applyCustomTheme() {
         let el = document.getElementById('elainaCustomTheme');
         if (currentTemplate() !== 'custom') {
@@ -131,7 +183,7 @@
         }
         const vars = deriveCustomVars(customTheme());
         const body = Object.entries(vars).map(([k, v]) => '  ' + k + ': ' + v + ';').join('\n');
-        el.textContent = 'html[data-theme-template="custom"] {\n' + body + '\n}\n';
+        el.textContent = 'html.rd[data-theme-template="custom"] {\n' + body + '\n}\n';
         saveBootSnapshot();
     }
 
@@ -223,6 +275,10 @@
     let lastPointer = null;
     window.addEventListener('pointerdown', (e) => { lastPointer = { x: e.clientX, y: e.clientY }; }, true);
 
+    // 正在播放的转场数：连点深浅时 Chromium 自动跳过旧转场重拍快照，计数保证
+    // rd-theme-switching 一直挂到最后一轮结束，不会中途把过渡/毛玻璃放回来。
+    let vtActive = 0;
+
     // 圆形主题切换：从最近一次点击处铺开（View Transitions）；没有手势上下文、减少动态效果或浏览器不支持时退回瞬时切换。
     function radialTransition(mutate) {
         const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -232,7 +288,21 @@
         root.style.setProperty('--rd-theme-x', lastPointer.x + 'px');
         root.style.setProperty('--rd-theme-y', lastPointer.y + 'px');
         root.style.setProperty('--rd-theme-r', Math.ceil(r) + 'px');
-        document.startViewTransition(mutate);
+        vtActive += 1;
+        root.classList.add('rd-theme-switching');
+        let settled = false;
+        const done = () => {
+            if (settled) return;
+            settled = true;
+            vtActive = Math.max(0, vtActive - 1);
+            if (!vtActive) root.classList.remove('rd-theme-switching');
+        };
+        let vt;
+        try { vt = document.startViewTransition(mutate); }
+        catch (e) { mutate(); done(); return; }
+        vt.finished.then(done, done);
+        // 兜底：标签页切后台时 finished 可能迟迟不落定，类挂死会让过渡一直缺席
+        window.setTimeout(done, 900);
     }
 
     function setTemplate(id) {
@@ -365,8 +435,10 @@
             const tpl = Store.getItem(TPL_KEY);
             if (tpl && tpl !== 'majo' && allTemplates().some((t) => t.id === tpl)) {
                 document.documentElement.setAttribute('data-theme-template', tpl);
-            } else if (!tpl) {
-                // Store 里没有模板键（删库重置等）时必须摘掉回放残留，否则首帧后的页面停在快照那套模板而非默认。
+            } else {
+                // 其余三种情形都要摘掉首帧回放的残留属性：没存过（删库重置）、存的就是默认 majo（默认不设属性）、
+                // 存的是已下线的模板 id（已移除的自定义主题、被卸掉的插件主题）。留着会让页面停在快照那套模板上，
+                // 而那个 id 已经没有任何变量定义。
                 document.documentElement.removeAttribute('data-theme-template');
             }
             applyCustomTheme();

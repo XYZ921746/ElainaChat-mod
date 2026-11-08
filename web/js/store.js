@@ -15,6 +15,7 @@
         'elaina_open_character_cards',
         'elaina_open_current_card',
         'elaina_open_memory_core',
+        'elaina_memory_vectors',         // 记忆/对话原文的向量索引（派生数据，可按嵌入模型重建）
         'elaina_memory_tiers',           // 记忆分层（热/温/冷）容量设置
         'elaina_open_current_conv',
         'elaina_open_tasks',

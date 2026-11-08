@@ -3,7 +3,6 @@
 /** 设置改完即生效，故不弹阻断式提示；silent（自动保存）跳过提示与关面板。 */
 async function saveSettings(opts) {
     const silent = Boolean(opts && opts.silent);
-    const asrProvider = document.querySelector('input[name="asrProvider"]:checked')?.value || '';
     const ttsLang = document.querySelector('input[name="ttsLang"]:checked')?.value || 'chinese';
     const replyDisplayMode = document.querySelector('input[name="replyDisplayMode"]:checked')?.value || DEFAULT_SETTINGS.replyDisplayMode;
     const providerSettings = readProviderSettingsForm();
@@ -41,9 +40,17 @@ async function saveSettings(opts) {
         ttsVolume: Math.max(0, Math.min(2, parseFloat(elements.settingTtsVolume.value) || 0)),
         ttsLang,
         replyDisplayMode,
-        asrProvider,
-        autoMemory: elements.settingAutoMemory.checked,
+        // autoMemory / memoryModelPair 由 readProviderSettingsForm 从「对话优化」的记忆下拉读取
         memoryEvery: Math.max(3, Math.min(50, parseInt(elements.settingMemoryEvery.value, 10) || 15)),
+        // 记忆召回的嵌入 / 重排序绑定：控件常驻 DOM，值即事实源；空值 = 该环节不启用。
+        defaultEmbeddingProviderId: (() => {
+            const sel = document.getElementById('settingMemoryEmbeddingProvider');
+            return sel ? sel.value : String(state.settings.defaultEmbeddingProviderId || '');
+        })(),
+        defaultRerankProviderId: (() => {
+            const sel = document.getElementById('settingMemoryRerankProvider');
+            return sel ? sel.value : String(state.settings.defaultRerankProviderId || '');
+        })(),
         agentAccess: nextAccess,
         agentPhoneEnabled: document.getElementById('settingAgentPhoneEnabled')?.checked !== false,
         // 判据是 === true：控件不在页面上时按关闭处理，不能用 "!== false" 兜成默认开启。

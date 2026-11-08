@@ -8,12 +8,31 @@ function bindAppEvents() {
 
     elements.railSettingsBtn.addEventListener('click', openSettings);
     elements.headerSettingsBtn.addEventListener('click', openSettings);
-    elements.closeSettings.addEventListener('click', closeSettingsPanel);
+    elements.closeSettings.addEventListener('click', () => {
+        // 手机上添加模型是设置内的二级页：顶栏返回先退回模型页，再按一次才关设置。
+        const modelTab = document.getElementById('tab-model');
+        if (window.innerWidth <= 980 && modelTab && modelTab.classList.contains('is-add') && typeof closeModelAddPage === 'function') {
+            closeModelAddPage();
+            return;
+        }
+        // 提供商详情同样是设置内的二级页：顶栏返回先回列表，再按一次才关设置。
+        const modelBody = document.getElementById('modelPageBody');
+        if (window.innerWidth <= 980 && modelBody && modelBody.classList.contains('is-detail') && typeof backFromModelDetail === 'function') {
+            backFromModelDetail();
+            return;
+        }
+        closeSettingsPanel();
+    });
     elements.settingsOverlay.addEventListener('click', (e) => {
         if (e.target === elements.settingsOverlay) closeSettingsPanel();
     });
     // 设置改完即生效（bindSettingsAutoSave），故没有「取消 / 保存」按钮，也没有整体「恢复默认设置」—— 那会抹掉用户逐项调过的值。
     bindSettingsAutoSave();
+
+    // 「全部更新」同属静态元素：绑一次，走 plugins.js 的公共批量更新入口（单个更新走卡片按钮）。
+    document.getElementById('modsUpdateAllBtn')?.addEventListener('click', () => {
+        void runModsUpdates(modsUpdateList.slice(), document.getElementById('modsUpdateAllBtn'));
+    });
 
     // 「浏览目录」必须绑在这里，且绑在不在 #modsList 里的按钮上：那块内容每次刷新整块重建 innerHTML，绑在里面会失去监听器，绑在 refreshModsList 里则会重绑 N 次。
     document.getElementById('modsBrowseBtn')?.addEventListener('click', async () => {
@@ -31,7 +50,7 @@ function bindAppEvents() {
 
         btn.disabled = true;
         setHint('正在打开 mods/…');
-        showPanel('<div class="text-[11px] text-indigo-500">正在打开 mods/ …</div>');
+        showPanel('<div class="text-[11px] text-dim">正在打开 mods/ …</div>');
         try {
             let openMsg = '';
             let openOk = false;
@@ -51,33 +70,33 @@ function bindAppEvents() {
                 const res = await fetch('/api/plugins/open-folder?dir=1', { method: 'POST', cache: 'no-store' });
                 const data = await res.json().catch(() => null);
                 if (!res.ok || !data || !data.ok) {
-                    listHtml = '<div class="text-[11px] text-red-500">读取目录失败：'
+                    listHtml = '<div class="text-[11px] text-danger">读取目录失败：'
                         + esc((data && data.message) || ('HTTP ' + res.status)) + '</div>';
                 } else {
                     const list = Array.isArray(data.entries) ? data.entries : [];
                     const dirs = list.filter((e) => e.dir).map((e) => e.name);
                     const files = list.filter((e) => !e.dir).map((e) => e.name);
-                    listHtml = '<div class="text-[11px] text-indigo-500 break-all">'
+                    listHtml = '<div class="text-[11px] text-dim break-all">'
                         + '<b>路径</b>：' + esc(data.path || 'mods/') + '</div>'
                         + (list.length
                             ? (dirs.length
-                                ? '<div class="text-[11px] text-indigo-500 mt-1"><b>文件夹</b>：'
+                                ? '<div class="text-[11px] text-dim mt-1"><b>文件夹</b>：'
                                     + dirs.map((d) => '<span class="inline-block bg-white/70 rounded px-1 mr-1 mb-0.5">' + esc(d) + '</span>').join('') + '</div>'
                                 : '')
                               + (files.length
-                                ? '<div class="text-[11px] text-indigo-400 mt-1"><b>其它文件</b>：' + esc(files.join('、')) + '</div>'
+                                ? '<div class="text-[11px] text-dim mt-1"><b>其它文件</b>：' + esc(files.join('、')) + '</div>'
                                 : '')
-                            : '<div class="text-[11px] text-indigo-400 mt-1">（目录是空的）</div>');
+                            : '<div class="text-[11px] text-dim mt-1">（目录是空的）</div>');
                 }
             } catch (e) {
-                listHtml = '<div class="text-[11px] text-red-500">读取目录失败：'
+                listHtml = '<div class="text-[11px] text-danger">读取目录失败：'
                     + esc(String((e && e.message) || e)) + '（服务没在运行？）</div>';
             }
 
-            showPanel('<div class="text-[11px] ' + (openOk ? 'text-emerald-600' : 'text-amber-600') + '">'
+            showPanel('<div class="text-[11px] ' + (openOk ? 'text-ok' : 'text-warn') + '">'
                 + esc(openMsg) + '</div>' + listHtml);
             setHint(openOk ? '已打开 mods/' : '已列出 mods/（窗口没开，可照下面的路径手动打开）',
-                openOk ? 'text-indigo-500' : 'text-amber-600');
+                openOk ? 'text-dim' : 'text-warn');
         } finally {
             btn.disabled = false;
         }
@@ -124,7 +143,7 @@ function bindAppEvents() {
         const hint = document.getElementById('modsHint');
         if (!file) return;
         const setHint = (text, cls) => setHintText(hint, text, cls);
-        setHint('上传中…（' + Math.round(file.size / 1024) + ' KB）', 'text-indigo-500');
+        setHint('上传中…（' + Math.round(file.size / 1024) + ' KB）', 'text-dim');
         try {
             const res = await fetch('/api/plugins/install?name=' + encodeURIComponent(file.name), {
                 method: 'POST',
@@ -133,7 +152,7 @@ function bindAppEvents() {
             });
             const data = await res.json().catch(() => null);
             if (!res.ok || !data || !data.ok) {
-                setHint('安装失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
+                setHint('安装失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-danger');
             } else {
                 // 与市场安装同一个坑：装完不重扫，新插件不在注册表里，上面那个开关点了也不生效。
                 let reloaded = false;
@@ -144,11 +163,11 @@ function bindAppEvents() {
                     }
                 } catch (err) { /* 加载失败不该把"安装成功"说成失败 */ }
                 setHint('✅ ' + (data.message || '已安装')
-                    + (reloaded ? '，已加载生效' : '（刷新页面后生效）'), 'text-emerald-600');
+                    + (reloaded ? '，已加载生效' : '（刷新页面后生效）'), 'text-ok');
                 void refreshModsList();
             }
         } catch (err) {
-            setHint('安装失败：' + String((err && err.message) || err), 'text-red-500');
+            setHint('安装失败：' + String((err && err.message) || err), 'text-danger');
         } finally {
             e.target.value = '';
         }
@@ -162,7 +181,7 @@ function bindAppEvents() {
         const hint = document.getElementById('skillsHint');
         if (!file) return;
         const setHint = (text, cls) => setHintText(hint, text, cls);
-        setHint('上传中…（' + Math.round(file.size / 1024) + ' KB）', 'text-indigo-500');
+        setHint('上传中…（' + Math.round(file.size / 1024) + ' KB）', 'text-dim');
         try {
             const res = await fetch('/api/skills/install?name=' + encodeURIComponent(file.name), {
                 method: 'POST',
@@ -171,13 +190,13 @@ function bindAppEvents() {
             });
             const data = await res.json().catch(() => null);
             if (!res.ok || !data || !data.ok) {
-                setHint('安装失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
+                setHint('安装失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-danger');
             } else {
-                setHint('✅ ' + (data.message || '已安装'), 'text-emerald-600');
+                setHint('✅ ' + (data.message || '已安装'), 'text-ok');
                 void refreshSkillsList();
             }
         } catch (err) {
-            setHint('安装失败：' + String((err && err.message) || err), 'text-red-500');
+            setHint('安装失败：' + String((err && err.message) || err), 'text-danger');
         } finally {
             e.target.value = '';
         }
@@ -241,7 +260,7 @@ document.querySelector('#settingsExtNav .settings-tab-btn')?.addEventListener('c
             hint.textContent = reg.ok
                 ? ('已重新连接：当前共 ' + reg.count + ' 个 MCP 工具可用。')
                 : ('重新连接失败：' + (reg.message || '未知原因'));
-            hint.className = 'text-[11px] leading-relaxed mb-3 ' + (reg.ok ? 'text-emerald-600' : 'text-red-500');
+            hint.className = 'text-[11px] leading-relaxed mb-3 ' + (reg.ok ? 'text-ok' : 'text-danger');
         }
     });
 
@@ -321,7 +340,6 @@ document.querySelector('#settingsExtNav .settings-tab-btn')?.addEventListener('c
     document.getElementById('lanShareOpenBtn')?.addEventListener('click', openLanShare);
     document.getElementById('lanShareReceiveBtn')?.addEventListener('click', receiveLanShare);
     initSettingsDropdowns();
-    elements.settingTtsProvider.addEventListener('change', updateTtsProviderUI);
     document.getElementById('settingMimoTtsModel')?.addEventListener('change', updateMimoTtsModelUI);
     // 文件框不触发自动保存（见 save.js 的 bindSettingsAutoSave），所以这里自己落盘
     document.getElementById('settingMimoTtsCloneSample')?.addEventListener('change', handleMimoTtsCloneSampleFileChange);
@@ -332,8 +350,6 @@ document.querySelector('#settingsExtNav .settings-tab-btn')?.addEventListener('c
     document.getElementById('mimoTtsCloneSampleBuiltin')?.addEventListener('click', () => {
         void loadBuiltinMimoCloneSample();
     });
-    elements.testTtsConnectionBtn.addEventListener('click', testTtsConnection);
-    elements.clearApiKeysBtn.addEventListener('click', clearApiKeys);
     bindChatProviderSettingsUI();
     elements.announcementConfirmBtn.addEventListener('click', closeAnnouncement);
     elements.announcementOverlay.addEventListener('click', (event) => {
@@ -348,91 +364,6 @@ document.querySelector('#settingsExtNav .settings-tab-btn')?.addEventListener('c
         try { window.ElainaMarket?.open?.(); } catch (e) { /* 忽略 */ }
     });
 
-    document.querySelectorAll('input[name="asrProvider"]').forEach(r => {
-        r.addEventListener('change', updateAsrProviderUI);
-    });
-    document.getElementById('settingAsrTest')?.addEventListener('click', async () => {
-        const key = document.getElementById('settingAsrApiKey')?.value.trim();
-        const asrUrl = document.getElementById('settingDashscopeAsrBaseUrl')?.value.trim() || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-        const asrModel = document.getElementById('settingDashscopeAsrModel')?.value.trim() || 'qwen3-asr-flash';
-        const statusEl = document.getElementById('settingAsrTestStatus');
-        if (!statusEl) return;
-        if (!key) {
-            statusEl.textContent = '请先填写 API Key（语音输入 → 阿里百炼）';
-            statusEl.className = 'text-[11px] text-red-400';
-            return;
-        }
-        if (/streaming/i.test(asrModel)) {
-            statusEl.textContent = '❌ 「' + asrModel + '」是流式（实时）模型，走 WebSocket 实时接口，本应用的非流式识别调不了它 —— 请改用非流式模型（qwen-audio-3.0-asr-flash 或 qwen3-asr-flash）';
-            statusEl.className = 'text-[11px] text-red-400';
-            return;
-        }
-        statusEl.textContent = '测试中…';
-        statusEl.className = 'text-[11px] text-indigo-300';
-        try {
-            const samples = new Float32Array(ASR_TARGET_SAMPLE_RATE * 0.5); // 0.5s 静音
-            const result = await postJsonFromDevice(asrUrl,
-                buildAliyunAsrRequestBody(asrModel, float32ToWavBase64(samples, ASR_TARGET_SAMPLE_RATE)),
-                { Authorization: `Bearer ${key}`, 'X-DashScope-DataInspection': 'enable' }, { timeoutMs: 20000 });
-            if (result.ok || isAsrNoWordsError(result)) {
-                statusEl.textContent = '✅ 连接成功（HTTP ' + (result.status || 200) + '）：Key 有效、' + asrModel + ' 可调用'
-                    + (result.ok ? '' : '（测试发的是 0.5 秒静音，模型如实回「没有听到词」—— 属正常，录真话就会出文字）');
-                statusEl.className = 'text-[11px] text-green-500';
-            } else {
-                const msg = String(
-                    result.payload?.base_resp?.status_msg ||
-                    result.payload?.message ||
-                    result.payload?.error?.message ||
-                    result.payload?.error ||
-                    ('HTTP ' + result.status)
-                );
-                statusEl.textContent = '❌ ' + msg + '（HTTP ' + (result.status || '?') + '）';
-                statusEl.className = 'text-[11px] text-red-400';
-            }
-        } catch (err) {
-            statusEl.textContent = '❌ ' + (err.message || err);
-            statusEl.className = 'text-[11px] text-red-400';
-        }
-    });
-    document.getElementById('settingMimoAsrTest')?.addEventListener('click', async () => {
-        const key = document.getElementById('settingMimoAsrApiKey')?.value.trim();
-        const baseUrl = (document.getElementById('settingMimoAsrBaseUrl')?.value.trim() || 'https://api.xiaomimimo.com').replace(/\/+$/, '');
-        const model = document.getElementById('settingMimoAsrModel')?.value.trim() || 'mimo-v2.5-asr';
-        const statusEl = document.getElementById('settingMimoAsrTestStatus');
-        if (!statusEl) return;
-        if (!key) {
-            statusEl.textContent = '请先填写 MiMo API Key';
-            statusEl.className = 'text-[11px] text-red-400';
-            return;
-        }
-        statusEl.textContent = '测试中…';
-        statusEl.className = 'text-[11px] text-indigo-300';
-        try {
-            const samples = new Float32Array(ASR_TARGET_SAMPLE_RATE * 0.5); // 0.5s 静音
-            const result = await postJsonFromDevice(baseUrl + '/v1/chat/completions', {
-                model,
-                messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${float32ToWavBase64(samples, ASR_TARGET_SAMPLE_RATE)}`, format: 'wav' } }] }],
-                asr_options: { language: 'zh' },
-                stream: false
-            }, { 'api-key': key, 'Content-Type': 'application/json' }, { timeoutMs: 20000 });
-            if (result.ok) {
-                statusEl.textContent = '✅ 连接成功（HTTP ' + (result.status || 200) + '）：MiMo ASR 可用';
-                statusEl.className = 'text-[11px] text-green-500';
-            } else {
-                const msg = String(
-                    result.payload?.message ||
-                    result.payload?.error?.message ||
-                    result.payload?.error ||
-                    ('HTTP ' + result.status)
-                );
-                statusEl.textContent = '❌ ' + msg + '（HTTP ' + (result.status || '?') + '）';
-                statusEl.className = 'text-[11px] text-red-400';
-            }
-        } catch (err) {
-            statusEl.textContent = '❌ ' + (err.message || err);
-            statusEl.className = 'text-[11px] text-red-400';
-        }
-    });
     elements.settingTtsSpeed.addEventListener('input', () => {
         elements.ttsSpeedLabel.textContent = parseFloat(elements.settingTtsSpeed.value).toFixed(1) + 'x';
         updateSliderFill(elements.settingTtsSpeed);
@@ -590,7 +521,7 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
             document.querySelectorAll('.notes-tab').forEach(b => {
                 const active = b === btn;
                 b.classList.toggle('tab-active', active);
-                b.classList.toggle('text-indigo-500', !active);
+                b.classList.toggle('text-dim', !active);
                 b.classList.toggle('bg-white/40', !active);
                 b.classList.toggle('border', !active);
                 b.classList.toggle('border-white/55', !active);

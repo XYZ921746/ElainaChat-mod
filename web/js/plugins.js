@@ -19,6 +19,11 @@ function applyModsPlatformHint() {
 let modsPrereqOpen = false;
 let modsHintErrorText = '';
 
+// 更新检查结果同样只存内存：本次会话自动查一次（走市场商店源，含自定义源），不进 DATA_KEYS —— 它不是跨设备同步的设置项，D13 的三处同步不适用。
+let modsUpdateList = [];      // [{ plugin: 索引条目, current: 当前版本 }]
+let modsUpdateChecked = false;
+let modsUpdateBusy = false;
+
 const ICON = {
     grip: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>',
     doc: '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6M7 3h7l5 5v13a1 1 0 01-1 1H7a1 1 0 01-1-1V4a1 1 0 011-1z"/></svg>',
@@ -37,37 +42,44 @@ function renderModCard(m, opts) {
         ? window.ElainaReadme.inline(m.description || '')
         : escapeHtml(m.description || '');
     const ver = m.version
-        ? '<span class="text-[10px] text-indigo-400 ml-1">v' + escapeHtml(m.version) + '</span>' : '';
+        ? '<span class="text-[10px] text-dim ml-1">v' + escapeHtml(m.version) + '</span>' : '';
 
-    let badge = '';
+    // 更新角标 / 按钮只对自动检查命中的卡片出现；更新动作走市场安装管线，与首次安装同一条安全路径。
+    const upd = modsUpdateList.find((u) => u.plugin.id === m.id);
+    const updBadge = upd
+        ? badge('可更新 v' + (upd.plugin.version || ''), 'warn') : '';
+    const updBtn = upd
+        ? '<button type="button" class="mod-act mod-update-btn" data-mod-id="' + id + '"'
+            + (modsUpdateBusy ? ' disabled' : '')
+            + ' title="从商店源下载新版本覆盖安装（进度见右下角悬浮窗）">' + ICON.refresh + '</button>'
+        : '';
+
+    let badgeHtml = '';
     if (m.state === 'error') {
-        badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 ml-1" title="'
-            + escapeHtml(m.error || '') + '">'
-            + (m.autoDisabled ? '加载失败 · 已自动停用' : '加载失败') + '</span>';
+        badgeHtml = badge((m.autoDisabled ? '加载失败 · 已自动停用' : '加载失败'), 'danger', m.error || '');
     } else if (m.state === 'blocked') {
-        badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-600 ml-1" title="'
-            + escapeHtml(m.error || '') + '">前置插件不可用</span>';
+        badgeHtml = badge('前置插件不可用', 'danger', m.error || '');
     } else if (m.state === 'ready') {
-        badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 ml-1">已加载</span>';
+        badgeHtml = badge('已加载', 'ok');
     } else if (m.state === 'disabled') {
-        badge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 ml-1">未启用</span>';
+        badgeHtml = badge('未启用', 'neutral');
     }
 
 // 报错详情只写在卡片上（不在 title 里，也不弹全局提示）：触屏没有悬停，插件坏了也不该在聊天区 / 顶栏 / 公告里出现（AGENTS.md D20）。
     let errorDetail = '';
     if (m.state === 'error' && m.error) {
-        errorDetail = '<div class="mt-1.5 rounded-md bg-red-50 border border-red-100 px-2 py-1.5">'
-            + '<div class="text-[11px] text-red-600 leading-relaxed break-words">'
+        errorDetail = '<div class="mt-1.5 rounded-md bg-danger-soft border border-danger-soft px-2 py-1.5">'
+            + '<div class="text-[11px] text-danger leading-relaxed break-words">'
             + escapeHtml(String(m.error)) + '</div>'
-            + '<div class="text-[11px] text-red-400 leading-relaxed mt-1">'
+            + '<div class="text-[11px] text-danger leading-relaxed mt-1">'
             + (m.autoDisabled
                 ? '已自动停用，软件其余功能不受影响。修好它之后把开关重新打开即可。'
                 : '软件其余功能不受影响。')
             + (m.faultCount ? '<br>运行期已出错 ' + escapeHtml(String(m.faultCount)) + ' 次。' : '')
             + '</div></div>';
     } else if (m.state === 'blocked' && m.error) {
-        errorDetail = '<div class="mt-1.5 rounded-md bg-red-50 border border-red-100 px-2 py-1.5">'
-            + '<div class="text-[11px] text-red-600 leading-relaxed break-words">'
+        errorDetail = '<div class="mt-1.5 rounded-md bg-danger-soft border border-danger-soft px-2 py-1.5">'
+            + '<div class="text-[11px] text-danger leading-relaxed break-words">'
             + escapeHtml(String(m.error)) + '</div></div>';
     }
 
@@ -82,13 +94,13 @@ function renderModCard(m, opts) {
             if (dep.reason === '插件系统总开关已关闭') return what + ' —— 插件系统被关闭（设置里的总开关为关），刷新页面即可恢复';
             return what;
         });
-        blockReason = '<span class="block text-[11px] text-red-500 leading-relaxed mt-1">'
+        blockReason = '<span class="block text-[11px] text-danger leading-relaxed mt-1">'
             + rows.join('<br>') + '</span>';
     }
 
     // hidden 的公共依赖仍给开关：一旦被禁用，界面上就没有任何入口能再打开它，只能手改存储键。
     const hiddenNote = m.hidden
-        ? '<span class="text-[10px] text-indigo-300 ml-1">（公共依赖）</span>' : '';
+        ? '<span class="text-[10px] text-dim ml-1">（公共依赖）</span>' : '';
 
     const toggle = '<label class="mod-switch" title="' + (m.enabled ? '点击停用' : '点击启用') + '">'
         + '<input type="checkbox" class="mod-toggle" data-mod-id="' + id + '"'
@@ -123,17 +135,18 @@ function renderModCard(m, opts) {
         + '<div class="min-w-0 flex-1">'
           + '<div class="flex items-start gap-2">'
             + '<div class="min-w-0 flex-1">'
-              + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + ver + hiddenNote + badge
+              + '<span class="text-xs font-semibold text-ink">' + name + '</span>' + ver + updBadge + hiddenNote + badgeHtml
             + '</div>'
             + '<div class="flex-none pt-0.5">' + toggle + '</div>'
           + '</div>'
-          + (desc ? '<div class="mod-desc text-[11px] text-indigo-400 leading-relaxed mt-1">' + desc + '</div>' : '')
+          + (desc ? '<div class="mod-desc text-[11px] text-dim leading-relaxed mt-1">' + desc + '</div>' : '')
           + errorDetail
           + blockReason
           + '<div class="flex items-center gap-1.5 mt-2">'
             + '<button type="button" class="mod-act mod-readme-btn" data-mod-id="' + id + '"'
               + ' data-mod-name="' + name + '" title="查看插件自带的说明（README）">' + ICON.doc + '</button>'
             + settingsBtn
+            + updBtn
             + openFolderBtn
             + delBtn
           + '</div>'
@@ -158,9 +171,9 @@ function renderGroupHtml(g, items, order) {
         + '<button type="button" class="mod-group-toggle" data-group-id="' + gid + '"'
         + ' title="' + (collapsed ? '展开' : '收纳') + '" aria-label="' + (collapsed ? '展开分栏' : '收纳分栏') + '">'
         + '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M9 6l6 6-6 6z"/></svg></button>'
-        + '<span class="mod-group-name text-xs font-semibold text-indigo-800" data-group-id="' + gid + '">'
+        + '<span class="mod-group-name text-xs font-semibold text-ink" data-group-id="' + gid + '">'
         + escAttr(g.name) + '</span>'
-        + '<span class="text-[10px] text-indigo-400">' + items.length + '</span>'
+        + '<span class="text-[10px] text-dim">' + items.length + '</span>'
         + '<span class="mod-group-actions ml-auto flex items-center gap-1">'
         + '<button type="button" class="mod-act mod-group-rename" data-group-id="' + gid + '" title="重命名这个分栏">'
         + '<svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5h6M4 20h16M13.5 4.5l4 4L8 18H5v-3l8.5-10.5z"/></svg></button>'
@@ -171,7 +184,7 @@ function renderGroupHtml(g, items, order) {
         + '<div class="mod-group-body mod-grid' + (collapsed ? ' is-collapsed' : '') + '" data-group-body="' + gid + '">'
         + (items.length
             ? items.map(renderModCard).join('')
-            : '<div class="text-[11px] text-indigo-300 py-3 text-center">把插件卡片拖到这里</div>')
+            : '<div class="text-[11px] text-dim py-3 text-center">把插件卡片拖到这里</div>')
         + '</div>'
         + '</div>';
 }
@@ -242,7 +255,7 @@ async function loadModsEntries(hint) {
     if (hint && bad.length) {
         const msg = '有 ' + bad.length + ' 个 zip 安装失败：' + bad.map((b) => b.zip + '（' + b.error + '）').join('；');
         hint.textContent = msg;
-        hint.className = 'text-[11px] text-red-500';
+        hint.className = 'text-[11px] text-danger';
         modsHintErrorText = msg;
     } else if (hint && modsHintErrorText && hint.textContent === modsHintErrorText) {
         hint.textContent = '';
@@ -377,7 +390,7 @@ function bindModToggle(box, hint) {
                     hint.textContent = st && st.error
                         ? '没有' + (el.checked ? '启动 ' : '停用 ') + id + '：' + st.error
                         : '这个插件当前没能' + (el.checked ? '启用' : '停用') + '（加载器没认到它）。刷新页面后再试一次。';
-                    hint.className = 'text-[11px] text-red-500';
+                    hint.className = 'text-[11px] text-danger';
                 }
                 el.checked = !el.checked;   // 把开关拨回去，别留一个假状态
                 void refreshModsList();
@@ -392,7 +405,7 @@ function bindModToggle(box, hint) {
                     }
                 }
                 hint.textContent = msg;
-                hint.className = 'text-[11px] text-indigo-500';
+                hint.className = 'text-[11px] text-dim';
             }
             const refreshed = refreshModsList();
             void Promise.resolve(refreshed).then(() => {
@@ -424,13 +437,22 @@ function bindModCardButtons(box, hint) {
         });
     });
 
+    // 单独更新一个：从待更清单按 id 找回索引条目，走市场安装管线；批量进行中按钮已在渲染时禁用。
+    box.querySelectorAll('.mod-update-btn').forEach((el) => {
+        el.addEventListener('click', () => {
+            const id = el.getAttribute('data-mod-id');
+            const upd = modsUpdateList.find((u) => u.plugin.id === id);
+            if (upd) void runModsUpdates([upd], el);
+        });
+    });
+
     // 打开插件目录（POST /api/plugins/open-folder?id=…）：失败必须写在插件列表上（modsHint），不能弹全局 alert（AGENTS.md D20）；失败另给兜底出口「浏览目录」。
     box.querySelectorAll('.mod-openfolder').forEach((el) => {
         el.addEventListener('click', async () => {
             const id = el.getAttribute('data-mod-id');
             const name = el.getAttribute('data-mod-name') || id;
             el.disabled = true;
-            if (hint) { hint.textContent = '正在打开「' + name + '」的文件夹…'; hint.className = 'text-[11px] text-indigo-500'; }
+            if (hint) { hint.textContent = '正在打开「' + name + '」的文件夹…'; hint.className = 'text-[11px] text-dim'; }
             try {
                 const res = await fetch('/api/plugins/open-folder?id=' + encodeURIComponent(id), { method: 'POST' });
                 const data = await res.json().catch(() => null);
@@ -438,7 +460,7 @@ function bindModCardButtons(box, hint) {
                     if (hint) {
                         hint.textContent = '已打开「' + name + '」的文件夹'
                             + (data.path ? '：' + data.path : '');
-                        hint.className = 'text-[11px] text-indigo-500';
+                        hint.className = 'text-[11px] text-dim';
                     }
                     return;
                 }
@@ -446,13 +468,13 @@ function bindModCardButtons(box, hint) {
                     hint.textContent = '打开「' + name + '」的文件夹失败：'
                         + ((data && data.message) || ('HTTP ' + res.status))
                         + '。可点「浏览目录」查看 mods/ 里的文件夹。';
-                    hint.className = 'text-[11px] text-red-500';
+                    hint.className = 'text-[11px] text-danger';
                 }
             } catch (err) {
                 if (hint) {
                     hint.textContent = '打开「' + name + '」的文件夹失败：'
                         + String((err && err.message) || err) + '（服务没在运行？）';
-                    hint.className = 'text-[11px] text-red-500';
+                    hint.className = 'text-[11px] text-danger';
                 }
             } finally {
                 el.disabled = false;
@@ -486,14 +508,14 @@ function bindModCardButtons(box, hint) {
             if (!okToGo) return;
 
             el.disabled = true;
-            if (hint) { hint.textContent = '正在删除 ' + name + '…'; hint.className = 'text-[11px] text-indigo-500'; }
+            if (hint) { hint.textContent = '正在删除 ' + name + '…'; hint.className = 'text-[11px] text-dim'; }
             try {
                 const res = await fetch('/api/plugins/' + encodeURIComponent(id), { method: 'DELETE' });
                 const data = await res.json().catch(() => null);
                 if (!res.ok || !data || data.ok === false) {
                     if (hint) {
                         hint.textContent = '删除失败：' + ((data && data.message) || ('HTTP ' + res.status));
-                        hint.className = 'text-[11px] text-red-500';
+                        hint.className = 'text-[11px] text-danger';
                     }
                 } else {
                     if (window.ElainaMods && typeof window.ElainaMods.forget === 'function') {
@@ -501,14 +523,14 @@ function bindModCardButtons(box, hint) {
                     }
                     if (hint) {
                         hint.textContent = '已删除 ' + name + '（刷新页面后彻底生效）';
-                        hint.className = 'text-[11px] text-emerald-600';
+                        hint.className = 'text-[11px] text-ok';
                     }
                     void refreshModsList();
                 }
             } catch (err) {
                 if (hint) {
                     hint.textContent = '删除失败：' + String((err && err.message) || err);
-                    hint.className = 'text-[11px] text-red-500';
+                    hint.className = 'text-[11px] text-danger';
                 }
             } finally {
                 el.disabled = false;
@@ -576,6 +598,15 @@ async function refreshModsList() {
 
     const merged = await loadModsEntries(hint);
 
+    // 每次会话自动查一次更新（商店源不可达就安静放弃：打开市场时会看到具体原因，不该在插件页报全局错）。
+    if (!modsUpdateChecked && window.ElainaMarket && typeof window.ElainaMarket.checkUpdates === 'function') {
+        modsUpdateChecked = true;
+        void window.ElainaMarket.checkUpdates(merged).then((found) => {
+            modsUpdateList = Array.isArray(found) ? found : [];
+            void refreshModsList();   // 结果回来重画一遍：角标与更新条靠这次渲染落地
+        }).catch(() => { /* 本会话不再自动重试 */ });
+    }
+
     // 前置扩展单独成区：照样能开关、看加载失败原因、卸载；混在普通列表里会让人拨开关后发现没反应。
     const { prereqMods, normalMods } = splitPrereqMods(merged);
 
@@ -641,10 +672,10 @@ async function refreshModsList() {
             + '<button type="button" id="modsPrereqToggle" class="w-full flex items-baseline gap-2 mb-1.5 text-left"'
             + ' aria-expanded="' + (modsPrereqOpen ? 'true' : 'false') + '"'
             + ' title="前置扩展默认收起；点一下展开">'
-            + '<span class="text-[11px] font-semibold text-indigo-500">前置扩展</span>'
-            + '<span class="text-[10px] text-indigo-300">' + prereqMods.length
+            + '<span class="text-[11px] font-semibold text-dim">前置扩展</span>'
+            + '<span class="text-[10px] text-dim">' + prereqMods.length
             + ' 个 · 被其他插件依赖；可单独开关，关闭前需先关掉用它的插件</span>'
-            + '<span class="ml-auto text-[10px] text-indigo-400" data-prereq-caret'
+            + '<span class="ml-auto text-[10px] text-dim" data-prereq-caret'
             + ' style="display:inline-block;transform:rotate(' + (modsPrereqOpen ? '0' : '-90') + 'deg)">▾</span>'
             + '</button>'
             + '<div id="modsPrereqBody" class="mod-grid' + (modsPrereqOpen ? '' : ' hidden') + '">'
@@ -663,4 +694,52 @@ async function refreshModsList() {
     bindModGroupActions(box, normalMods, groupOf, UNGROUPED_ID, readGroups, saveGroups);
 
     bindGroupDragSort(box, () => void refreshModsList(), { readGroups, saveGroups });
+
+    syncModsUpdateBar();
+}
+
+/** 更新条只在有结果时出现；全部更新按钮在每次同步时刷新禁用态（条是静态 HTML，按钮监听由 bindings.js 绑一次）。 */
+function syncModsUpdateBar() {
+    const bar = document.getElementById('modsUpdateBar');
+    if (!bar) return;
+    if (!modsUpdateList.length) {
+        bar.classList.add('hidden');
+        return;
+    }
+    bar.classList.remove('hidden');
+    const names = modsUpdateList
+        .map((u) => (u.plugin.name || u.plugin.id) + ' v' + u.current + ' → v' + (u.plugin.version || '?'))
+        .join('、');
+    const text = document.getElementById('modsUpdateText');
+    if (text) text.textContent = '发现 ' + modsUpdateList.length + ' 个可更新：' + names;
+    const all = document.getElementById('modsUpdateAllBtn');
+    if (all) all.disabled = modsUpdateBusy;
+}
+
+/** 单个 / 全部更新共用这一条路径：逐个走市场安装管线，成功的从待更清单摘掉，失败的留下（原因在右下角悬浮窗逐条可见）。 */
+async function runModsUpdates(list, btn) {
+    if (!window.ElainaMarket || typeof window.ElainaMarket.updateBatch !== 'function') return;
+    if (modsUpdateBusy || !list.length) return;
+    modsUpdateBusy = true;
+    // 卡片上的更新按钮是图标按钮（innerHTML 是 svg），标签存取必须走 innerHTML，textContent 会把图标弄丢
+    const label = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '更新中…'; }
+    try {
+        const results = await window.ElainaMarket.updateBatch(list);
+        const failedIds = new Set(results.filter((r) => !r.ok).map((r) => r.id));
+        const okN = results.filter((r) => r.ok).length;
+        modsUpdateList = modsUpdateList.filter((u) => failedIds.has(u.plugin.id));
+        const hint = document.getElementById('modsHint');
+        if (hint) {
+            hint.textContent = okN === results.length
+                ? '已更新 ' + okN + ' 个插件' + (okN > 1 ? '（依赖包按序一并处理）' : '')
+                : '已更新 ' + okN + ' 个，' + (results.length - okN) + ' 个失败 —— 原因见右下角下载悬浮窗';
+            hint.className = okN === results.length ? 'text-[11px] text-ok' : 'text-[11px] text-danger';
+        }
+    } finally {
+        modsUpdateBusy = false;
+        if (btn) { btn.disabled = false; btn.innerHTML = label; }
+        syncModsUpdateBar();
+        void refreshModsList();
+    }
 }

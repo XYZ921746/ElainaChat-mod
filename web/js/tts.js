@@ -34,45 +34,85 @@ function hashTtsText(text) {
     return (hash >>> 0).toString(36);
 }
 
+// 当前生效的文字转语音提供商：默认指向悬空（被删/未设）时回落第一条；一条都没有返回 null，由调用方给「去添加」的指引。
+function activeTtsProvider() {
+    const list = Array.isArray(state.settings.ttsProviders) ? state.settings.ttsProviders : [];
+    if (!list.length) return null;
+    return list.find((p) => p.id === state.settings.defaultTtsProviderId) || list[0];
+}
+
+// 把提供商对象 + 它的 Key 映射成老平铺字段的 settings 视图：四个生成函数仍按平铺字段读配置，只换数据源，
+// 生成逻辑本身不动 —— 这样「测试连接」传草稿提供商、「正式播放」传生效提供商走同一条路。
+// base 保留播放参数（ttsSpeed / ttsVolume / ttsLang）；克隆样本仍是全局设置（内置样本助手写在那里）。
+function ttsProviderSettings(provider, base = state.settings) {
+    const cfg = { ...base };
+    if (!provider) return cfg;
+    const key = typeof getProviderSecret === 'function' ? getProviderSecret(provider.id) : '';
+    if (provider.apiFormat === 'mimo') {
+        cfg.mimoTtsApiKey = key;
+        cfg.mimoTtsBaseUrl = String(provider.baseUrl || '').trim() || 'https://api.xiaomimimo.com';
+        cfg.mimoTtsModel = String(provider.model || 'mimo-v2.5-tts').trim();
+        cfg.mimoTtsVoice = String(provider.voice || 'mimo_default').trim();
+        cfg.mimoTtsVoiceDesignPrompt = String(provider.voiceDesignPrompt || '').trim();
+    } else if (provider.apiFormat === 'openai-tts') {
+        cfg.openaiTtsApiKey = key;
+        cfg.openaiTtsBaseUrl = String(provider.baseUrl || '').trim() || 'https://api.openai.com/v1';
+        cfg.openaiTtsModel = String(provider.model || 'tts-1').trim();
+        cfg.openaiTtsVoice = String(provider.voice || 'alloy').trim();
+    } else if (provider.apiFormat === 'minimax') {
+        cfg.minimaxApiKey = key;
+        cfg.minimaxModel = String(provider.model || 'speech-2.8-hd').trim();
+        cfg.minimaxVoice = String(provider.voice || '').trim();
+    } else if (provider.apiFormat === 'dashscope') {
+        cfg.dashscopeApiKey = key;
+        cfg.dashscopeTtsModel = String(provider.model || 'qwen3-tts-flash').trim();
+        cfg.dashscopeTtsVoice = String(provider.voice || 'Cherry').trim();
+    }
+    return cfg;
+}
+
 function buildMessageTtsCacheKey(message, spokenText, conversationId = state.currentConversationId) {
     const clean = sanitizeTtsText(spokenText || '', false);
-    const provider = String(state.settings.ttsProvider || 'mimo');
+    const provider = activeTtsProvider();
     let providerFingerprint = '';
-    if (provider === 'dashscope') {
-        providerFingerprint = [
-            state.settings.dashscopeTtsModel || 'qwen3-tts-flash',
-            state.settings.dashscopeTtsVoice || 'no-voice'
-        ].join('|');
-    } else if (provider === 'mimo') {
-        const mimoModel = String(state.settings.mimoTtsModel || 'mimo-v2.5-tts');
-        // 音色来源随模型变化，必须进指纹 —— 否则换了参考样本/描述仍会命中同一条缓存
-        let voiceToken;
-        if (mimoModel === 'mimo-v2.5-tts-voiceclone') {
-            // 样本是长 base64，指纹只取"文件名 + 长度"这种轻量信息（换样本即变）
-            const sample = String(state.settings.mimoTtsCloneSample || '');
-            voiceToken = sample ? `clone:${state.settings.mimoTtsCloneSampleName || ''}:${sample.length}` : 'clone:none';
-        } else if (mimoModel === 'mimo-v2.5-tts-voicedesign') {
-            voiceToken = `design:${state.settings.mimoTtsVoiceDesignPrompt || ''}`;
+    if (provider) {
+        const cfg = ttsProviderSettings(provider);
+        if (provider.apiFormat === 'dashscope') {
+            providerFingerprint = [
+                cfg.dashscopeTtsModel || 'qwen3-tts-flash',
+                cfg.dashscopeTtsVoice || 'no-voice'
+            ].join('|');
+        } else if (provider.apiFormat === 'mimo') {
+            const mimoModel = String(cfg.mimoTtsModel || 'mimo-v2.5-tts');
+            // 音色来源随模型变化，必须进指纹 —— 否则换了参考样本/描述仍会命中同一条缓存
+            let voiceToken;
+            if (mimoModel === 'mimo-v2.5-tts-voiceclone') {
+                // 样本是长 base64，指纹只取"文件名 + 长度"这种轻量信息（换样本即变）
+                const sample = String(cfg.mimoTtsCloneSample || '');
+                voiceToken = sample ? `clone:${cfg.mimoTtsCloneSampleName || ''}:${sample.length}` : 'clone:none';
+            } else if (mimoModel === 'mimo-v2.5-tts-voicedesign') {
+                voiceToken = `design:${cfg.mimoTtsVoiceDesignPrompt || ''}`;
+            } else {
+                voiceToken = cfg.mimoTtsVoice || 'mimo_default';
+            }
+            providerFingerprint = [mimoModel, voiceToken].join('|');
+        } else if (provider.apiFormat === 'openai-tts') {
+            providerFingerprint = [
+                cfg.openaiTtsModel || 'tts-1',
+                cfg.openaiTtsVoice || 'alloy'
+            ].join('|');
         } else {
-            voiceToken = state.settings.mimoTtsVoice || 'mimo_default';
+            providerFingerprint = [
+                cfg.minimaxModel || 'speech-2.8-hd',
+                cfg.minimaxVoice || 'no-voice'
+            ].join('|');
         }
-        providerFingerprint = [mimoModel, voiceToken].join('|');
-    } else if (provider === 'openai-tts') {
-        providerFingerprint = [
-            state.settings.openaiTtsModel || 'tts-1',
-            state.settings.openaiTtsVoice || 'alloy'
-        ].join('|');
-    } else {
-        providerFingerprint = [
-            state.settings.minimaxModel || 'speech-2.8-hd',
-            state.settings.minimaxVoice || 'no-voice'
-        ].join('|');
     }
     return [
-        'message-v2',
+        'message-v3',
         conversationId || 'conversation',
         message?.id || 'unknown',
-        provider,
+        provider ? provider.id : 'none',
         providerFingerprint,
         state.settings.ttsLang || 'japanese',
         Number(state.settings.ttsSpeed || 1).toFixed(2),
@@ -199,10 +239,10 @@ async function playCachedPcm(record, onStart, onEnd, session) {
 
 async function generateMimoTtsAudio(text, settings = state.settings) {
     const mimoApiKey = String(settings.mimoTtsApiKey || '').trim();
-    if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写小米 MiMo TTS API Key');
+    if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 文字转语音 里给这家 MiMo 填好 API Key');
     const baseUrl = String(settings.mimoTtsBaseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
     const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim() || 'mimo-v2.5-tts';
-    // voiceclone 但还没有样本时，先补上软件自带的伊蕾娜日语样本；settings 可能是设置页的**草稿对象**（见 testTtsConnection），补完要同步过去，否则本次请求读到的仍是空样本。
+    // voiceclone 但还没有样本时，先补上软件自带的伊蕾娜日语样本；settings 可能是详情页的**草稿视图**（见 testTtsProviderDraft），补完要同步过去，否则本次请求读到的仍是空样本。
     if (model === 'mimo-v2.5-tts-voiceclone' && !String(settings.mimoTtsCloneSample || '').trim()) {
         await ensureBuiltinMimoCloneSample();
         settings.mimoTtsCloneSample = state.settings.mimoTtsCloneSample;
@@ -214,12 +254,12 @@ async function generateMimoTtsAudio(text, settings = state.settings) {
     if (model === 'mimo-v2.5-tts-voicedesign') {
         // 音色设计：user 消息里的音色描述**必填**，且该模型不支持 voice 字段
         const prompt = String(settings.mimoTtsVoiceDesignPrompt || '').trim();
-        if (!prompt) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 MiMo 音色描述（voicedesign 模型必填）');
+        if (!prompt) throw new ClientApiError('APP_KEY_MISSING', '请先在这家 MiMo 的详情里填写音色描述（voicedesign 模型必填）');
         messages = [{ role: 'user', content: prompt }, assistantMessage];
     } else if (model === 'mimo-v2.5-tts-voiceclone') {
         // 音色复刻：参考音频样本（base64 data URL）**必填**，放在 audio.voice 里；不支持预置音色
         const sample = String(settings.mimoTtsCloneSample || '').trim();
-        if (!sample) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中上传音色复刻的参考音频样本');
+        if (!sample) throw new ClientApiError('APP_KEY_MISSING', '请先在这家 MiMo 的详情里上传音色复刻的参考音频样本');
         audio.voice = /^data:audio\//i.test(sample) ? sample : `data:audio/wav;base64,${sample}`;
         messages = [{ role: 'user', content: '' }, assistantMessage];
     } else {
@@ -242,7 +282,7 @@ async function generateMimoTtsAudio(text, settings = state.settings) {
     return { bytes: base64ToArrayBuffer(audioBase64), format: 'wav' };
 }
 
-async function speakTextMimo(text, onStart, options = {}) {
+async function speakTextMimo(text, onStart, options = {}, cfg = null) {
     const { cacheKey = '', onEnd = null } = options;
     const session = options.session || createVoiceSession(options.messageId || null);
     ensureVoiceSessionActive(session);
@@ -265,7 +305,7 @@ async function speakTextMimo(text, onStart, options = {}) {
     }
     try {
         session.abortController = new AbortController();
-        const { bytes, format } = await generateMimoTtsAudio(text);
+        const { bytes, format } = await generateMimoTtsAudio(text, cfg || undefined);
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
@@ -284,7 +324,7 @@ async function speakTextMimo(text, onStart, options = {}) {
 // 通用 OpenAI TTS：POST {base}/audio/speech + Bearer，请求体 { model, input, voice, response_format: 'mp3' }，响应是**二进制 mp3**；直接读 arrayBuffer 交给播放器（与 MiniMax 的 { bytes, format } 形状一致）。
 async function generateOpenaiTtsAudio(text, settings = state.settings) {
     const apiKey = String(settings.openaiTtsApiKey || '').trim();
-    if (!apiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写通用 OpenAI TTS 的 API Key');
+    if (!apiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 文字转语音 里给这家 TTS 填好 API Key');
     const baseUrl = String(settings.openaiTtsBaseUrl || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
     const response = await fetchWithTimeout(baseUrl + '/audio/speech', {
         method: 'POST',
@@ -312,7 +352,7 @@ async function generateOpenaiTtsAudio(text, settings = state.settings) {
     return { bytes, format: 'mp3' };
 }
 
-async function speakTextOpenaiTts(text, onStart, options = {}) {
+async function speakTextOpenaiTts(text, onStart, options = {}, cfg = null) {
     const { cacheKey = '', onEnd = null } = options;
     const session = options.session || createVoiceSession(options.messageId || null);
     ensureVoiceSessionActive(session);
@@ -335,7 +375,7 @@ async function speakTextOpenaiTts(text, onStart, options = {}) {
     }
     try {
         session.abortController = new AbortController();
-        const { bytes, format } = await generateOpenaiTtsAudio(text);
+        const { bytes, format } = await generateOpenaiTtsAudio(text, cfg || undefined);
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
@@ -351,7 +391,7 @@ async function speakTextOpenaiTts(text, onStart, options = {}) {
     }
 }
 
-async function speakTextMinimax(text, onStart, options = {}) {
+async function speakTextMinimax(text, onStart, options = {}, cfg = null) {
     const { cacheKey = '', onEnd = null } = options;
     const session = options.session || createVoiceSession(options.messageId || null);
     ensureVoiceSessionActive(session);
@@ -372,21 +412,22 @@ async function speakTextMinimax(text, onStart, options = {}) {
             console.log('[TTS Cache] 未命中，首次调用 MiniMax 生成');
         }
     }
-    const minimaxApiKey = String(state.settings.minimaxApiKey || '').trim();
-    const voiceId = String(state.settings.minimaxVoice || '').trim();
-    if (!minimaxApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 MiniMax API Key');
-    if (!voiceId) throw new ClientApiError('BAD_REQUEST', '请先在设置中填写自己的 MiniMax 音色 ID');
+    const minimaxCfg = cfg || state.settings;
+    const minimaxApiKey = String(minimaxCfg.minimaxApiKey || '').trim();
+    const voiceId = String(minimaxCfg.minimaxVoice || '').trim();
+    if (!minimaxApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 文字转语音 里给这家 MiniMax 填好 API Key');
+    if (!voiceId) throw new ClientApiError('BAD_REQUEST', '请先在这家 MiniMax 的详情里填自己的克隆音色 ID');
     try {
         session.abortController = new AbortController();
         const result = await postJsonFromDevice(MINIMAX_TTS_HTTP, {
-            model: state.settings.minimaxModel || 'speech-2.8-hd',
+            model: minimaxCfg.minimaxModel || 'speech-2.8-hd',
             text,
             stream: false,
             language_boost: 'auto',
             voice_setting: {
                 voice_id: voiceId,
-                speed: state.settings.ttsSpeed || 1.0,
-                vol: state.settings.ttsVolume ?? 1,
+                speed: minimaxCfg.ttsSpeed || 1.0,
+                vol: minimaxCfg.ttsVolume ?? 1,
                 pitch: 0
             },
             audio_setting: {
@@ -422,8 +463,8 @@ async function speakTextMinimax(text, onStart, options = {}) {
 async function generateDashscopeTtsAudio(text, settings = state.settings) {
     const dashscopeApiKey = String(settings.dashscopeApiKey || '').trim();
     const voiceId = String(settings.dashscopeTtsVoice || '').trim();
-    if (!dashscopeApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 DashScope API Key');
-    if (!voiceId) throw new ClientApiError('BAD_REQUEST', '请先在设置中填写千问 TTS 音色');
+    if (!dashscopeApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 文字转语音 里给这家千问填好 API Key');
+    if (!voiceId) throw new ClientApiError('BAD_REQUEST', '请先在这家千问的详情里填好音色');
     const languageMap = {
         chinese: 'Chinese',
         japanese: 'Japanese',
@@ -449,7 +490,7 @@ async function generateDashscopeTtsAudio(text, settings = state.settings) {
     return { bytes: audio.bytes, format };
 }
 
-async function speakTextDashscope(text, onStart, options = {}) {
+async function speakTextDashscope(text, onStart, options = {}, cfg = null) {
     const { cacheKey = '', onEnd = null } = options;
     const session = options.session || createVoiceSession(options.messageId || null);
     ensureVoiceSessionActive(session);
@@ -472,7 +513,7 @@ async function speakTextDashscope(text, onStart, options = {}) {
     }
     try {
         session.abortController = new AbortController();
-        const { bytes, format } = await generateDashscopeTtsAudio(text);
+        const { bytes, format } = await generateDashscopeTtsAudio(text, cfg || undefined);
         ensureVoiceSessionActive(session);
         if (cacheKey) {
             await saveCachedTtsAudio(cacheKey, bytes, 24000, format);
@@ -528,14 +569,18 @@ function speakText(text, onStart, options = {}) {
         console.log('[TTS] 同一消息的语音任务仍在进行，复用现有任务');
         return activeTtsTasks.get(cacheKey);
     }
-    const provider = String(state.settings.ttsProvider || 'mimo');
-    const task = provider === 'mimo'
-        ? speakTextMimo(clean, onStart, options)
-        : provider === 'openai-tts'
-            ? speakTextOpenaiTts(clean, onStart, options)
-            : provider === 'dashscope'
-                ? speakTextDashscope(clean, onStart, options)
-                : speakTextMinimax(clean, onStart, options);
+    const provider = activeTtsProvider();
+    const cfg = provider ? ttsProviderSettings(provider) : null;
+    const task = !provider
+        ? Promise.reject(new ClientApiError('APP_KEY_MISSING',
+            '还没有可用的文字转语音服务：先在 设置 → 模型 → 文字转语音 里点「＋新增」添加一家并填好 Key'))
+        : provider.apiFormat === 'mimo'
+            ? speakTextMimo(clean, onStart, options, cfg)
+            : provider.apiFormat === 'openai-tts'
+                ? speakTextOpenaiTts(clean, onStart, options, cfg)
+                : provider.apiFormat === 'dashscope'
+                    ? speakTextDashscope(clean, onStart, options, cfg)
+                    : speakTextMinimax(clean, onStart, options, cfg);
     if (!cacheKey) return task;
     activeTtsTasks.set(cacheKey, task);
     const clearTask = () => {

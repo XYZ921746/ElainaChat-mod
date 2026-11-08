@@ -15,6 +15,22 @@ function memoryTierRoleLabel(role) {
 
 let memoryView = 'tiers'; // 记忆页内页签：'tiers' = 分层记忆，'diary' = 日记分区
 
+/* 三层分区的展开层（key = 'hot' | 'warm' | 'cold'）：同一层在各对话组里一起展开/收起，
+   默认为空即全收起 —— 层头本身就是摘要行，铺开卡片是主动选择。 */
+const memoryTierExpanded = new Set();
+
+/** 点层头就地切类展开/收起该层（不整页重渲染：重渲染会丢列表滚动位置）。 */
+function toggleMemoryTierExpand(layerKey) {
+    const expanded = !memoryTierExpanded.has(layerKey);
+    if (expanded) memoryTierExpanded.add(layerKey);
+    else memoryTierExpanded.delete(layerKey);
+    for (const block of elements.memoryBody.querySelectorAll('.memory-tier-block.is-' + layerKey)) {
+        block.classList.toggle('is-collapsed', !expanded);
+        const head = block.querySelector('.memory-tier-head');
+        if (head) head.setAttribute('aria-expanded', String(expanded));
+    }
+}
+
 function renderMemoryPage() {
     if (memoryView === 'diary') {
         ensureMemoryConvFilter();
@@ -82,13 +98,18 @@ function renderMemoryPage() {
     if (typeof syncConvFilterLabels === 'function') syncConvFilterLabels();
 }
 
-/** 一层分区：层头（图标 + 名称 + 统计/容量）+ 该层记忆卡片列表。 */
+/** 一层分区：层头（图标 + 名称 + 统计/容量 + 展开箭头，可点收起/展开）+ 该层记忆卡片列表。 */
 function buildMemoryTierBlock(layer, tier, view) {
+    const collapsed = !memoryTierExpanded.has(layer.key);
     const block = document.createElement('div');
-    block.className = 'memory-tier-block is-' + layer.key;
+    block.className = 'memory-tier-block is-' + layer.key + (collapsed ? ' is-collapsed' : '');
 
     const tierHead = document.createElement('div');
     tierHead.className = 'memory-tier-head';
+    tierHead.setAttribute('role', 'button');
+    tierHead.tabIndex = 0;
+    tierHead.title = '点一下收起 / 展开';
+    tierHead.setAttribute('aria-expanded', String(!collapsed));
     const badge = document.createElement('span');
     badge.className = 'memory-tier-badge';
     badge.setAttribute('aria-hidden', 'true');
@@ -103,6 +124,15 @@ function buildMemoryTierBlock(layer, tier, view) {
         ? `${tier.items.length} 条 · ${memoryTierFormatTokens(tier.tokens)} tokens（向量库归档）`
         : `${tier.items.length} 条 · ${memoryTierFormatTokens(tier.tokens)} / ${memoryTierFormatTokens(capTokens)} tokens`;
     tierHead.append(badge, name, stat);
+    const chevron = document.createElement('span');
+    chevron.className = 'memory-tier-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    chevron.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+    tierHead.appendChild(chevron);
+    tierHead.addEventListener('click', () => toggleMemoryTierExpand(layer.key));
+    tierHead.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleMemoryTierExpand(layer.key); }
+    });
     block.appendChild(tierHead);
 
     const list = document.createElement('div');
@@ -274,6 +304,22 @@ let memoryTierSettingsEl = null;
 /** 滑块拖动中的草稿配置（拖动实时预览，pointerup 才落盘）。 */
 let memoryTierDraft = null;
 
+/** 层说明一行：bold 片段加粗（<b>），其余走文本节点 —— 说明区没有别的解释文字，重点要能扫出来。 */
+function buildMemoryTierHint(segments) {
+    const p = document.createElement('p');
+    p.className = 'memory-tier-hint';
+    for (const seg of segments) {
+        if (seg.bold) {
+            const b = document.createElement('b');
+            b.textContent = seg.t;
+            p.appendChild(b);
+        } else {
+            p.appendChild(document.createTextNode(seg.t));
+        }
+    }
+    return p;
+}
+
 function openMemoryTierSettings() {
     if (!memoryTierSettingsEl) {
         memoryTierSettingsEl = document.createElement('div');
@@ -282,9 +328,9 @@ function openMemoryTierSettings() {
         memoryTierSettingsEl.innerHTML =
             '<div class="modal-panel w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">'
               + '<div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">'
-                + '<div class="text-base font-bold text-indigo-950">记忆分层设置</div>'
+                + '<div class="text-base font-bold text-ink">记忆分层设置</div>'
                 + '<button id="memoryTierSettingsClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" aria-label="关闭">'
-                  + '<svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
+                  + '<svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
                 + '</button>'
               + '</div>'
               + '<div id="memoryTierSettingsBody" class="flex-1 overflow-y-auto scroll-soft px-6 py-4"></div>'
@@ -307,12 +353,7 @@ function openMemoryTierSettings() {
 
     const body = memoryTierSettingsEl.querySelector('#memoryTierSettingsBody');
     body.innerHTML = '';
-    const intro = document.createElement('p');
-    intro.className = 'rd-field-hint mb-3';
     const enabled = memoryCompressionEnabled();
-    intro.textContent = '以模型的上下文长度为总标尺，拖动两个圆点分配三层：左点左边是空闲预留（模型输出、工具调用结果、召回注入的空间，建议 ≥200k），两点之间是温区（压缩记忆），右点右边是热区（完整原文）。冷记忆存在向量库里，不占这段标尺。改动立即影响记忆页的分区归属。'
-        + (enabled ? '' : '当前未开启记忆日记：不做记忆压缩，温区不可用，分配的温记忆容量已并入热区。');
-    body.appendChild(intro);
 
     // —— 模型上下文档位 ——
     const ctxRow = document.createElement('div');
@@ -390,15 +431,32 @@ function openMemoryTierSettings() {
 
     const hints = document.createElement('div');
     hints.className = 'memory-tier-hints';
-    for (const hint of [
-        '🆓 空闲（左段）：留给模型输出、工具调用结果和召回注入的空间；低于 200k 时，长回复或大工具结果可能撑爆上下文报错。',
-        '🌤️ 温区（中段）：整理出的压缩记忆（日记、约定、偏好等摘要），按相关度注入对话；超出的最旧摘要下沉到冷区。',
-        '🔥 热区（右段）：对话现场的完整原文，每个对话保留不超过该容量的最近原文；容量随模型上下文等比伸缩。'
+    // 说明区是弹层里唯一的解释文字：重点加粗便于扫读；未打开记忆日记时先给当前状态，再讲通用规则
+    if (!enabled) {
+        hints.appendChild(buildMemoryTierHint([
+            { t: '当前未在「设置 → 能力 → 记忆」打开「记忆日记」：' },
+            { t: '不做记忆压缩，温区不启用，分配的温记忆容量已并入热区', bold: true },
+            { t: '。' }
+        ]));
+    }
+    for (const segments of [
+        [
+            { t: '🆓 空闲（左段）：留给模型输出、工具调用结果和召回注入的空间；' },
+            { t: '低于 200k 时，长回复或大工具结果可能撑爆上下文报错', bold: true },
+            { t: '。' }
+        ],
+        [
+            { t: '🌤️ 温区（中段）：整理出的压缩记忆（日记、约定、偏好等摘要），按相关度注入对话；超出的最旧摘要下沉到冷区。温区依赖记忆压缩 —— ' },
+            { t: '要先在「设置 → 能力 → 记忆」打开「记忆日记」，没打开时温区不启用', bold: true },
+            { t: '，分配的温记忆容量并入热区。' }
+        ],
+        [
+            { t: '🔥 热区（右段）：对话现场的完整原文，' },
+            { t: '每个对话保留不超过该容量的最近原文', bold: true },
+            { t: '；容量随模型上下文等比伸缩。' }
+        ]
     ]) {
-        const p = document.createElement('p');
-        p.className = 'memory-tier-hint';
-        p.textContent = hint;
-        hints.appendChild(p);
+        hints.appendChild(buildMemoryTierHint(segments));
     }
     body.appendChild(hints);
 
@@ -541,6 +599,7 @@ function saveMemoryTierSettings() {
 }
 
 function enterMemoryPage() {
+    memoryTierExpanded.clear(); // 每次进记忆页回到默认收起：三层是索引视图，展开态不跨访问保留
     state.memoryPageMode = true;
     state.notesMode = false;
     state.diaryMode = false;

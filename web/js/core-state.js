@@ -217,9 +217,6 @@ const elements = {
     settingSearchCustomHeaderRow: document.getElementById('searchCustomHeaderRow'),
     settingSearchCustomBody: document.getElementById('settingSearchCustomBody'),
     settingSearchCustomResultsPath: document.getElementById('settingSearchCustomResultsPath'),
-    testTtsConnectionBtn: document.getElementById('testTtsConnectionBtn'),
-    clearApiKeysBtn: document.getElementById('clearApiKeysBtn'),
-    settingTtsProvider: document.getElementById('settingTtsProvider'),
     minimaxTtsFields: document.getElementById('minimaxTtsFields'),
     mimoTtsFields: document.getElementById('mimoTtsFields'),
     openaiTtsFields: document.getElementById('openaiTtsFields'),
@@ -228,7 +225,6 @@ const elements = {
     ttsSpeedLabel: document.getElementById('ttsSpeedLabel'),
     settingTtsVolume: document.getElementById('settingTtsVolume'),
     ttsVolumeLabel: document.getElementById('ttsVolumeLabel'),
-    settingAutoMemory: document.getElementById('settingAutoMemory'),
     settingMemoryEvery: document.getElementById('settingMemoryEvery'),
     // 记忆模块的步进器按钮与「立即整理记忆」按钮
     memoryEveryMinus: document.getElementById('memoryEveryMinus'),

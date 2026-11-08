@@ -309,10 +309,11 @@ function showCustomAlert(message, title = '提示') {
     return showCustomModal({ title, message, showCancel: false });
 }
 
-/** 一条**不会挡住操作**的提示条（只读提醒，不是弹窗）：自定义弹窗串行排队、被顶掉的那条不会自己消失，而保存失败往往连着发生，排队的弹窗会一直糊在界面上；提示条自建节点、自己计时消失，同时只留一条。 */
+/** 一条**不会挡住操作**的提示条（只读提醒，不是弹窗）：自定义弹窗串行排队、被顶掉的那条不会自己消失；
+    提示条自建节点、自己计时消失，同时只留一条。kind: info | ok | warn | danger，决定描边用哪组语义色。 */
 let storeAlertEl = null;
 let storeAlertTimer = null;
-function showStoreSaveAlert(text) {
+function showToast(text, { kind = 'info', duration = 3200 } = {}) {
     if (!document.body) return;
     if (!storeAlertEl || !storeAlertEl.isConnected) {
         storeAlertEl = document.createElement('div');
@@ -322,15 +323,21 @@ function showStoreSaveAlert(text) {
         storeAlertEl.className = 'store-save-alert';
         document.body.appendChild(storeAlertEl);
     }
-    const title = text.code === 'KEY_TOO_LARGE' ? '数据太大，没能保存' : '没能保存';
-    const body = String(text.message || '').replace(/^保存失败[：:]\s*/, '');
-    storeAlertEl.textContent = title + '：' + body + '（这条提示会自动消失；问题没解决前请勿关闭页面）';
+    storeAlertEl.textContent = String(text);
+    storeAlertEl.classList.remove('toast-ok', 'toast-warn', 'toast-danger');
+    if (kind === 'ok' || kind === 'warn' || kind === 'danger') storeAlertEl.classList.add('toast-' + kind);
     storeAlertEl.classList.add('is-visible');
     if (storeAlertTimer) clearTimeout(storeAlertTimer);
     storeAlertTimer = setTimeout(() => {
         storeAlertTimer = null;
         if (storeAlertEl) storeAlertEl.classList.remove('is-visible');
-    }, 12000);
+    }, Math.max(800, duration));
+}
+
+function showStoreSaveAlert(text) {
+    const title = text.code === 'KEY_TOO_LARGE' ? '数据太大，没能保存' : '没能保存';
+    const body = String(text.message || '').replace(/^保存失败[：:]\s*/, '');
+    showToast(title + '：' + body + '（这条提示会自动消失；问题没解决前请勿关闭页面）', { kind: 'danger', duration: 12000 });
 }
 
 function showCustomConfirm(message, title = '确认') {

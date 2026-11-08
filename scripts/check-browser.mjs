@@ -834,15 +834,16 @@ async function caseVisionToggle(c) {
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
 
     c.ok(/visionEnabled: false/.test(core), '默认关闭（主模型能看图时转述只会丢细节）');
-    c.ok(/settingVisionEnabled/.test(html), '设置页有开关');
-    c.ok(/id="visionFields"/.test(html), '控件包在一个可整体显隐的容器里');
+    c.ok(!/settingVisionEnabled/.test(html), '★ 不再是开关（下拉选「不使用」即停）');
+    c.ok(!/id="visionFields"/.test(html), '★ 不再有整体显隐的字段容器（下拉常驻）');
+    c.ok(/不使用图片转述/.test(settings), '★ 下拉的空选项写明「不使用图片转述」');
     c.ok(/fillVisionSettings/.test(settings), '有统一的回填函数');
-    c.ok(/visionEnabled === true/.test(data), '★ 生效判据是"开关打开"（只看填没填的话开关就成了摆设）');
-    c.ok(/visionEnabled === true/.test(settings), '保存时把开关一起落盘');
+    c.ok(/visionEnabled === true/.test(data), '★ data.js 的形态归一仍认 visionEnabled');
+    c.ok(/visionEnabled === true/.test(settings), '★ 生效判据仍读 visionEnabled（visionConfigured）');
 
-    // 提示必须点名"主模型本身能看图时不要打开"
-    const hasHint = /本来就支持查看图片/.test(html) && /建议/.test(html) && /不要打开这个开关/.test(html);
-    c.ok(hasHint, '★ 提示里写明"主模型能看图时建议不要打开"');
+    // 提示必须点名"主模型能识图时选「不使用」"
+    const hasHint = /本来就支持查看图片/.test(settings) && /不使用/.test(html) && /建议/.test(settings);
+    c.ok(hasHint, '★ 提示写明主模型能看图时选「不使用」');
 }
 
 // 8. 标签通道的解析（把中文标签翻成结构化参数）

@@ -160,14 +160,21 @@ function scoreRoleplayMemoryText(value, keywords) {
     ), 0);
 }
 
-function selectRoleplayMemoryItems(items, userText, limit, getText = item => item) {
+function selectRoleplayMemoryItems(items, userText, limit, getText = item => item, vectorScores = null) {
     if (!Array.isArray(items) || !items.length || limit <= 0) return [];
     const keywords = buildMemoryRecallKeywords(userText);
-    return items.map((item, index) => ({
-        item,
-        index,
-        score: scoreRoleplayMemoryText(getText(item), keywords)
-    })).sort((left, right) => right.score - left.score || left.index - right.index)
+    return items.map((item, index) => {
+        const text = getText(item);
+        // 向量分是 0–1，词面分按命中片段长度累加；放大到同一量级后，语义先决定次序、字面只在并列时补充。
+        const semantic = vectorScores
+            ? (vectorScores.get(memoryVectorTextKey(text)) || 0) * 10000
+            : 0;
+        return {
+            item,
+            index,
+            score: semantic + scoreRoleplayMemoryText(text, keywords)
+        };
+    }).sort((left, right) => right.score - left.score || left.index - right.index)
         .slice(0, limit)
         .map(entry => entry.item);
 }
@@ -193,19 +200,21 @@ function formatRoleplayMemoryForPrompt(userText) {
     const parts = [];
     const budget = { used: 0 };
     const cleanItem = value => cleanMemoryPromptText(value, limits.itemChars);
+    // 本轮预取到的向量分：同步路径只读缓存，不在这里发请求。
+    const vectorScores = (typeof getMemoryVectorScoreMap === 'function') ? getMemoryVectorScoreMap(userText) : null;
 
     const pivotal = selectRoleplayMemoryItems(
-        mc.pivotal_memory, userText, limits.pivotalMemory, item => item
+        mc.pivotal_memory, userText, limits.pivotalMemory, item => item, vectorScores
     ).map((item, index) => `${index + 1}. ${cleanItem(item)}`);
     appendRoleplayMemorySection(parts, budget, '## 关键记忆与关系变化', pivotal);
 
     const promises = selectRoleplayMemoryItems(
-        mc.promise, userText, limits.promise, item => item
+        mc.promise, userText, limits.promise, item => item, vectorScores
     ).map((item, index) => `${index + 1}. ${cleanItem(item)}`);
     appendRoleplayMemorySection(parts, budget, '## 仍需记住的约定', promises);
 
     const preferences = selectRoleplayMemoryItems(
-        mc.preference, userText, limits.preference, item => item
+        mc.preference, userText, limits.preference, item => item, vectorScores
     ).map((item, index) => `${index + 1}. ${cleanItem(item)}`);
     appendRoleplayMemorySection(parts, budget, '## 用户资料、好恶与习惯', preferences);
 
@@ -213,7 +222,8 @@ function formatRoleplayMemoryForPrompt(userText) {
         mc.plan,
         userText,
         limits.plan,
-        item => `${item && item.date || ''} ${item && item.content || ''}`
+        item => [item && item.date, item && item.content].filter(Boolean).join(' · '),
+        vectorScores
     ).map(item => {
         const date = cleanMemoryPromptText(item && item.date, 40);
         const content = cleanItem(item && item.content);
@@ -222,7 +232,7 @@ function formatRoleplayMemoryForPrompt(userText) {
     appendRoleplayMemorySection(parts, budget, '## 尚有效的计划', plans);
 
     const motivations = selectRoleplayMemoryItems(
-        mc.motivation, userText, limits.motivation, item => item
+        mc.motivation, userText, limits.motivation, item => item, vectorScores
     ).map((item, index) => `${index + 1}. ${cleanItem(item)}`);
     appendRoleplayMemorySection(parts, budget, '## 长期目标与在意的事', motivations);
 
@@ -276,18 +286,30 @@ function getRelatedMemories(userText) {
     const mc = state.memoryCore;
     if (!mc) return [];
     // 仅以用户当前输入召回，避免模型上一轮自行提到的词反向强化错误记忆。
-    const all = matchEssencesWithText(userText);
+    // 向量召回排在前：关键词只能命中字面，用户换了说法时就靠语义命中补位。
+    const vectorHits = (typeof getPrefetchedMemoryRecall === 'function') ? getPrefetchedMemoryRecall(userText) : null;
+    const vectorDiary = (Array.isArray(vectorHits) ? vectorHits : [])
+        .filter(hit => hit && hit.item && hit.item.kind === 'diary')
+        .map(hit => ({
+            date: hit.item.date || '',
+            content: hit.item.content || hit.item.text || '',
+            matched_essence: '',
+            semantic: true
+        }));
+    const all = vectorDiary.concat(matchEssencesWithText(userText));
     const unique = [];
     const seenDates = new Set();
     for (const memory of all) {
-        if (!seenDates.has(memory.date)) {
-            seenDates.add(memory.date);
-            unique.push(memory);
-        }
+        const key = String(memory.date || '') || ('semantic:' + String(memory.content || '').slice(0, 40));
+        if (seenDates.has(key)) continue;
+        seenDates.add(key);
+        unique.push(memory);
     }
     const byEssence = {};
     for (const memory of unique) {
-        const essenceKey = String(memory.matched_essence || '').toLowerCase();
+        // 语义命中没有要点词，各自成组，保持向量给出的相关度次序。
+        const essenceKey = String(memory.matched_essence || '').toLowerCase()
+            || ('__semantic__:' + String(memory.content || '').slice(0, 40));
         if (!byEssence[essenceKey]) byEssence[essenceKey] = [];
         byEssence[essenceKey].push(memory);
     }
@@ -525,7 +547,7 @@ async function requestMemorySummary(convId) {
         ];
 
         console.log(`[记忆] 开始总结对话「${conv.title || '未命名'}」...`);
-        const currentSummary = await callChatAPI(summaryMessages);
+        const currentSummary = await callChatAPI(summaryMessages, {}, memoryChatSettings());
         let currentParsed = extractJsonFromText(currentSummary);
         if (!currentParsed) {
             // 重试一次：明确要求只输出合法 JSON
@@ -536,7 +558,7 @@ async function requestMemorySummary(convId) {
                 { role: 'user', content: '你上次的输出不是合法 JSON（可能是被截断或带多余内容）。请重新只输出一个合法、完整的 JSON 对象，不要代码块、解释或前后缀。' }
             ];
             try {
-                const retrySummary = await callChatAPI(retryMessages);
+                const retrySummary = await callChatAPI(retryMessages, {}, memoryChatSettings());
                 currentParsed = extractJsonFromText(retrySummary);
             } catch (e) { console.warn('[记忆] 重试总结请求失败:', e); }
         }
@@ -565,7 +587,7 @@ async function requestMemorySummary(convId) {
                 { role: 'user', content: `# 需整合的记忆\n## 旧记忆:\n${oldMemoryJson}\n## 新记忆 | ${todayDateStr()}:\n${JSON.stringify(currentParsed)}` }
             ];
             console.log('[记忆] 进行递归整合...');
-            const recursiveSummary = await callChatAPI(recursiveMessages);
+            const recursiveSummary = await callChatAPI(recursiveMessages, {}, memoryChatSettings());
             const recursiveParsed = extractJsonFromText(recursiveSummary);
             if (recursiveParsed) {
                 saveMemoryCoreFromSummary(recursiveParsed, {
@@ -607,7 +629,7 @@ async function requestMemorySummary(convId) {
 }
 
 function setManualMemoryUi(running) {
-    // memoryNowBtn 是「设置 → 记忆」里那个手动按钮 —— 与顶栏的「整理记忆」是同一个动作，运行中也该一起置灰/显示状态。
+    // memoryNowBtn 是「对话优化」里那个手动按钮 —— 与顶栏的「整理记忆」是同一个动作，运行中也该一起置灰/显示状态。
     [elements.memoryBtn, elements.memoryNowBtn, elements.initialComposerMemoryBtn, elements.composerMemoryBtn].filter(Boolean).forEach(button => {
         button.disabled = running;
         button.classList.toggle('opacity-60', running);

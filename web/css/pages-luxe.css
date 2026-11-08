@@ -723,7 +723,7 @@ html.rd .rd-market-hero h2 {
 }
 
 html.rd .rd-market-hero p {
-    max-width: 640px;
+    max-width: 620px;
     margin: 0;
     color: var(--rd-text-3);
     font-size: 11.5px;
@@ -792,15 +792,12 @@ html.rd #marketList .mod-card:hover {
     box-shadow: var(--rd-shadow-2) !important;
 }
 
-html.rd #marketList .mod-card .text-indigo-800 {
+html.rd #marketList .mod-card .text-ink {
     color: var(--rd-text) !important;
     font-size: 13px !important;
 }
 
-html.rd #marketList .mod-card .text-indigo-400,
-html.rd #marketList .mod-card .text-indigo-300,
 html.rd #marketList .mod-card .text-\[11px\] {
-    color: var(--rd-text-3) !important;
     line-height: 1.65 !important;
 }
 
@@ -1230,6 +1227,7 @@ html.rd #settingsContent .settings-card:hover {
 }
 
 html.rd #settingsContent .settings-tab-panel > section > .modal-label,
+html.rd #settingsContent .adv-group > .modal-label,
 html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child,
 html.rd #settingsContent .settings-card > .flex .modal-label {
     margin: 0 0 14px !important;
@@ -1243,6 +1241,7 @@ html.rd #settingsContent .settings-card > .flex .modal-label {
 }
 
 html.rd #settingsContent .settings-tab-panel > section > .modal-label > span:first-child,
+html.rd #settingsContent .adv-group > .modal-label > span:first-child,
 html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child > span:first-child,
 html.rd #settingsContent .settings-card > .flex .modal-label > span:first-child {
     color: var(--rd-accent) !important;
@@ -1397,6 +1396,22 @@ html.rd #tab-log .log-pill[aria-pressed="true"] {
 
 html.rd #tab-log .log-pill[aria-pressed="false"] { opacity: .4 !important; }
 
+/* 设置：插件市场平台分类 */
+
+html.rd #marketPlatformPills .market-pill {
+    color: var(--rd-text-3) !important;
+    border-color: var(--rd-border) !important;
+    background: transparent !important;
+}
+
+html.rd #marketPlatformPills .market-pill[aria-pressed="true"] {
+    color: var(--rd-accent) !important;
+    border-color: var(--rd-accent-border) !important;
+    background: var(--rd-accent-soft) !important;
+}
+
+html.rd #marketPlatformPills .market-pill[aria-pressed="false"] { opacity: .4 !important; }
+
 html.rd #tab-log .log-select,
 html.rd #tab-log .log-search,
 html.rd #tab-log .log-icon-btn {
@@ -1439,11 +1454,8 @@ html.rd #marketList > #marketPrereqToggle {
     margin-top: 4px !important;
 }
 
-@media (min-width: 900px) {
-    html.rd #tab-advanced.settings-tab-panel.active-panel {
-        grid-template-columns: minmax(0, 1fr);
-    }
-}
+/* 高级设置：整页内容合并在一张卡里（.adv-duo 在卡内分两栏），分隔线随主题边框色 */
+html.rd #tab-advanced .adv-duo { border-top-color: var(--rd-border); }
 
 /* 顶栏：公告面板 */
 
@@ -1599,21 +1611,12 @@ html.rd #backendList .backend-card.is-active {
     box-shadow: inset 3px 0 0 var(--rd-accent);
 }
 
-html.rd #backendList .backend-card .text-indigo-950 {
-    color: var(--rd-text) !important;
-}
-
-html.rd #backendList .backend-card .text-indigo-400,
-html.rd #backendList .backend-card .text-indigo-300 {
-    color: var(--rd-text-3) !important;
-}
-
 /* 响应式 */
 
 html.rd #achList > *,
 html.rd #marketList > * { margin-top: 0 !important; }
 
-@media (max-width: 1240px) {
+@media (max-width: 1200px) {
     html.rd #notesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
     html.rd #marketList { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
 }
@@ -1939,7 +1942,7 @@ html.rd #marketList > * { margin-top: 0 !important; }
     }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 620px) {
     html.rd #themePickerBox { grid-template-columns: 1fr !important; }
     html.rd .header-theme-switch { display: none !important; }
 }
@@ -1974,7 +1977,7 @@ html.rd #settingsContent #tab-mods.active-panel {
     max-width: none;
 }
 
-@media (min-width: 900px) {
+@media (min-width: 981px) {
     /* 这三页内容长短差异太大，两列会留下大片空盒；统一单列。 */
     html.rd #settingsContent #tab-model.active-panel,
     html.rd #settingsContent #tab-capability.active-panel,
@@ -2047,7 +2050,7 @@ html.rd #agentPermissionSection [style*="#9a3412"] {
     color: var(--rd-warn) !important;
 }
 
-@media (min-width: 1100px) {
+@media (min-width: 1201px) {
     html.rd #agentPermissionSection .space-y-2 {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2122,7 +2125,7 @@ html.rd #settingsContent .mod-card .mod-act:hover {
 
 html.rd #settingsContent .mod-card .mod-act svg { width: 15px; height: 15px; }
 
-html.rd #settingsContent .mod-card .bg-emerald-100 {
+html.rd #settingsContent .mod-card .bg-ok-soft {
     background: var(--rd-accent-soft) !important;
     color: var(--rd-accent) !important;
     border: 1px solid var(--rd-accent-border);
@@ -2132,22 +2135,11 @@ html.rd #settingsContent .mod-card .bg-slate-100 {
     color: var(--rd-text-3) !important;
     border: 1px solid var(--rd-border);
 }
-html.rd #settingsContent .mod-card .bg-indigo-100 {
-    background: var(--rd-accent-soft) !important;
-    color: var(--rd-accent) !important;
-}
-html.rd #settingsContent .mod-card .bg-red-100 {
+html.rd #settingsContent .mod-card .bg-danger-soft {
     background: var(--rd-danger-soft) !important;
     color: var(--rd-danger) !important;
     border: 1px solid var(--rd-danger-border);
 }
-html.rd #settingsContent .mod-card .bg-red-50 {
-    background: var(--rd-danger-soft) !important;
-    border-color: var(--rd-danger-border) !important;
-}
-html.rd #settingsContent .mod-card .text-red-600,
-html.rd #settingsContent .mod-card .text-red-500,
-html.rd #settingsContent .mod-card .text-red-400 { color: var(--rd-danger) !important; }
 
 html.rd #skillsList {
     margin-top: 6px;
@@ -2171,9 +2163,6 @@ html.rd #marketDlPanel {
     box-shadow: var(--rd-shadow-2, 0 12px 32px rgba(0, 0, 0, .18)) !important;
     backdrop-filter: none;
 }
-html.rd #marketDlPanel .text-indigo-800 { color: var(--rd-text) !important; }
-html.rd #marketDlPanel .text-indigo-400 { color: var(--rd-text-2) !important; }
-html.rd #marketDlPanel .text-indigo-300 { color: var(--rd-text-2) !important; }
 html.rd #marketDlPanel .bg-black\/10 { background: var(--rd-border) !important; }
 html.rd #marketDlPanel #marketDlClear:hover { background: var(--rd-surface-2) !important; }
 
@@ -2229,6 +2218,7 @@ html.rd #tab-mods .settings-card {
 }
 
 html.rd #settingsContent .settings-tab-panel > section > .modal-label,
+html.rd #settingsContent .adv-group > .modal-label,
 html.rd #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child,
 html.rd #settingsContent .settings-card > .flex .modal-label {
     margin: 0 0 10px !important;
@@ -2324,7 +2314,7 @@ html.rd #settingsContent .rd-more p { margin: 7px 0 0; }
 html.rd #settingsContent .rd-more p:first-of-type { margin-top: 6px; }
 
 /* 宽屏下「模型」仍按两列铺开各个区块（入口列表只在窄屏出现）。 */
-@media (min-width: 1280px) {
+@media (min-width: 1201px) {
     html.rd #settingsContent #tab-model.active-panel {
         max-width: none;
         grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
@@ -2443,6 +2433,13 @@ html.rd .memory-tier-stat { margin-left: auto; color: var(--rd-text-3) !importan
 html.rd .memory-tier-block.is-hot .memory-tier-head { border-left: 3px solid rgba(217, 106, 58, .55); }
 html.rd .memory-tier-block.is-warm .memory-tier-head { border-left: 3px solid rgba(184, 134, 47, .55); }
 html.rd .memory-tier-block.is-cold .memory-tier-head { border-left: 3px solid rgba(109, 127, 209, .55); }
+/* 层头可点收起/展开：默认收起时只留摘要行，箭头指向右；展开转朝下 */
+html.rd .memory-tier-head { cursor: pointer; user-select: none; -webkit-user-select: none; }
+html.rd .memory-tier-head:hover .memory-tier-name { color: var(--rd-text-1) !important; }
+html.rd .memory-tier-chevron { margin-left: 2px; color: var(--rd-text-3); transition: transform .16s ease; }
+html.rd .memory-tier-chevron svg { width: 11px; height: 11px; display: block; }
+html.rd .memory-tier-block.is-collapsed .memory-list { display: none; }
+html.rd .memory-tier-block.is-collapsed .memory-tier-chevron { transform: rotate(-90deg); }
 
 html.rd .memory-tier-note {
     margin-top: 8px;
@@ -2554,6 +2551,7 @@ html.rd .memory-tier-hint {
     font-size: 10.5px;
     line-height: 1.7;
 }
+html.rd .memory-tier-hint b { font-weight: 700; color: var(--rd-text-1) !important; }
 
 html.rd .memory-tier-input {
     width: 110px;
@@ -2616,23 +2614,47 @@ html.rd .memory-toolbar .conv-filter-btn.is-filtered { color: #8b7ff0; border-co
 html.rd .memory-tier-card.is-expandable { cursor: pointer; transition: border-color .15s ease; }
 html.rd .memory-tier-card.is-expandable:hover { border-color: var(--rd-text-3); }
 
-/* 记忆页双页签：分层记忆 / 日记（共用对话筛选与工具栏） */
-html.rd .memory-view-tabs { display: flex; gap: 6px; padding: 8px 16px 0; }
-html.rd .memory-view-tab {
-    padding: 6px 14px;
+/* 记忆页双页签：分层记忆 / 日记（共用对话筛选与工具栏）—— 与回忆分段条同一套胶囊滑块，选中底色由滑块画。 */
+html.rd .memory-view-tabs {
+    position: relative;
+    display: flex;
+    align-self: flex-start;
+    gap: 2px;
+    margin: 10px 16px 2px;
+    padding: 4px;
     border: 1px solid var(--rd-border);
-    border-radius: 999px 999px 0 0;
-    border-bottom: none;
+    border-radius: 999px;
+    background: var(--rd-surface-2);
+}
+html.rd .memory-view-tab {
+    position: relative;
+    z-index: 1;
+    padding: 6px 14px;
+    border: 0;
+    border-radius: 999px;
     background: transparent;
     color: var(--rd-text-3);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: color .15s ease, background .15s ease;
+    transition: color .2s ease;
 }
 html.rd .memory-view-tab:hover { color: var(--rd-text-1); }
-html.rd .memory-view-tab.is-active {
-    background: var(--rd-surface);
-    color: var(--rd-text-1);
-    border-color: var(--rd-border);
+html.rd .memory-view-tab.is-active { color: var(--rd-accent-contrast); }
+html.rd .memory-view-tabs .mm-seg-thumb {
+    position: absolute;
+    top: 4px;
+    left: 0;
+    width: 0;
+    height: 0;
+    border-radius: 999px;
+    background: var(--rd-accent);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 0;
+    will-change: transform;
+    transition: transform .42s cubic-bezier(.22, .7, .25, 1), width .2s ease, height .2s ease, opacity .2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+    html.rd .memory-view-tabs .mm-seg-thumb { transition-duration: .01ms !important; }
 }

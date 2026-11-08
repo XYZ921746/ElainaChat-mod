@@ -22,12 +22,12 @@ async function refreshMcpList() {
         statusError = '本机服务不可用，状态未知';
     }
 
-    if (box) box.innerHTML = servers.length ? '' : ('<div class="text-[11px] text-indigo-300 py-2 text-center">还没有 MCP 服务器。'
+    if (box) box.innerHTML = servers.length ? '' : ('<div class="text-[11px] text-dim py-2 text-center">还没有 MCP 服务器。'
         + '点右上角「＋ 添加」：<br>远程填地址（例如 <code>https://example.com/mcp</code>），本地填启动命令（例如 <code>npx -y @modelcontextprotocol/server-filesystem D:/</code>）。</div>');
     if (hint && statusError) {
         hint.textContent = 'MCP 是外部工具服务：本应用当客户端去连它，把它提供的工具并进 AI 的能力清单。'
             + '当前' + statusError + '（配置仍可编辑）。';
-        hint.className = 'text-[11px] leading-relaxed mb-3 text-amber-500';
+        hint.className = 'text-[11px] leading-relaxed mb-3 text-warn';
     }
 
     servers.forEach((srv, index) => {
@@ -41,8 +41,8 @@ function renderMcpCard(srv, index, statusMap) {
         : st.state === 'error' ? ('起不来：' + (st.error || '未知原因'))
             : st.state === 'starting' ? '正在启动…'
                 : (srv.enabled ? '未启动（第一次调用时自动启动）' : '已停用');
-    const stateCls = st.state === 'ready' ? 'text-emerald-600'
-        : st.state === 'error' ? 'text-red-500' : 'text-indigo-400';
+    const stateCls = st.state === 'ready' ? 'text-ok'
+        : st.state === 'error' ? 'text-danger' : 'text-dim';
     const card = document.createElement('div');
     card.className = 'mod-card';
     card.setAttribute('data-fullwidth', '1');
@@ -54,10 +54,10 @@ function renderMcpCard(srv, index, statusMap) {
     const titleRow = document.createElement('div');
     titleRow.className = 'flex items-center gap-2 flex-wrap';
     const nameEl = document.createElement('span');
-    nameEl.className = 'text-sm font-medium text-indigo-900 truncate';
+    nameEl.className = 'text-sm font-medium text-ink truncate';
     nameEl.textContent = srv.name || srv.id;
     const idEl = document.createElement('span');
-    idEl.className = 'text-[10px] px-1.5 py-0.5 rounded bg-white/70 text-indigo-500';
+    idEl.className = 'text-[10px] px-1.5 py-0.5 rounded bg-white/70 text-dim';
     idEl.textContent = srv.id;
     titleRow.appendChild(nameEl);
     titleRow.appendChild(idEl);
@@ -65,7 +65,7 @@ function renderMcpCard(srv, index, statusMap) {
     stateEl.className = 'text-[11px] mt-1 break-all ' + stateCls;
     stateEl.textContent = stateText;
     const cmdEl = document.createElement('div');
-    cmdEl.className = 'text-[11px] text-indigo-400 mt-0.5 break-all';
+    cmdEl.className = 'text-[11px] text-dim mt-0.5 break-all';
     const cmdCode = document.createElement('code');
     if (srv.url) {
         cmdEl.title = '远程 MCP 服务（Streamable HTTP）';
@@ -137,7 +137,7 @@ async function reloadMcpTools() {
 function makeTestStatusLine() {
     const box = document.getElementById('customModalEditor');
     const line = document.createElement('div');
-    line.className = 'mt-2 text-xs leading-relaxed text-indigo-400';
+    line.className = 'mt-2 text-xs leading-relaxed text-dim';
     line.dataset.mcpTestLine = '1';
     line.textContent = '';
     if (box && box.parentElement) {
@@ -236,16 +236,16 @@ function makeMcpTestAction() {
                 if (data && data.ok) {
                     line.textContent = '✓ 连接成功' + name + ' · ' + (data.tools || []).length + ' 个工具'
                         + ((data.tools || []).length ? '：' + (data.tools || []).join('、') : '（没有提供工具）');
-                    line.className = 'mt-2 text-xs leading-relaxed text-emerald-600';
+                    line.className = 'mt-2 text-xs leading-relaxed text-ok';
                 } else {
                     line.textContent = '✗ 连不上' + name + '：' + String((data && data.message) || '未知原因')
                         + '（常见原因：地址写错、令牌无效、需要特定请求头）';
-                    line.className = 'mt-2 text-xs leading-relaxed text-red-500';
+                    line.className = 'mt-2 text-xs leading-relaxed text-danger';
                 }
             } catch (e) {
                 const line = api.statusLine || (api.statusLine = makeTestStatusLine());
                 line.textContent = '✗ 测试请求发不出去：' + String((e && e.message) || e);
-                line.className = 'mt-2 text-xs leading-relaxed text-red-500';
+                line.className = 'mt-2 text-xs leading-relaxed text-danger';
             }
         },
     };

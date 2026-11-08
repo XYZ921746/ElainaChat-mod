@@ -38,6 +38,25 @@ const LEGACY_BASE_URL_REWRITE = Object.freeze({
 });
 const MINIMAX_TTS_HTTP = 'https://api.minimaxi.com/v1/t2a_v2';
 const DASHSCOPE_SYNC_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
+
+// 各类能力的「＋新增」协议预设：点新增时从这些模板建条目，列表本身只显示已添加的实例。
+// baseUrl 统一含版本段（…/v1），请求端点在它后面拼；editableBaseUrl=false 的协议端点固定（取上面的常量）。
+const TTS_PROTOCOL_PRESETS = Object.freeze([
+    { id: 'mimo', name: 'MiMo TTS（小米）', baseUrl: 'https://api.xiaomimimo.com', model: 'mimo-v2.5-tts', voice: 'mimo_default', editableBaseUrl: true, hint: 'OpenAI 兼容聊天端点承载语音生成，认证头是 api-key；凭据与 MiMo 语音输入各自独立。' },
+    { id: 'minimax', name: 'MiniMax（克隆音色）', baseUrl: '', model: 'speech-2.8-hd', voice: '', editableBaseUrl: false, hint: '端点固定为 MiniMax 官方 t2a_v2，只需填 Key、模型与克隆音色 ID。' },
+    { id: 'dashscope', name: '阿里千问 Qwen-TTS', baseUrl: '', model: 'qwen3-tts-flash', voice: 'Cherry', editableBaseUrl: false, hint: '端点固定为 DashScope 多模态生成接口。' },
+    { id: 'openai-tts', name: 'OpenAI 兼容 TTS', baseUrl: 'https://api.openai.com/v1', model: 'tts-1', voice: 'alloy', editableBaseUrl: true, hint: '任何提供 /audio/speech 的服务都选这个。' }
+]);
+const ASR_PROTOCOL_PRESETS = Object.freeze([
+    { id: 'aliyun', name: '阿里百炼', baseUrl: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation', model: 'qwen3-asr-flash', editableBaseUrl: true, hint: '这里的 Key 与语音输出的 DashScope Key 各自独立。' },
+    { id: 'mimo', name: '小米 MiMo', baseUrl: 'https://api.xiaomimimo.com', model: 'mimo-v2.5-asr', editableBaseUrl: true, hint: '凭据与 MiMo 语音输出各自独立。' }
+]);
+const EMBEDDING_PROTOCOL_PRESETS = Object.freeze([
+    { id: 'openai-compatible', name: 'OpenAI 兼容 /embeddings', baseUrl: 'https://api.siliconflow.cn/v1', model: 'bge-m3', hint: '任何提供标准 /v1/embeddings 的服务：硅基流动、Jina、Ollama、自建中转。' }
+]);
+const RERANK_PROTOCOL_PRESETS = Object.freeze([
+    { id: 'rerank', name: '通用 /rerank', baseUrl: 'https://api.jina.ai/v1', model: 'jina-reranker-v2-base-multilingual', hint: 'Jina / Cohere / 硅基流动等提供的 /v1/rerank 接口，query + 文档列表 → 按相关度排序。' }
+]);
 const API_SECRET_NAMES = Object.freeze([
     'apiKey', 'minimaxApiKey', 'dashscopeApiKey', 'asrApiKey', 'mimoApiKey', 'mimoTtsApiKey', 'openaiTtsApiKey',
     'searchApiKey_tavily',
@@ -207,7 +226,21 @@ const DEFAULT_SETTINGS = {
     chatProviders: [],
     defaultChatModel: { providerId: '', model: '' },
     fallbackChatModels: [],
+    // 全部 5 类模型提供商（对话 / 语音转文字 / 文字转语音 / 嵌入 / 重排序）的 Key 集合，形状 { 提供商 id: Key }：
+    // 共用这一个密钥通道（API_SECRET_NAMES 与安卓白名单都已含此名），读写统一走 getProviderSecret / setProviderSecret。
     chatProviderKeys: {},
+    // 文字转语音 / 语音转文字 / 嵌入 / 重排序提供商：与 chatProviders 同一套「动态列表 + 默认指向」契约；
+    // 预设协议只在「＋新增」时作为模板出现。请求链路只读这些数组，下面的平铺字段只作老配置的一次性迁移源。
+    ttsProviders: [],
+    defaultTtsProviderId: '',
+    asrProviders: [],
+    defaultAsrProviderId: '',   // 空 = 不使用云端语音转文字
+    embeddingProviders: [],
+    defaultEmbeddingProviderId: '',
+    rerankProviders: [],
+    defaultRerankProviderId: '',
+    ttsProviderMigrated: false,
+    asrProviderMigrated: false,
     minimaxApiKey: '',
     minimaxVoice: '',
     minimaxModel: 'speech-2.8-hd',
@@ -249,6 +282,8 @@ const DEFAULT_SETTINGS = {
     optTopP: '',
     autoMemory: false,
     memoryEvery: 15,
+    // 记忆整理用哪个模型：null = 跟随默认对话模型；{ providerId, model } = 单独指定的整理模型（对失效时回落默认，解析统一走 memoryChatSettings）。
+    memoryModelPair: null,
     // 权限只有一个档位 agentAccess：off / strict / auto / full（前三档同时管电脑与手机）；agentPermission / agentApproval 只作迁移输入，迁移一完成就由 data.js 删掉。
     agentAccess: 'strict',
     agentPhoneEnabled: true,

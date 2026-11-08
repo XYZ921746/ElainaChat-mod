@@ -184,16 +184,16 @@ function renderScheduledTaskList() {
     if (!listEl) return;
     const tasks = listScheduledTasks();
     if (!tasks.length) {
-        listEl.innerHTML = '<p class="text-[11px] text-indigo-300">（暂无任务）</p>';
+        listEl.innerHTML = '<p class="text-[11px] text-dim">（暂无任务）</p>';
         return;
     }
     listEl.innerHTML = tasks.map(t => `
-        <div class="flex items-center justify-between gap-2 bg-white/60 border border-indigo-100 rounded-lg px-3 py-2">
+        <div class="flex items-center justify-between gap-2 bg-white/60 border border-soft rounded-lg px-3 py-2">
             <div class="min-w-0">
-                <div class="text-xs text-indigo-800 truncate">${escapeHtml(t.content)}</div>
-                <div class="text-[11px] text-indigo-400">下次：${new Date(t.nextAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}${t.intervalMs > 0 ? '（周期）' : '（一次）'}</div>
+                <div class="text-xs text-ink truncate">${escapeHtml(t.content)}</div>
+                <div class="text-[11px] text-dim">下次：${new Date(t.nextAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}${t.intervalMs > 0 ? '（周期）' : '（一次）'}</div>
             </div>
-            <button type="button" class="btn-secondary text-xs text-red-500" onclick="window.__cancelScheduledTask('${safeAttrId(t.id)}')">取消</button>
+            <button type="button" class="btn-secondary text-xs text-danger" onclick="window.__cancelScheduledTask('${safeAttrId(t.id)}')">取消</button>
         </div>
     `).join('');
 }

@@ -7,9 +7,41 @@
             --safe-right: env(safe-area-inset-right, 0px);
             --safe-bottom: env(safe-area-inset-bottom, 0px);
             --safe-left: env(safe-area-inset-left, 0px);
-            --color-primary: #8a6a1f;
+
+            /* 动效令牌：时长与缓动只在这里定义一份，交互过渡统一取用；
+               三档时长 + 一条收尾曲线覆盖弹层/面板/列表的进出，新动效不再写裸时长。 */
+            --motion-fast: 0.15s;
+            --motion-base: 0.2s;
+            --motion-slow: 0.3s;
+            --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+
+            /* 默认主题（暗夜魔女书房 · 浅色）的首帧兜底色：themes.css 的 --rd-*（html.rd 承接）是
+               取色的唯一事实源，这里只在样式表尚未就位时顶住首屏。只留一组裸值，其余名字全部
+               var() 指回去 —— 同一组基准色写两份必然漂移。 */
+            --pixso-canvas: #f4eee1;
+            --pixso-cream: #fbf7ee;
+            --pixso-surface: #fbf7ee;
+            --pixso-panel: #efe7d7;
+            --pixso-panel-soft: #f1e8d7;
+            --pixso-brown: #241f18;
+            --pixso-brown-soft: #5a5041;
+            --pixso-green: #8a6a1f;
+            --pixso-green-dark: #6f5315;
+            --pixso-orange: #5c6f8a;
+            --pixso-line: #ddcfb8;
+            --pixso-warn: #a6761f;
+            --pixso-warn-soft: #8a5f12;
+            --pixso-warn-bg: rgba(255, 247, 237, 0.75);
+            --pixso-warn-line: #e8cf9e;
+            --pixso-shadow: 0 24px 70px rgba(60, 45, 20, 0.18);
+            --chat-liquid-background:
+                radial-gradient(ellipse at 12% 18%, rgba(255, 255, 255, .92) 0%, rgba(255, 255, 255, 0) 42%),
+                radial-gradient(ellipse at 88% 24%, rgba(211, 179, 106, .18) 0%, rgba(211, 179, 106, 0) 44%),
+                radial-gradient(ellipse at 24% 88%, rgba(120, 150, 190, .12) 0%, rgba(120, 150, 190, 0) 46%),
+                linear-gradient(135deg, #fbf7ee 0%, #f4eee1 48%, #efe4d2 100%);
+            --color-primary: var(--pixso-green);
             --color-primary-soft: #a9853f;
-            --color-secondary: #5c6f8a;
+            --color-secondary: var(--pixso-orange);
             --color-secondary-soft: #7d8ea6;
             --color-accent: #d3b36a;
             --color-neutral-50: #fbf7ee;
@@ -22,21 +54,14 @@
             --color-neutral-700: #6d5938;
             --color-neutral-800: #4f4028;
             --color-neutral-900: #332a1c;
-            --text-heading: #241f18;
-            --text-body: #312b22;
-            --text-secondary: #5a5041;
+            --text-heading: var(--pixso-brown);
+            --text-body: var(--pixso-brown-soft);
+            --text-secondary: var(--pixso-green-dark);
             --text-muted: #8b7f6b;
-            --text-glass-heading: #241f18;
-            --text-glass-body: #312b22;
+            --text-glass-heading: var(--pixso-brown);
+            --text-glass-body: var(--pixso-brown-soft);
             --text-glass-muted: #5a5041;
-            --ink: #241f18;
-
-            /* 动效令牌：时长与缓动只在这里定义一份，交互过渡统一取用；
-               三档时长 + 一条收尾曲线覆盖弹层/面板/列表的进出，新动效不再写裸时长。 */
-            --motion-fast: 0.15s;
-            --motion-base: 0.2s;
-            --motion-slow: 0.3s;
-            --ease-out-soft: cubic-bezier(0.16, 1, 0.3, 1);
+            --ink: var(--pixso-brown);
         }
 
         html, body {
@@ -46,6 +71,34 @@
             margin: 0;
             padding: 0;
             overflow: hidden;
+        }
+
+        /* 语义色工具类：宿主 HTML / JS 渲染的取色只走这组名字，色值全部来自 --rd-*（themes.css）。
+           Tailwind 色类（text-indigo-500 一类）的颜色编译在 vendor 里，换主题不跟随，
+           宿主内容不得再用；redesign.css 保留的对应覆盖只服务插件自带的 HTML。 */
+        .text-ink { color: var(--rd-text); }
+        .text-soft { color: var(--rd-text-2); }
+        .text-dim { color: var(--rd-text-3); }
+        .text-accent { color: var(--rd-accent); }
+        .text-ok { color: var(--rd-ok); }
+        .text-warn { color: var(--rd-warn); }
+        .text-danger { color: var(--rd-danger); }
+        .bg-accent { background-color: var(--rd-accent); }
+        .bg-accent-soft { background-color: var(--rd-accent-soft); }
+        .bg-ok { background-color: var(--rd-ok); }
+        .bg-ok-soft { background-color: var(--rd-ok-soft); }
+        .bg-warn { background-color: var(--rd-warn); }
+        .bg-warn-soft { background-color: var(--rd-warn-bg); }
+        .bg-danger { background-color: var(--rd-danger); }
+        .bg-danger-soft { background-color: var(--rd-danger-soft); }
+        .bg-neutral { background-color: var(--rd-surface-2); }
+        .border-soft { border-color: var(--rd-border); }
+        .border-warn { border-color: var(--rd-warn-border); }
+        .border-danger-soft { border-color: var(--rd-danger-border); }
+        /* 主题化渐变：装饰徽标 / 强调按钮用，替代写死的 from-* to-* 渐变组合。 */
+        .grad-accent {
+            background-image: linear-gradient(135deg, var(--rd-accent-2), var(--rd-accent));
+            box-shadow: 0 10px 15px -3px var(--rd-glow-1), 0 4px 6px -2px var(--rd-glow-2);
         }
 
         html { box-sizing: border-box; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
@@ -653,8 +706,6 @@
         #folderList .conversation-inline-actions button:hover,
         #conversationMoveClose:hover { color: var(--pixso-orange, #ff7d4d); background: var(--pixso-panel-soft, #f1e5d5); }
         #folderList .conversation-inline-actions button svg { color: var(--pixso-brown-soft, #92796e) !important; }
-        #folderList .conversation-inline-actions button svg.text-pink-500,
-        #folderList .conversation-inline-actions button svg.text-amber-500 { color: var(--pixso-orange, #ff7d4d) !important; }
         #folderList .folder-header-icon { color: var(--pixso-green-dark) !important; }
         #folderList .folder-header-unfiled { color: var(--pixso-green-dark) !important; }
         #folderList .conversation-pin-icon,
@@ -1206,65 +1257,6 @@
         .floating-dock-btn:hover { transform: scale(1.08); }
         .floating-dock-btn:active { transform: scale(0.95); }
 
-        @media (max-width: 980px) {
-            #sidebar {
-                width: min(280px, calc(100vw - 24px));
-                left: 12px;
-                top: 12px;
-                bottom: 12px;
-                animation: none;
-                transform: translateX(-115%);
-                opacity: 0;
-                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
-                background: rgba(255, 247, 252, 0.96);
-                -webkit-backdrop-filter: blur(24px) saturate(1.35);
-                backdrop-filter: blur(24px) saturate(1.35);
-            }
-            body.sidebar-open #sidebar {
-                animation: none;
-                transform: translateX(0);
-                opacity: 1;
-            }
-            #showSidebar {
-                display: flex !important;
-            }
-            body.sidebar-open #mainContent {
-                visibility: hidden;
-                pointer-events: none;
-            }
-            #mainContent,
-            .ml-\[320px\] {
-                margin-left: 0 !important;
-            }
-            #mainContent > header {
-                flex-basis: 56px;
-                min-height: 56px;
-                margin: 12px 12px 0;
-                padding: 0 12px;
-                gap: 8px;
-            }
-            .quote-chip {
-                padding-left: 10px;
-                padding-right: 10px;
-            }
-            #initialState { padding: 20px 16px 24px; }
-            .initial-composer { margin-top: 24px; }
-            #inputBar { padding: 8px 12px 14px; }
-            #inputBar .conversation-composer {
-                min-height: 56px;
-                padding: 7px 8px 7px 12px;
-                gap: 8px;
-                border-radius: 16px;
-            }
-            .composer-more-menu { width: min(276px, calc(100vw - 32px)); }
-            #inputBar .conversation-send-btn {
-                width: 40px;
-                padding: 0;
-                justify-content: center;
-                font-size: 0;
-            }
-            #inputBar .conversation-send-btn svg { width: 16px; height: 16px; }
-        }
 
         .fallback-ready .flex { display: flex; }
         .fallback-ready .flex-col { flex-direction: column; }
@@ -1485,37 +1477,6 @@
         .fallback-ready .from-pink-300.to-violet-300 { background-image: linear-gradient(135deg, #f9a8d4, #a5b4fc); }
         .fallback-ready .from-emerald-300.to-teal-400 { background-image: linear-gradient(135deg, #6ee7b7, #2dd4bf); }
         .fallback-ready .shadow-pink-200 { box-shadow: 0 10px 15px -3px rgba(251, 207, 232, 0.5), 0 4px 6px -2px rgba(251, 207, 232, 0.3); }
-        /* 默认主题（暗夜魔女书房 · 浅色）的基准色；themes.css 运行时会按 data-theme-template 覆盖，
-           这里保证首屏在主题脚本执行前不闪白。 */
-        :root {
-            --pixso-canvas: #f4eee1;
-            --pixso-cream: #fbf7ee;
-            --pixso-surface: #fbf7ee;
-            --pixso-panel: #efe7d7;
-            --pixso-panel-soft: #f1e8d7;
-            --pixso-brown: #241f18;
-            --pixso-brown-soft: #5a5041;
-            --pixso-green: #8a6a1f;
-            --pixso-green-dark: #6f5315;
-            --pixso-orange: #5c6f8a;
-            --pixso-line: #ddcfb8;
-            --pixso-warn: #a6761f;
-            --pixso-warn-soft: #8a5f12;
-            --pixso-warn-bg: rgba(255, 247, 237, 0.75);
-            --pixso-warn-line: #e8cf9e;
-            --pixso-shadow: 0 24px 70px rgba(60, 45, 20, 0.18);
-            --chat-liquid-background:
-                radial-gradient(ellipse at 12% 18%, rgba(255, 255, 255, .92) 0%, rgba(255, 255, 255, 0) 42%),
-                radial-gradient(ellipse at 88% 24%, rgba(211, 179, 106, .18) 0%, rgba(211, 179, 106, 0) 44%),
-                radial-gradient(ellipse at 24% 88%, rgba(120, 150, 190, .12) 0%, rgba(120, 150, 190, 0) 46%),
-                linear-gradient(135deg, #fbf7ee 0%, #f4eee1 48%, #efe4d2 100%);
-            --text-heading: var(--pixso-brown);
-            --text-body: var(--pixso-brown-soft);
-            --text-secondary: var(--pixso-green-dark);
-            --text-muted: #8b7f6b;
-            --ink: var(--pixso-brown);
-        }
-
         html, body { background: var(--pixso-canvas); }
         body {
             /* 这里是真正生效的 body 背景（同级规则里它更靠后，所以由它胜出）：
@@ -1630,20 +1591,8 @@
             box-shadow: none !important;
         }
         #sidebarBrand > div:first-child svg { width: 24px; height: 24px; }
-        #sidebarBrand .text-indigo-950,
-        #sidebarBrand .text-indigo-400 { color: var(--pixso-brown) !important; }
-        #sidebarBrand .text-indigo-400 { color: var(--pixso-brown-soft) !important; }
         #sidebarBrand .text-sm { font-size: 18px !important; font-weight: 700; letter-spacing: -0.02em; }
         #sidebarBrand .text-\[11px\] { font-size: 11px !important; font-weight: 500; }
-        #sidebar .text-indigo-950,
-        #sidebar .text-indigo-900,
-        #sidebar .text-indigo-800,
-        #sidebar .text-indigo-700,
-        #sidebar .text-indigo-600 { color: var(--pixso-brown) !important; }
-        #sidebar .text-indigo-500,
-        #sidebar .text-indigo-400,
-        #sidebar .text-indigo-300,
-        #sidebar .text-indigo-200 { color: var(--pixso-brown-soft) !important; }
         #sidebar .p-3.grid { padding: 8px 18px 14px; gap: 8px; }
         #sidebar .btn-primary,
         #sidebar .glass-button {
@@ -1699,12 +1648,6 @@
             box-shadow: inset 4px 0 0 var(--pixso-orange);
             border-radius: 12px;
         }
-        #sidebar .sidebar-item-active .text-pink-600,
-        #sidebar .sidebar-item-active .text-indigo-900,
-        #sidebar .sidebar-item-active .text-indigo-300 {
-            color: var(--pixso-brown) !important;
-        }
-        #sidebar .sidebar-item-active .text-indigo-300 { color: var(--pixso-brown-soft) !important; }
         #sidebar > div:last-child {
             padding: 16px 18px 18px;
             border-top: 1px solid rgba(76,49,35,0.12);
@@ -1745,28 +1688,6 @@
         .modal-panel select { font-family: inherit; letter-spacing: 0; }
         .modal-panel > div:first-child,
         .modal-panel > div:last-child { border-color: var(--pixso-line) !important; }
-        .modal-panel .text-indigo-950,
-        .modal-panel .text-indigo-900,
-        .modal-panel .text-indigo-800,
-        .modal-panel .text-indigo-700,
-        .modal-panel .text-indigo-600 { color: var(--pixso-brown) !important; }
-        .modal-panel .text-indigo-500,
-        .modal-panel .text-indigo-400,
-        .modal-panel .text-indigo-300,
-        .modal-panel .text-indigo-200 { color: var(--pixso-brown-soft) !important; }
-        .modal-panel .text-pink-500,
-        .modal-panel .text-pink-600,
-        .modal-panel .text-fuchsia-500,
-        .modal-panel .text-rose-500,
-        .modal-panel .text-violet-500 { color: var(--pixso-orange) !important; }
-
-        /* 这里补的是"默认主题那一档"：必须带 body 前缀（0,1,1）才压得过 Tailwind 的单类选择器；
-           选过主题模板时由 themes.css 那套特异性更高的规则说了算。 */
-        body .text-pink-500, body .text-pink-600, body .text-pink-400,
-        body .text-fuchsia-500, body .text-rose-500, body .text-violet-500,
-        body .text-purple-500 {
-            color: var(--pixso-orange);
-        }
         .modal-label {
             margin-bottom: 12px;
             font-size: 13px;
@@ -1928,7 +1849,7 @@
         .chat-provider-card .cpc-grid > div { min-width: 0; }
         .chat-provider-card .cpc-grid > div:first-child,
         .chat-provider-card .cpc-grid > div:last-child { grid-column: 1 / -1; }
-        @media (max-width: 640px) {
+        @media (max-width: 620px) {
             .chat-provider-card .cpc-grid { grid-template-columns: 1fr; }
             .chat-provider-card .cpc-grid > div { grid-column: auto; }
         }
@@ -1979,28 +1900,97 @@
         }
         .prov-back:hover { border-color: var(--pixso-orange); }
         .prov-detail-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: #9b8579; }
+        /* 模型分栏双栏：一整块卡片容器，左列表右详情、各自内部滚动；窄屏上下堆叠。
+           行样式在容器内收成极简行：去图标方块与边框，名称加粗、下行灰字（地址或协议）。 */
+        .model-page-body {
+            display: flex; align-items: stretch;
+            height: min(540px, 56vh);
+            border: 1px solid rgba(166, 137, 119, .28); border-radius: 16px;
+            background: rgba(255, 255, 255, .5);
+            overflow: hidden;
+        }
+        .model-pane-list {
+            width: 280px; flex-shrink: 0; min-height: 0; overflow-y: auto;
+            padding: 14px; border-right: 1px solid rgba(166, 137, 119, .22);
+        }
+        .model-pane-detail { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; padding: 14px 18px; }
+        .model-pane-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+        .model-pane-title { font-size: 12px; font-weight: 750; color: #9b8579; letter-spacing: .02em; }
+        .model-add-btn {
+            appearance: none; -webkit-appearance: none;
+            border: none; background: transparent; color: var(--pixso-orange, #d97706);
+            font: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+            padding: 4px 10px; border-radius: 999px;
+        }
+        .model-add-btn:hover { background: rgba(217, 119, 6, .12); }
+        .model-add-btn.is-cancel { color: #9b8579; }
+        .model-page-body .prov-list { display: flex; flex-direction: column; gap: 2px; }
+        .model-page-body .prov-row {
+            border: none; background: transparent; border-radius: 10px; padding: 9px 12px;
+            text-align: left; cursor: pointer;
+        }
+        .model-page-body .prov-row:hover { background: rgba(166, 137, 119, .14); }
+        .model-page-body .prov-row.is-active { background: rgba(217, 119, 6, .16); }
+        .model-page-body .prov-icon, .model-page-body .prov-chev { display: none; }
+        .model-page-body .prov-name { font-size: 13px; font-weight: 750; }
+        .model-page-body .prov-desc { display: block; font-size: 11px; color: #9b8579; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* 行内删除（AstrBot 式）：垃圾桶默认隐藏，悬停或选中该行时显现；点击不触发行选中 */
+        .model-page-body .prov-row { position: relative; padding-right: 36px; }
+        .model-page-body .prov-del {
+            position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+            width: 24px; height: 24px; display: grid; place-items: center;
+            border-radius: 8px; color: #9b8579; cursor: pointer;
+            opacity: 0; transition: opacity .12s ease, color .12s ease, background .12s ease;
+        }
+        .model-page-body .prov-row:hover .prov-del,
+        .model-page-body .prov-row.is-active .prov-del { opacity: 1; }
+        .model-page-body .prov-del:hover { color: #dc2626; background: rgba(220, 38, 38, .12); }
+        html[data-theme="dark"] .model-page-body .prov-del { color: var(--rd-text-3); }
+        html[data-theme="dark"] .model-page-body .prov-del:hover { color: #f87171; background: rgba(248, 113, 113, .14); }
+        /* 触屏设备没有悬停：垃圾桶常显，否则手机上永远删不了 */
+        @media (hover: none) {
+            .model-page-body .prov-del { opacity: 1; }
+        }
+        .model-detail-empty { height: 100%; min-height: 300px; display: flex; flex-direction: column; gap: 4px; align-items: center; justify-content: center; }
+        .model-detail-empty-text { color: var(--text-muted); font-size: 15px; font-weight: 650; }
+        .model-detail-empty-text::before { content: '✦'; display: block; text-align: center; font-size: 22px; color: #c9b8a8; margin-bottom: 6px; }
+        .model-detail-empty-hint { color: var(--text-muted); font-size: 11px; opacity: .8; }
+        /* tab-model 激活时面板加宽，给双栏留出舒展空间；切走时收回去 */
+        html[data-theme="dark"] .model-page-body { border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.045); }
+        html[data-theme="dark"] .model-pane-list { border-right-color: rgba(255,255,255,.12); }
+        html[data-theme="dark"] .model-page-body .prov-row:hover { background: rgba(255,255,255,.07); }
+        html[data-theme="dark"] .model-page-body .prov-row.is-active { background: rgba(255,255,255,.12); }
+        html[data-theme="dark"] .model-add-btn { color: var(--rd-accent); }
+        html[data-theme="dark"] .model-detail-empty-text::before { color: rgba(255,255,255,.35); }
+        /* 能力分栏的配置行：多行控件（回退链等）需要顶部对齐，不要垂直居中 */
+        .set-row-top { align-items: flex-start !important; }
+        .set-row-top .copy { padding-top: 2px; }
+        /* 回退链的收纳编辑器：摘要行长得像输入框，展开才是完整链 */
+        .fbc-editor > summary {
+            list-style: none; cursor: pointer;
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 12px; border: 1px solid var(--rd-border); border-radius: 10px;
+            font-size: 13px; color: var(--rd-text); background: transparent;
+            transition: border-color .12s ease;
+        }
+        .fbc-editor > summary::-webkit-details-marker { display: none; }
+        .fbc-editor > summary:hover { border-color: var(--rd-accent-border); }
+        .fbc-editor[open] > summary { border-color: var(--rd-accent-border); }
+        .fbc-editor-chev { margin-left: auto; flex: none; color: var(--rd-text-3); transition: transform .15s ease; }
+        .fbc-editor[open] .fbc-editor-chev { transform: rotate(180deg); }
+        .fbc-editor-more { font-size: 11px; color: var(--rd-text-3); flex: none; }
+        .fbc-editor #fallbackChainFirst { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        @media (max-width: 980px) {
+            .model-page-body { flex-direction: column; height: auto; }
+            .model-pane-list { width: auto; border-right: none; border-bottom: 1px solid rgba(166, 137, 119, .22); max-height: 40%; }
+            .model-page-body .prov-row { padding: 10px 10px; }
+        }
         html[data-theme="dark"] .prov-row { border-color: rgba(255, 255, 255, .13); background: rgba(255, 255, 255, .035); color: var(--rd-text); }
         html[data-theme="dark"] .prov-row:hover { border-color: rgba(255, 255, 255, .3); }
         html[data-theme="dark"] .prov-row.is-active { border-color: var(--rd-accent); background: rgba(255, 255, 255, .09); }
         html[data-theme="dark"] .prov-icon { background: rgba(255, 255, 255, .08); color: var(--rd-text); }
         html[data-theme="dark"] .prov-back { border-color: rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .06); color: var(--rd-text); }
         html[data-theme="dark"] .prov-detail-title { color: var(--rd-text-3); }
-        /* 候选模型勾选行：勾中的才会出现在一级的默认/回退选择里 */
-        .cpc-model-check {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 10px;
-            border-radius: 10px;
-            cursor: pointer;
-            font-size: 12.5px;
-            color: var(--pixso-brown-dark);
-        }
-        .cpc-model-check:hover { background: rgba(166, 137, 119, .14); }
-        .cpc-model-check input { accent-color: var(--pixso-orange); width: 14px; height: 14px; flex: none; }
-        .cpc-model-check span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        html[data-theme="dark"] .cpc-model-check { color: var(--rd-text); }
-        html[data-theme="dark"] .cpc-model-check:hover { background: rgba(255, 255, 255, .07); }
         /* 一级视图的回退链行：序号 + 「提供商 · 模型」 + 上移/下移/移除 */
         .fbc-row {
             display: flex;
@@ -2035,7 +2025,7 @@
         html[data-theme="dark"] .fbc-copy { color: var(--rd-text-2); }
         /* 深色模式：底色/描边/文字换主题令牌，选中态走强调色（浅色规则上面的暖棕在暗面板里读不清） */
         html[data-theme="dark"] .conversation-bot-avatar { border-color: rgba(255, 255, 255, .18); background-color: rgba(255, 255, 255, .06); color: var(--rd-text); }
-        @media (max-width: 640px) {
+        @media (max-width: 620px) {
             .guide-modal-panel { width: 100%; max-height: calc(100vh - 28px); max-height: calc(100dvh - 28px); }
             .guide-modal-scroll { padding: 20px 18px 16px; }
             .guide-title { font-size: 18px; }
@@ -2199,8 +2189,6 @@
             border-radius: 999px;
             box-shadow: none;
         }
-        #mainContent > header .quote-chip .text-indigo-800,
-        #mainContent > header .quote-chip .text-indigo-300 { color: var(--pixso-brown-soft) !important; }
         .header-memory-btn {
             appearance: none;
             -webkit-appearance: none;
@@ -2295,16 +2283,6 @@
             -webkit-backdrop-filter: none;
         }
         /* 圆角本身（16px 16px 0 16px）保留气泡的方向感：靠近发送方的那一角是直角。 */
-        .bubble-user .text-indigo-500,
-        .bubble-user .text-indigo-300,
-        .bubble-user .text-indigo-800,
-        .bubble-ai .text-pink-600,
-        .bubble-ai .text-indigo-300,
-        .bubble-ai .text-indigo-950 { color: var(--pixso-brown-soft) !important; }
-        .bubble-user .text-indigo-500,
-        .bubble-user .text-indigo-800 { color: rgba(255,255,255,0.92) !important; }
-        .bubble-ai .text-pink-600 { color: var(--pixso-orange) !important; }
-        .bubble-ai .text-indigo-950 { color: var(--pixso-brown) !important; }
         .ai-speaker-name {
             align-items: center;
             line-height: 1;
@@ -2655,6 +2633,24 @@
         /* 未选中：划掉的感觉 —— 明确"这一类被关掉了" */
         .log-pill[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 
+        /* ---- 插件市场平台分类药丸（与级别药丸同一套形状；中文标签不用等宽字体） ---- */
+        .market-pill {
+            padding: 3px 11px;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .02em;
+            color: var(--pixso-brown-soft);
+            background: transparent;
+            border: 1px solid var(--pixso-line);
+            border-radius: 999px;
+            cursor: pointer;
+            transition: color .15s ease, border-color .15s ease, background .15s ease;
+        }
+        .market-pill:hover { border-color: var(--pixso-green); color: var(--pixso-brown); }
+        .market-pill[aria-pressed="true"] { color: #4f46e5; border-color: #4f46e5; background: rgba(79,70,229,.10); }
+        /* 未选中：只降透明度，不划掉 —— 分类是"换视角"不是"关掉一类" */
+        .market-pill[aria-pressed="false"] { opacity: .55; }
+
         /* ---- 工具栏控件 ---- */
         .log-select, .log-search {
             height: 28px;
@@ -2772,9 +2768,9 @@
         }
         .log-meta b { color: var(--pixso-brown); }
 
-        @media (max-width: 1080px) and (min-width: 981px) {
-            #appShell { width: calc(100vw - 28px); height: calc(100vh - 28px); margin: 14px auto; }
-            #sidebar { width: 330px; flex-basis: 330px; }
+        @media (max-width: 1200px) and (min-width: 981px) {
+            #sidebar {
+flex-basis: 330px;}
             #sidebar::before, .sidebar-rail { width: 96px; }
             #sidebar > div:not(.sidebar-rail) { width: calc(100% - 96px); margin-left: 96px; }
             #conversationHistory { padding-left: 24px; padding-right: 24px; }
@@ -2791,45 +2787,22 @@
                 overflow: hidden;
             }
             html, body { background: var(--pixso-cream); }
-            #appShell { position: fixed; top: var(--viewport-offset-top); left: 0; width: 100%; max-width: 100%; height: var(--app-height); min-height: 0; margin: 0; border-radius: 0; box-shadow: none; overflow: hidden; }
+            #appShell {
+top: var(--viewport-offset-top);left: 0;}
             #sidebar {
-                position: fixed;
-                top: calc(8px + var(--safe-top));
-                bottom: calc(8px + var(--safe-bottom));
-                left: calc(8px + var(--safe-left));
-                width: min(390px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
-                height: auto;
-                flex: 0 0 min(390px, calc(100vw - 16px - var(--safe-left) - var(--safe-right)));
-                transform: translateX(-115%);
-                opacity: 0;
-                transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
-                background: var(--pixso-panel);
-                border-radius: 22px;
-                box-shadow: 0 20px 56px rgba(67, 47, 36, .24);
-            }
-            body.sidebar-open #sidebar { transform: translateX(0); opacity: 1; }
+position: fixed;top: calc(8px + var(--safe-top));bottom: calc(8px + var(--safe-bottom));left: calc(8px + var(--safe-left));transform: translateX(-115%);opacity: 0;transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;/* 元素上的 animate-slide-in-left（Tailwind 动画类）填充态会把 transform 钉在 0，
+                   抽屉就永远收不回去 —— 动画优先级高于静态声明，必须在这里显式关掉。 */
+                animation: none;}
+            body.sidebar-open #sidebar { transform: translateX(0); opacity: 1; animation: none; }
             #sidebar::before {
-                display: block;
-                width: 84px;
-            }
+width: 84px;}
             .sidebar-rail {
-                display: flex;
-                width: 84px !important;
-                padding: 14px 10px 16px;
-                gap: 8px;
-                overflow-y: auto;
-                overscroll-behavior: contain;
-            }
+overflow-y: auto;overscroll-behavior: contain;}
             .sidebar-rail-logo {
-                width: 50px;
-                height: 50px;
-                margin-bottom: 14px;
-            }
+margin-bottom: 14px;}
             .sidebar-rail-logo svg { width: 28px; height: 28px; }
-            .sidebar-rail-btn { width: 52px; height: 52px; }
             .sidebar-rail-btn svg { width: 27px; height: 27px; }
             #sidebar > div:not(.sidebar-rail) { width: calc(100% - 84px); margin-left: 84px; }
-            #sidebarBrand { height: 78px; padding: 14px 12px; }
             #sidebarBrand > div:first-child { width: 40px; height: 40px; flex: 0 0 40px; }
             #sidebarBrand .text-sm { font-size: 16px !important; }
             #folderList .text-sm { font-size: 15px !important; }
@@ -2837,20 +2810,7 @@
             #folderList .text-base { font-size: 17px !important; }
             #folderList .text-xs { font-size: 13px !important; }
             #mobileSidebarClose {
-                appearance: none;
-                -webkit-appearance: none;
-                width: 34px;
-                height: 34px;
-                margin-left: auto;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 34px;
-                color: var(--pixso-brown-soft);
-                background: rgba(255,255,255,.56);
-                border: 0;
-                border-radius: 50%;
-            }
+appearance: none;-webkit-appearance: none;margin-left: auto;flex: 0 0 34px;}
             #mobileSidebarClose svg { width: 17px; height: 17px; }
             #mainContent { width: 100%; max-width: 100%; min-width: 0; margin: 0 !important; overflow: hidden; }
             body.sidebar-open #mainContent {
@@ -2885,40 +2845,16 @@
                这里不需要给胶囊做任何"条件显形"。
                （胶囊在 ≤1199px 的隐藏由 layout-full.css 统一负责，这里不再重复写。） */
             .page-secondary-header {
-                flex-basis: 68px;
-                min-height: 68px;
-                margin: calc(10px + var(--safe-top)) calc(12px + var(--safe-right)) 0 calc(12px + var(--safe-left));
-                padding: 0 14px;
-                border-radius: 20px;
-            }
-            .page-secondary-title { font-size: 18px; }
-            .page-secondary-subtitle { font-size: 11px; }
+flex-basis: 68px;}
             .page-secondary-back {
-                width: 38px;
-                min-width: 38px;
-                height: 38px;
-                min-height: 38px;
-                padding: 0;
-                gap: 0;
-                font-size: 0;
-                border-radius: 50%;
-            }
+width: 38px;min-width: 38px;height: 38px;}
             .page-secondary-back svg { width: 18px; height: 18px; }
             #notesPage > .overflow-y-auto { padding: 14px calc(16px + var(--safe-right)) calc(28px + var(--safe-bottom)) calc(16px + var(--safe-left)); }
             .notes-subtitle-full { display: none; }
             .notes-subtitle-mobile { display: inline; }
-            .notes-toolbar {
-                flex-wrap: nowrap;
-                gap: 10px;
-            }
             #notesPage .notes-tabs { display: none !important; }
             .notes-search-wrap {
-                display: block !important;
-                flex: 1 1 auto;
-                width: auto;
-                min-width: 0;
-                margin-left: 0 !important;
-            }
+display: block !important;flex: 1 1 auto;min-width: 0;margin-left: 0 !important;}
             #notesSearch {
                 box-sizing: border-box;
                 width: 100% !important;
@@ -2926,11 +2862,7 @@
                 max-width: 100%;
             }
             #notesCount {
-                flex: 0 0 auto;
-                white-space: nowrap;
-                font-size: 11px;
-            }
-            .diary-toolbar { padding: 12px calc(16px + var(--safe-right)) 4px calc(16px + var(--safe-left)); }
+flex: 0 0 auto;white-space: nowrap;}
             .diary-toolbar .diary-count { margin-left: 0; }
             /* 日志分栏（手机）：工具栏换行、搜索框收窄。高度不在这里改 ——
                  它由 .log-tab-body 的 flex:1 填满内容区，与机型无关。 */
@@ -2951,51 +2883,23 @@
             #sidebar .modal-input { width: 100%; }
             #sidebar .relative { min-width: 0; max-width: 100%; }
             #showSidebar {
-                width: 38px;
-                height: 38px;
-                padding: 0 !important;
-                display: inline-flex !important;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 38px;
-                color: var(--pixso-brown) !important;
-                background: var(--pixso-cream) !important;
-                border-radius: 50%;
-            }
+width: 38px;height: 38px;padding: 0 !important;display: inline-flex !important;align-items: center;justify-content: center;flex: 0 0 38px;background: var(--pixso-cream) !important;}
             #showSidebar svg { width: 18px; height: 18px; color: var(--pixso-brown) !important; stroke: currentColor; }
-            #showSidebar:hover { color: var(--pixso-orange) !important; background: var(--pixso-panel-soft) !important; }
             .header-memory-btn {
-                width: 38px;
-                height: 38px;
-                min-height: 38px;
-                padding: 0;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 38px;
-                color: var(--pixso-brown) !important;
-                background: var(--pixso-cream) !important;
-                border-radius: 50%;
-            }
+width: 38px;display: inline-flex;align-items: center;justify-content: center;flex: 0 0 38px;}
             /* 手机上按钮收成圆图标：隐藏文字，但「状态红点」要保留（两个按钮都有） */
             .header-memory-btn > span:not(#memoryStatusDot):not(#announceStatusDot) { display: none; }
             .header-memory-btn svg { width: 18px; height: 18px; }
-            .header-memory-btn:hover { color: var(--pixso-orange) !important; background: var(--pixso-panel-soft) !important; }
             /* 顶栏外观模式开关：手机上收窄一点，别挤掉「整理记忆」 */
-            .header-theme-switch { padding: 2px; gap: 1px; }
             .header-theme-switch .theme-seg { width: 26px; height: 26px; }
             .header-theme-switch .theme-seg svg { width: 15px; height: 15px; }
             #initialState {
-                justify-content: safe center;
-                overflow-y: auto;
-                overscroll-behavior: contain;
-                padding: calc(26px + var(--safe-top)) calc(16px + var(--safe-right)) calc(30px + var(--safe-bottom)) calc(16px + var(--safe-left));
-            }
-            #greetingText { font-size: 28px; }
-            #conversationHistory { padding: 18px 16px 112px; }
+justify-content: safe center;overflow-y: auto;overscroll-behavior: contain;}
             #conversationHistory > .message-item > .flex > .flex-1 { max-width: 88%; }
-            #inputBar { box-sizing: border-box; width: 100%; max-width: 100%; padding: 10px calc(12px + var(--safe-right)) calc(14px + var(--safe-bottom)) calc(12px + var(--safe-left)); overflow: visible; }
-            #inputBar .conversation-composer { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; min-height: 58px; margin-left: 0; margin-right: 0; padding: 7px 8px 7px 10px; border-radius: 18px; }
+            #inputBar {
+box-sizing: border-box;width: 100%;max-width: 100%;overflow: visible;}
+            #inputBar .conversation-composer {
+box-sizing: border-box;width: 100%;max-width: 100%;min-width: 0;margin-left: 0;margin-right: 0;}
             #inputBar .composer-tools,
             #inputBar #textInput,
             #inputBar .conversation-mic-btn,
@@ -3003,9 +2907,9 @@
             #inputBar .conversation-send-btn { width: 42px; min-width: 42px; max-width: 42px; height: 42px; min-height: 42px; }
             #inputBar .conversation-send-btn.is-hidden { width: 0; min-width: 0; max-width: 0; }
             .initial-composer { width: 100%; }
-            .initial-composer-shell { min-height: 58px; padding-left: 10px; }
+            .initial-composer-shell {
+padding-left: 10px;}
             .composer-more-menu { width: min(276px, calc(100vw - 32px)); }
-            .diary-toolbar { padding: 20px 16px 8px; }
             .diary-grid { grid-template-columns: 1fr; padding: 12px calc(16px + var(--safe-right)) calc(28px + var(--safe-bottom)) calc(16px + var(--safe-left)); }
             #folderList [data-conv-id] {
                 position: relative;
@@ -3046,47 +2950,13 @@
             .conversation-favorite-btn svg { width: 18px !important; height: 18px !important; }
 
             #settingsOverlay {
-                padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left) !important;
-                width: 100%;
-                height: var(--app-height);
-                min-height: 0;
-                top: 0;
-                left: 0;
-                align-items: stretch !important;
-                justify-content: stretch !important;
-                background: var(--chat-liquid-background) !important;
-                background-color: #f7f1e9 !important;
-                backdrop-filter: none !important;
-                -webkit-backdrop-filter: none !important;
-            }
+min-height: 0;top: 0;left: 0;background-color: #f7f1e9 !important;}
             #settingsPanel {
-                width: 100%;
-                max-width: none;
-                height: 100%;
-                max-height: 100%;
-                min-height: 0;
-                margin: 0;
-                color: var(--pixso-brown);
-                background: transparent;
-                border: 0;
-                border-radius: 0;
-                box-shadow: none;
-                animation: settings-page-enter .24s cubic-bezier(.16, 1, .3, 1) both;
-                backdrop-filter: none;
-                -webkit-backdrop-filter: none;
-            }
+min-height: 0;margin: 0;animation: settings-page-enter .24s cubic-bezier(.16, 1, .3, 1) both;backdrop-filter: none;-webkit-backdrop-filter: none;}
             /* 顶栏（导航 + ✕）作用于 #settingsTopBar：用 id 而不是 div:first-child，结构一改索引就错位。
                ★ 与桌面端保持一致：无框、无底色、无分隔线，否则同一个界面在手机/电脑上长得不一样。 */
             #settingsTopBar {
-                min-height: 56px;
-                margin: 8px 12px 0;
-                padding: 0 10px;
-                background: transparent;
-                border: 0 !important;
-                border-bottom: 0 !important;
-                border-radius: 0;
-                box-shadow: none;
-            }
+border-bottom: 0 !important;border-radius: 0;box-shadow: none;}
             #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
             #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
 /* 手机上的分栏导航横向滚动（浏览器标签页的做法），不改成换行 ——
@@ -3096,51 +2966,26 @@
               ★★ justify-content: flex-start 写在基础 #settingsTabNav 规则里（那是真因），
                 在这里写会被文件更后面的基础规则覆盖掉。 */
             #settingsTabNav {
-                max-width: calc(100% - 66px);
-                /* 触摸滚动更跟手；并让点中的分栏吸附到可视区 */
-                -webkit-overflow-scrolling: touch;
-                scroll-snap-type: x proximity;
-                scroll-padding-inline: 8px;
-                /* 左右各留 2px 内边距：首/末项不贴边，scroll-snap 吸附后也不会看着像被裁。
-                 ★ 不用 mask 做"右侧渐隐"：mask 会把首/末项的文字一起渐隐掉，
-                   与被遮挡的观感叠加反而更像 bug；可滑动的提示交给"露出半个分栏"本身。 */
-                padding: 0 2px !important;
-                mask-image: none;
-                -webkit-mask-image: none;
-            }
+/* 触摸滚动更跟手；并让点中的分栏吸附到可视区 */
+                -webkit-overflow-scrolling: touch;scroll-snap-type: x proximity;scroll-padding-inline: 8px;mask-image: none;-webkit-mask-image: none;}
             .settings-tab-btn { scroll-snap-align: start; }
             /* 手机上隐藏分栏图标、只留文字：横向占位更少，且图标是 unicode 符号
                  （◐☺◗♪◉✧⚙☰▣），在安卓中文字体里常常没有对应字形，
                  会退化成方框或与文字重叠。图标用 display:none，不占位。
                  桌面端宽度充裕、字体也更全，图标保留。 */
-            .settings-tab-btn::before { display: none; }
 /* 手机上没有悬停，未选中分栏要更实一点：桌面靠悬停区分选中态，
                  而手机上未选中太淡，在户外/低亮度下几乎看不清还有哪些分栏可点。
                ★★ 分栏的间距与内边距不在这里改：媒体查询位于基础 .settings-tab-btn 规则之前，
                   同权重下后面的基础规则胜出，写在这里的 padding/font-size/gap 会被覆盖。
                   那些覆盖写在文件后面「手机分栏间距」那一段（基础规则之后）。 */
-            .settings-tab-btn { opacity: .92; color: var(--pixso-brown); }
 /* 级别药丸在手机上收紧内边距与字号，给日志区多留出可视行数 */
             .log-pill { padding: 3px 8px; font-size: 10.5px; }
             #closeSettings {
-                width: 38px;
-                height: 38px;
-                padding: 0;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                flex: 0 0 38px;
-            }
+padding: 0;display: inline-flex;align-items: center;justify-content: center;flex: 0 0 38px;}
             #closeSettings svg { width: 18px; height: 18px; color: var(--pixso-brown) !important; }
             .settings-close-desktop { display: none; }
-            .settings-close-mobile { display: block; }
             #settingsContent {
-                min-height: 0;
-                overflow-y: auto;
-                overscroll-behavior: contain;
-                padding: 18px 14px 26px;
-                background: transparent;
-            }
+min-height: 0;overscroll-behavior: contain;}
             #settingsContent > section,
             #settingsContent > section:last-child {
                 padding: 17px;
@@ -3159,9 +3004,9 @@
         @media (max-width: 980px) and (max-height: 620px) {
             #mainContent > header { flex-basis: 62px; min-height: 62px; }
             #initialState { justify-content: flex-start; }
-            #greetingText { font-size: 24px; }
             .sidebar-rail-logo { margin-bottom: 4px; }
-            .sidebar-rail { gap: 4px; padding-top: 8px; padding-bottom: 8px; }
+            .sidebar-rail {
+padding-top: 8px;padding-bottom: 8px;}
         }
 
         @keyframes settings-page-enter {
@@ -3182,89 +3027,29 @@
     @media (min-width: 981px) {
         /* ① 遮罩：铺满视口、完全不透明 */
         #settingsOverlay {
-            inset: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            max-height: none !important;
-            padding: 0 !important;
-            /* 必须改掉 Tailwind 的 items-center justify-center p-4：不改的话面板会被居中并留边距，
-               看起来仍是"放大的弹窗"而不是全屏页。 */
-            align-items: stretch !important;
-            justify-content: stretch !important;
-            /* 半透明：设置页背后能透出聊天界面，配合模糊形成毛玻璃整页观感。
-                 用 color-mix 把主题面板色压到 82% 不透明，深浅色与各模板都自动跟随
-                 （不支持时由下面的 @supports 实色兜底）。 */
-            background: var(--pixso-panel) !important;
-            background: color-mix(in srgb, var(--pixso-panel) 82%, transparent) !important;
-            backdrop-filter: blur(18px) saturate(1.2) !important;
-            -webkit-backdrop-filter: blur(18px) saturate(1.2) !important;
-        }
+max-height: none !important;}
         /* ② 面板：同样铺满，去掉弹窗的一切外观（圆角/描边/阴影/限宽）。
               ★ 面板本身透明：半透明与模糊交给遮罩一层做，两层都设会叠出双倍模糊。 */
         #settingsPanel {
-            width: 100% !important;
-            max-width: none !important;
-            height: 100% !important;
-            max-height: none !important;
-            margin: 0 !important;
-            border: 0 !important;
-            border-radius: 0 !important;
-            box-shadow: none !important;
-            background: transparent !important;
-            backdrop-filter: none !important;
-            -webkit-backdrop-filter: none !important;
-        }
+margin: 0 !important;backdrop-filter: none !important;-webkit-backdrop-filter: none !important;}
         /* ③ 顶栏：自己不画背景，只负责定位与那条分隔线。
               导航胶囊与独立圆形按钮的样式见下方「导航胶囊」段（放在基础导航规则之后）。 */
         #settingsTopBar {
-            min-height: 58px !important;
-            margin: 0 !important;
-            padding: 0 20px !important;
-            border: 0 !important;
-            /* 导航下面不画任何线：元素上还带着 Tailwind 的 border-b，
+min-height: 58px !important;/* 导航下面不画任何线：元素上还带着 Tailwind 的 border-b，
                必须写 border: 0 才能清掉（只写 border-bottom 会被那条类里的
                border-bottom-width 与 0 打架）。 */
-            border-bottom: 0 !important;
-            border-radius: 0 !important;
-            background: transparent !important;
-            box-shadow: none !important;
-            position: sticky;
-            top: 0;
-            z-index: 2;
-        }
+            border-bottom: 0 !important;border-radius: 0 !important;box-shadow: none !important;top: 0;z-index: 2;}
         /* ✕ 必须显式清掉背景/边框：文件前面给 #closeSettings 画过实底圆片（给别的弹窗关闭按钮用的）。
                ★ 绝对定位到右端 —— 这样导航用 margin:auto 时能在整条顶栏里真正居中，不被 ✕ 的宽度挤偏。 */
         #settingsTopBar > #closeSettings {
-            position: absolute;
-            right: 20px;
-            top: 50%;
-            transform: translateY(-50%);
-            z-index: 1;
-            width: 34px;
-            height: 34px;
-            padding: 0;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 9999px;
-            background: transparent !important;
-            border: 0 !important;
-            box-shadow: none !important;
-            opacity: .7;
-            transition: background .15s ease, opacity .15s ease;
-        }
+right: 20px;top: 50%;transform: translateY(-50%);z-index: 1;width: 34px;height: 34px;padding: 0;display: inline-flex;align-items: center;justify-content: center;border-radius: 9999px;background: transparent !important;border: 0 !important;box-shadow: none !important;opacity: .7;transition: background .15s ease, opacity .15s ease;}
         #settingsTopBar > #closeSettings:hover {
             background: rgba(99,102,241,.12) !important;
             opacity: 1;
         }
         /* ④ 内容区：居中列（太宽时眼睛要横着扫），卡片在这个列里两列排布 */
         #settingsContent {
-            padding: 22px 28px 30px !important;
-            max-width: 1180px;
-            width: 100%;
-            margin: 0 auto;
-            box-sizing: border-box;
-        }
+box-sizing: border-box;}
             }
     
     /* 导航：纯文字、透明背景（无胶囊、无边框、无底色）；选中项用文字变色 + 加粗，
@@ -3319,35 +3104,6 @@
     }
     .settings-tab-btn.active::after { content: none; }
 
-/* 手机分栏间距：按钮被 flex 压缩才是"看着太近"的真因（文字被压扁导致视觉重叠），
-       光调大 gap 会更糟。做法：flex-shrink: 0 保持内容宽度、导航横向滚动，
-       gap: 12px 提供间距，上下 padding 留 0 避免与 gap 叠加把总宽撑大。
-       ★★ 这段必须放在基础 .settings-tab-btn / #settingsTabNav 规则之后：
-          媒体查询在文件里早于基础规则，同权重下后面的基础规则胜出，
-          写在那里 padding / font-size / gap 全会被覆盖。 */
-    @media (max-width: 980px) {
-        #settingsTabNav {
-            /* `gap: 12px` 让相邻分栏之间有清晰空隙。 */
-            gap: 12px !important;
-            /* 容器宽度只需给 ✕ 留位：基础规则是 calc(100% - 120px)，
-               那是给桌面"标题 + ✕"两侧留的。手机上标题行已删、✕ 绝对定位（宽 38px），
-               留 38 + 20 + 8 ≈ 66px 即可，否则导航白少 54px 可视宽度。
-               （justify-content: flex-start 已提到基础规则里，这里重复会被它盖掉。） */
-            max-width: calc(100% - 66px);
-            /* 左右留 2px：首/末项不贴边，不会被误看成"被裁掉" */
-            padding: 0 2px !important;
-            /* 不用 mask 渐隐：mask 会把首/末项的文字一起渐隐，与被遮挡的观感叠加反而更像 bug。 */
-            mask-image: none;
-            -webkit-mask-image: none;
-        }
-        .settings-tab-btn {
-            padding: 8px 0;
-            font-size: 12.5px;
-            gap: 0;
-            /* 这一条是关键：不压缩，让导航真的滚动起来 */
-            flex-shrink: 0;
-        }
-    }
     #closeSettings svg { color: var(--pixso-brown-soft) !important; }
     /* 不支持 color-mix 的浏览器的兜底：退回实色主题面板色（颜色还在、模糊仍在，不是整块透明）。
      *
@@ -3355,14 +3111,11 @@
      *   顺序在 color-mix 那条之后：支持时这段被 @supports 判为不成立、整块跳过，
      *   不会影响电脑端的 82% 半透明观感。 */
     @supports not (background: color-mix(in srgb, red 82%, transparent)) {
-        #settingsOverlay { background: var(--pixso-panel) !important; }
     }
             
     /* 三档卡片里的说明文字在深色下本来就偏暗，放在 panel-soft 底上要再亮一档才够对比。 */
-    #settingsPanel #agentPermissionSection .text-indigo-400,
-    #settingsPanel #agentPermissionSection .text-indigo-300,
-    #settingsPanel #agentPhoneSection .text-indigo-400,
-    #settingsPanel #agentPhoneSection .text-indigo-300 {
+    #settingsPanel #agentPermissionSection .text-dim,
+    #settingsPanel #agentPhoneSection .text-dim {
         color: var(--pixso-brown-soft) !important;
     }
 
@@ -3427,6 +3180,7 @@
     /* 卡片标题：左侧主题色图标 + 文字，下方一条细分隔线。两种标题写法都覆盖：
        `section > .modal-label`（多数）与 `div.mb-4 > .text-xs.font-semibold`（外观页）。 */
     #settingsContent .settings-tab-panel > section > .modal-label,
+    #settingsContent .settings-tab-panel .adv-group > .modal-label,
     #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child {
         display: flex;
         align-items: center;
@@ -3440,6 +3194,7 @@
         border-bottom: 1px solid var(--pixso-line);
     }
     #settingsContent .settings-tab-panel > section > .modal-label > span:first-child,
+    #settingsContent .settings-tab-panel .adv-group > .modal-label > span:first-child,
     #settingsContent .settings-tab-panel > div.mb-4 > .text-xs.font-semibold:first-child > span:first-child {
         font-size: 15px;
         line-height: 1;
@@ -3453,7 +3208,7 @@
     }
     
     /* 大屏下：内容列里卡片两列排布（一屏塞下更多功能） */
-    @media (min-width: 900px) {
+    @media (min-width: 981px) {
         /* 必须写 .active-panel，不能只写 #settingsContent .settings-tab-panel：
            后者的特异性（1,1,0）比基础规则 .settings-tab-panel{display:none}（0,1,0）高，
            会盖掉 display:none → 所有分栏内容同时显示。 */
@@ -3518,6 +3273,20 @@
 
     .settings-tab-panel{display:none}.settings-tab-panel.active-panel{display:block}
 
+    /* 高级设置：三块内容合并在一张卡里，「访问密码」与「版本与更新」在卡内并排（窄屏退化为竖排）。
+       分区自身不带边框——搬进手机二级页（#settingsSubpage > section）时直接以卡片形态出现。 */
+    #tab-advanced .adv-duo {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 16px;
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid var(--pixso-line, rgba(120, 120, 140, .25));
+    }
+    @media (min-width: 981px) {
+        #tab-advanced .adv-duo { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+    }
+
     /* 扩展页的子分栏（插件 / 技能 / MCP）：复用 .settings-tab-btn 的视觉，但不参与 switchSettingsTab，
        只在 #tab-mods 内部切换三个 .ext-panel。显隐规则必须单独写：
        上面的 .settings-tab-panel 只认主分栏，管不到 .ext-panel。 */
@@ -3556,9 +3325,8 @@
 
 
 
-    @media (max-width: 719px) {
+    @media (max-width: 620px) {
         #settingsExtNav { margin-left: 2px; padding-left: 4px; gap: 1px; }
-        .ext-nav-btn { padding: 3px 6px; font-size: 10.5px; border-radius: 999px; }
         /* 窄屏的展开/收起完全交给 pages-luxe.css 的下拉规则，这里不能再写 display 规则：
            它的特异性（#id .class）比 .ext-nav-children { display:none } 高，
            会压掉 is-open / :has() 的展开。 */
@@ -3607,9 +3375,8 @@
     .mod-card{
         position:relative;display:flex;gap:12px;align-items:flex-start;
         padding:14px 14px 10px;border-radius:16px;
-        /* 用主题变量而不是写死的白色。★ 不能用 --pixso-surface：它在 index.html 的 :root 里
-              兜底写死成 #ffffff，默认模板下深色时没人改它。用 --pixso-panel-soft
-              （深色 #222833 / 浅色 #f1e8e5），两边都合适。 */
+        /* 不能用 --pixso-surface：它是卡片底色（浅奶油），和面板内容同色会糊成一片；
+              panel-soft 深浅两套主题下都与背景拉开层次。 */
         background:var(--pixso-panel-soft);
         border:1px solid var(--pixso-line);
         box-shadow:0 1px 3px rgba(30,27,75,.06);
@@ -3670,7 +3437,7 @@
     }
     /* 宽屏最多两列：三列时每张卡窄得像条子、说明文字全被截断，
        而且拖动换位时一跨就跨过中间那张，操作意图容易看错。 */
-    @media (min-width: 1100px){
+    @media (min-width: 1201px){
         .mod-grid, #skillsList, #mcpList{grid-template-columns:repeat(2, minmax(0, 1fr))}
     }
     /* 分栏是「卡片的一层容器」：排进列里会变成格子套格子 → 永远独占整行 */
@@ -3697,7 +3464,7 @@
         line-clamp:unset;
         overflow:visible;
     }
-    @media (max-width: 719px) {
+    @media (max-width: 620px) {
         .mod-grid, #skillsList, #mcpList{grid-template-columns:1fr}
     }
 
@@ -3848,7 +3615,7 @@
     .readme-toc a:hover { color: var(--pixso-brown); background: var(--pixso-panel-soft); }
     .readme-toc a.is-sub { padding-left: 18px; font-size: 11px; opacity: .85; }
     .readme-body { padding: 20px 26px 32px; max-width: 760px; }
-    @media (max-width: 820px) {
+    @media (max-width: 980px) {
         .readme-toc { display: none; }
         .readme-body { padding: 16px 16px 28px; }
     }

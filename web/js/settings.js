@@ -61,12 +61,6 @@ function fillSettingsForm() {
     syncThinkingModeControls();
     // 采样参数同理：开关 / 滑杆 / 数值文案的同步只走 syncSamplingControls 一处。
     syncSamplingControls(null, true);
-    elements.settingTtsProvider.value = state.settings.ttsProvider || 'mimo';
-    document.getElementById('settingMinimaxApiKey').value = state.settings.minimaxApiKey || '';
-    document.getElementById('settingMinimaxVoice').value = state.settings.minimaxVoice || '';
-    document.getElementById('settingMinimaxModel').value = state.settings.minimaxModel || 'speech-2.8-hd';
-    document.getElementById('settingDashscopeTtsModel').value = state.settings.dashscopeTtsModel || 'qwen3-tts-flash';
-    document.getElementById('settingDashscopeTtsVoice').value = state.settings.dashscopeTtsVoice || 'Cherry';
     elements.settingTtsSpeed.value = state.settings.ttsSpeed;
     elements.ttsSpeedLabel.textContent = state.settings.ttsSpeed.toFixed(1) + 'x';
     elements.settingTtsVolume.value = Number(state.settings.ttsVolume ?? 1);
@@ -81,39 +75,16 @@ function fillSettingsForm() {
         r.checked = (r.value === (state.settings.replyDisplayMode || DEFAULT_SETTINGS.replyDisplayMode));
     });
 
-    document.querySelectorAll('input[name="asrProvider"]').forEach(r => {
-        r.checked = (r.value === (state.settings.asrProvider || ''));
-    });
-    updateAsrProviderUI();
-    updateTtsProviderUI();
-    // 模型分栏每次打开都回到入口列表，各分页里的二级页也回到服务商列表。
+    // 模型分栏每次打开都回到对话分类页；四类语音/向量详情也回到各自列表（详情字段由渲染函数按提供商回填）。
     resetModelSectionPage();
     resetModelProviderPages();
 
-    document.getElementById('settingDashscopeApiKey').value = state.settings.dashscopeApiKey || '';
-    // 阿里百炼 ASR 的 Key 与 TTS 的 dashscopeApiKey 分开存
-    document.getElementById('settingAsrApiKey').value = state.settings.asrApiKey || '';
-    document.getElementById('settingDashscopeAsrBaseUrl').value = state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-    document.getElementById('settingDashscopeAsrModel').value = state.settings.dashscopeAsrModel || 'qwen3-asr-flash';
-    // MiMo TTS 凭据独立于 ASR；接口地址固定在默认值里，界面上不提供该输入框。
-    document.getElementById('settingMimoTtsApiKey').value = state.settings.mimoTtsApiKey || '';
-    // MiMo ASR 内部键名仍是 mimoApiKey / mimoBaseUrl：为兼容已存数据不改名
-    document.getElementById('settingMimoAsrApiKey').value = state.settings.mimoApiKey || '';
-    document.getElementById('settingMimoAsrBaseUrl').value = state.settings.mimoBaseUrl || 'https://api.xiaomimimo.com';
-    document.getElementById('settingMimoTtsModel').value = state.settings.mimoTtsModel || 'mimo-v2.5-tts';
-    document.getElementById('settingMimoTtsVoice').value = state.settings.mimoTtsVoice || 'mimo_default';
-    document.getElementById('settingMimoVoiceDesignPrompt').value = state.settings.mimoTtsVoiceDesignPrompt || '';
-    // 文件框不能程序化回填：清空控件，已存样本改用文件名展示
+    // MiMo 克隆样本仍是全局设置：文件框不能程序化回填，清空控件、已存样本用文件名展示。
     const cloneInput = document.getElementById('settingMimoTtsCloneSample');
     if (cloneInput) cloneInput.value = '';
     updateMimoTtsCloneSampleStatus();
-    updateMimoTtsModelUI();
-    document.getElementById('settingOpenaiTtsBaseUrl').value = state.settings.openaiTtsBaseUrl || 'https://api.openai.com/v1';
-    document.getElementById('settingOpenaiTtsApiKey').value = state.settings.openaiTtsApiKey || '';
-    document.getElementById('settingOpenaiTtsModel').value = state.settings.openaiTtsModel || 'tts-1';
-    document.getElementById('settingOpenaiTtsVoice').value = state.settings.openaiTtsVoice || 'alloy';
-    document.getElementById('settingMimoAsrModel').value = state.settings.mimoAsrModel || 'mimo-v2.5-asr';
-    elements.settingAutoMemory.checked = Boolean(state.settings.autoMemory);
+    fillMemoryModelSelect();
+    fillMemoryBindingSelects();
     elements.settingMemoryEvery.value = state.settings.memoryEvery || 15;
     document.querySelectorAll('input[name="agentAccess"]').forEach(r => {
         r.checked = (r.value === currentAgentAccess());
@@ -124,6 +95,7 @@ function fillSettingsForm() {
     if (browserToggle) browserToggle.checked = state.settings.agentBrowserEnabled === true;
     void refreshBrowserStatus();
     fillTavilySettings();
+    renderChatBindings();
     fillVisionSettings();
     fillAgentReadToggles();
     renderAgentFolderSummary();

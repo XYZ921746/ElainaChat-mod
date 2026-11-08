@@ -189,7 +189,7 @@ function enterNotesMode() {
         document.querySelectorAll('.notes-tab').forEach(btn => {
             const active = btn.dataset.tab === state.notesTab;
             btn.classList.toggle('tab-active', active);
-            btn.classList.toggle('text-indigo-500', !active);
+            btn.classList.toggle('text-dim', !active);
             btn.classList.toggle('bg-white/40', !active);
             btn.classList.toggle('border', !active);
             btn.classList.toggle('border-white/55', !active);

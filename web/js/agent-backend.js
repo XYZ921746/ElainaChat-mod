@@ -366,14 +366,14 @@ function renderBackendList() {
             + ' class="backend-card w-full text-left rounded-2xl border px-4 py-3 transition cursor-pointer' + (active ? ' is-active' : '') + '"'
             + ' style="border-color:' + (active ? 'var(--rd-accent-border)' : 'var(--rd-border)') + ';background:' + (active ? 'var(--rd-accent-soft)' : 'var(--rd-surface-2)') + '">'
             + '<div class="flex items-center gap-2">'
-            + '<span class="text-sm font-semibold text-indigo-950">' + b.name + '</span>'
+            + '<span class="text-sm font-semibold text-ink">' + b.name + '</span>'
                     + '<span style="font-size:10px;color:var(--rd-accent);background:var(--rd-accent-soft);padding:2px 6px;border-radius:7px;white-space:nowrap">' + b.tag + '</span>'
             + '<span class="ml-auto">' + backendStatusBadge(st) + '</span>'
             + '</div>'
             + (detail ? '<p class="text-[11px] mt-1 leading-relaxed" style="color:' + detailColor + '">' + detail + '</p>' : '')
-            + '<p class="text-[11px] text-indigo-400 mt-1 leading-relaxed">' + b.desc + '</p>'
+            + '<p class="text-[11px] text-dim mt-1 leading-relaxed">' + b.desc + '</p>'
             + '<div class="flex items-center gap-2 mt-1">'
-            + '<span class="text-[11px] text-indigo-300 leading-relaxed flex-1">需要：' + b.need + '</span>'
+            + '<span class="text-[11px] text-dim leading-relaxed flex-1">需要：' + b.need + '</span>'
             + (setup ? '<button type="button" data-backend-setup="' + b.id + '" class="btn-secondary text-[11px] flex-shrink-0" style="padding:3px 10px">' + setup.label + '</button>' : '')
             + '</div>'
             + (active ? '<p class="text-[11px] font-semibold mt-1" style="color:var(--rd-accent)">当前使用</p>' : '')
@@ -487,10 +487,6 @@ document.getElementById('settingTavilyApiKey')?.addEventListener('input', () => 
     if (typeof updateTavilyHint === 'function') updateTavilyHint();
 });
 // 图片转述：开关切换立刻显隐下面的控件（与联网搜索同一套做法）
-document.getElementById('settingVisionEnabled')?.addEventListener('change', () => {
-    // 显隐与详情页说明统一走 syncVisionFieldsVisibility()，免得两处各判一次。
-    if (typeof syncVisionFieldsVisibility === 'function') syncVisionFieldsVisibility();
-});
 // 换服务商：先把刚打进去还没保存的 Key 收回它自己那格再切，否则「A 家填一半 → 想看 B 家 → 切回来」会发现 A 的 Key 没了。
 document.getElementById('settingSearchProvider')?.addEventListener('change', () => {
     if (typeof stashCurrentSearchKey === 'function') stashCurrentSearchKey();

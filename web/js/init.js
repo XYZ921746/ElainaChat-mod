@@ -2,7 +2,7 @@
 
 // 行内提示元素（#modsHint / #skillsHint 等）的文案与配色写入。样式串必须跨流程保持一致；元素不存在时静默跳过。
 function setHintText(el, text, cls) {
-    if (el) { el.textContent = text; el.className = 'text-[11px] ' + (cls || 'text-indigo-500'); }
+    if (el) { el.textContent = text; el.className = 'text-[11px] ' + (cls || 'text-dim'); }
 }
 
 // 多设备实时同步：订阅服务端 store 变更广播（SSE），按类型重渲染 —— 聊天记录重载会话列表（保留滚动位置与当前选中会话）、人设卡 / 记忆 / 收藏 / 定时任务重载对应 state、设置只更新内存值、主题立即应用、插件开关重载列表；任何一步出错只记日志，绝不影响本地使用。

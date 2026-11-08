@@ -22,7 +22,7 @@ html.rd #mainContent {
 
 /* 顶栏金句胶囊：窄桌面（≤1199px）顶栏被标题 / 模型胶囊 / 图标挤满，胶囊只剩截断的
    几十像素；窄屏（≤1000px，见 redesign.css）改用首页的金句卡，这里一并收起。 */
-@media (max-width: 1199px) {
+@media (max-width: 1200px) {
     html.rd #mainContent > header .quote-chip { display: none !important; }
 }
 html.rd #sidebar {
@@ -32,23 +32,6 @@ html.rd #sidebar {
 @media (min-width: 981px) {
     html.rd {
         --rd-sidebar-w: 392px;
-    }
-
-    html.rd #settingsOverlay {
-        align-items: stretch !important;
-        justify-content: stretch !important;
-        padding: 0 !important;
-    }
-
-    html.rd #settingsPanel {
-        width: 100vw !important;
-        max-width: none !important;
-        height: 100dvh !important;
-        max-height: none !important;
-        border: 0 !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
-        background: var(--rd-bg) !important;
     }
 
     html.rd #settingsTopBar {
@@ -84,23 +67,6 @@ html.rd #sidebar {
     /* 底部导航占位：聊天/语笺/日记内容不再被导航条盖住。 */
     html.rd #mainContent {
         padding-bottom: calc(58px + var(--safe-bottom)) !important;
-    }
-
-    html.rd #settingsOverlay {
-        align-items: stretch !important;
-        justify-content: stretch !important;
-        padding: 0 !important;
-    }
-
-    html.rd #settingsPanel {
-        width: 100vw !important;
-        max-width: none !important;
-        height: 100dvh !important;
-        max-height: none !important;
-        border: 0 !important;
-        border-radius: 0 !important;
-        box-shadow: none !important;
-        background: var(--rd-bg) !important;
     }
 }
 
@@ -210,11 +176,11 @@ html.rd #headerInstallBtn {
     justify-content: center;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 620px) {
     html.rd .rd-model-pill { display: none !important; }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 620px) {
     html.rd .rd-header-sub { display: none !important; }
 }
 
@@ -376,11 +342,10 @@ html.rd .rd-rail-avatar img {
     }
 }
 
-/* 「模型」的第一层入口列表只给窄屏：宽屏把各区块直接铺开，不需要先点一次分类。 */
+/* 「模型」的旧分页入口（modelHomeSection / model-page-back）已随「左列表右详情」改版移除，
+   这里只剩宽屏下让内容区直接铺开的那一条。 */
 @media (min-width: 981px) {
-    html.rd #tab-model #modelHomeSection { display: none !important; }
     html.rd #tab-model > section.hidden { display: block !important; }
-    html.rd #tab-model .model-page-back { display: none !important; }
 }
 
 

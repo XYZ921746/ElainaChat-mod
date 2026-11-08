@@ -118,8 +118,7 @@ const filesToCopy = [
     //
     //   这三个文件在源仓库里当然还留着（电脑版要用），所以下面那套"源里没有 → 删"
     //   的过期清理抓不到它们 —— 必须显式清（见 HOST_FILES_NOT_IN_APK）。
-    // Markdown + LaTeX 渲染（消息里的 **加粗**、列表、表格与 $公式$ 靠它们）
-    ['vendor/marked/marked.min.js', 'vendor/marked/marked.min.js'],
+    // LaTeX 渲染（消息里的 $公式$ 靠它；Markdown 由宿主渲染器负责，不需要第三方库）
     ['vendor/katex/katex.min.js', 'vendor/katex/katex.min.js'],
     ['vendor/katex/katex.min.css', 'vendor/katex/katex.min.css'],
 ];

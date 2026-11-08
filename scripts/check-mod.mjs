@@ -247,6 +247,35 @@ async function caseModsCore(c) {
             && /classList\.toggle\('hidden', !marketPrereqOpen\)/.test(market),
             '★ 市场的前置区默认收起（点标题展开，收起只是折叠）');
 
+        // 平台分类：索引可选 platform 字段，缺省归 universal；手机端「全部」不放电脑插件，点「电脑」分类才可见
+        c.ok(/function platformOf/.test(market) && /v === 'mobile' \|\| v === 'desktop'/.test(market)
+            && /: 'universal'/.test(market),
+            '★ 平台归一化只认 mobile / desktop，缺省与非法值归 universal（第三方源不写这字段行为不变）');
+        c.ok(/function matchesPlatform/.test(market)
+            && /return !\(isMobileDevice && plat === 'desktop'\)/.test(market),
+            '★ 「全部」只在手机设备上排除电脑插件（电脑端不排除）');
+        c.ok(/plat === sel \|\| plat === 'universal'/.test(market),
+            '★ 手机 / 电脑分类各自带上通用插件（通用没有独立分类，两边都显示）');
+        c.ok(/var marketPlatform = 'all'/.test(market)
+            && /marketEntrancePending = true;\s*marketPlatform = 'all';/.test(market),
+            '★ 分类默认「全部」且每次打开市场重置（不跨次记忆）');
+        c.ok(/matchesPlatform\(p, marketPlatform, isMobile\)/.test(market)
+            && /matchesQuery\(p, q\)/.test(market),
+            '★ 列表条目同时过平台分类与搜索词两道过滤');
+        c.ok(/marketPlatformPills/.test(market) && /closest\('button\[data-platform\]'\)/.test(market)
+            && /syncMarketPlatformPills\(\)/.test(market),
+            '★ 分类 chips 走事件委托且 aria-pressed 单独同步（静态 HTML 不随列表重渲）');
+        c.ok(/plat === 'universal'/.test(market) && /plat === 'desktop' \? '电脑' : '手机'/.test(market),
+            '★ 手机 / 电脑插件打平台角标（通用不打，全打等于没打）');
+
+        // 插件页自动检查更新：比对与排序必须是纯函数，批量更新必须复用安装管线（进度/停用/续装不另起一套）
+        c.ok(/function updateCandidatesOf/.test(market) && /function sortUpdateFirstDeps/.test(market),
+            '★ 更新比对与依赖先行排序是纯函数（落 market-utils，不碰 DOM）');
+        c.ok(/function checkModUpdates/.test(market) && /updateCandidatesOf\(installedList, lastIndex\.plugins\)/.test(market),
+            '★ 更新检查拉整份索引并按已装版本比对（自定义商店源同样生效）');
+        c.ok(/function updateModsBatch/.test(market) && /await installFromMarket\(list\[i\]\.plugin, null\)/.test(market),
+            '★ 批量更新逐个走安装管线（进度与失败原因落在下载悬浮窗，不另起一套）');
+
         // 大包分片并发下载：单条 TCP 流限速严重而浏览器默认多连接；钉住"并发是默认路径"与"退回单流"退路
         c.ok(/function downloadZipSegmented/.test(market),
             '★ 有分片并发下载（downloadZipSegmented）');
@@ -306,6 +335,10 @@ async function caseModsCore(c) {
         c.ok(/method: 'DELETE'/.test(settingsSrc), '★ 删除走 DELETE /api/plugins/:id');
         c.ok(/showCustomConfirm[\s\S]{0,400}删除插件/.test(settingsSrc), '★ 删除前二次确认（防误删）');
         c.ok(/forget: forgetMod/.test(modsLoader), '★ ElainaMods 导出 forget（清启用状态，避免重装自动启用）');
+        // 插件页自动检查更新：入口只在插件卡片与更新条上（与 D20 同一呈现原则），批量入口要绑一次不随列表重建
+        c.ok(/mod-update-btn/.test(settingsSrc) && /modsUpdateList/.test(settingsSrc),
+            '★ 插件卡片有「更新」按钮与待更清单（自动检查命中才出现）');
+        c.ok(/id="modsUpdateAllBtn"/.test(html), '★ 插件页有「全部更新」入口');
 
         c.ok(/data-settings-tab="tab-mods"/.test(html), '设置里有「插件」Tab');
         c.ok(/id="tab-mods"/.test(html), '有 #tab-mods 面板');
@@ -335,6 +368,7 @@ async function caseModsCore(c) {
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
         c.ok(/modsBrowseBtn[\s\S]{0,2000}fetch\('\/api\/plugins\/open-folder'/.test(initSrc2),
             '★ 「浏览目录」先真去打开 mods/，再列内容兜底');
+        c.ok(/modsUpdateAllBtn'\)\?\.addEventListener/.test(initSrc2), '★ 「全部更新」在 init/bindings 绑一次');
         c.ok(/\/api\/plugins/.test(settings), '列表数据来自服务端 /api/plugins');
         c.ok(/ElainaMods\.list\(\)/.test(settings), '同时合并前端加载状态（服务端只知道磁盘上有什么）');
         c.ok(/加载失败/.test(settings), '★ 加载失败的 mod 有显眼标记（否则用户以为"开了没反应"）');

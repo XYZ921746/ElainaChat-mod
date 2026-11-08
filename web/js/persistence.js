@@ -55,6 +55,7 @@ async function loadApiSecrets() {
     await migrateLegacySharedMimoCredentials();
     await migrateLegacySharedAsrKey();
     migrateLegacyChatProviderSettings();
+    await migrateLegacyTtsAsrProviders();
 }
 
 // 密钥表里唯一的对象值条目 chatProviderKeys：落盘时是 JSON 串，赋回 settings 后解析成对象。
@@ -136,6 +137,69 @@ function migrateLegacyChatProviderSettings() {
     delete s.fallbackChatProviderIds;
     // 链里失效/未勾选的模型在读取侧剔除，这里只保证形态正确。
     if (!s.chatProviderKeys || typeof s.chatProviderKeys !== 'object') s.chatProviderKeys = {};
+}
+
+// 老平铺的语音配置（每家协议一组平铺字段 + 单选 ttsProvider / asrProvider）合成动态提供商列表里的条目：
+// 有 Key 的协议各合成一条（Key 挪进 chatProviderKeys 统一通道），老单选指向的那条设为默认。
+// 必须在 loadApiSecrets 末尾跑：平铺 Key 是密钥通道回填的，早了拿到的是空值；合成出的 Key 也要立刻写回密钥库，否则设置标记已置位、Key 却只留在内存。
+async function migrateLegacyTtsAsrProviders() {
+    const s = state.settings;
+    if (!s.chatProviderKeys || typeof s.chatProviderKeys !== 'object') s.chatProviderKeys = {};
+    if (s.ttsProviderMigrated !== true) {
+        const list = Array.isArray(s.ttsProviders) ? s.ttsProviders : [];
+        const legacy = {
+            mimo: { baseUrl: s.mimoTtsBaseUrl, model: s.mimoTtsModel, voice: s.mimoTtsVoice, voiceDesignPrompt: s.mimoTtsVoiceDesignPrompt, key: s.mimoTtsApiKey },
+            'openai-tts': { baseUrl: s.openaiTtsBaseUrl, model: s.openaiTtsModel, voice: s.openaiTtsVoice, key: s.openaiTtsApiKey },
+            minimax: { baseUrl: '', model: s.minimaxModel, voice: s.minimaxVoice, key: s.minimaxApiKey },
+            dashscope: { baseUrl: '', model: s.dashscopeTtsModel, voice: s.dashscopeTtsVoice, key: s.dashscopeApiKey }
+        };
+        TTS_PROTOCOL_PRESETS.forEach((preset) => {
+            const old = legacy[preset.id] || {};
+            const key = String(old.key || '').trim();
+            if (!key) return;
+            const id = 'prov_tts_' + preset.id;
+            if (list.some((p) => p.id === id)) return;
+            list.push({
+                id,
+                name: preset.name,
+                apiFormat: preset.id,
+                baseUrl: String(old.baseUrl || preset.baseUrl || '').trim(),
+                model: String(old.model || preset.model || '').trim(),
+                voice: String(old.voice || preset.voice || '').trim(),
+                voiceDesignPrompt: String(old.voiceDesignPrompt || '').trim()
+            });
+            s.chatProviderKeys[id] = key;
+        });
+        s.ttsProviders = list;
+        const active = String(s.ttsProvider || '');
+        s.defaultTtsProviderId = (list.find((p) => p.apiFormat === active) || list[0] || {}).id || '';
+        s.ttsProviderMigrated = true;
+    }
+    if (s.asrProviderMigrated !== true) {
+        const list = Array.isArray(s.asrProviders) ? s.asrProviders : [];
+        const active = String(s.asrProvider || '');
+        const preset = ASR_PROTOCOL_PRESETS.find((p) => p.id === active);
+        const key = active === 'aliyun' ? String(s.asrApiKey || '').trim() : (active === 'mimo' ? String(s.mimoApiKey || '').trim() : '');
+        if (preset && key) {
+            const id = 'prov_asr_' + preset.id;
+            if (!list.some((p) => p.id === id)) {
+                list.push({
+                    id,
+                    name: preset.name,
+                    apiFormat: preset.id,
+                    baseUrl: String((active === 'aliyun' ? s.dashscopeAsrBaseUrl : s.mimoBaseUrl) || preset.baseUrl || '').trim(),
+                    model: String((active === 'aliyun' ? s.dashscopeAsrModel : s.mimoAsrModel) || preset.model || '').trim()
+                });
+                s.chatProviderKeys[id] = key;
+            }
+            s.defaultAsrProviderId = id;
+        }
+        s.asrProviders = list;
+        s.asrProviderMigrated = true;
+    }
+    // 合成结果只在这一刻完整：立刻把 Key 写进密钥库、设置（含迁移标记）写进设置包，之后不再重迁。
+    try { await saveApiSecrets(s); } catch (e) { console.warn('[BYOK] 语音提供商迁移写入密钥库失败', e); }
+    try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
 }
 
 // 兼容老配置「TTS / ASR 共用 MiMo 凭据」：把 mimoApiKey / mimoBaseUrl 搬到 TTS 专用键（仅当 TTS 侧为空）。

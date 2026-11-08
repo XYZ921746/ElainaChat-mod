@@ -31,7 +31,7 @@ function loadDailyQuote() {
 
 function updateQuoteButtons() {
     const faved = state.favorites.some(f => f.type === 'quote' && f.quoteDate === getTodayKey());
-    elements.quoteFavBtn.className = `p-1 rounded-full hover:bg-white/60 transition-colors ${faved ? 'text-amber-500' : 'text-indigo-300'}`;
+    elements.quoteFavBtn.className = `p-1 rounded-full hover:bg-white/60 transition-colors ${faved ? 'text-warn' : 'text-dim'}`;
 }
 
 function toggleQuoteFavorite() {
@@ -187,6 +187,21 @@ function loadSettings() {
     if (!['', 'accessibility', 'module'].includes(state.settings.agentBackend)) state.settings.agentBackend = '';
     // asrApiKey 与 MiMo 共用凭据的迁移必须放在 loadApiSecrets() 之后（见 migrateLegacySharedAsrKey / migrateLegacySharedMimoCredentials），否则会被密钥库覆盖。
     if (!['mimo', 'openai-tts', 'minimax', 'dashscope'].includes(state.settings.ttsProvider)) state.settings.ttsProvider = 'mimo';
+    // 四类动态提供商列表（文字转语音 / 语音转文字 / 嵌入 / 重排序）逐项归一：坏一项不能丢整张表。
+    // 语义校验（默认指向悬空回落等）在读取侧（activeTtsProvider / activeAsrProvider / resolveModelProvider）做，这里只保证形态。
+    for (const key of ['ttsProviders', 'asrProviders', 'embeddingProviders', 'rerankProviders']) {
+        const list = state.settings[key];
+        state.settings[key] = Array.isArray(list)
+            ? list.filter((p) => p && typeof p === 'object').map((p) => ({
+                ...p,
+                id: String(p.id || '').trim(),
+                name: String(p.name || '').trim(),
+                apiFormat: String(p.apiFormat || '').trim(),
+                baseUrl: String(p.baseUrl || '').trim(),
+                model: String(p.model || '').trim()
+            })).filter((p) => p.id)
+            : [];
+    }
     // 脚本顶层那次同步可能早于 loadSettings，这里再同步一次灰显状态。
     syncBackendSummary();
 }

@@ -2,11 +2,28 @@
 // Chrome 内置的 webkitSpeechRecognition 已整条移除：它要连 Google 语音服务，国内网络下不可用，且连不上会把整个浏览器进程带崩。
 'use strict';
 
+// 当前生效的语音转文字提供商：只认 defaultAsrProviderId 的精确指向 —— 空或悬空（提供商被删）都算「不使用云端识别」，
+// 与 TTS 不同：语音转文字有明确的"关闭"语义，不能在没有明确选择时自动拿列表第一条顶上。
+function activeAsrProvider() {
+    const id = String(state.settings.defaultAsrProviderId || '');
+    if (!id) return null;
+    const list = Array.isArray(state.settings.asrProviders) ? state.settings.asrProviders : [];
+    return list.find((p) => p.id === id) || null;
+}
+
+// 语音转文字提供商的展示名（状态栏文案用）：按协议预设表取名字，查不到回落提供商自己的名字。
+function asrProviderLabel(provider) {
+    if (!provider) return '';
+    const preset = (typeof ASR_PROTOCOL_PRESETS !== 'undefined')
+        ? ASR_PROTOCOL_PRESETS.find((p) => p.id === provider.apiFormat)
+        : null;
+    return (preset && preset.name) || provider.name || '';
+}
+
 function canUseCloudFinalAsr() {
-    const provider = state.settings.asrProvider || '';
-    if (provider === 'aliyun') return Boolean(String(state.settings.asrApiKey || '').trim());
-    if (provider === 'mimo') return Boolean(String(state.settings.mimoApiKey || '').trim());
-    return false;
+    const provider = activeAsrProvider();
+    if (!provider) return false;
+    return Boolean(String(getProviderSecret(provider.id) || '').trim());
 }
 
 function isLocalAudioAsrMode(mode = asrMode) {
@@ -159,8 +176,9 @@ async function fetchWithTimeout(url, options, timeoutMs, signal = null) {
 }
 
 async function transcribeRecordedAudioWithCloud() {
-    const provider = state.settings.asrProvider || '';
-    if (provider === 'mimo') return transcribeRecordedAudioWithMimo();
+    const provider = activeAsrProvider();
+    if (!provider) return '';
+    if (provider.apiFormat === 'mimo') return transcribeRecordedAudioWithMimo();
     return transcribeRecordedAudioWithAliyun();
 }
 
@@ -224,10 +242,12 @@ async function transcribeRecordedAudioWithAliyun() {
         return '';
     }
 
-    const asrApiKey = String(state.settings.asrApiKey || '').trim();
-    if (!asrApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写阿里百炼 ASR API Key');
-    const asrUrl = String(state.settings.dashscopeAsrBaseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation').trim();
-    const asrModel = String(state.settings.dashscopeAsrModel || 'qwen3-asr-flash').trim();
+    const provider = activeAsrProvider();
+    if (!provider) throw new ClientApiError('APP_KEY_MISSING', '还没有语音转文字服务：先在 设置 → 模型 → 语音转文字 里添加');
+    const asrApiKey = String(getProviderSecret(provider.id) || '').trim();
+    if (!asrApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 语音转文字 里给这家百炼填好 API Key');
+    const asrUrl = String(provider.baseUrl || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation').trim();
+    const asrModel = String(provider.model || 'qwen3-asr-flash').trim();
     // 流式（实时）模型走 WebSocket 实时接口，本应用是"录完整段 → 一次 HTTP"的非流式实现，调不了它。
     // 提前拦掉并给出人话，而不是把服务端的 "url error / format is empty" 原样抛给用户。
     if (/streaming/i.test(asrModel)) {
@@ -275,10 +295,12 @@ async function transcribeRecordedAudioWithMimo() {
         return '';
     }
 
-    const mimoApiKey = String(state.settings.mimoApiKey || '').trim();
-    if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写小米 MiMo API Key');
-    const baseUrl = String(state.settings.mimoBaseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
-    const model = String(state.settings.mimoAsrModel || 'mimo-v2.5-asr').trim();
+    const provider = activeAsrProvider();
+    if (!provider) throw new ClientApiError('APP_KEY_MISSING', '还没有语音转文字服务：先在 设置 → 模型 → 语音转文字 里添加');
+    const mimoApiKey = String(getProviderSecret(provider.id) || '').trim();
+    if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 语音转文字 里给这家 MiMo 填好 API Key');
+    const baseUrl = String(provider.baseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
+    const model = String(provider.model || 'mimo-v2.5-asr').trim();
     const startedAt = performance.now();
     const wavBase64 = float32ToWavBase64(audio, ASR_TARGET_SAMPLE_RATE);
     console.log(`[ASR] 小米 MiMo 识别开始: 音频 ${(audio.length / ASR_TARGET_SAMPLE_RATE).toFixed(1)}s, wav ${Math.round(wavBase64.length / 1024)}KB, 模型 ${model}`);
@@ -473,7 +495,8 @@ async function endListening() {
             stopLocalAudioGraph();
             let finalText = '';
             if (canUseCloudFinalAsr()) {
-                elements.statusText.textContent = (state.settings.asrProvider === 'mimo' ? '正在用小米 MiMo 识别...' : '正在用阿里百炼识别...');
+                const asrProv = activeAsrProvider();
+                elements.statusText.textContent = '正在用 ' + (asrProviderLabel(asrProv) || '云端服务') + ' 识别...';
                 try {
                     const cloudText = await transcribeRecordedAudioWithCloud();
                     if (cloudText && !isBadCloudFinalText(cloudText)) {
@@ -481,12 +504,12 @@ async function endListening() {
                     } else {
                         console.warn('[ASR] 云端识别返回空或疑似无效文本', {
                             cloudText: String(cloudText || '').slice(0, 100),
-                            provider: state.settings.asrProvider
+                            provider: asrProv ? asrProv.apiFormat : ''
                         });
                     }
                 } catch (error) {
                     console.error('[ASR] 云端识别失败：', {
-                        provider: state.settings.asrProvider,
+                        provider: asrProv ? asrProv.apiFormat : '',
                         code: error?.code,
                         status: error?.status,
                         message: error?.message || String(error)

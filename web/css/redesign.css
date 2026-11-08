@@ -65,7 +65,8 @@ html.rd #greetingText {
     letter-spacing: var(--rd-letter);
 }
 
-/* 通用工具类 → 主题 token */
+/* 第三方兼容：插件自带的 HTML 仍可能写 Tailwind 色类，这里把它们钉到 token；
+   宿主内容已改走 base.css 的语义工具类（.text-ink / .text-accent / …），不经过本节。 */
 
 html.rd body .text-indigo-950,
 html.rd body .text-indigo-900,
@@ -113,6 +114,13 @@ html.rd .hover\:bg-white\/50:hover,
 html.rd .hover\:bg-white\/60:hover,
 html.rd .hover\:bg-white\/70:hover { background-color: var(--rd-hover) !important; }
 
+html.rd .bubble-user .text-ink,
+html.rd .bubble-user .text-soft,
+html.rd .bubble-user .text-dim,
+html.rd .bubble-user .text-accent,
+html.rd .bubble-user .text-ok,
+html.rd .bubble-user .text-warn,
+html.rd .bubble-user .text-danger,
 html.rd .bubble-user .text-indigo-950,
 html.rd .bubble-user .text-indigo-900,
 html.rd .bubble-user .text-indigo-800,
@@ -475,14 +483,14 @@ html.rd #folderList .conversation-item.sidebar-item-active {
     border-radius: var(--rd-radius-sm) !important;
 }
 
-html.rd .conversation-item .text-indigo-900 { color: var(--rd-text) !important; font-weight: 500 !important; }
-html.rd .conversation-item .text-indigo-300 { color: var(--rd-text-3) !important; }
+html.rd .conversation-item .text-ink { color: var(--rd-text) !important; font-weight: 500 !important; }
+html.rd .conversation-item .text-dim { color: var(--rd-text-3) !important; }
 html.rd .conversation-item .text-\[11px\] { font-size: 10px !important; }
 html.rd .conversation-pin-icon { color: var(--rd-accent) !important; }
 html.rd .conversation-inline-actions button:hover { background: var(--rd-hover) !important; }
 html.rd .conversation-inline-actions svg { color: var(--rd-text-3) !important; }
-html.rd .conversation-inline-actions svg.text-pink-500,
-html.rd .conversation-inline-actions svg.text-amber-500 { color: var(--rd-accent) !important; }
+html.rd .conversation-inline-actions svg.text-accent,
+html.rd .conversation-inline-actions svg.text-warn { color: var(--rd-accent) !important; }
 
 html.rd #sidebarModSlot { padding: 0 14px !important; }
 
@@ -539,8 +547,6 @@ html.rd #mainContent > header .quote-chip {
     padding: 0 12px !important;
 }
 
-html.rd #mainContent > header .quote-chip .text-indigo-800,
-html.rd #mainContent > header .quote-chip .text-indigo-300 { color: var(--rd-text-2) !important; }
 html.rd #mainContent > header .quote-chip .text-pink-500 { color: var(--rd-accent) !important; }
 html.rd #quoteFavBtn { color: var(--rd-text-3) !important; }
 
@@ -1394,7 +1400,7 @@ html.rd #settingsPanel {
     grid-template-columns: 190px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
     width: min(1080px, 96vw) !important;
-    max-width: 1080px !important;
+    max-width: 1200px !important;
     height: min(820px, 92dvh) !important;
     max-height: 92dvh !important;
     overflow: hidden;
@@ -1658,12 +1664,12 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
 
 /* 响应式 */
 
-@media (max-width: 1240px) {
+@media (max-width: 1200px) {
     html.rd #notesGrid { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
     html.rd #marketList { grid-template-columns: 1fr !important; }
 }
 
-@media (max-width: 1000px) {
+@media (max-width: 980px) {
     html.rd .quote-chip { display: none !important; }
 }
 
@@ -1802,7 +1808,7 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
     html.rd .modal-panel { border-radius: var(--rd-radius-md) !important; }
 }
 
-@media (max-width: 720px) {
+@media (max-width: 620px) {
     html.rd .quote-chip { display: none !important; }
     html.rd #headerAnnounceBtn span,
     html.rd #headerInstallBtn span { display: none !important; }
@@ -1851,6 +1857,18 @@ html.rd[data-theme-template="majo"][data-theme="dark"] .bubble-ai {
     ::view-transition-new(root) { animation: none; }
 }
 
+/* 主题切换进行中（rd-theme-switching 由 theme.js 在转场期间挂/摘）：全场停掉颜色过渡与毛玻璃。
+   调色盘一翻，所有带颜色过渡的元素会同时起动画，其中 background（渐变）过渡只能主线程逐帧
+   重绘，正好跟圆形铺开抢帧；毛玻璃则是新旧两份全页快照光栅化最贵的一项。这 0.4s 里两者都
+   看不出差别，转场结束后原样恢复。 */
+html.rd-theme-switching *,
+html.rd-theme-switching *::before,
+html.rd-theme-switching *::after {
+    transition: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
 /* 插件开关反馈：光晕从被拨动的开关中心散开，由 settings.js 运行时生成（WAAPI），
    不走这里的 keyframes —— 卡片自身的 box-shadow/背景被 #tab-mods 的 !important 规则压死。
    这里只保留减少动态效果时的静态描边。 */
@@ -1892,10 +1910,10 @@ html.rd .profile-impression-box {
 html.rd .profile-impression-text { color: var(--rd-text) !important; }
 html.rd .profile-impression-text.is-empty { color: var(--rd-text-3) !important; }
 
-/* 保存失败提示条（见 ui.js 的 showStoreSaveAlert）：
-   底部横条而不是弹窗 —— 它只报告"数据还在内存、没落盘"，不该挡住用户去点「导出备份」，
-   底部居中不压输入框、手机上也够得着；它是"坏消息"，所以用提示色而不是主题强调色
-   （默认主题强调色是橄榄绿，看起来像成功）。层级在遮罩层之上、但 pointer-events 关掉，永不拦截点击。 */
+/* 通用提示条（modal.js 的 showToast；保存失败等各处共用）：
+   底部横条而不是弹窗 —— 只读提醒不该挡操作；底部居中不压输入框、手机上也够得着。
+   描边按 kind 走语义色（不染文字：toast 底是深色，彩色文字对比不稳）。层级在遮罩层之上、
+   pointer-events 关掉，永不拦截点击。 */
 html.rd .store-save-alert {
     position: fixed;
     left: 50%;
@@ -1904,7 +1922,7 @@ html.rd .store-save-alert {
     max-width: min(560px, calc(100vw - 32px));
     padding: 10px 16px;
     border-radius: 14px;
-    border: 1px solid var(--rd-danger-border, var(--rd-border));
+    border: 1px solid var(--rd-border);
     background: var(--rd-toast-bg);
     color: var(--rd-toast-fg);
     font-size: 12.5px;
@@ -1915,6 +1933,9 @@ html.rd .store-save-alert {
     z-index: 80;
     transition: opacity .18s ease, transform .18s ease;
 }
+html.rd .store-save-alert.toast-ok { border-color: var(--rd-ok); }
+html.rd .store-save-alert.toast-warn { border-color: var(--rd-warn-border); }
+html.rd .store-save-alert.toast-danger { border-color: var(--rd-danger-border, var(--rd-border)); }
 html.rd .store-save-alert.is-visible {
     opacity: 1;
     transform: translate(-50%, 0);

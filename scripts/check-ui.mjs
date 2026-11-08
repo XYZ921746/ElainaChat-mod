@@ -527,6 +527,8 @@ async function caseTheme(c) {
         for (const id of ['majo', 'olive', 'mist', 'glass']) {
             c.ok(ids.includes(id), '含模板 ' + id);
         }
+        // 自定义主题已下线：卡片不在清单里，整条 DIY 通路不可达（setTemplate('custom') 会被本校验打回 majo）。
+        c.ok(!ids.includes('custom'), '自定义主题已下线，不再出现在内置清单里');
         for (const id of ['amber', 'plum', 'ios', 'claude', 'sakura']) {
             c.ok(!ids.includes(id), '旧模板 id 已移除：' + id);
         }

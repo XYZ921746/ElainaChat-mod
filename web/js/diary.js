@@ -141,10 +141,10 @@ function openDiaryDetail(entry, fallbackTitle) {
         diaryDetailEl.innerHTML =
             '<div class="modal-panel w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">'
               + '<div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">'
-                + '<div class="text-base font-bold text-indigo-950">日记</div>'
+                + '<div class="text-base font-bold text-ink">日记</div>'
                 + '<span id="diaryDetailMeta" class="diary-detail-meta"></span>'
                 + '<button id="diaryDetailClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" aria-label="关闭">'
-                  + '<svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
+                  + '<svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>'
                 + '</button>'
               + '</div>'
               + '<div id="diaryDetailBody" class="flex-1 overflow-y-auto scroll-soft px-6 py-4"></div>'

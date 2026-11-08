@@ -145,6 +145,9 @@ function collectExternal(externalCssList) {
 /**
  * 这条声明是否"注定输"：对规则里的**每个**选择器，都能在覆盖层找到
  * 最右复合选择器相同、同属性、权重更高的声明。
+ * 覆盖层只收顶层规则（collectExternal 跳过媒体查询内的规则）：顶层在任何宽度都生效，
+ * 所以它能压过基础层里**媒体查询内**的同名声明 —— 这正是设置页样式从 base 搬进
+ * settings.css 后，base 侧旧块可以被机械判死的前提。
  */
 function isDeclarationOverridden(decl, selectors, external) {
     return selectors.every((selector) => {
@@ -165,7 +168,8 @@ export function findFullyOverriddenRules(layerCss, externalCssList) {
     const external = collectExternal(externalCssList);
     const dead = [];
     for (const rule of parseTopLevelRules(layerCss)) {
-        if (rule.at || !rule.decls.length) continue;
+        // 基础层的规则允许位于媒体查询内：顶层覆盖规则在媒体查询限定的宽度下同样生效。
+        if (!rule.decls.length) continue;
         const selectors = rule.selector.split(',').map((s) => s.trim());
         if (rule.decls.every((decl) => isDeclarationOverridden(decl, selectors, external))) {
             dead.push({ line: rule.line, selector: rule.selector });
@@ -184,7 +188,7 @@ export function findOverriddenDeclarations(layerCss, externalCssList) {
     const external = collectExternal(externalCssList);
     const dead = [];
     for (const rule of parseTopLevelRules(layerCss)) {
-        if (rule.at || !rule.decls.length) continue;
+        if (!rule.decls.length) continue;
         const selectors = rule.selector.split(',').map((s) => s.trim());
         for (const decl of rule.decls) {
             if (isDeclarationOverridden(decl, selectors, external)) {

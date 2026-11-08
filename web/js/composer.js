@@ -222,11 +222,11 @@ function updateThinkingModeHint() {
     if (!hint) return;
     const effort = THINKING_EFFORTS.includes(state.settings.thinkingEffort) ? state.settings.thinkingEffort : 'off';
     if (effort === 'off') {
-        hint.textContent = '已关闭思考：请求会显式告诉服务商「不要思考」（DeepSeek 服务端默认是开的，所以必须显式关闭）。';
+        hint.textContent = '已关闭思考：会显式请求服务商不要思考。';
         return;
     }
     const label = { low: '低（快速）', high: '高（均衡）', max: '极高（深度）' }[effort] || effort;
-    hint.textContent = `当前向服务商请求「${label}」强度；不认这一档的服务商会忽略它（OpenAI 没有 max，「极高」会自动降到 high）。`;
+    hint.textContent = `已请求「${label}」强度；不认这一档的服务商会忽略或自动降档。`;
 }
 
 // 流式预览：增量只让用户先看见，最终正文必须走完整文本的后处理（标签剥离 / 任务抽取 / 朗读稿拆分）。
@@ -346,9 +346,9 @@ function renderStreamingReplyPreview() {
                 <div class="bubble-ai rounded-2xl p-4">
                     <div class="flex items-center gap-2 mb-2">
                         <span class="ai-speaker-name">${escapeHtml(typeof conversationBotName === 'function' ? conversationBotName(getCurrentConversation()) : (state.characterCard?.name || '伊蕾娜'))}</span>
-                        <span class="text-xs text-indigo-300">正在输入…</span>
+                        <span class="text-xs text-dim">正在输入…</span>
                     </div>
-                    <p class="text-indigo-950 text-sm leading-relaxed whitespace-pre-wrap typing-cursor" id="streaming-reply-text"></p>
+                    <p class="text-ink text-sm leading-relaxed whitespace-pre-wrap typing-cursor" id="streaming-reply-text"></p>
                 </div>
             </div>
         `;
@@ -487,23 +487,25 @@ function handleTextSubmit() {
 }
 
 function isTtsConfigured(settings = state.settings) {
-    const provider = String(settings.ttsProvider || 'mimo');
-    // MiMo TTS 用自己的付费 Key（mimoTtsApiKey），没有 Key 不能用。
-    if (provider === 'mimo') {
-        if (!String(settings.mimoTtsApiKey || '').trim()) return false;
+    // 始终按当前生效的提供商判断（settings 参数保留给测试草稿传视图用）：没有提供商或没有 Key 都算未配置。
+    const provider = activeTtsProvider();
+    if (!provider) return false;
+    const cfg = ttsProviderSettings(provider, settings);
+    if (provider.apiFormat === 'mimo') {
         // v2.5 三个模型必需的"音色"来源不同：预置音色 / 音色描述 / 参考音频样本
-        const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim();
-        if (model === 'mimo-v2.5-tts-voiceclone') return Boolean(String(settings.mimoTtsCloneSample || '').trim());
-        if (model === 'mimo-v2.5-tts-voicedesign') return Boolean(String(settings.mimoTtsVoiceDesignPrompt || '').trim());
-        return Boolean(String(settings.mimoTtsVoice || '').trim());
+        if (!String(cfg.mimoTtsApiKey || '').trim()) return false;
+        const model = String(cfg.mimoTtsModel || 'mimo-v2.5-tts').trim();
+        if (model === 'mimo-v2.5-tts-voiceclone') return Boolean(String(cfg.mimoTtsCloneSample || '').trim());
+        if (model === 'mimo-v2.5-tts-voicedesign') return Boolean(String(cfg.mimoTtsVoiceDesignPrompt || '').trim());
+        return Boolean(String(cfg.mimoTtsVoice || '').trim());
     }
-    if (provider === 'openai-tts') {
-        return Boolean(String(settings.openaiTtsApiKey || '').trim());
+    if (provider.apiFormat === 'openai-tts') {
+        return Boolean(String(cfg.openaiTtsApiKey || '').trim());
     }
-    if (provider === 'dashscope') {
-        return Boolean(String(settings.dashscopeApiKey || '').trim() && String(settings.dashscopeTtsVoice || '').trim());
+    if (provider.apiFormat === 'dashscope') {
+        return Boolean(String(cfg.dashscopeApiKey || '').trim() && String(cfg.dashscopeTtsVoice || '').trim());
     }
-    return Boolean(String(settings.minimaxApiKey || '').trim() && String(settings.minimaxVoice || '').trim());
+    return Boolean(String(cfg.minimaxApiKey || '').trim() && String(cfg.minimaxVoice || '').trim());
 }
 
 

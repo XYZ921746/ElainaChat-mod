@@ -96,12 +96,12 @@
                 <button id="railProfileBtn" class="rd-rail-avatar" type="button" title="我的资料" aria-label="我的资料">旅</button>
             </div>
             <div id="sidebarBrand" class="flex items-center gap-3 px-5 h-16 flex-shrink-0 border-b border-white/50">
-                <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-300 to-pink-200 flex items-center justify-center text-white shadow-lg shadow-pink-200">
+                <div class="w-9 h-9 rounded-xl grad-accent flex items-center justify-center text-white">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z"/></svg>
                 </div>
                 <div class="flex-1 min-w-0">
-                    <div id="sidebarBrandTitle" class="text-sm font-bold text-indigo-950 leading-tight">对话</div>
-                    <div id="convCountLabel" class="text-[11px] text-indigo-400">ElainaChat Mod</div>
+                    <div id="sidebarBrandTitle" class="text-sm font-bold text-ink leading-tight">对话</div>
+                    <div id="convCountLabel" class="text-[11px] text-dim">ElainaChat Mod</div>
                 </div>
                 <button id="mobileSidebarClose" type="button" title="收起侧边栏" aria-label="收起侧边栏">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" d="M6 6l12 12M18 6L6 18"/></svg>
@@ -135,7 +135,7 @@
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div id="sidebarFooter" class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <div id="appVersionFooter" data-version="2.0.1" class="text-center text-[10px] text-indigo-200 select-none">v2.0.1 · 魔女之旅</div>
+                <div id="appVersionFooter" data-version="2.1.0" class="text-center text-[10px] text-dim select-none">v2.1.0 · 魔女之旅</div>
             </div>
         </aside>
 
@@ -145,17 +145,17 @@
 
                         <header id="chatHeader" class="glass-panel h-16 mx-4 mt-4 rounded-2xl flex items-center px-4 gap-3 flex-shrink-0 z-10 relative">
                 <button id="showSidebar" class="hidden p-2 rounded-xl hover:bg-white/50 transition-colors" title="打开侧边栏">
-                    <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    <svg class="w-5 h-5 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/></svg>
                 </button>
                 <div class="rd-header-copy">
-                    <div id="currentConversationTitle" class="text-sm font-semibold text-indigo-950 whitespace-nowrap overflow-hidden text-ellipsis min-w-0 max-w-[220px]">伊蕾娜</div>
+                    <div id="currentConversationTitle" class="text-sm font-semibold text-ink whitespace-nowrap overflow-hidden text-ellipsis min-w-0 max-w-[220px]">伊蕾娜</div>
                     <div id="rdHeaderSub" class="rd-header-sub">灰之魔女 · 本地存储</div>
                 </div>
                 <div class="flex-1 min-w-0 flex justify-center">
                     <div class="quote-chip rounded-full px-4 py-1.5 flex items-center gap-2 max-w-full cursor-default select-none" title="每日金句">
-                        <span class="text-xs text-pink-500 flex-shrink-0">✨</span>
-                        <span id="quoteText" class="text-xs text-indigo-800 truncate"></span>
-                        <span id="quoteSource" class="text-[11px] text-indigo-300 flex-shrink-0"></span>
+                        <span class="text-xs text-accent flex-shrink-0">✨</span>
+                        <span id="quoteText" class="text-xs text-ink truncate"></span>
+                        <span id="quoteSource" class="text-[11px] text-dim flex-shrink-0"></span>
                         <div class="flex items-center gap-0.5 flex-shrink-0">
 
                             <button id="quoteFavBtn" class="p-1 rounded-full hover:bg-white/60 transition-colors" title="收藏金句">
@@ -211,7 +211,7 @@
             </header>
 
             <div id="initialState" class="flex-1 flex flex-col items-center justify-center px-6">
-                <h1 id="greetingText" class="text-2xl md:text-3xl font-bold text-center text-indigo-950 min-h-[42px]"></h1>
+                <h1 id="greetingText" class="text-2xl md:text-3xl font-bold text-center text-ink min-h-[42px]"></h1>
                 <p class="greeting-subtitle">与伊蕾娜聊天吧</p>
                 <p id="statusText" class="hidden" aria-live="polite"></p>
                 <div class="initial-composer mt-6 w-full max-w-md">
@@ -253,7 +253,7 @@
                             </div>
                         </div>
                         <div id="initialComposerImagePreview" class="composer-image-preview hidden"></div>
-                        <input id="initialTextInput" autocomplete="off" type="text" readonly onfocus="this.removeAttribute('readonly')" placeholder="和伊蕾娜说点什么..." class="flex-1 bg-transparent outline-none text-sm text-indigo-950 py-2" onkeydown="if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229)handleInitialTextSubmit()">
+                        <input id="initialTextInput" autocomplete="off" type="text" readonly onfocus="this.removeAttribute('readonly')" placeholder="和伊蕾娜说点什么..." class="flex-1 bg-transparent outline-none text-sm text-ink py-2" onkeydown="if(event.key==='Enter'&&!event.isComposing&&event.keyCode!==229)handleInitialTextSubmit()">
                         <button onclick="handleMicClick()" class="initial-conversation-mic-btn mic-btn rounded-full flex items-center justify-center" title="语音输入" aria-label="语音输入">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
                         </button>
@@ -285,17 +285,17 @@
                     <div class="notes-toolbar flex items-center gap-3 mb-4">
                         <div class="notes-tabs flex items-center gap-1.5">
                             <button class="notes-tab tab-active px-4 py-1.5 rounded-full text-xs font-medium transition-all" data-tab="message">消息收藏</button>
-                            <button class="notes-tab px-4 py-1.5 rounded-full text-xs font-medium text-indigo-500 bg-white/40 border border-white/55 transition-all" data-tab="quote">金句收藏</button>
+                            <button class="notes-tab px-4 py-1.5 rounded-full text-xs font-medium text-dim bg-white/40 border border-white/55 transition-all" data-tab="quote">金句收藏</button>
                         </div>
                         <div class="notes-search-wrap ml-auto relative hidden md:block">
                             <input id="notesSearch" autocomplete="off" type="text" placeholder="搜索收藏..." class="modal-input py-2 pl-9 w-56 text-xs">
-                            <svg class="w-4 h-4 text-indigo-300 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+                            <svg class="w-4 h-4 text-dim absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
                         </div>
-                        <span id="notesCount" class="text-xs text-indigo-400"></span>
+                        <span id="notesCount" class="text-xs text-dim"></span>
                     </div>
                     <div id="notesEmpty" class="hidden text-center py-24">
                         <div class="text-5xl mb-4">📭</div>
-                        <p class="text-sm text-indigo-400">还没有收藏，去和伊蕾娜聊聊天吧</p>
+                        <p class="text-sm text-dim">还没有收藏，去和伊蕾娜聊聊天吧</p>
                     </div>
                     <div id="notesGrid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
                 </div>
@@ -304,18 +304,18 @@
                     <div id="favoriteDetail" class="hidden">
                         <div id="favoriteDetailCard" class="modal-panel w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden">
                             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
-                                <div id="detailTypeBadge" class="text-xs px-2.5 py-1 rounded-full bg-gradient-to-r from-pink-300 to-violet-300 text-white"></div>
-                                <span id="detailRole" class="text-xs text-indigo-400"></span>
-                                <span id="detailTimestamp" class="text-xs text-indigo-300 ml-auto"></span>
+                                <div id="detailTypeBadge" class="text-xs px-2.5 py-1 rounded-full grad-accent text-white"></div>
+                                <span id="detailRole" class="text-xs text-dim"></span>
+                                <span id="detailTimestamp" class="text-xs text-dim ml-auto"></span>
                                 <button id="detailClose" class="p-1.5 rounded-lg hover:bg-white/60 transition-colors">
-                                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                                 </button>
                             </div>
                             <div class="flex-1 overflow-y-auto scroll-soft px-5 py-4">
-                                <div id="detailText" class="text-sm text-indigo-950 leading-relaxed whitespace-pre-wrap"></div>
+                                <div id="detailText" class="text-sm text-ink leading-relaxed whitespace-pre-wrap"></div>
                                 <div id="detailContextSection" class="hidden mt-4 pt-3 border-t border-white/60">
-                                    <div class="text-[11px] font-semibold text-indigo-400 mb-2">来源对话</div>
-                                    <div id="detailConvTitle" class="text-xs text-indigo-600"></div>
+                                    <div class="text-[11px] font-semibold text-dim mb-2">来源对话</div>
+                                    <div id="detailConvTitle" class="text-xs text-soft"></div>
                                 </div>
                             </div>
                             <div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-white/60 flex-shrink-0">
@@ -439,10 +439,10 @@
         <div class="modal-panel w-full max-w-md max-h-[92vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-3.5 border-b border-white/60 flex-shrink-0">
                 <span class="w-2 h-2 rounded-full flex-none" id="screenWatchDot" style="background:var(--rd-text-3)"></span>
-                <div class="text-sm font-bold text-indigo-950">副屏监视</div>
-                <span id="screenWatchMeta" class="text-[11px] text-indigo-400 ml-1">检测中…</span>
+                <div class="text-sm font-bold text-ink">副屏监视</div>
+                <span id="screenWatchMeta" class="text-[11px] text-dim ml-1">检测中…</span>
                 <button id="closeScreenWatch" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
-                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
 
@@ -459,8 +459,8 @@
                 </div>
 
                                 <div class="mt-3">
-                    <div class="text-[11px] text-indigo-500 font-semibold mb-1">AI 最近的动作</div>
-                    <div id="screenWatchLog" class="text-[11px] text-indigo-600 leading-relaxed rounded-lg bg-white/60 px-3 py-2"
+                    <div class="text-[11px] text-dim font-semibold mb-1">AI 最近的动作</div>
+                    <div id="screenWatchLog" class="text-[11px] text-soft leading-relaxed rounded-lg bg-white/60 px-3 py-2"
                          style="max-height:96px;overflow-y:auto">（还没有动作）</div>
                 </div>
             </div>
@@ -475,7 +475,7 @@
 
         <div id="floatingMic" class="hidden fixed left-1/2 -translate-x-1/2 bottom-24 z-40">
         <div class="floating-mic-surface glass-panel flex items-center gap-3">
-            <button id="floatingCancelBtn" class="floating-dock-btn w-10 h-10 rounded-full bg-white/50 text-indigo-400 flex items-center justify-center" title="取消">
+            <button id="floatingCancelBtn" class="floating-dock-btn w-10 h-10 rounded-full bg-white/50 text-dim flex items-center justify-center" title="取消">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
             <div class="floating-voice-status" aria-live="polite">
@@ -492,7 +492,7 @@
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z"/></svg>
                 </button>
             </div>
-            <button id="floatingEndBtn" class="floating-dock-btn w-10 h-10 rounded-full bg-gradient-to-br from-emerald-300 to-teal-400 text-white flex items-center justify-center" title="结束并发送">
+            <button id="floatingEndBtn" class="floating-dock-btn w-10 h-10 rounded-full grad-accent text-white flex items-center justify-center" title="结束并发送">
                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
             </button>
         </div>
@@ -506,7 +506,7 @@
                     <span class="settings-brand-copy"><b>设置</b><i>偏好 · 连接 · 扩展</i></span>
                 </div>
                 <button id="closeSettings" class="flex-none p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭设置" aria-label="关闭设置">
-                    <svg class="settings-close-desktop w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="settings-close-desktop w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                     <svg class="settings-close-mobile" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M15 18l-6-6 6-6"/></svg>
                     <span class="settings-close-label">关闭</span>
                 </button>
@@ -517,9 +517,6 @@
                             <span class="settings-nav-ic" aria-hidden="true"></span>
                             <span class="settings-nav-copy"><b>外观</b><i>主题、气泡与背景</i></span>
                         </button>
-                    </div>
-                    <div class="settings-nav-group">
-                        <span class="settings-nav-label">角色</span>
                         <button type="button" class="settings-tab-btn" data-settings-tab="tab-character" data-title="角色">
                             <span class="settings-nav-ic" aria-hidden="true"></span>
                             <span class="settings-nav-copy"><b>角色</b><i>人设与世界观</i></span>
@@ -527,13 +524,13 @@
                     </div>
                     <div class="settings-nav-group">
                         <span class="settings-nav-label">智能</span>
-                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-model" data-title="模型与语音">
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-model" data-title="模型">
                             <span class="settings-nav-ic" aria-hidden="true"></span>
-                            <span class="settings-nav-copy"><b>模型</b><i>对话、语音与视觉</i></span>
+                            <span class="settings-nav-copy"><b>模型</b><i>五类模型的添加与管理</i></span>
                         </button>
                         <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability" data-title="能力">
                             <span class="settings-nav-ic" aria-hidden="true"></span>
-                            <span class="settings-nav-copy"><b>能力</b><i>记忆、权限与浏览器</i></span>
+                            <span class="settings-nav-copy"><b>能力</b><i>定时任务、权限与浏览器</i></span>
                         </button>
                     </div>
                     <div class="settings-nav-group">
@@ -552,9 +549,9 @@
                     </div>
                     <div class="settings-nav-group">
                         <span class="settings-nav-label">系统</span>
-                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced" data-title="数据与安全">
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-advanced" data-title="高级设置">
                             <span class="settings-nav-ic" aria-hidden="true"></span>
-                            <span class="settings-nav-copy"><b>数据与安全</b><i>备份、密码与更新</i></span>
+                            <span class="settings-nav-copy"><b>高级设置</b><i>备份、密码与更新</i></span>
                         </button>
                         <button type="button" class="settings-tab-btn" data-settings-tab="tab-log" data-title="日志">
                             <span class="settings-nav-ic" aria-hidden="true"></span>
@@ -581,18 +578,17 @@
                       <header class="settings-page-head">
                           <p class="settings-page-eyebrow">Appearance</p>
                           <h1>外观</h1>
-                          <p>挑一套读起来舒服的配色，再决定气泡与背景的分寸。所有改动即时生效。</p>
                       </header>
                       <div class="mb-4" id="themeSettingsSection">
-                          <div class="text-xs font-semibold text-indigo-700 mb-2 flex items-center gap-2">
-                              <span><span class="text-pink-500">✦</span> 外观主题</span>
+                          <div class="text-xs font-semibold text-soft mb-2 flex items-center gap-2">
+                              <span><span class="text-accent">✦</span> 外观主题</span>
                               <span class="badge" id="rdCurrentTheme">暗夜魔女书房</span>
                           </div>
                           <div id="themePickerBox" class="mb-3"></div>
                           <div id="themeCustomEditor" style="display:none"></div>
                       </div>
                       <section class="rd-display-card settings-span-2">
-                          <div class="modal-label"><span class="text-pink-500">✦</span> 显示</div>
+                          <div class="modal-label"><span class="text-accent">✦</span> 显示</div>
                           <div class="bubble-preview" id="bubblePreview">
                               <div class="bubble-preview-head">
                                   <span>对话预览</span>
@@ -608,7 +604,7 @@
                               </div>
                           </div>
                           <div class="set-row">
-                              <div class="copy"><b>外观模式</b><span>跟随设备、浅色或深色；与顶栏开关同步</span></div>
+                              <div class="copy"><b>外观模式</b></div>
                               <div class="segmented rd-mode-seg">
                                   <button type="button" data-rd-mode="system">跟随</button>
                                   <button type="button" data-rd-mode="light">浅色</button>
@@ -616,14 +612,14 @@
                               </div>
                           </div>
                           <div class="set-row">
-                              <div class="copy"><b>气泡形状</b><span>圆润适合阅读，紧凑适合长对话；设置页会同步收紧</span></div>
+                              <div class="copy"><b>气泡形状</b></div>
                               <div class="segmented rd-bubble-seg">
                                   <button type="button" data-rd-bubble="round">圆润</button>
                                   <button type="button" data-rd-bubble="compact">紧凑</button>
                               </div>
                           </div>
                           <div class="set-row">
-                              <div class="copy"><b>背景光晕</b><span>关闭后使用纯色背景，减少视觉干扰</span></div>
+                              <div class="copy"><b>背景光晕</b></div>
                               <button class="switch on" data-rd-texture type="button" aria-label="背景光晕"></button>
                           </div>
                       </section>
@@ -633,39 +629,38 @@
                 <header class="settings-page-head">
                     <p class="settings-page-eyebrow">Character</p>
                     <h1>角色</h1>
-                    <p>她是谁、如何看待这个世界，都写在这两张卡里。改动会进入下一次对话。</p>
                 </header>
                 <section id="characterSettingsSection">
-                    <div class="mb-4 pb-3 border-b border-indigo-100">
+                    <div class="mb-4 pb-3 border-b border-soft">
                         <div class="modal-label flex items-center gap-2 mb-2">
-                            <span class="text-pink-500">✦</span> 人设
+                            <span class="text-accent">✦</span> 人设
                         </div>
                         <div class="flex items-center gap-2 flex-wrap">
                             <select id="ccPresetSelect" class="modal-input text-sm" style="flex:1;min-width:150px"></select>
                             <button id="ccPresetNew" class="btn-secondary text-xs" type="button" title="基于当前内容新建一套人设">新建</button>
                             <button id="ccPresetDup" class="btn-secondary text-xs" type="button" title="复制当前人设">复制</button>
                             <button id="ccPresetRename" class="btn-secondary text-xs" type="button" title="给人设改个名字">改名</button>
-                            <button id="ccPresetDelete" class="btn-secondary text-xs text-red-500" type="button" title="删除当前人设">删除</button>
+                            <button id="ccPresetDelete" class="btn-secondary text-xs text-danger" type="button" title="删除当前人设">删除</button>
                         </div>
-                        <p id="ccPresetHint" class="text-[11px] text-indigo-300 leading-relaxed mt-1.5"></p>
+                        <p id="ccPresetHint" class="text-[11px] text-dim leading-relaxed mt-1.5"></p>
                     </div>
-                    <div class="modal-label flex items-center gap-2"><span class="text-pink-500">✦</span> 角色设定卡</div>
+                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 角色设定卡</div>
                     <div class="grid grid-cols-2 gap-3 mb-3">
                         <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">角色名</label>
+                            <label class="text-xs text-dim mb-1 block">角色名</label>
                             <input id="ccName" type="text" class="modal-input text-sm">
                         </div>
                         <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">称号</label>
+                            <label class="text-xs text-dim mb-1 block">称号</label>
                             <input id="ccTitle" type="text" class="modal-input text-sm">
                         </div>
                     </div>
                     <div class="mb-3">
-                        <label class="text-xs text-indigo-500 mb-1 block">完整角色卡</label>
+                        <label class="text-xs text-dim mb-1 block">完整角色卡</label>
                         <textarea id="ccCharacterPrompt" rows="10" class="modal-textarea text-sm resize-y" placeholder="直接填写完整角色身份、性格、表达方式、能力边界与对话规则"></textarea>
                     </div>
                     <div class="mb-3">
-                        <label class="text-xs text-indigo-500 mb-1 block">开场白（首页问候语）</label>
+                        <label class="text-xs text-dim mb-1 block">开场白（首页问候语）</label>
                         <input id="ccGreeting" type="text" class="modal-input text-sm">
                     </div>
                     <div class="flex gap-2">
@@ -674,327 +669,403 @@
                     </div>
                 </section>
 
-                <section id="worldSettingsSection" class="mt-6 pt-4 border-t border-indigo-100">
+                <section id="worldSettingsSection" class="mt-6 pt-4 border-t border-soft">
                     <div class="modal-label flex items-center gap-2 mb-2">
-                        <span class="text-pink-500">✦</span> 世界观卡
+                        <span class="text-accent">✦</span> 世界观卡
                     </div>
                     <div class="mb-3">
-                        <label class="text-xs text-indigo-500 mb-1 block">世界观设定</label>
+                        <label class="text-xs text-dim mb-1 block">世界观设定</label>
                         <textarea id="ccWorldSetting" rows="6" class="modal-textarea text-sm resize-y" placeholder="描述世界规则、时代背景，以及角色与用户为何能够面对面交流"></textarea>
                     </div>
                 </section>
                 </div>
 
                 <div id="tab-model" class="settings-tab-panel">
-                <header class="settings-page-head">
-                    <p class="settings-page-eyebrow">Models &amp; Voice</p>
-                    <h1>模型与语音</h1>
-                    <p>对话、朗读与识别各自连接哪家服务；图片转述并进对话模型，主模型能识图时不必再开。</p>
-                </header>
-                <section id="modelHomeSection" class="settings-hub">
-                    <div class="settings-hub-head">
-                        <span id="modelEntryCount">4 个分类</span>
-                        <p>选一个部分开始；返回时会回到这里。</p>
+                <header class="settings-page-head model-page-head">
+                    <div class="model-page-head-copy">
+                        <p class="settings-page-eyebrow">Models</p>
+                        <h1>模型</h1>
+                        <p class="settings-page-sub">五类模型一处管理：先添加连接，再分配用途。</p>
                     </div>
-                    <div id="modelEntryList" class="prov-list settings-hub-list"></div>
-                </section>
-                <section id="modelChatPage" class="hidden">
-                    <div class="modal-label flex items-center gap-2"><span class="text-violet-500">✦</span> 对话模型</div>
-                    <div id="chatProviderHome" class="space-y-3">
-                        <div id="settingChatModel">
-                            <label class="text-xs text-indigo-500 mb-1 block">默认模型</label>
-                            <div class="flex items-center gap-2">
-                                <select id="defaultChatModelSelect" class="modal-input text-sm flex-1 min-w-0"></select>
-                                <button id="editChatProvidersBtn" type="button" class="btn-secondary text-xs flex-none" title="管理提供商与模型（添加提供商、勾选模型）">编辑</button>
+                    <button id="modelAddModelBtn" type="button" class="btn-primary text-xs model-add-primary">＋ 添加模型</button>
+                </header>
+                <div id="modelSectionTabs" class="model-section-tabs" role="tablist" aria-label="模型分区">
+                    <button type="button" role="tab" aria-selected="true" class="model-section-tab is-active" data-model-view="overview">总览</button>
+                    <button type="button" role="tab" aria-selected="false" class="model-section-tab" data-model-view="providers">我的模型 <span id="modelProviderCount" class="model-tab-count"></span></button>
+                    <button type="button" role="tab" aria-selected="false" class="model-section-tab" data-model-view="prefs">使用偏好</button>
+                </div>
+                <div id="modelOverviewPane" class="model-view-pane">
+                    <div id="modelOverviewCards"></div>
+                </div>
+                <div id="modelProvidersPane" class="model-view-pane hidden">
+                    <div id="modelFilterNav" class="model-filter-nav" role="tablist" aria-label="模型分类"></div>
+                    <div id="modelPageBody" class="model-page-body">
+                    <div id="modelPaneList" class="model-pane-list flex-shrink-0 overflow-y-auto scroll-soft">
+                        <section id="modelChatListPane" class="model-pane-section">
+                            <div class="model-pane-head">
+                                <span class="model-pane-title">提供商</span>
+                                <button type="button" class="model-add-btn" data-model-add="chat">＋ 新增</button>
                             </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">聊天、记忆整理、Agent 等全部请求都走默认模型。</p>
+                            <div id="chatProviderList" class="prov-list"></div>
+                        </section>
+                        <section id="modelAsrListPane" class="model-pane-section hidden">
+                            <div class="model-pane-head">
+                                <span class="model-pane-title">提供商</span>
+                                <button type="button" class="model-add-btn" data-model-add="asr">＋ 新增</button>
+                            </div>
+                            <div id="asrProviderHome" class="prov-section">
+                                <div id="asrProviderList" class="prov-list"></div>
+                            </div>
+                        </section>
+                        <section id="modelTtsListPane" class="model-pane-section hidden">
+                            <div class="model-pane-head">
+                                <span class="model-pane-title">提供商</span>
+                                <button type="button" class="model-add-btn" data-model-add="tts">＋ 新增</button>
+                            </div>
+                            <div id="ttsProviderHome" class="prov-section">
+                                <div id="ttsProviderList" class="prov-list"></div>
+                            </div>
+                        </section>
+                        <section id="modelEmbeddingListPane" class="model-pane-section hidden">
+                            <div class="model-pane-head">
+                                <span class="model-pane-title">提供商</span>
+                                <button type="button" class="model-add-btn" data-model-add="embedding">＋ 新增</button>
+                            </div>
+                            <div id="embeddingProviderHome" class="prov-section">
+                                <div id="embeddingProviderList" class="prov-list"></div>
+                            </div>
+                        </section>
+                        <section id="modelRerankListPane" class="model-pane-section hidden">
+                            <div class="model-pane-head">
+                                <span class="model-pane-title">提供商</span>
+                                <button type="button" class="model-add-btn" data-model-add="rerank">＋ 新增</button>
+                            </div>
+                            <div id="rerankProviderHome" class="prov-section">
+                                <div id="rerankProviderList" class="prov-list"></div>
+                            </div>
+                        </section>
+                    </div>
+                    <div id="modelPaneDetail" class="model-pane-detail flex-1 min-w-0 overflow-y-auto scroll-soft">
+                        <div id="modelDetailPlaceholder" class="model-detail-empty hidden">
+                            <p class="model-detail-empty-text">请选择一个提供商</p>
+                            <p class="model-detail-empty-hint">左侧列表点一家，或点「＋ 新增」</p>
                         </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">失败回退模型（按顺序）</label>
-                            <div id="fallbackChainList" class="space-y-1.5"></div>
+                        <section id="chatCardPane" class="model-pane-section hidden">
+                            <div class="prov-detail-head">
+                                <button id="chatCardBack" type="button" class="prov-back">← 返回</button>
+                                <span id="chatCardTitle" class="prov-detail-title"></span>
+                            </div>
+                            <div id="chatProviderCard"></div>
+                        </section>
+                                <div id="ttsProviderDetail" class="prov-detail hidden">
+                                    <div class="prov-detail-head">
+                                        <button id="ttsProviderBack" type="button" class="prov-back">← 返回</button>
+                                        <span id="ttsProviderDetailTitle" class="prov-detail-title"></span>
+                                    </div>
+                                    <div class="prov-detail-body space-y-3">
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">名称</label>
+                                            <input id="settingTtsProviderName" autocomplete="off" type="text" class="modal-input text-sm" placeholder="如：MiMo 官方 / 中转 A">
+                                        </div>
+                                        <div id="ttsBaseUrlRow" class="hidden">
+                                            <label class="text-xs text-dim mb-1 block">接口地址</label>
+                                            <input id="settingTtsBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.openai.com/v1">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">API Key</label>
+                                            <input id="settingTtsProviderKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...（只保存在本机）">
+                                        </div>
+                                        <p id="ttsProtocolHint" class="text-[11px] text-dim leading-relaxed"></p>
+                                        <div id="mimoTtsFields" class="space-y-3">
+                                            <div>
+                                                <label class="text-xs text-dim mb-1 block">模型</label>
+                                                <select id="settingMimoTtsModel" class="modal-input text-sm">
+                                                    <option value="mimo-v2.5-tts">mimo-v2.5-tts（预置音色）</option>
+                                                    <option value="mimo-v2.5-tts-voicedesign">mimo-v2.5-tts-voicedesign（文本描述设计音色）</option>
+                                                    <option value="mimo-v2.5-tts-voiceclone">mimo-v2.5-tts-voiceclone（参考音频复刻音色）</option>
+                                                </select>
+                                            </div>
+                                            <div id="mimoTtsVoiceFields">
+                                                <label class="text-xs text-dim mb-1 block">音色</label>
+                                                <input id="settingMimoTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" value="" placeholder="mimo_default">
+                                            </div>
+                                            <div id="mimoTtsVoiceDesignFields" class="hidden">
+                                                <label class="text-xs text-dim mb-1 block">音色描述（voicedesign 模型必填）</label>
+                                                <textarea id="settingMimoVoiceDesignPrompt" rows="2" class="modal-input text-sm" placeholder="例如：年轻男性，嗓音低沉略带沙哑，语速偏慢，语气沉稳"></textarea>
+                                                <p class="text-[11px] text-dim leading-relaxed mt-1">必填，1-4 句：性别与年龄、音色质感、情绪语气、语速节奏。越具体越贴近预期，避免相互矛盾或加混响 / EQ 类描述。</p>
+                                            </div>
+                                            <div id="mimoTtsVoiceCloneFields" class="hidden">
+                                                <label class="text-xs text-dim mb-1 block">参考音频样本（voiceclone 模型必填）</label>
+                                                <input id="settingMimoTtsCloneSample" autocomplete="off" type="file" accept="audio/*" class="tts-sample-input">
+                                                <div class="tts-sample-row">
+                                                    <button type="button" id="mimoTtsCloneSamplePick" class="tts-sample-pick">
+                                                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+                                                        <span>选择参考音频…</span>
+                                                    </button>
+                                                    <button type="button" id="mimoTtsCloneSampleBuiltin" class="tts-sample-pick" title="使用软件自带的伊蕾娜日语样本（会自动转成 wav）">内置样本</button>
+                                                    <button type="button" id="mimoTtsCloneSampleClear" class="tts-sample-clear">清除样本</button>
+                                                </div>
+                                                <span id="mimoTtsCloneSampleStatus" class="tts-sample-status">未选择样本</span>
+                                                <details class="rd-more">
+                                                    <summary>样本要求</summary>
+                                                    <p>官方只接受 <code class="text-dim">mp3 / flac / m4a / wav / ogg</code>，<b>数秒</b>即可复刻，样本以 base64 放进请求的 <code class="text-dim">audio.voice</code>。本应用把上限设为 <b>5&nbsp;MB</b> 以免设置文件膨胀。</p>
+                                                    <p class="set-warn-text">免费克隆目前只有日语样本：日语输出可用，用它做「日语转中文」不行。手上有中文样本的话欢迎通过 PR 或联系作者加进项目。</p>
+                                                </details>
+                                            </div>
+                                            <details class="rd-more">
+                                                <summary>预置音色怎么填</summary>
+                                                <p>走 OpenAI 兼容的 <code class="text-dim">/v1/chat/completions</code>，需要 API Key。预置音色填 MiMo 文档里的 Voice ID，例如 <code class="text-dim">mimo_default</code>、<code class="text-dim">Chloe</code>。</p>
+                                            </details>
+                                        </div>
+                                        <div id="openaiTtsFields" class="space-y-3 hidden">
+                                            <div class="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">模型</label>
+                                                    <input id="settingOpenaiTtsModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="tts-1">
+                                                </div>
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">音色</label>
+                                                    <input id="settingOpenaiTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="alloy">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div id="minimaxTtsFields" class="space-y-3 hidden">
+                                            <div class="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">模型</label>
+                                                    <select id="settingMinimaxModel" class="modal-input text-sm">
+                                                        <option value="speech-2.8-turbo">speech-2.8-turbo</option>
+                                                        <option value="speech-2.8-hd">speech-2.8-hd</option>
+                                                        <option value="speech-2.5-hd">speech-2.5-hd</option>
+                                                        <option value="speech-02-hd">speech-02-hd</option>
+                                                        <option value="speech-01-turbo">speech-01-turbo</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">克隆音色 ID</label>
+                                                    <input id="settingMinimaxVoice" autocomplete="off" type="text" class="modal-input text-sm" value="" placeholder="请填写自己账号的音色 ID">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div id="dashscopeTtsFields" class="space-y-3 hidden">
+                                            <div class="grid grid-cols-2 gap-3">
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">模型</label>
+                                                    <input id="settingDashscopeTtsModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="qwen3-tts-flash">
+                                                </div>
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">音色</label>
+                                                    <input id="settingDashscopeTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="Cherry / Ethan / Serena">
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div class="flex flex-wrap items-center gap-2 pt-1">
+                                            <button id="ttsProviderTest" type="button" class="btn-secondary text-xs">测试连接</button>
+                                                                        <span id="ttsDefaultBadge" class="text-[11px] text-accent"></span>
+                                        </div>
+                                        <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
+                                            <div class="text-xs text-[var(--pixso-brown)]">朗读播放</div>
+                                            <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1">对所有文字转语音提供商生效。</p>
+                                            <div class="mt-2 space-y-3">
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">语音语言（朗读文本的语言）</label>
+                                                    <div class="flex gap-4">
+                                                        <label class="flex items-center gap-1.5 text-xs text-soft cursor-pointer">
+                                                            <input type="radio" name="ttsLang" value="chinese" class="accent-pink-500"> 中文语音
+                                                        </label>
+                                                        <label class="flex items-center gap-1.5 text-xs text-soft cursor-pointer">
+                                                            <input type="radio" name="ttsLang" value="japanese" class="accent-pink-500"> 日语语音（并行生成日语朗读文本）
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label class="text-xs text-dim mb-1 block">回复展示方式</label>
+                                                    <div class="flex flex-wrap gap-4">
+                                                        <label class="flex items-center gap-1.5 text-xs text-soft cursor-pointer">
+                                                            <input type="radio" name="replyDisplayMode" value="text-first" class="accent-pink-500"> 先显示文本，再播放语音
+                                                        </label>
+                                                        <label class="flex items-center gap-1.5 text-xs text-soft cursor-pointer">
+                                                            <input type="radio" name="replyDisplayMode" value="simultaneous" class="accent-pink-500"> 文本与语音同时出现
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div class="grid grid-cols-2 gap-3">
+                                                    <div>
+                                                        <div class="flex items-center justify-between mb-1">
+                                                            <label class="text-xs text-dim">语速</label>
+                                                            <span id="ttsSpeedLabel" class="text-xs font-medium text-accent">1.0x</span>
+                                                        </div>
+                                                        <input id="settingTtsSpeed" type="range" min="0.5" max="2" step="0.1" value="1.0" class="custom-slider">
+                                                    </div>
+                                                    <div>
+                                                        <div class="flex items-center justify-between mb-1">
+                                                            <label class="text-xs text-dim">音量</label>
+                                                            <span id="ttsVolumeLabel" class="text-xs font-medium text-accent">100%</span>
+                                                        </div>
+                                                        <input id="settingTtsVolume" type="range" min="0" max="2" step="0.05" value="1.5" class="custom-slider">
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="asrProviderDetail" class="prov-detail hidden">
+                                    <div class="prov-detail-head">
+                                        <button id="asrProviderBack" type="button" class="prov-back">← 返回</button>
+                                        <span id="asrProviderDetailTitle" class="prov-detail-title"></span>
+                                    </div>
+                                    <div class="prov-detail-body space-y-3">
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">名称</label>
+                                            <input id="settingAsrProviderName" autocomplete="off" type="text" class="modal-input text-sm" placeholder="如：百炼 / MiMo 官方">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">接口地址</label>
+                                            <input id="settingAsrBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="按协议默认">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">API Key</label>
+                                            <input id="settingAsrProviderKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...（只保存在本机）">
+                                        </div>
+                                        <p id="asrProtocolHint" class="text-[11px] text-dim leading-relaxed"></p>
+                                        <div id="dashscopeAsrFields" class="space-y-3">
+                                            <div>
+                                                <label class="text-xs text-dim mb-1 block">ASR 模型</label>
+                                                <input id="settingDashscopeAsrModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="qwen3-asr-flash">
+                                            </div>
+                                            <details class="rd-more">
+                                                <summary>测试报错对照</summary>
+                                                <p>模型只能填<b>非流式</b>的 <code class="text-dim">qwen3-asr-flash</code> / <code class="text-dim">qwen-audio-3.0-asr-flash</code>；带 <code>-streaming</code> 的走 WebSocket，本应用调不了。</p>
+                                                <p>401 = Key 无效或未开通；403 / 404 = 模型未开通；400「format is empty」= 请求体形状不对（应用已按模型自动适配）；400「ASR_RESPONSE_HAVE_NO_WORDS」= 音频里没人声（测试发的是静音，属正常）。</p>
+                                            </details>
+                                        </div>
+                                        <div id="mimoAsrFields" class="space-y-3 hidden">
+                                            <div>
+                                                <label class="text-xs text-dim mb-1 block">ASR 模型</label>
+                                                <input id="settingMimoAsrModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="mimo-v2.5-asr">
+                                            </div>
+                                        </div>
+                                        <div class="flex flex-wrap items-center gap-2 pt-1">
+                                            <button id="asrProviderTest" type="button" class="btn-secondary text-xs">测试</button>
+                                                                        <span id="asrDefaultBadge" class="text-[11px] text-accent"></span>
+                                        </div>
+                                        <span id="asrProviderTestStatus" class="text-[11px] text-dim"></span>
+                                    </div>
+                                </div>
+                                <div id="embeddingProviderDetail" class="prov-detail hidden">
+                                    <div class="prov-detail-head">
+                                        <button id="embeddingProviderBack" type="button" class="prov-back">← 返回</button>
+                                        <span id="embeddingProviderDetailTitle" class="prov-detail-title"></span>
+                                    </div>
+                                    <div class="prov-detail-body space-y-3">
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">名称</label>
+                                            <input id="settingEmbeddingProviderName" autocomplete="off" type="text" class="modal-input text-sm" placeholder="如：硅基流动 / Jina">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">接口地址（OpenAI 兼容，含版本段）</label>
+                                            <input id="settingEmbeddingBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.siliconflow.cn/v1">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">API Key</label>
+                                            <input id="settingEmbeddingProviderKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...（只保存在本机）">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">模型</label>
+                                            <div class="flex items-center gap-2">
+                                                <input id="settingEmbeddingModel" autocomplete="off" type="text" class="modal-input text-sm flex-1 min-w-0" placeholder="bge-m3">
+                                                <button id="embeddingFetchModelsBtn" type="button" class="btn-secondary text-xs flex-none" title="从该提供商的 API 地址拉取可用模型列表">获取模型</button>
+                                            </div>
+                                        </div>
+                                        <div class="flex flex-wrap items-center gap-2 pt-1">
+                                            <button id="embeddingProviderTest" type="button" class="btn-secondary text-xs">测试连接</button>
+                                                                        <span id="embeddingDefaultBadge" class="text-[11px] text-accent"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div id="rerankProviderDetail" class="prov-detail hidden">
+                                    <div class="prov-detail-head">
+                                        <button id="rerankProviderBack" type="button" class="prov-back">← 返回</button>
+                                        <span id="rerankProviderDetailTitle" class="prov-detail-title"></span>
+                                    </div>
+                                    <div class="prov-detail-body space-y-3">
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">名称</label>
+                                            <input id="settingRerankProviderName" autocomplete="off" type="text" class="modal-input text-sm" placeholder="如：Jina / 硅基流动">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">接口地址（含版本段）</label>
+                                            <input id="settingRerankBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.jina.ai/v1">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">API Key</label>
+                                            <input id="settingRerankProviderKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...（只保存在本机）">
+                                        </div>
+                                        <div>
+                                            <label class="text-xs text-dim mb-1 block">模型</label>
+                                            <div class="flex items-center gap-2">
+                                                <input id="settingRerankModel" autocomplete="off" type="text" class="modal-input text-sm flex-1 min-w-0" placeholder="jina-reranker-v2-base-multilingual">
+                                                <button id="rerankFetchModelsBtn" type="button" class="btn-secondary text-xs flex-none" title="从该提供商的 API 地址拉取可用模型列表">获取模型</button>
+                                            </div>
+                                        </div>
+                                        <div class="flex flex-wrap items-center gap-2 pt-1">
+                                            <button id="rerankProviderTest" type="button" class="btn-secondary text-xs">测试连接</button>
+                                                                        <span id="rerankDefaultBadge" class="text-[11px] text-accent"></span>
+                                        </div>
+                                    </div>
+                                </div>
+                    </div>
+                    </div>
+                </div>
+                <div id="modelPrefsPane" class="model-view-pane hidden">
+                <section id="chatBindingSection" class="rd-display-card settings-span-2">
+                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 对话模型与回退</div>
+                    <p class="rd-field-hint mb-2">选择对话使用的默认模型与失败回退策略；提供商本体在「模型」分栏添加与管理。</p>
+                    <div class="set-row" id="settingChatModel">
+                        <div class="copy"><b>默认模型</b><span>聊天、记忆整理、Agent 等全部请求都走这个模型</span></div>
+                        <select id="defaultChatModelSelect" class="modal-input text-sm flex-none" style="max-width: 320px"></select>
+                    </div>
+                    <div class="set-row set-row-top">
+                        <div class="copy"><b>失败回退模型（按顺序）</b><span>默认模型请求失败（限流 / Key 失效 / 网络等）时，按此顺序逐个尝试；第 2 个及之后的在「编辑」里看。</span></div>
+                        <details class="fbc-editor flex-1 min-w-0" style="max-width: 340px">
+                            <summary>
+                                <span id="fallbackChainFirst" class="truncate">未设置回退</span>
+                                <span id="fallbackChainMore" class="fbc-editor-more"></span>
+                                <svg class="fbc-editor-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                            </summary>
+                            <div id="fallbackChainList" class="space-y-1.5 mt-2"></div>
                             <div class="flex items-center gap-2 mt-1.5">
                                 <select id="fallbackAddSelect" class="modal-input text-sm flex-1 min-w-0"></select>
                                 <button id="fallbackAddBtn" type="button" class="btn-secondary text-xs flex-none">添加</button>
                             </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">默认模型请求失败（限流 / Key 失效 / 网络等）时，按此顺序逐个尝试。</p>
-                        </div>
-                        <div class="flex flex-wrap gap-2 mt-1">
-                            <button id="clearApiKeysBtn" type="button" class="btn-secondary text-xs">清除全部 API Key</button>
-                        </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed">请求由本机直接发往各服务商，不经过作者服务器；Key 只保存本机（Android 走系统 Keystore）。</p>
-                    </div>
-                    <div id="visionSettingsSection" class="model-subsection">
-                        <div class="model-subsection-head">
-                            <div class="model-subsection-copy">
-                                <b>图片转述（可选）</b>
-                                <span>默认模型本身能识图时不要打开；只有纯文本模型才需要一个视觉模型替它看。</span>
-                            </div>
-                            <label class="mod-switch" title="开启 / 关闭图片转述">
-                                <input type="checkbox" id="settingVisionEnabled" aria-label="图片转述（视觉模型）">
-                                <span class="track"></span><span class="knob"></span>
-                            </label>
-                        </div>
-                        <p id="visionMainModelHint" class="set-note">💡 主模型本来就支持查看图片（多模态）时，<b>建议不要打开这个开关</b> —— 图片直接交给它，细节更全、速度更快。只有主模型是纯文本时，才需要在这里接一个视觉模型替它看。</p>
-                        <div id="visionFields" class="space-y-3">
-                            <div>
-                                <label class="text-xs text-[var(--text-muted)] mb-1 block">视觉模型（从「对话模型」的提供商里选）</label>
-                                <select id="settingVisionModelPair" class="modal-input text-sm"></select>
-                                <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1">图片转述就用这里选中的模型；它的 API 地址与 Key 直接取该提供商在「对话模型」里配好的那一份，不用另填。</p>
-                            </div>
-                        </div>
-                    </div>
-                    <div id="chatProviderEditor" class="hidden"></div>
-                </section>
-
-
-                <section id="modelTtsPage" class="hidden">
-                    <div class="modal-label flex items-center gap-2"><span class="text-rose-500">✦</span> 语音输出（多服务商）</div>
-                    <div class="space-y-3">
-                        <div id="ttsProviderHome" class="prov-section">
-                            <div id="ttsProviderList" class="prov-list"></div>
-                        </div>
-                        <div id="ttsProviderDetail" class="prov-detail hidden">
-                            <div class="prov-detail-head">
-                                <button id="ttsProviderBack" type="button" class="prov-back">← 返回</button>
-                                <span id="ttsProviderDetailTitle" class="prov-detail-title"></span>
-                            </div>
-                            <div class="prov-detail-body">
-                        <div id="mimoTtsFields" class="space-y-3">
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">MiMo TTS API Key</label>
-                                    <input id="settingMimoTtsApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="mimo_... 或 $MIMO_API_KEY">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">模型</label>
-                                    <select id="settingMimoTtsModel" class="modal-input text-sm">
-                                        <option value="mimo-v2.5-tts">mimo-v2.5-tts（预置音色）</option>
-                                        <option value="mimo-v2.5-tts-voicedesign">mimo-v2.5-tts-voicedesign（文本描述设计音色）</option>
-                                        <option value="mimo-v2.5-tts-voiceclone">mimo-v2.5-tts-voiceclone（参考音频复刻音色）</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <div id="mimoTtsVoiceFields">
-                                <label class="text-xs text-indigo-500 mb-1 block">音色</label>
-                                <input id="settingMimoTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" value="" placeholder="mimo_default">
-                            </div>
-                            <div id="mimoTtsVoiceDesignFields" class="hidden">
-                                <label class="text-xs text-indigo-500 mb-1 block">音色描述（voicedesign 模型必填）</label>
-                                <textarea id="settingMimoVoiceDesignPrompt" rows="2" class="modal-input text-sm" placeholder="例如：年轻男性，嗓音低沉略带沙哑，语速偏慢，语气沉稳"></textarea>
-                                <p class="text-[11px] text-indigo-300 leading-relaxed mt-1">必填，1-4 句：性别与年龄、音色质感、情绪语气、语速节奏。越具体越贴近预期，避免相互矛盾或加混响 / EQ 类描述。</p>
-                            </div>
-                            <div id="mimoTtsVoiceCloneFields" class="hidden">
-                                <label class="text-xs text-indigo-500 mb-1 block">参考音频样本（voiceclone 模型必填）</label>
-                                <input id="settingMimoTtsCloneSample" autocomplete="off" type="file" accept="audio/*" class="tts-sample-input">
-                                <div class="tts-sample-row">
-                                    <button type="button" id="mimoTtsCloneSamplePick" class="tts-sample-pick">
-                                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
-                                        <span>选择参考音频…</span>
-                                    </button>
-                                    <button type="button" id="mimoTtsCloneSampleBuiltin" class="tts-sample-pick" title="使用软件自带的伊蕾娜日语样本（会自动转成 wav）">内置样本</button>
-                                    <button type="button" id="mimoTtsCloneSampleClear" class="tts-sample-clear">清除样本</button>
-                                </div>
-                                <span id="mimoTtsCloneSampleStatus" class="tts-sample-status">未选择样本</span>
-                                <details class="rd-more">
-                                    <summary>样本要求</summary>
-                                    <p>官方只接受 <code class="text-indigo-500">mp3 / flac / m4a / wav / ogg</code>，<b>数秒</b>即可复刻，样本以 base64 放进请求的 <code class="text-indigo-500">audio.voice</code>。本应用把上限设为 <b>5&nbsp;MB</b> 以免设置文件膨胀。</p>
-                                    <p class="set-warn-text">免费克隆目前只有日语样本：日语输出可用，用它做「日语转中文」不行。手上有中文样本的话欢迎通过 PR 或联系作者加进项目。</p>
-                                </details>
-                            </div>
-                            <details class="rd-more">
-                                <summary>预置音色怎么填</summary>
-                                <p>走 OpenAI 兼容的 <code class="text-indigo-500">/v1/chat/completions</code>，需要 API Key。预置音色填 MiMo 文档里的 Voice ID，例如 <code class="text-indigo-500">mimo_default</code>、<code class="text-indigo-500">Chloe</code>。</p>
-                            </details>
-                        </div>
-                        <div id="openaiTtsFields" class="space-y-3 hidden">
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">接口地址</label>
-                                    <input id="settingOpenaiTtsBaseUrl" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.openai.com/v1">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">API Key</label>
-                                    <input id="settingOpenaiTtsApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...">
-                                </div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">模型</label>
-                                    <input id="settingOpenaiTtsModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="tts-1">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">音色</label>
-                                    <input id="settingOpenaiTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="alloy">
-                                </div>
-                            </div>
-                        </div>
-                        <div id="minimaxTtsFields" class="space-y-3 hidden">
-                            <div>
-                                <label class="text-xs text-indigo-500 mb-1 block">MiniMax API Key</label>
-                                <input id="settingMinimaxApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="留空则不生成语音">
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">模型</label>
-                                    <select id="settingMinimaxModel" class="modal-input text-sm">
-                                        <option value="speech-2.8-turbo">speech-2.8-turbo</option>
-                                        <option value="speech-2.8-hd">speech-2.8-hd</option>
-                                        <option value="speech-2.5-hd">speech-2.5-hd</option>
-                                        <option value="speech-02-hd">speech-02-hd</option>
-                                        <option value="speech-01-turbo">speech-01-turbo</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">克隆音色 ID</label>
-                                    <input id="settingMinimaxVoice" autocomplete="off" type="text" class="modal-input text-sm" value="" placeholder="请填写自己账号的音色 ID">
-                                </div>
-                            </div>
-                        </div>
-                        <div id="dashscopeTtsFields" class="space-y-3 hidden">
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">模型</label>
-                                    <input id="settingDashscopeTtsModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="qwen3-tts-flash">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-indigo-500 mb-1 block">音色</label>
-                                    <input id="settingDashscopeTtsVoice" autocomplete="off" type="text" class="modal-input text-sm" placeholder="Cherry / Ethan / Serena">
-                                </div>
-                            </div>
-                            <div>
-                                <label class="text-xs text-indigo-500 mb-1 block">DashScope API Key（阿里千问 Qwen-TTS）</label>
-                                <input id="settingDashscopeApiKey" autocomplete="new-password" type="password" class="modal-input text-sm" placeholder="sk-...">
-                            </div>
-                        </div>
-                            </div>
-                        </div>
-                        <select id="settingTtsProvider" class="hidden" aria-hidden="true" tabindex="-1">
-                            <option value="mimo">MiMo TTS（小米）</option>
-                            <option value="minimax">MiniMax（克隆音色）</option>
-                            <option value="dashscope">阿里千问 Qwen-TTS</option>
-                            <option value="openai-tts">通用 OpenAI TTS</option>
-                        </select>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">语音语言（朗读文本的语言）</label>
-                            <div class="flex gap-4">
-                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                    <input type="radio" name="ttsLang" value="chinese" class="accent-pink-500"> 中文语音
-                                </label>
-                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                    <input type="radio" name="ttsLang" value="japanese" class="accent-pink-500"> 日语语音（并行生成日语朗读文本）
-                                </label>
-                            </div>
-                        </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">回复展示方式</label>
-                            <div class="flex flex-wrap gap-4">
-                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                    <input type="radio" name="replyDisplayMode" value="text-first" class="accent-pink-500"> 先显示文本，再播放语音
-                                </label>
-                                <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                                    <input type="radio" name="replyDisplayMode" value="simultaneous" class="accent-pink-500"> 文本与语音同时出现
-                                </label>
-                            </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-1.5">默认先显示文字、语音后台准备；同步模式等语音真正开始再显示回复。</p>
-                        </div>
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="text-xs text-indigo-500">语速</label>
-                                    <span id="ttsSpeedLabel" class="text-xs font-medium text-pink-600">1.0x</span>
-                                </div>
-                                <input id="settingTtsSpeed" type="range" min="0.5" max="2" step="0.1" value="1.0" class="custom-slider">
-                            </div>
-                            <div>
-                                <div class="flex items-center justify-between mb-1">
-                                    <label class="text-xs text-indigo-500">音量</label>
-                                    <span id="ttsVolumeLabel" class="text-xs font-medium text-pink-600">100%</span>
-                                </div>
-                                <input id="settingTtsVolume" type="range" min="0" max="2" step="0.05" value="1.5" class="custom-slider">
-                            </div>
-                        </div>
-                        <div class="flex flex-wrap gap-2">
-                            <button id="testTtsConnectionBtn" type="button" class="btn-secondary text-xs">测试语音连接</button>
-                        </div>
-                    </div>
-                </section>
-
-                <section id="modelAsrPage" class="hidden">
-                    <div class="modal-label flex items-center gap-2"><span class="text-rose-500">✦</span> 语音输入</div>
-                    <div id="asrProviderHome" class="prov-section">
-                        <div id="asrProviderList" class="prov-list"></div>
-                    </div>
-                    <div class="hidden" aria-hidden="true">
-                        <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                            <input type="radio" name="asrProvider" value="aliyun" class="accent-pink-500"> 阿里百炼
-                        </label>
-                        <label class="flex items-center gap-1.5 text-xs text-indigo-700 cursor-pointer">
-                            <input type="radio" name="asrProvider" value="mimo" class="accent-pink-500"> 小米 MiMo
-                        </label>
-                    </div>
-                    <div id="asrProviderDetail" class="prov-detail hidden">
-                        <div class="prov-detail-head">
-                            <button id="asrProviderBack" type="button" class="prov-back">← 返回</button>
-                            <span id="asrProviderDetailTitle" class="prov-detail-title"></span>
-                        </div>
-                        <div class="prov-detail-body">
-                    <div id="dashscopeAsrFields" class="space-y-3 hidden">
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">DashScope ASR API Key（阿里百炼，独立于语音输出）</label>
-                            <input id="settingAsrApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="sk-...">
-                        </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">接口地址</label>
-                            <input id="settingDashscopeAsrBaseUrl" autocomplete="off" type="url" class="modal-input text-sm" placeholder="https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation">
-                        </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">ASR 模型</label>
-                            <input id="settingDashscopeAsrModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="qwen3-asr-flash">
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <button id="settingAsrTest" class="btn-secondary text-xs" type="button">测试</button>
-                            <span id="settingAsrTestStatus" class="text-[11px] text-indigo-300"></span>
-                        </div>
-                        <details class="rd-more">
-                            <summary>测试报错对照</summary>
-                            <p>模型只能填<b>非流式</b>的 <code class="text-indigo-500">qwen3-asr-flash</code> / <code class="text-indigo-500">qwen-audio-3.0-asr-flash</code>；带 <code>-streaming</code> 的走 WebSocket，本应用调不了。</p>
-                            <p>401 = Key 无效或未开通；403 / 404 = 模型未开通；400「format is empty」= 请求体形状不对（应用已按模型自动适配）；400「ASR_RESPONSE_HAVE_NO_WORDS」= 音频里没人声（测试发的是静音，属正常）。</p>
                         </details>
                     </div>
-                    <div id="mimoAsrFields" class="space-y-3 hidden">
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">MiMo ASR API Key</label>
-                            <input id="settingMimoAsrApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm" placeholder="mimo_... 或 $MIMO_API_KEY">
+                    <div class="set-row set-row-top" id="visionSettingsSection">
+                        <div class="copy">
+                            <b>图片转述（可选）</b>
+                            <span>主模型能识图时选「不使用」；只有纯文本主模型才需要接一个视觉模型替它看。地址与 Key 直接取该提供商在「模型」分栏配好的那份。</span>
+                            <span id="visionMainModelHint" class="block mt-1"></span>
                         </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">接口地址（OpenAI 兼容）</label>
-                            <input id="settingMimoAsrBaseUrl" autocomplete="off" type="url" class="modal-input text-sm" placeholder="https://api.xiaomimimo.com">
-                        </div>
-                        <div>
-                            <label class="text-xs text-indigo-500 mb-1 block">ASR 模型</label>
-                            <input id="settingMimoAsrModel" autocomplete="off" type="text" class="modal-input text-sm" placeholder="mimo-v2.5-asr">
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <button id="settingMimoAsrTest" class="btn-secondary text-xs" type="button">测试 MiMo 识别</button>
-                            <span id="settingMimoAsrTestStatus" class="text-[11px] text-indigo-300"></span>
-                        </div>
+                        <select id="settingVisionModelPair" class="modal-input text-sm flex-none" style="max-width: 320px"></select>
                     </div>
-                        </div>
-                    </div>
+                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">请求直接发往各服务商，Key 只保存在本机。</p>
                 </section>
 
-                <section id="modelOptimizePage" class="hidden">
-                    <div class="modal-label flex items-center gap-2"><span class="text-amber-500">✦</span> 对话优化</div>
-
-                    <div class="mb-4">
-                        <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingThinkingEffort">思考强度</label>
-                        <select id="settingThinkingEffort" class="modal-input text-sm">
+                    <section id="modelGenerationSection" class="rd-display-card settings-span-2">
+                        <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 生成参数</div>
+                        <p class="rd-field-hint mb-2">对默认对话模型生效；开关关闭 = 不发送该项，使用服务商默认值。</p>
+                    <div class="set-row set-row-top" id="settingThinkingEffortRow">
+                        <div class="copy">
+                            <b>思考强度</b>
+                            <span>越 thinking 越慢但更聪明；部分服务商开思考时会忽略自定义采样参数</span>
+                            <span id="thinkingModeHint" class="block mt-1"></span>
+                        </div>
+                        <select id="settingThinkingEffort" class="modal-input text-sm flex-none" style="max-width: 320px">
                             <option value="off">关闭（不思考，直接回答）</option>
                             <option value="low">低（快速思考）</option>
                             <option value="high">高（均衡）</option>
                             <option value="max">极高（深度思考，慢但更贵）</option>
                         </select>
-                        <p id="thinkingModeHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
                     </div>
 
                     <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
@@ -1027,14 +1098,17 @@
                                 <input id="settingOptTopP" type="range" min="0" max="1" step="0.05" value="1" class="custom-slider mt-2" aria-label="Top P" disabled>
                             </div>
                         </div>
-                        <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">开关关着 = 这一项不发送，由服务商决定默认值。温度越高输出越发散，越低越稳定；Top P 收窄候选词的取值范围。开思考时部分服务商不支持自定义采样参数（会忽略或自动省略）。</p>
+                        <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">开关关闭 = 不发送，用服务商默认值；开思考时部分服务商会忽略这些参数。</p>
                     </div>
+                    </section>
+                <section id="conversationTuningSection" class="rd-display-card settings-span-2">
+                    <div class="modal-label flex items-center gap-2"><span class="text-warn">✦</span> 对话与联网</div>
 
-                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
+
+                    <div>
                         <div class="flex items-center justify-between gap-3">
                             <div class="min-w-0">
                                 <div class="text-xs text-[var(--pixso-brown)]">联网搜索</div>
-                                <div class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-0.5">需要最新信息时让 AI 自己去搜一下，再把结果当作资料回答。用的是你自己的搜索额度。</div>
                             </div>
                             <label class="mod-switch" title="开启 / 关闭 AI 联网搜索">
                                 <input type="checkbox" id="settingTavilyEnabled" aria-label="AI 联网搜索">
@@ -1079,12 +1153,12 @@
                                 <div>
                                     <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomBody">请求体模板（JSON，可留空）</label>
                                     <textarea id="settingSearchCustomBody" rows="2" class="modal-input text-sm" spellcheck="false" placeholder='{"query":"{{query}}","count":{{count}}}'></textarea>
-                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">支持 <code class="text-indigo-500">{{query}}</code> 与 <code class="text-indigo-500">{{count}}</code> 两个占位符。留空则发 <code class="text-indigo-500">{"query":…,"count":…}</code>。</p>
+                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">支持 <code class="text-dim">{{query}}</code> 与 <code class="text-dim">{{count}}</code> 占位符。</p>
                                 </div>
                                 <div>
                                     <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomResultsPath">结果数组路径（可留空）</label>
                                     <input id="settingSearchCustomResultsPath" autocomplete="off" type="text" class="modal-input text-sm" placeholder="data.webPages.value">
-                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">留空会自动在返回里找出结果数组（title/name、url/link、content/snippet 这些常见字段名都能认）。找错了再填这里。</p>
+                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">留空自动识别；识别错了再填。</p>
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3">
@@ -1104,10 +1178,10 @@
                         </div>
                     </div>
 
-                    <div class="flex items-center justify-between gap-3">
+                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)] flex items-center justify-between gap-3">
                         <div class="min-w-0">
                             <div class="text-xs text-[var(--pixso-brown)]">第三人称（两段式生成）</div>
-                            <div class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-0.5">先以旁白视角推进剧情，再改写成伊蕾娜的第一人称口吻展示给你。</div>
+                            <div class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-0.5">先以旁白推进剧情，再改写成第一人称口吻。</div>
                         </div>
                         <label class="mod-switch" title="开启 / 关闭第三人称">
                             <input type="checkbox" id="settingThirdPerson" aria-label="第三人称（两段式生成）">
@@ -1115,94 +1189,136 @@
                         </label>
                     </div>
 
-                </section>
-
+                    </section>
+                </div>
+                <div id="modelAddPane" class="model-view-pane hidden">
+                    <header class="settings-page-head model-add-head">
+                        <div class="model-page-head-copy">
+                            <p class="settings-page-eyebrow">Add model</p>
+                            <h1>添加模型</h1>
+                            <p class="settings-page-sub">先选类型和服务商，再填连接信息。</p>
+                        </div>
+                        <button id="modelAddBackBtn" type="button" class="btn-secondary text-xs">← 返回模型</button>
+                    </header>
+                    <div id="modelAddBody"></div>
+                </div>
                 </div>
 
                 <div id="tab-capability" class="settings-tab-panel">
                 <header class="settings-page-head">
                     <p class="settings-page-eyebrow">Capabilities</p>
                     <h1>能力</h1>
-                    <p>记忆怎么形成、任务何时送达，以及 AI 能碰到这台设备的哪些部分。</p>
+                    <p class="settings-page-sub">Agent 的定时任务、设备权限与浏览器；联网搜索、第三人称、默认模型与生成参数都在「模型 → 使用偏好」，朗读播放在「文字转语音」提供商里。</p>
                 </header>
-                <section id="memorySettingsSection">
-                    <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 记忆</div>
 
-                    <div class="flex items-center justify-between gap-3">
-                        <div class="min-w-0">
-                            <div class="text-xs text-[var(--pixso-brown)]">记忆日记</div>
+
+
+
+                <!-- 记忆与检索：整理、召回、重排回答的是同一个问题「记忆怎么进来、怎么被找出来」，
+                     原来散在「对话与朗读」里，多一类模型就多一个找不到的开关。 -->
+                <section id="memoryRecallSection" class="rd-display-card settings-span-2">
+                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 记忆与检索</div>
+                    <p class="rd-field-hint mb-2">记忆怎么整理、怎么被找出来；各类模型的提供商本体在「模型」分栏添加。</p>
+
+                    <div class="text-xs text-[var(--pixso-brown)]">记忆整理</div>
+                    <div class="mt-2 space-y-3">
+                        <div class="set-row set-row-top">
+                            <div class="copy">
+                                <b>整理模型</b>
+                                <span>后台整理记忆用的模型；候选项来自「模型」分栏已勾选的模型。想让便宜些的模型在后台跑整理，就在这里单独指定。</span>
+                            </div>
+                            <select id="settingMemoryModel" class="modal-input text-sm flex-none" style="max-width: 320px">
+                                <option value="off">关闭</option>
+                                <option value="">沿用当前对话模型</option>
+                            </select>
                         </div>
-                        <label class="mod-switch" title="开启 / 关闭记忆日记">
-                            <input type="checkbox" id="settingAutoMemory" aria-label="记忆日记">
-                            <span class="track"></span><span class="knob"></span>
-                        </label>
+
+                        <div class="memory-every-row">
+                            <span class="memory-every-text">每</span>
+                            <div class="memory-stepper">
+                                <button type="button" id="memoryEveryMinus" class="memory-step-btn" title="少一点" aria-label="减少轮数">−</button>
+                                <input id="settingMemoryEvery" type="number" min="3" max="50" inputmode="numeric" class="memory-step-input" aria-label="每多少轮整理一次记忆">
+                                <button type="button" id="memoryEveryPlus" class="memory-step-btn" title="多一点" aria-label="增加轮数">＋</button>
+                            </div>
+                            <span class="memory-every-text">轮整理一次</span>
+                        </div>
+
+                        <button type="button" id="memoryNowBtn" class="memory-now-btn">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/><path stroke-linecap="round" d="M17 17h3m-1.5-1.5v3"/></svg>
+                            <span>立即整理记忆</span>
+                        </button>
                     </div>
 
-                    <div class="memory-every-row">
-                        <span class="memory-every-text">每</span>
-                        <div class="memory-stepper">
-                            <button type="button" id="memoryEveryMinus" class="memory-step-btn" title="少一点" aria-label="减少轮数">−</button>
-                            <input id="settingMemoryEvery" type="number" min="3" max="50" inputmode="numeric" class="memory-step-input" aria-label="每多少轮写一次日记">
-                            <button type="button" id="memoryEveryPlus" class="memory-step-btn" title="多一点" aria-label="增加轮数">＋</button>
+                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
+                        <div class="text-xs text-[var(--pixso-brown)]">记忆召回</div>
+                        <p class="rd-field-hint mb-2">嵌入负责先找出候选记忆，重排序负责把候选再排一遍；两者可以同时开启，只开其中一个也能工作。</p>
+                        <div class="mt-2 space-y-3">
+                            <div class="set-row set-row-top">
+                                <div class="copy">
+                                    <b>嵌入模型</b>
+                                    <span>把记忆与消息转成向量，按语义找回相关内容；不选则只按关键词匹配。</span>
+                                    <span id="memoryEmbeddingHint" class="block mt-1 text-[11px] text-dim"></span>
+                                </div>
+                                <select id="settingMemoryEmbeddingProvider" class="modal-input text-sm flex-none" style="max-width: 320px">
+                                    <option value="">未启用（只按关键词召回）</option>
+                                </select>
+                            </div>
+                            <div class="set-row set-row-top">
+                                <div class="copy">
+                                    <b>重排序模型</b>
+                                    <span>先粗筛一批候选记忆，再按与当前问题的相关度重排；不选则保持召回顺序。</span>
+                                    <span id="memoryRerankHint" class="block mt-1 text-[11px] text-dim"></span>
+                                </div>
+                                <select id="settingMemoryRerankProvider" class="modal-input text-sm flex-none" style="max-width: 320px">
+                                    <option value="">未启用（保持召回顺序）</option>
+                                </select>
+                            </div>
                         </div>
-                        <span class="memory-every-text">轮写一次日记</span>
                     </div>
-
-                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-3">每过这么多轮，她会把近期的对话整理成一篇记忆日记。这个数字越高，单篇保留的细节越少；数字越低，细节保留得更多，但日记篇数变多，温记忆也更容易进入冷记忆区。想立刻写就点下面的按钮。</p>
-
-                    <button type="button" id="memoryNowBtn" class="memory-now-btn">
-                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/><path stroke-linecap="round" d="M17 17h3m-1.5-1.5v3"/></svg>
-                        <span>立即整理记忆</span>
-                    </button>
                 </section>
 
+                <!-- 权限与自动化：都是「AI 能对这台机器/这个账号做什么」的同一类决定，合成一张卡，
+                     免得定时任务、权限、手机操作、浏览器四个分区在长页里各据一方。 -->
+                <section id="agentAutomationCard" class="rd-display-card settings-span-2">
+                <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 权限与自动化</div>
+                <p class="rd-field-hint mb-2">AI 能替你做哪些事、做到什么程度；这些开关同时管电脑与手机，手机侧另有独立开关。</p>
+
                 <section id="scheduledTaskSection">
-                    <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 定时任务（AI 未来消息）</div>
-                    <div class="rd-field-hint mb-2">对 AI 说"每天给我发消息 / 明天提醒我…"，它会用 <code>[任务:…]</code> 建任务，到点以角色身份发来消息。这里可查看与取消。</div>
+                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 定时任务（AI 未来消息）</div>
+                    <div class="rd-field-hint mb-2">对 AI 说「明天提醒我…」即可建任务，到点以角色身份发来消息；这里可查看与取消。</div>
                     <div id="scheduledTaskList" class="space-y-2">
-                        <p class="text-[11px] text-indigo-300">（暂无任务）</p>
+                        <p class="text-[11px] text-dim">（暂无任务）</p>
                     </div>
                 </section>
 
                     <section id="agentPermissionSection" class="settings-span-2">
-                        <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> AI 权限</div>
-                        <div class="rd-field-hint mb-2">控制 AI 通过 <code>[操作:…]</code> 标签能做什么。前三档<b>同时管电脑与手机</b>；<b>「关闭」只关电脑侧</b>（手机侧另有开关）。</div>
+                        <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> AI 权限</div>
+                        <div class="rd-field-hint mb-2">前三档<b>同时管电脑与手机</b>；手机侧另有开关。</div>
 
                         <div class="space-y-2 mb-3">
                             <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
                                 <input type="radio" name="agentAccess" value="off" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold text-indigo-700">🚫 关闭（AI 不能碰这台电脑）</span>
-                                    <span class="block text-[11px] text-indigo-400 leading-relaxed mt-0.5">
-                                        不能读取、写入或修改任何电脑文件，也不能执行电脑命令。应用内操作不受影响。
-                                    </span>
+                                    <span class="text-xs font-semibold text-soft">🚫 关闭（AI 不能碰这台电脑）</span>
                                 </span>
                             </label>
                             <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
                                 <input type="radio" name="agentAccess" value="strict" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold text-indigo-700">逐条确认</span>
-                                    <span class="block text-[11px] text-indigo-400 leading-relaxed mt-0.5">
-                                        会<b>改动电脑</b>的操作（写入、覆盖、删除、执行命令）<b>每次都问你</b>；读取与查看目录不问。
-                                    </span>
+                                    <span class="text-xs font-semibold text-soft">逐条确认</span>
+                                    <span class="block text-[11px] text-dim leading-relaxed mt-0.5">写入、覆盖、删除、执行命令<b>每次都问你</b>；读取不问。</span>
                                 </span>
                             </label>
                             <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
                                 <input type="radio" name="agentAccess" value="auto" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold text-indigo-700">自动通过（禁止删除）</span>
-                                    <span class="block text-[11px] text-indigo-400 leading-relaxed mt-0.5">
-                                        写入与覆盖直接执行。<b>删除被完全禁止</b>（接口层面拒绝）。
-                                    </span>
+                                    <span class="text-xs font-semibold text-soft">自动通过（禁止删除）</span>
                                 </span>
                             </label>
                             <label class="flex items-start gap-2 cursor-pointer set-note set-note-warn">
                                 <input type="radio" name="agentAccess" value="full" class="accent-pink-500 mt-0.5">
                                 <span class="flex-1 min-w-0">
                                     <span class="text-xs font-semibold set-warn-text">完全访问（含删除）</span>
-                                    <span class="block text-[11px] leading-relaxed mt-0.5 set-warn-body">
-                                        所有操作直接执行，<b>包括删除文件与目录</b>。
-                                    </span>
                                 </span>
                             </label>
                         </div>
@@ -1219,8 +1335,8 @@
                         </div>
 
                         <div class="mt-2 set-note">
-                            <div class="text-[11px] font-semibold mb-1 text-indigo-700">ℹ️ 三档共有的说明</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1 text-indigo-500">
+                            <div class="text-[11px] font-semibold mb-1 text-soft">ℹ️ 三档共有的说明</div>
+                            <ul class="text-[11px] leading-relaxed space-y-1 text-dim">
                                 <li>· 三档都能访问<b>任意路径</b>；<b>读取任何档位下都不会询问</b> —— 包括 <code>data/store.json</code>（含 API Key 明文）。</li>
                                 <li>· 「自动通过」档<b>只禁删除、不禁覆盖</b> —— 覆盖同样会丢原内容，写同名文件即可绕过删除禁令。</li>
                             </ul>
@@ -1228,16 +1344,16 @@
                     </section>
 
                     <section id="agentPhoneSection" class="settings-span-2">
-                        <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 手机操作</div>
-                        <div class="rd-field-hint mb-2">允许 AI 点击、滑动、输入文字、读取界面与截图。需要安卓版 App（浏览器没有这个能力）。</div>
+                        <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 手机操作</div>
+                        <div class="rd-field-hint mb-2">需要安卓版 App；浏览器没有这个能力。</div>
 
                         <div class="mb-3 set-note">
                             <div class="flex items-center gap-2">
-                                <span class="text-[11px] text-indigo-600 font-semibold">实现方式</span>
+                                <span class="text-[11px] text-soft font-semibold">实现方式</span>
                                 <span id="settingBackendBadge" class="ml-auto"></span>
                             </div>
                             <p id="settingBackendSummary" class="text-[11px] mt-1 leading-relaxed set-warn-text">还没有选择实现方式，AI 现在不能操作手机。</p>
-                            <p id="settingBackendBridge" class="text-[11px] mt-1 leading-relaxed text-indigo-300">原生设备层：检测中…</p>
+                            <p id="settingBackendBridge" class="text-[11px] mt-1 leading-relaxed text-dim">原生设备层：检测中…</p>
                             <div class="flex items-center gap-2 mt-2">
                                 <button id="settingBackendChooseBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">选择实现方式</button>
                                 <button id="settingBackendRefreshBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">重新检测</button>
@@ -1245,7 +1361,7 @@
                         </div>
 
 <div class="flex items-center justify-between gap-3 mb-3">
-                            <div class="text-xs text-indigo-700">允许 AI 操作手机</div>
+                            <div class="text-xs text-soft">允许 AI 操作手机</div>
                             <label class="mod-switch" title="开启 / 关闭 AI 操作手机">
                                 <input type="checkbox" id="settingAgentPhoneEnabled" aria-label="允许 AI 操作手机">
                                 <span class="track"></span><span class="knob"></span>
@@ -1253,9 +1369,9 @@
                         </div>
 
                         <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold text-indigo-700 mb-1">确认策略</div>
-                            <p class="text-[11px] text-indigo-400 leading-relaxed">
-                                手机操作<b>不做逐步确认</b>：读取界面、点击、滑动、输入、按键、打开应用都直接执行，发现问题点悬浮窗上的「停止」。
+                            <div class="text-[11px] font-semibold text-soft mb-1">确认策略</div>
+                            <p class="text-[11px] text-dim leading-relaxed">
+                                手机操作<b>不逐步确认</b>，直接执行；发现异常点悬浮窗上的「停止」。
                             </p>
                             <p class="text-[11px] leading-relaxed mt-2 set-warn-text">
                                 ⚠️ <b>模块后端就是 KernelSU（root）</b>：它的「手机命令」能执行任意系统命令且<b>不会询问你</b>，破坏力与电脑的「完全访问」档同级。无障碍方式只能点按界面，风险有限。
@@ -1263,15 +1379,15 @@
                         </div>
 
                         <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold text-indigo-700 mb-1">读取信息（隐私）</div>
-                            <p class="text-[11px] text-indigo-400 leading-relaxed mb-2">
-                                下面这些<b>隐私数据</b>会进入对话上下文，用来了解你当下的处境。<b>关掉某项开关后 AI 连读取标签都看不到</b>（不是"读了不说"，是根本没这个能力）。
+                            <div class="text-[11px] font-semibold text-soft mb-1">读取信息（隐私）</div>
+                            <p class="text-[11px] text-dim leading-relaxed mb-2">
+                                这些<b>隐私数据</b>会进入对话上下文；关掉某项开关，AI 就读不到。
                             </p>
                             <div class="space-y-2">
                                 <div class="flex items-center gap-3">
-                                    <div class="text-xs text-indigo-700 flex-1 min-w-0">
+                                    <div class="text-xs text-soft flex-1 min-w-0">
                                         已安装应用列表
-                                        <span class="text-[11px] text-indigo-300">（包名 + 应用名，用于"帮我打开某某"）</span>
+                                        <span class="text-[11px] text-dim">（包名 + 应用名，用于"帮我打开某某"）</span>
                                     </div>
                                     <span id="agentPermBadgeApps" class="agent-perm-badge">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭已安装应用列表">
@@ -1280,9 +1396,9 @@
                                     </label>
                                 </div>
                                 <div class="flex items-center gap-3">
-                                    <div class="text-xs text-indigo-700 flex-1 min-w-0">
+                                    <div class="text-xs text-soft flex-1 min-w-0">
                                         通知内容
-                                        <span class="text-[11px] text-indigo-300">（哪个应用发来什么消息 —— <b>最敏感的一项</b>）</span>
+                                        <span class="text-[11px] text-dim">（哪个应用发来什么消息 —— <b>最敏感的一项</b>）</span>
                                     </div>
                                     <span id="agentPermBadgeNotifications" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里打开系统的「通知使用权」设置">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭通知内容">
@@ -1291,9 +1407,9 @@
                                     </label>
                                 </div>
                                 <div class="flex items-center gap-3">
-                                    <div class="text-xs text-indigo-700 flex-1 min-w-0">
+                                    <div class="text-xs text-soft flex-1 min-w-0">
                                         设备与前台状态
-                                        <span class="text-[11px] text-indigo-300">（电量、网络、当前前台应用）</span>
+                                        <span class="text-[11px] text-dim">（电量、网络、当前前台应用）</span>
                                     </div>
                                     <span id="agentPermBadgeDevice" class="agent-perm-badge">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭设备与前台状态">
@@ -1302,9 +1418,9 @@
                                     </label>
                                 </div>
                                 <div class="flex items-center gap-3">
-                                    <div class="text-xs text-indigo-700 flex-1 min-w-0">
+                                    <div class="text-xs text-soft flex-1 min-w-0">
                                         短信
-                                        <span class="text-[11px] text-indigo-300">（最近短信内容与发件人）</span>
+                                        <span class="text-[11px] text-dim">（最近短信内容与发件人）</span>
                                     </div>
                                     <span id="agentPermBadgeSms" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里申请短信权限">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭短信读取">
@@ -1313,9 +1429,9 @@
                                     </label>
                                 </div>
                                 <div class="flex items-center gap-3">
-                                    <div class="text-xs text-indigo-700 flex-1 min-w-0">
+                                    <div class="text-xs text-soft flex-1 min-w-0">
                                         通讯录
-                                        <span class="text-[11px] text-indigo-300">（联系人姓名与号码）</span>
+                                        <span class="text-[11px] text-dim">（联系人姓名与号码）</span>
                                     </div>
                                     <span id="agentPermBadgeContacts" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里申请通讯录权限">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭通讯录读取">
@@ -1324,9 +1440,9 @@
                                     </label>
                                 </div>
                                 <div class="flex items-center gap-3">
-                                    <div class="text-xs text-indigo-700 flex-1 min-w-0">
+                                    <div class="text-xs text-soft flex-1 min-w-0">
                                         日历
-                                        <span class="text-[11px] text-indigo-300">（近期日程）</span>
+                                        <span class="text-[11px] text-dim">（近期日程）</span>
                                     </div>
                                     <span id="agentPermBadgeCalendar" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里申请日历权限">检测中…</span>
                                     <label class="mod-switch" title="开启 / 关闭日历读取">
@@ -1335,34 +1451,34 @@
                                     </label>
                                 </div>
                             </div>
-                            <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
-                                右侧标记是它<b>现在在系统里的状态</b>，<b>点一下</b>可直接去申请权限（通知读取、短信、通讯录、日历都要系统允许）。没有权限时 AI 会如实读到"没有权限"，不会假装有内容。
+                            <p class="text-[11px] text-dim leading-relaxed mt-2">
+                                右侧标记是当前系统状态，<b>点一下</b>可直接去申请权限。
                             </p>
                             <p class="text-[11px] leading-relaxed mt-1.5 set-warn-text">
-                                ⚠️ <b>不想让 AI 读到某件信息？</b>到系统里关掉对应权限即可：短信 / 通讯录 / 日历在「设置 → 应用 → ElainaChat Open → 权限」，通知读取在「设置 → 通知 → 通知使用权」。（应用列表是安装期授权、设备状态不需权限，这两项没法单独关。）
+                                ⚠️ 要彻底关掉某项，去系统设置撤销对应权限（短信 / 通讯录 / 日历在应用权限，通知在「通知使用权」）。
                             </p>
                         </div>
 
                                                 <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold text-indigo-700 mb-1">文件访问（Agent 工作区）</div>
-                            <p class="text-[11px] text-indigo-400 leading-relaxed mb-2">
-                                AI 可在 <b>Agent 工作区</b>（应用私有目录的 <code>agent-workspace/</code>，无需系统权限）里读写文件；也可以再授权<b>一个自己的文件夹</b>（比如「下载」）给它用。
+                            <div class="text-[11px] font-semibold text-soft mb-1">文件访问（Agent 工作区）</div>
+                            <p class="text-[11px] text-dim leading-relaxed mb-2">
+                                AI 可在应用内工作区读写文件，也可再授权一个自己的文件夹（比如「下载」）。
                             </p>
-                            <div id="agentFolderSummary" class="text-[11px] text-indigo-500 mb-2">还没有授权额外文件夹。</div>
+                            <div id="agentFolderSummary" class="text-[11px] text-dim mb-2">还没有授权额外文件夹。</div>
                             <div class="flex flex-wrap items-center gap-2">
                                 <button id="agentFolderPickBtn" class="btn-secondary text-[11px]" type="button" style="padding:3px 10px">选择文件夹授权</button>
                                 <button id="agentFolderClearBtn" class="btn-secondary text-[11px]" type="button" style="padding:3px 10px">取消授权</button>
                             </div>
                         </div>
 
-                        <div class="mt-3 pt-3 border-t border-indigo-100">
+                        <div class="mt-3 pt-3 border-t border-soft">
                             <div class="flex items-center gap-2 mb-1">
-                                <span id="overlayStatusDot" class="w-2 h-2 rounded-full bg-slate-300 flex-none"></span>
-                                <span class="text-xs font-semibold text-indigo-700">操作悬浮窗</span>
-                                <span id="overlayStatusText" class="text-[11px] text-indigo-400 ml-auto">检测中…</span>
+                                <span id="overlayStatusDot" class="w-2 h-2 rounded-full bg-neutral flex-none"></span>
+                                <span class="text-xs font-semibold text-soft">操作悬浮窗</span>
+                                <span id="overlayStatusText" class="text-[11px] text-dim ml-auto">检测中…</span>
                             </div>
-                            <p class="text-[11px] text-indigo-400 mb-2 leading-relaxed">
-                                AI 操作的是<b>别的应用</b>：没有悬浮窗时，每一步确认都要切回本应用，而切回来会让被操作的应用退到后台、那一步可能失败。开启后屏幕上浮一个小条，<b>随时点停止、就地允许</b>，全程不用切回来。
+                            <p class="text-[11px] text-dim mb-2 leading-relaxed">
+                                开启后操作时屏幕上浮一个小条，<b>随时可停止、就地确认</b>，不用切回本应用。
                             </p>
                             <div class="flex flex-wrap items-center gap-2">
                                 <button id="overlayEnableBtn" class="btn-secondary text-xs" type="button">开启悬浮窗</button>
@@ -1372,11 +1488,11 @@
                     </section>
 
                     <section id="agentBrowserSection" class="settings-span-2">
-                        <div class="modal-label flex items-center gap-2"><span class="text-sky-500">🌐</span> 浏览器</div>
-                        <div class="rd-field-hint mb-2">让 AI 打开网页查资料、点按钮、填表单。它用独立窗口与临时配置，不碰你平时那个浏览器的书签与登录状态，关掉后痕迹一并清掉。</div>
+                        <div class="modal-label flex items-center gap-2"><span class="text-accent">🌐</span> 浏览器</div>
+                        <div class="rd-field-hint mb-2">独立窗口与临时配置，不碰你平时那个浏览器的书签与登录状态。</div>
 
                         <div class="flex items-center justify-between gap-3 mb-3">
-                            <div class="text-xs text-indigo-700">允许 AI 用浏览器</div>
+                            <div class="text-xs text-soft">允许 AI 用浏览器</div>
                             <label class="mod-switch" title="开启 / 关闭 AI 用浏览器">
                                 <input type="checkbox" id="settingAgentBrowserEnabled" aria-label="允许 AI 用浏览器">
                                 <span class="track"></span><span class="knob"></span>
@@ -1384,18 +1500,17 @@
                         </div>
 
                         <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold mb-1 text-indigo-700">当前状态</div>
-                            <p id="settingBrowserStatus" class="text-[11px] text-indigo-400 leading-relaxed">检测中…</p>
+                            <div class="text-[11px] font-semibold mb-1 text-soft">当前状态</div>
+                            <p id="settingBrowserStatus" class="text-[11px] text-dim leading-relaxed">检测中…</p>
                             <button id="settingBrowserRefreshBtn" type="button" class="btn-secondary text-[11px] mt-2" style="padding:3px 10px">重新检测</button>
                         </div>
 
                         <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold mb-1 text-indigo-700">它能看到什么、能做什么</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1 text-indigo-400">
-                                <li>· 能：打开 http / https 网址、读页面文字、点按钮和链接、往输入框打字、按回车。</li>
-                                <li>· 不能：读本地文件（file:// 一律拒绝）、改浏览器设置、访问 chrome:// 内部页面。</li>
-                                <li>· <b>独立临时配置</b>：看不到你平时那个浏览器的登录状态与书签，需要登录的站点要在它打开的窗口里自己登一次。</li>
-                                <li>· 「逐条确认」档下每次「打开浏览器」都问一次；关掉开关后 AI 与本次服务端都拒绝浏览器请求。</li>
+                            <div class="text-[11px] font-semibold mb-1 text-soft">它能看到什么、能做什么</div>
+                            <ul class="text-[11px] leading-relaxed space-y-1 text-dim">
+                                <li>· 能：打开网页、读页面、点按钮、填表单；不能读本地文件。</li>
+                                <li>· 需要登录的站点要在它打开的窗口里自己登一次。</li>
+                                <li>· 「逐条确认」档下每次打开都询问；关掉开关即拒绝。</li>
                             </ul>
                         </div>
 
@@ -1406,86 +1521,74 @@
                             </p>
                         </div>
                     </section>
+                </section>
                 </div>
 
                 <div id="tab-advanced" class="settings-tab-panel">
                     <header class="settings-page-head">
-                        <p class="settings-page-eyebrow">Data &amp; Security</p>
-                        <h1>数据与安全</h1>
-                        <p>备份整份旅途、管理访问密码，或检查是否有新版本。</p>
+                        <p class="settings-page-eyebrow">Advanced</p>
+                        <h1>高级设置</h1>
                     </header>
-                    <section id="dataSettingsSection">
+                    <section class="settings-span-2">
+                        <section id="dataSettingsSection" class="adv-group">
+                            <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 我的数据</div>
+                            <div class="rd-field-hint mb-2">
+                                备份为 zip，电脑版与手机版可互相导入。
+                            </div>
+                            <div id="dataStatusBox" class="text-[11px] text-dim leading-relaxed mb-2">读取中…</div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <button id="dataExportBtn" class="btn-secondary text-xs" type="button">导出备份</button>
+                                <button id="dataImportBtn" class="btn-secondary text-xs" type="button">导入备份</button>
+                                <button id="lanShareOpenBtn" class="btn-secondary text-xs" type="button">开启局域网共享</button>
+                                <button id="lanShareReceiveBtn" class="btn-secondary text-xs" type="button">局域网接收共享</button>
+                                <input id="dataImportFile" type="file" accept=".zip,.json,application/zip,application/json" class="hidden">
+                                <span id="dataActionHint" class="text-[11px] text-dim"></span>
+                            </div>
+                            <div id="lanShareHintLine" class="text-[11px] text-dim leading-relaxed mt-1">
+                                把弹窗里的 IP、端口与访问密码告诉对方，对方填入即可。
+                            </div>
+                        </section>
 
-                        <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 我的数据</div>
-                        <div class="rd-field-hint mb-2">
-                            聊天记录、人设卡、记忆分类存在 <code>data/</code> 目录（一条一个文件），<b>升级不会覆盖</b>。备份是标准 zip，含 <code>data/</code>、<code>mods/</code>、<code>skills/</code> 三个目录，电脑版与手机版可互相导入（同名插件与技能会被覆盖）。
-                        </div>
-                        <div id="dataStatusBox" class="text-[11px] text-indigo-400 leading-relaxed mb-2">读取中…</div>
-                        <div class="flex flex-wrap items-center gap-2">
-                            <button id="dataExportBtn" class="btn-secondary text-xs" type="button">导出备份</button>
-                            <button id="dataImportBtn" class="btn-secondary text-xs" type="button">导入备份</button>
-                            <button id="lanShareOpenBtn" class="btn-secondary text-xs" type="button">开启局域网共享</button>
-                            <button id="lanShareReceiveBtn" class="btn-secondary text-xs" type="button">局域网接收共享</button>
-                            <input id="dataImportFile" type="file" accept=".zip,.json,application/zip,application/json" class="hidden">
-                            <span id="dataActionHint" class="text-[11px] text-indigo-300"></span>
-                        </div>
-                        <div id="lanShareHintLine" class="text-[11px] text-indigo-300 leading-relaxed mt-1">
-                            局域网共享：「开启」后把弹窗里的 IP、端口和访问密码告诉对方；对方点「局域网接收共享」填进去即可导入。
+                        <div class="adv-duo">
+                            <section id="authSettingsSection" class="adv-group">
+                                <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 访问密码（局域网）</div>
+                                <div id="authStatusBox" class="text-[11px] text-dim mb-2 leading-relaxed">检测中…</div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <input id="authNewPwd" type="password" class="modal-input text-sm flex-1 min-w-[150px] py-1.5" placeholder="新密码（≥8 位）" autocomplete="new-password">
+                                    <input id="authNewPwd2" type="password" class="modal-input text-sm flex-1 min-w-[150px] py-1.5" placeholder="再输一次" autocomplete="new-password">
+                                    <button id="authChangeBtn" class="btn-secondary text-xs" type="button">修改访问密码</button>
+                                </div>
+                                <div class="mt-2 set-note set-note-warn">
+                                    <p class="text-[11px] leading-relaxed set-warn-text">⚠️ 这个密码是<b>整台电脑的钥匙</b>，请用 ≥8 位强密码；连错会逐次延长锁定。忘记密码：删数据目录下的 <code>auth.json</code> 再重启。</p>
+                                </div>
+                            </section>
+
+                            <section id="updateSettingsSection" class="adv-group">
+                                <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 版本与更新</div>
+                                <div id="appUpdateVersionLine" class="text-[11px] text-dim leading-relaxed mb-2">读取中…</div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <button id="appUpdateCheckBtn" class="btn-secondary text-xs" type="button">检查更新</button>
+                                    <span id="appUpdateHint" class="text-[11px] text-dim" aria-live="polite"></span>
+                                </div>
+                                <div id="appUpdateResult" class="hidden mt-3 rounded-2xl border px-3 py-2.5" style="border-color: var(--pixso-line)">
+                                    <div id="appUpdateTitle" class="text-[12px] font-semibold mb-1"></div>
+                                    <div id="appUpdateMeta" class="text-[11px] text-dim mb-2"></div>
+                                    <div id="appUpdateDownloads" class="flex flex-wrap items-center gap-2 mb-2"></div>
+                                    <div id="appUpdateNotes" class="hidden readme-body app-update-notes"></div>
+                                    <a id="appUpdatePageLink" class="text-[11px] underline" href="https://github.com/XYZ921746/ElainaChat-mod/releases/latest" target="_blank" rel="noopener noreferrer">打开发布页</a>
+                                </div>
+                                <p class="text-[11px] text-dim leading-relaxed mt-2">
+                                    不会自动替换程序，安装前请先退出当前程序；数据不会被清空。
+                                </p>
+                            </section>
                         </div>
                     </section>
-
-                    <section id="authSettingsSection" class="settings-span-2">
-                        <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 访问密码（局域网）</div>
-                        <div id="authStatusBox" class="text-[11px] text-indigo-400 mb-2 leading-relaxed">检测中…</div>
-                        <div class="flex flex-wrap items-center gap-2">
-                            <input id="authNewPwd" type="password" class="modal-input text-sm w-40 py-1.5" placeholder="新密码（≥8位，含数字+大小写）" autocomplete="new-password">
-                            <input id="authNewPwd2" type="password" class="modal-input text-sm w-40 py-1.5" placeholder="再输一次" autocomplete="new-password">
-                            <button id="authChangeBtn" class="btn-secondary text-xs" type="button">修改访问密码</button>
-                        </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
-                            未设密码时只有本机（127.0.0.1）可用；设了密码后<b>本机与局域网设备都要输入密码</b>。忘记密码只能删掉数据目录下的 <code>auth.json</code> 再重启（登录页的「忘记密码？」会显示实际路径）。
-                        </p>
-
-                        <div class="mt-2 set-note set-note-warn">
-                            <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 关于这个密码的分量</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1 set-warn-body">
-                                <li>· 登录后的设备<b>与本机同等能力</b>（读写任意文件、执行 PowerShell / cmd），所以这个密码是<b>整台电脑的钥匙</b>。</li>
-                                <li>· 强度要求：<b>≥8 位且同时含数字、小写、大写</b>；弱口令、键盘顺子（<code>qwerty</code>）、"弱口令 + 数字尾巴"都会被拒。</li>
-                                <li>· 已内置防爆破与全局限流：密码错会<b>逐次延长锁定</b>（30 秒起翻倍，最长 1 小时，失败次数只在登录成功后清零）；换 IP 持续攻击会让<b>全部登录临时冻结</b>。</li>
-                            </ul>
-                        </div>
-                    </section>
-
-                    <section id="updateSettingsSection" class="settings-span-2">
-                        <div class="modal-label flex items-center gap-2"><span class="text-fuchsia-500">✦</span> 版本与更新</div>
-                        <div id="appUpdateVersionLine" class="text-[11px] text-indigo-400 leading-relaxed mb-2">读取中…</div>
-                        <div class="flex flex-wrap items-center gap-2">
-                            <button id="appUpdateCheckBtn" class="btn-secondary text-xs" type="button">检查更新</button>
-                            <span id="appUpdateHint" class="text-[11px] text-indigo-300" aria-live="polite"></span>
-                        </div>
-                        <div id="appUpdateResult" class="hidden mt-3 rounded-2xl border px-3 py-2.5" style="border-color: var(--pixso-line)">
-                            <div id="appUpdateTitle" class="text-[12px] font-semibold mb-1"></div>
-                            <div id="appUpdateMeta" class="text-[11px] text-indigo-400 mb-2"></div>
-                            <div id="appUpdateDownloads" class="flex flex-wrap items-center gap-2 mb-2"></div>
-                            <div id="appUpdateNotes" class="hidden readme-body app-update-notes"></div>
-                            <a id="appUpdatePageLink" class="text-[11px] underline" href="https://github.com/XYZ921746/ElainaChat-mod/releases/latest" target="_blank" rel="noopener noreferrer">打开发布页</a>
-                        </div>
-                        <p class="text-[11px] text-indigo-300 leading-relaxed mt-2">
-                            检测 GitHub 仓库的最新 Release；<b>只提示与提供下载</b>，不会自动替换程序。
-                            按当前运行形态给出对应的安装包：手机版 APK / 桌面版 exe / 电脑版源码 zip。
-                            下载后请先退出当前程序再安装；<code>data/</code> 数据目录与 <code>mods/</code> 不会被安装包清空。
-                            若本机 hosts / DNS 把 GitHub 指偏了（加速工具常见），会自动改用公共 DNS 解析真实 IP 直连，
-                            TLS 证书仍按 <code>api.github.com</code> 校验，<b>不会修改你的系统设置</b>。
-                        </p>
-                    </section>
-
-                                    </div>
+                </div>
 
                 <div id="tab-log" class="settings-tab-panel">
                     <header class="settings-page-head">
                         <p class="settings-page-eyebrow">Logs</p>
                         <h1>日志</h1>
-                        <p>按级别与模块查看运行记录；排查完可直接导出这一段。</p>
                     </header>
                     <div class="log-tab-body">
                         <div class="log-toolbar">
@@ -1533,7 +1636,6 @@
                     <header class="settings-page-head">
                         <p class="settings-page-eyebrow">Extensions</p>
                         <h1>扩展</h1>
-                        <p>宿主只保留对话本体。插件、技能与 MCP 服务按需装卸，失败时只影响它自己。</p>
                     </header>
                     <div class="ext-mobile-tabs" role="tablist" aria-label="扩展分类">
                         <button type="button" class="ext-nav-btn is-active" data-ext-tab="ext-mod" role="tab"><span class="ext-nav-label">插件</span></button>
@@ -1544,21 +1646,26 @@
                     <div id="ext-mod" class="ext-panel active-panel" role="tabpanel">
                         <div class="ext-head">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
-                                <span class="text-pink-500">✦</span> 插件（Mod）
+                                <span class="text-accent">✦</span> 插件（Mod）
                             </div>
                             <button type="button" id="modsMarketBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="到插件市场下载并安装扩展包">✦ 插件市场</button>
                             <button type="button" id="modsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个插件 zip 安装">上传安装</button>
                         </div>
-                        <p id="modsPlatformHint" class="text-[11px] text-indigo-400 leading-relaxed mb-3">
-                            可选功能的开关。<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
-                            拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。
+                        <p id="modsPlatformHint" class="text-[11px] text-dim leading-relaxed mb-3">
+                            <b>安装插件等于信任它的代码</b>，只装自己信得过的。
                         </p>
                         <div class="flex items-center gap-2 mb-2">
                             <button type="button" id="modsAddGroupBtn" class="btn-secondary text-xs" style="padding:4px 10px" title="新建一个分栏，把插件拖进去归类">＋ 添加分栏</button>
                             <button type="button" id="modsBrowseBtn" class="btn-secondary text-xs" style="padding:4px 10px" title="在这里列出 mods/ 里的文件夹（系统的文件管理器打不开时用）">浏览目录</button>
-                            <span id="modsHint" class="text-[11px] text-indigo-400"></span>
+                            <span id="modsHint" class="text-[11px] text-dim"></span>
                         </div>
-                        <div id="modsBrowseResult" class="hidden mb-2 rounded-md border border-indigo-100 bg-indigo-50/50 px-2.5 py-2"></div>
+                        <div id="modsBrowseResult" class="hidden mb-2 rounded-md border border-soft bg-accent-soft/50 px-2.5 py-2"></div>
+                        <div id="modsUpdateBar" class="hidden mb-2 rounded-md border border-warn bg-warn-soft px-2.5 py-2">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span id="modsUpdateText" class="text-[11px] text-warn leading-relaxed flex-1 min-w-0"></span>
+                                <button type="button" id="modsUpdateAllBtn" class="btn-secondary text-xs flex-none" style="padding:4px 10px" title="把可更新的插件按依赖顺序逐个下载安装（进度见右下角悬浮窗）">全部更新</button>
+                            </div>
+                        </div>
                         <div id="modsList"></div>
                         <input type="file" id="modsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
                     </div>
@@ -1566,13 +1673,12 @@
                     <div id="ext-skill" class="ext-panel" role="tabpanel">
                         <div class="ext-head">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
-                                <span class="text-indigo-500">✦</span> 技能（Skill）
+                                <span class="text-dim">✦</span> 技能（Skill）
                             </div>
                             <button type="button" id="skillsInstallBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="上传一个技能 zip 安装">上传安装</button>
                         </div>
-                        <p id="skillsHint" class="text-[11px] text-indigo-400 leading-relaxed mb-2">
-                            技能是给 AI 的<b>指令与知识</b>（一个含 <code class="px-1 rounded bg-white/60">SKILL.md</code> 的目录），与插件相互独立。
-                            本地技能可以卸载；插件随附的技能住在插件目录里，会随插件一起删掉。
+                        <p id="skillsHint" class="text-[11px] text-dim leading-relaxed mb-2">
+                            给 AI 的<b>指令与知识</b>；插件随附的技能会随插件一起删除。
                         </p>
                         <div id="skillsList"></div>
                         <input type="file" id="skillsFileInput" accept=".zip,application/zip" class="hidden" aria-hidden="true">
@@ -1581,14 +1687,13 @@
                     <div id="ext-mcp" class="ext-panel" role="tabpanel">
                         <div class="ext-head">
                             <div class="modal-label flex items-center gap-2 flex-1 min-w-0">
-                                <span class="text-emerald-500">✦</span> MCP 服务器
+                                <span class="text-ok">✦</span> MCP 服务器
                             </div>
                             <button type="button" id="mcpAddBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="添加一台 MCP 服务器">＋ 添加</button>
                             <button type="button" id="mcpRefreshBtn" class="mod-act" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新连接并刷新工具清单">刷新</button>
                         </div>
-                        <p id="mcpHint" class="text-[11px] text-indigo-400 leading-relaxed mb-3">
-                            MCP 是<b>外部工具服务</b>：本应用当客户端去连它，把它提供的工具并进 AI 的能力清单。
-                            它<b>在你的页面之外</b>运行（一个本地进程），能力大小取决于那一端做了什么 —— 只加自己信得过的服务器。
+                        <p id="mcpHint" class="text-[11px] text-dim leading-relaxed mb-3">
+                            <b>外部工具服务</b>，运行在你的页面之外；只加自己信得过的服务器。
                         </p>
                         <div id="mcpList"></div>
                     </div>
@@ -1601,20 +1706,20 @@
     <div id="categoriesModalOverlay" class="fixed inset-0 z-50 hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-2xl max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-6 py-4 border-b border-white/60 flex-shrink-0">
-                <div class="text-base font-bold text-indigo-950">管理分类</div>
+                <div class="text-base font-bold text-ink">管理分类</div>
                 <button id="categoriesModalNew" class="btn-secondary text-xs ml-auto">新建文件夹</button>
                 <button id="categoriesModalClose" class="p-1.5 rounded-lg hover:bg-white/60 transition-colors">
-                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
             <div id="categoriesBatchBar" class="hidden items-center gap-2 px-6 py-2.5 border-b border-white/60 bg-white/40 flex-shrink-0">
-                <span id="catSelectedCount" class="text-xs text-indigo-600 font-medium"></span>
+                <span id="catSelectedCount" class="text-xs text-soft font-medium"></span>
                 <button id="catSelectAllBtn" class="btn-secondary text-xs">全选</button>
                 <button id="catInvertBtn" class="btn-secondary text-xs">反选</button>
                 <select id="catMoveSelect" class="modal-input text-xs flex-1 max-w-[180px] py-1.5">
                     <option value="">移动到...</option>
                 </select>
-                <button id="catDeleteSelectedBtn" class="btn-secondary text-xs text-red-500">删除所选</button>
+                <button id="catDeleteSelectedBtn" class="btn-secondary text-xs text-danger">删除所选</button>
             </div>
             <div id="categoriesModalList" class="flex-1 overflow-y-auto scroll-soft px-6 py-4 space-y-3"></div>
         </div>
@@ -1623,9 +1728,9 @@
     <div id="conversationMoveOverlay" class="fixed inset-0 z-[1000] hidden items-center justify-center p-4 modal-overlay">
         <div class="conversation-move-panel modal-panel overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60">
-                <div id="conversationMoveTitle" class="text-base font-bold text-indigo-950">分类</div>
+                <div id="conversationMoveTitle" class="text-base font-bold text-ink">分类</div>
                 <button id="conversationMoveClose" type="button" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" aria-label="关闭移动弹窗">
-                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
             <div id="conversationMoveList" class="conversation-move-list overflow-y-auto scroll-soft px-5 py-4"></div>
@@ -1669,16 +1774,16 @@
                 <h2 class="guide-title font-bold">当前会话设定</h2>
                 <p class="guide-field-hint mt-2">先选这段对话演谁，再按需补充世界观与人设。不会影响其他对话。</p>
                 <div class="mt-4">
-                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block" for="conversationCardSelect">对话人设</label>
+                    <label class="text-xs font-bold text-ink mb-1.5 block" for="conversationCardSelect">对话人设</label>
                     <select id="conversationCardSelect" class="modal-input text-sm w-full" aria-label="对话人设"></select>
                 </div>
                 <div class="mt-4">
-                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block" for="conversationModelSelect">本对话使用的模型</label>
+                    <label class="text-xs font-bold text-ink mb-1.5 block" for="conversationModelSelect">本对话使用的模型</label>
                     <select id="conversationModelSelect" class="modal-input text-sm w-full" aria-label="本对话使用的模型"></select>
                     <p class="guide-field-hint">选项来自设置 → 对话模型；选「跟随默认模型」则与其它对话一致。</p>
                 </div>
                 <div class="mt-4">
-                    <label class="text-xs font-bold text-indigo-800 mb-1.5 block" for="conversationBotNameInput">这段对话里的 bot</label>
+                    <label class="text-xs font-bold text-ink mb-1.5 block" for="conversationBotNameInput">这段对话里的 bot</label>
                     <div class="conversation-bot-row">
                         <button id="conversationBotAvatarBtn" type="button" class="conversation-bot-avatar" title="更换 bot 头像" aria-label="更换 bot 头像"></button>
                         <input id="conversationBotNameInput" type="text" maxlength="24" class="modal-input text-sm flex-1 min-w-0" placeholder="名字（留空跟随人设卡）" autocomplete="off">
@@ -1689,11 +1794,11 @@
                 <input id="conversationBotAvatarInput" type="file" accept="image/*" class="hidden" aria-hidden="true">
                 <div class="conversation-prompt-grid mt-4">
                     <div>
-                        <label for="conversationWorldInput" class="text-xs font-bold text-indigo-800 mb-1.5 block">独立世界观</label>
+                        <label for="conversationWorldInput" class="text-xs font-bold text-ink mb-1.5 block">独立世界观</label>
                         <textarea id="conversationWorldInput" maxlength="400" class="modal-input text-sm w-full" placeholder="例如：这次对话发生在下着雪的钟表之城……"></textarea>
                     </div>
                     <div>
-                        <label for="conversationCharacterInput" class="text-xs font-bold text-indigo-800 mb-1.5 block">独立人设补充</label>
+                        <label for="conversationCharacterInput" class="text-xs font-bold text-ink mb-1.5 block">独立人设补充</label>
                         <textarea id="conversationCharacterInput" maxlength="400" class="modal-input text-sm w-full" placeholder="例如：伊蕾娜正在以临时向导的身份陪用户旅行……"></textarea>
                     </div>
                 </div>
@@ -1738,14 +1843,14 @@
         <div class="modal-panel w-full max-w-md max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="px-5 py-4 border-b border-white/60 flex items-start gap-3">
                 <div class="flex-1 min-w-0">
-                    <h3 class="text-base font-bold text-indigo-950">实现方式</h3>
-                    <p class="text-[11px] text-indigo-400 mt-0.5 leading-relaxed">AI 用哪种方式操作手机。能力与门槛各不相同，选一个。</p>
+                    <h3 class="text-base font-bold text-ink">实现方式</h3>
+                    <p class="text-[11px] text-dim mt-0.5 leading-relaxed">AI 用哪种方式操作手机。能力与门槛各不相同，选一个。</p>
                 </div>
                 <button id="backendPanelClose" type="button" class="btn-secondary text-xs flex-shrink-0">关闭</button>
             </div>
             <div id="backendList" class="flex-1 overflow-y-auto scroll-soft px-5 py-4 space-y-2"></div>
             <div class="px-5 py-3 border-t border-white/60 flex items-center gap-3">
-                <p class="text-[11px] text-indigo-300 leading-relaxed flex-1">当前生效：<span id="backendCurrent" class="text-indigo-500 font-semibold">尚未选择</span></p>
+                <p class="text-[11px] text-dim leading-relaxed flex-1">当前生效：<span id="backendCurrent" class="text-dim font-semibold">尚未选择</span></p>
                 <button id="backendRefresh" type="button" class="btn-secondary text-xs flex-shrink-0">重新检测</button>
             </div>
         </div>
@@ -1754,8 +1859,8 @@
     <div id="customModal" class="fixed inset-0 z-[60] hidden items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-md overflow-hidden animate-modal-pop">
             <div class="px-6 py-5">
-                <h3 id="customModalTitle" class="text-base font-bold text-indigo-950 mb-2">提示</h3>
-                <p id="customModalMessage" class="text-sm text-indigo-800 leading-relaxed whitespace-pre-wrap max-h-[50vh] overflow-y-auto scroll-soft"></p>
+                <h3 id="customModalTitle" class="text-base font-bold text-ink mb-2">提示</h3>
+                <p id="customModalMessage" class="text-sm text-ink leading-relaxed whitespace-pre-wrap max-h-[50vh] overflow-y-auto scroll-soft"></p>
                 <div id="customModalPresets" class="hidden mt-3 mb-1 flex flex-wrap gap-1.5"></div>
                 <div id="customModalEditor" class="hidden mt-3 modal-code-wrap">
                     <div class="modal-code-gutter" aria-hidden="true"><div id="customModalGutter"></div></div>
@@ -1776,7 +1881,7 @@
     </div>
 
     <!-- 应用主脚本按功能分区拆成多个外置脚本，共享同一全局词法环境（顶层 function / const / let 互相可见），拆分不改调用点；⚠️ 顺序即依赖：必须按下面书写的顺序加载（加新模块插进合适位置、别追加到末尾）—— pwa.js / chat-stream.js 在 core.js 之后，agent-ops.js 在 agent-tags.js 之前，mcp.js 在 agent.js 之后且 init.js 之前，mods-*.js 全部在 mods.js 之前、host-slots.js 紧随 mods.js 之后（两者都在 init.js 之前），theme.js / diagnostics.js 在 mods.js 之前，theme.js / redesign-extras.js 必须在 init.js 之前（init 的启动重放要调到它们暴露的命名空间）。
-     样式表顺序：base.css 在 head 内最早；themes.css 的规则全带 !important 且都挂在 html[data-theme-template] 之下，靠特异性而非加载位取胜；mobile-shell.css 排在 settings.css 之前（settings.css 是设置页的收口层，必须最后加载）；⚠️ 本注释里不要写脚本开标签字面量 —— 会骗过「内联脚本语法检查」的扫描。 -->
+     样式表顺序：base.css 在 head 内最早；themes.css 零 !important，规则挂在 html.rd / html.rd[data-theme-template=…] 之下，靠属性选择器的特异性取胜（比 base 层的同名规则高半级）；mobile-shell.css 排在 settings.css 之前（settings.css 是设置页的收口层，必须最后加载）；⚠️ 本注释里不要写脚本开标签字面量 —— 会骗过「内联脚本语法检查」的扫描。 -->
     <script defer src="/js/core-native.js"></script>
 <script defer src="/js/core-search.js"></script>
 <script defer src="/js/core-chat.js"></script>
@@ -1824,6 +1929,8 @@
 <script defer src="/js/ui.js"></script>
     <script defer src="/js/asr.js"></script>
 <script defer src="/js/tts.js"></script>
+<script defer src="/js/model-api.js"></script>
+<script defer src="/js/memory-vectors.js"></script>
 <script defer src="/js/composer.js"></script>
 <script defer src="/js/voice.js"></script>
     <script defer src="/js/readme-view.js"></script>
@@ -1882,9 +1989,9 @@
 <div id="modSettingsOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
-                <div class="text-sm font-bold text-indigo-950" id="modSettingsTitle">插件设置</div>
+                <div class="text-sm font-bold text-ink" id="modSettingsTitle">插件设置</div>
                 <button id="modSettingsClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
-                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
             <div id="modSettingsBody" class="flex-1 overflow-y-auto scroll-soft px-5 py-4 space-y-5"></div>
@@ -1915,10 +2022,10 @@
     <div id="marketOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
-                <div class="text-sm font-bold text-indigo-950">插件市场</div>
+                <div class="text-sm font-bold text-ink">插件市场</div>
                 <button type="button" id="marketRefreshBtn" class="mod-act ml-auto" style="width:auto;padding:0 10px;height:28px;font-size:11px;gap:4px" title="重新拉取商店索引">⟳ 刷新</button>
                 <button id="marketClose" class="p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
-                    <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
             <div class="flex-1 overflow-y-auto scroll-soft px-5 py-4">
@@ -1927,17 +2034,22 @@
                     <h2>让书斋变成你想要的样子</h2>
                     <p>宿主只保留对话本体，其余能力按需装卸。装上插件后，界面与提示词才会跟着长出来。</p>
                 </div>
-                <p id="marketHint" class="text-[11px] text-indigo-400 leading-relaxed mb-3">
+                <p id="marketHint" class="text-[11px] text-dim leading-relaxed mb-3">
                     从商店下载并安装扩展包。<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。
                     装完回到「插件」栏打开开关才会生效。
                 </p>
                 <div class="flex items-center gap-2 mb-3">
-                    <label for="marketSearch" class="text-[11px] text-indigo-400 flex-none">搜索</label>
+                    <label for="marketSearch" class="text-[11px] text-dim flex-none">搜索</label>
                     <input id="marketSearch" autocomplete="off" type="search" class="modal-input text-xs flex-1 min-w-0" placeholder="搜插件：名字 / 说明 / 依赖，例如 live2d、背景">
+                </div>
+                <div id="marketPlatformPills" class="flex items-center flex-wrap gap-1.5 mb-3" role="group" aria-label="按平台分类">
+                    <button type="button" class="market-pill" data-platform="all" aria-pressed="true">全部</button>
+                    <button type="button" class="market-pill" data-platform="mobile" aria-pressed="false">手机</button>
+                    <button type="button" class="market-pill" data-platform="desktop" aria-pressed="false">电脑</button>
                 </div>
                 <div id="marketList" class="space-y-2"></div>
                 <div class="flex items-center gap-2 mt-5">
-                    <label for="marketUrl" class="text-[11px] text-indigo-400 flex-none">商店源</label>
+                    <label for="marketUrl" class="text-[11px] text-dim flex-none">商店源</label>
                     <input id="marketUrl" autocomplete="off" type="text" class="modal-input text-xs flex-1 min-w-0" placeholder="https://xyz921746.github.io/web/store/index.json">
                     <button type="button" id="marketUrlSave" class="btn-secondary text-xs" style="padding:4px 10px" title="保存并重新拉取">保存</button>
                 </div>
@@ -1946,12 +2058,12 @@
     </div>
     <div id="marketDlPanel" class="hidden fixed bottom-5 right-5 z-50 w-80 max-w-[calc(100vw-2.5rem)] rounded-xl border border-black/10 bg-white/95 shadow-2xl backdrop-blur" role="region" aria-label="下载进度">
         <div id="marketDlHead" class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left" title="点一下展开/收起">
-            <span class="text-[11px] font-semibold text-indigo-800">下载</span>
-            <span id="marketDlCount" class="text-[10px] leading-none text-indigo-400"></span>
+            <span class="text-[11px] font-semibold text-ink">下载</span>
+            <span id="marketDlCount" class="text-[10px] leading-none text-dim"></span>
             <span class="ml-auto flex flex-none items-center gap-1">
-                <button type="button" id="marketDlClear" class="hidden rounded px-1.5 py-0.5 text-[10px] text-indigo-400 hover:bg-black/5 hover:text-indigo-600" title="清掉已结束的行">清空</button>
-                <button type="button" id="marketDlHide" class="rounded px-1.5 py-0.5 text-[10px] text-indigo-400 hover:bg-black/5 hover:text-indigo-600" title="收起悬浮窗（开始新下载时会再出现）">✕</button>
-                <span id="marketDlCaret" class="pl-1 text-[10px] text-indigo-400">▾</span>
+                <button type="button" id="marketDlClear" class="hidden rounded px-1.5 py-0.5 text-[10px] text-dim hover:bg-black/5 hover:text-soft" title="清掉已结束的行">清空</button>
+                <button type="button" id="marketDlHide" class="rounded px-1.5 py-0.5 text-[10px] text-dim hover:bg-black/5 hover:text-soft" title="收起悬浮窗（开始新下载时会再出现）">✕</button>
+                <span id="marketDlCaret" class="pl-1 text-[10px] text-dim">▾</span>
             </span>
         </div>
         <div id="marketDlBody" class="max-h-56 space-y-2 overflow-y-auto scroll-soft px-3 pb-3"></div>

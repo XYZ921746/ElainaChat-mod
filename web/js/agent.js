@@ -165,7 +165,7 @@ ElainaOps.define({
 
 
 
-function runRecallSearch(args) {
+async function runRecallSearch(args) {
     const query = String(args && args.query || '').trim();
     const queryLower = query.toLowerCase();
     const convHint = String(args && args.conversation || '').trim().toLowerCase();
@@ -177,23 +177,77 @@ function runRecallSearch(args) {
     const QUOTE_LIMIT = 15;
     const lines = [];
 
-    // ① 日记命中：日期/对话/关键词任一匹配；关键词没中但日期或对话中了也保留（当定位线索）
+    // 向量召回：配了嵌入就先按语义捞一批候选，再与关键词命中合并；没配时 vectorHits 为 null，行为与纯关键词一致。
+    let vectorHits = null;
+    if (query && typeof recallMemoriesByVector === 'function') {
+        try {
+            const waitMs = (typeof MEMORY_VECTOR_RECALL_TIMEOUT_MS === 'number') ? MEMORY_VECTOR_RECALL_TIMEOUT_MS : 8000;
+            vectorHits = await Promise.race([
+                recallMemoriesByVector(query, { topK: 24 }),
+                new Promise((resolve) => setTimeout(() => resolve(null), waitMs))
+            ]);
+        } catch (e) { vectorHits = null; }
+        if (vectorHits) {
+            vectorHits = vectorHits.filter((hit) => {
+                const item = hit && hit.item;
+                if (!item) return false;
+                if (convHint && !String(item.title || '').toLowerCase().includes(convHint)) return false;
+                if (dateHint && !recallDiaryDateMatches(dateHint, item.date)) return false;
+                return true;
+            });
+        }
+    }
+
+    // ① 日记命中：向量语义命中排在前，其后是日期/对话/关键词的字面命中。
     const diary = (state.memoryCore && Array.isArray(state.memoryCore.diary)) ? state.memoryCore.diary : [];
-    const diaryHits = diary.filter((e) => {
+    const semanticDiary = (vectorHits || [])
+        .filter((hit) => hit.item && hit.item.kind === 'diary')
+        .map((hit) => ({
+            date: hit.item.date || '',
+            content: hit.item.content || hit.item.text || '',
+            conversationId: hit.item.convId || '',
+            conversationTitle: hit.item.title || '',
+            essences: []
+        }));
+    const keywordDiary = diary.filter((e) => {
         if (convHint && !String(e && e.conversationTitle || '').toLowerCase().includes(convHint)) return false;
         const dateOk = !dateHint || recallDiaryDateMatches(dateHint, e && e.date);
         const hay = (String(e && e.content || '') + ' ' + ((e && e.essences) || []).join(' ')).toLowerCase();
         const queryOk = !query || hay.includes(queryLower);
         return dateOk && (queryOk || Boolean(dateHint || convHint));
-    }).slice(0, 5);
+    });
+    const diaryHits = [];
+    const seenDiary = new Set();
+    for (const entry of semanticDiary.concat(keywordDiary)) {
+        const key = String(entry.conversationId || '') + '|' + String(entry.date || '') + '|' + String(entry.content || '').slice(0, 40);
+        if (seenDiary.has(key)) continue;
+        seenDiary.add(key);
+        diaryHits.push(entry);
+        if (diaryHits.length >= 5) break;
+    }
 
-    // 原话命中：有关键词就在全部（或指定）对话里找；只给日期/对话时按命中日记的要点词在那几段对话里捞。
+    // 原话命中：向量候选排在前；关键词只补充语义没覆盖到的原话。
     const convs = state.conversations.filter((c) => !convHint || String(c.title || '').toLowerCase().includes(convHint));
     const quotes = [];
+    const seenQuote = new Set();
+    for (const hit of (vectorHits || [])) {
+        if (!hit.item || hit.item.kind !== 'msg') continue;
+        if (seenQuote.has(hit.item.id)) continue;
+        seenQuote.add(hit.item.id);
+        quotes.push({
+            title: hit.item.title || '未命名对话',
+            role: hit.item.role === 'user' ? '用户' : ((state.characterCard && state.characterCard.name) || '伊蕾娜'),
+            time: String(hit.item.date || ''),
+            excerpt: recallExcerpt(String(hit.item.text || '').replace(/^\[[^\]]*\]\s*[^：]*：/, ''), query, 160),
+        });
+        if (quotes.length >= QUOTE_LIMIT) break;
+    }
     for (const conv of convs) {
         const diaryOfConv = diaryHits.filter((e) => e && e.conversationId === conv.id);
         const essences = diaryOfConv.flatMap((e) => (e.essences || []).map(String));
-        for (const msg of (conv.messages || [])) {
+        const messages = Array.isArray(conv.messages) ? conv.messages : [];
+        for (let index = 0; index < messages.length; index += 1) {
+            const msg = messages[index];
             if (!msg || msg.hidden === true) continue;
             const text = String(msg.text || '');
             if (query) {
@@ -202,6 +256,9 @@ function runRecallSearch(args) {
                 if (!diaryOfConv.length) continue;
                 if (!essences.some((k) => k && text.toLowerCase().includes(k.toLowerCase()))) continue;
             }
+            const key = 'msg:' + String(conv.id || '') + ':' + index;
+            if (seenQuote.has(key)) continue;
+            seenQuote.add(key);
             quotes.push({
                 title: conv.title || '未命名对话',
                 role: msg.role === 'user' ? '用户' : ((state.characterCard && state.characterCard.name) || '伊蕾娜'),
@@ -211,6 +268,18 @@ function runRecallSearch(args) {
             if (quotes.length >= QUOTE_LIMIT) break;
         }
         if (quotes.length >= QUOTE_LIMIT) break;
+    }
+
+    // 没配嵌入但配了重排序：关键词候选也让它重排一次，保证「只开其中一个也能工作」。
+    if (!vectorHits && typeof rerankMemoryTexts === 'function' && query && quotes.length > 1) {
+        const ranked = await rerankMemoryTexts(query, quotes.map((quote) => quote.excerpt), quotes.length);
+        if (ranked) {
+            const reordered = ranked.map((entry) => quotes[entry.index]).filter(Boolean);
+            const used = new Set(ranked.map((entry) => entry.index));
+            quotes.forEach((quote, index) => { if (!used.has(index)) reordered.push(quote); });
+            quotes.length = 0;
+            quotes.push(...reordered);
+        }
     }
 
     // 只给对话（无关键词/日期）且日记锚不到时，给这段对话最近几条原话，否则这条合法参数组合永远返回"没检索到"。

@@ -44,6 +44,21 @@ function safeAttrId(id) {
     return String(id == null ? '' : id).replace(/[^A-Za-z0-9_-]/g, '');
 }
 
+/** 状态角标的唯一拼法：kind ∈ ok | danger | warn | accent | neutral，取值走 base.css 的语义色类。
+    各页手拼会导致同一种状态在不同页长两样，这里只留一个出口。 */
+function badge(label, kind = 'neutral', title = '') {
+    const kindClass = {
+        ok: 'bg-ok-soft text-ok',
+        danger: 'bg-danger-soft text-danger',
+        warn: 'bg-warn-soft text-warn',
+        accent: 'bg-accent-soft text-accent',
+        neutral: 'bg-neutral text-soft',
+    }[kind] || 'bg-neutral text-soft';
+    return '<span class="text-[10px] px-1.5 py-0.5 rounded ml-1 ' + kindClass + '"'
+        + (title ? ' title="' + escapeHtml(title) + '"' : '')
+        + '>' + escapeHtml(label) + '</span>';
+}
+
 // 把 AI 回复渲染成 HTML：Markdown 子集 + LaTeX 公式（离线）。Galgame mod 也依赖它，所以属于**宿主能力**，不能放进某个 mod 里；安全靠渲染器把输入一律当纯文本（先转义再拼标签），公式在转义后换占位符，渲染器或 katex 不可用就静默回落纯文本转义。
 function renderMessageText(text) {
     const raw0 = String(text == null ? '' : text);
@@ -112,26 +127,26 @@ function conversationItemMarkup(conv, previewText) {
         <span class="conv-row-avatar" aria-hidden="true">${conversationAvatarMarkup(conv)}</span>
         <div class="flex-1 min-w-0">
             <div class="flex items-center gap-1">
-                <span class="text-sm font-medium truncate text-indigo-900">${escapeHtml(conv.title)}</span>
+                <span class="text-sm font-medium truncate text-ink">${escapeHtml(conv.title)}</span>
                 ${conv.isPinned ? '<svg class="conversation-pin-icon w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-label="置顶"><path stroke-linecap="round" stroke-linejoin="round" d="M8 3h8l-.7 5.2 3.7 3.3v1.1H5v-1.1l3.7-3.3L8 3zM12 12.6V21"/></svg>' : ''}
-                ${conv.isStarred ? '<span class="text-[10px] text-amber-500">⭐</span>' : ''}
+                ${conv.isStarred ? '<span class="text-[10px] text-warn">⭐</span>' : ''}
             </div>
             <div class="conv-preview">${escapeHtml(previewText)}</div>
         </div>
         <span class="conv-time">${new Date(conv.updatedAt).toLocaleDateString(undefined, { month: '2-digit', day: '2-digit' })}</span>
         <div class="conversation-inline-actions flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             <button onclick="event.stopPropagation(); toggleStar('${safeAttrId(conv.id)}')" class="conversation-favorite-btn p-1 hover:bg-white/70 rounded-lg" title="${conv.isStarred ? '取消收藏' : '收藏'}" aria-label="${conv.isStarred ? '取消收藏' : '收藏'}">
-                <svg class="w-3.5 h-3.5 ${conv.isStarred ? 'text-amber-500 fill-current' : 'text-indigo-300'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
+                <svg class="w-3.5 h-3.5 ${conv.isStarred ? 'text-warn fill-current' : 'text-dim'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/></svg>
             </button>
             <div class="conversation-secondary-actions flex items-center gap-0.5">
                 <button onclick="event.stopPropagation(); togglePin('${safeAttrId(conv.id)}')" class="p-1 hover:bg-white/70 rounded-lg" title="${conv.isPinned ? '取消置顶' : '置顶'}">
-                    <svg class="w-3.5 h-3.5 ${conv.isPinned ? 'text-pink-500' : 'text-indigo-300'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>
+                    <svg class="w-3.5 h-3.5 ${conv.isPinned ? 'text-accent' : 'text-dim'}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z"/></svg>
                 </button>
                 <button onclick="event.stopPropagation(); renameConversation('${safeAttrId(conv.id)}')" class="p-1 hover:bg-white/70 rounded-lg" title="重命名">
-                    <svg class="w-3.5 h-3.5 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                    <svg class="w-3.5 h-3.5 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                 </button>
                 <button onclick="event.stopPropagation(); deleteConversation('${safeAttrId(conv.id)}')" class="p-1 hover:bg-white/70 rounded-lg" title="删除">
-                    <svg class="w-3.5 h-3.5 text-red-300 hover:text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    <svg class="w-3.5 h-3.5 text-danger hover:text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 </button>
             </div>
         </div>
@@ -191,8 +206,8 @@ function renderFolderList() {
     if (state.conversations.length === 0 && state.categories.length === 0) {
         elements.folderList.innerHTML = `
             <div class="text-center py-16">
-                <p class="text-base font-semibold text-indigo-700 leading-relaxed">还没有对话</p>
-                <p class="text-xs text-indigo-300 leading-relaxed mt-1.5">和伊蕾娜开启一段旅途吧</p>
+                <p class="text-base font-semibold text-soft leading-relaxed">还没有对话</p>
+                <p class="text-xs text-dim leading-relaxed mt-1.5">和伊蕾娜开启一段旅途吧</p>
             </div>
         `;
         return;
@@ -222,7 +237,7 @@ function renderFolderList() {
         const count = cat.isUnfiled
             ? state.conversations.filter(c => !c.categoryId).length
             : state.conversations.filter(c => c.categoryId === cat.id).length;
-        header.className = 'group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-xs font-semibold text-indigo-700 hover:bg-white/50 transition-colors select-none';
+        header.className = 'group flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg cursor-pointer text-xs font-semibold text-soft hover:bg-white/50 transition-colors select-none';
         header.dataset.folderId = cat.id;
         header.draggable = cat.isUnfiled ? false : true;
         header.addEventListener('dragover', (e) => {
@@ -241,16 +256,16 @@ function renderFolderList() {
             if (convId) moveConversationToCategory(convId, cat.isUnfiled ? null : cat.id);
         });
         header.innerHTML = `
-            <svg class="folder-header-icon ${cat.isUnfiled ? 'folder-header-unfiled' : ''} w-3.5 h-3.5 text-violet-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
+            <svg class="folder-header-icon ${cat.isUnfiled ? 'folder-header-unfiled' : ''} w-3.5 h-3.5 text-accent flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
             <span class="truncate">${escapeHtml(cat.name)}</span>
-            <span class="text-[10px] text-indigo-300 ml-auto">${count}</span>
+            <span class="text-[10px] text-dim ml-auto">${count}</span>
             ${cat.isUnfiled ? '' : `
             <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                 <button onclick="event.stopPropagation(); renameCategoryPrompt('${safeAttrId(cat.id)}')" class="p-0.5 hover:bg-white/70 rounded" title="重命名">
-                    <svg class="w-3 h-3 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                    <svg class="w-3 h-3 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                 </button>
                 <button onclick="event.stopPropagation(); deleteCategory('${safeAttrId(cat.id)}')" class="p-0.5 hover:bg-white/70 rounded" title="删除">
-                    <svg class="w-3 h-3 text-red-300 hover:text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    <svg class="w-3 h-3 text-danger hover:text-danger" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 </button>
             </div>`}
         `;
@@ -326,9 +341,9 @@ function renderCategoriesModalList() {
         const header = document.createElement('div');
         header.className = 'flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-white/40 transition-colors';
         header.innerHTML = `
-            <svg class="w-3.5 h-3.5 text-violet-400 transition-transform ${expanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-            <span class="text-xs font-semibold text-indigo-800">${escapeHtml(name)}</span>
-            <span class="text-[11px] text-indigo-300 ml-auto">${convs.length} 条对话</span>
+            <svg class="w-3.5 h-3.5 text-accent transition-transform ${expanded ? 'rotate-90' : ''}" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-xs font-semibold text-ink">${escapeHtml(name)}</span>
+            <span class="text-[11px] text-dim ml-auto">${convs.length} 条对话</span>
         `;
         header.onclick = () => {
             state.catModalExpanded[catId || '__unfiled__'] = !expanded;
@@ -342,17 +357,17 @@ function renderCategoriesModalList() {
             convs.forEach(conv => {
                 const row = document.createElement('label');
                 const checked = catSelected.has(conv.id);
-                row.className = `flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${checked ? 'bg-pink-50' : 'hover:bg-white/50'}`;
+                row.className = `flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer transition-colors text-xs ${checked ? 'bg-accent-soft' : 'hover:bg-white/50'}`;
                 row.innerHTML = `
                     <input type="checkbox" class="accent-pink-500 cat-checkbox" data-conv-id="${safeAttrId(conv.id)}" ${checked ? 'checked' : ''}>
-                    <span class="truncate text-indigo-800">${escapeHtml(conv.title)}</span>
-                    <span class="ml-auto text-[10px] text-indigo-300">${new Date(conv.updatedAt).toLocaleDateString()}</span>
+                    <span class="truncate text-ink">${escapeHtml(conv.title)}</span>
+                    <span class="ml-auto text-[10px] text-dim">${new Date(conv.updatedAt).toLocaleDateString()}</span>
                 `;
                 const checkbox = row.querySelector('.cat-checkbox');
                 checkbox.onchange = () => {
                     if (checkbox.checked) catSelected.add(conv.id);
                     else catSelected.delete(conv.id);
-                    row.classList.toggle('bg-pink-50', checkbox.checked);
+                    row.classList.toggle('bg-accent-soft', checkbox.checked);
                     renderCatBatchBar();
                 };
                 list.appendChild(row);
@@ -515,10 +530,10 @@ function renderMessage(message, animate = true) {
                 <div class="flex-1">
                     <div class="bubble-user rounded-2xl p-4">
                         <div class="flex items-center gap-2 mb-2">
-                            <span class="text-xs font-medium text-indigo-500">${escapeHtml(getUserProfileName() || '旅人')}</span>
-                            <span class="text-xs text-indigo-300">${escapeHtml(message.timestamp)}</span>
+                            <span class="text-xs font-medium text-dim">${escapeHtml(getUserProfileName() || '旅人')}</span>
+                            <span class="text-xs text-dim">${escapeHtml(message.timestamp)}</span>
                             <button onclick="event.stopPropagation(); handleMessageFavoriteClick('${safeAttrId(message.id)}')"
-                                    class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${isMessageFavorited(state.currentConversationId, message.id) ? 'text-amber-500' : 'text-indigo-300 hover:text-amber-500'}">
+                                    class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${isMessageFavorited(state.currentConversationId, message.id) ? 'text-warn' : 'text-dim hover:text-warn'}">
                                 <svg class="w-3.5 h-3.5" fill="${isMessageFavorited(state.currentConversationId, message.id) ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
                                 </svg>
@@ -529,7 +544,7 @@ function renderMessage(message, animate = true) {
                             <span class="message-slot-actions flex items-center gap-1" data-message-id="${safeAttrId(message.id)}"></span>
                         </div>
                         ${userImageUrl ? `<img class="message-image" src="${userImageUrl}" alt="${escapeHtml(message.imageName || '用户发送的图片')}">` : ''}
-                        ${message.text ? `<p class="text-indigo-800 text-sm leading-relaxed whitespace-pre-wrap">${renderMessageText(message.text)}</p>` : ''}
+                        ${message.text ? `<p class="text-ink text-sm leading-relaxed whitespace-pre-wrap">${renderMessageText(message.text)}</p>` : ''}
                     </div>
                 </div>
             </div>
@@ -559,9 +574,9 @@ function renderMessage(message, animate = true) {
                     <div class="bubble-ai rounded-2xl p-4">
                         <div class="flex items-center gap-2 mb-2">
                             <span class="ai-speaker-name">${escapeHtml(name)}</span>
-                            <span class="text-xs text-indigo-300">${escapeHtml(message.timestamp)}</span>
+                            <span class="text-xs text-dim">${escapeHtml(message.timestamp)}</span>
                             <button onclick="event.stopPropagation(); handleMessageFavoriteClick('${safeAttrId(message.id)}')"
-                                    class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${faved ? 'text-amber-500' : 'text-indigo-300 hover:text-amber-500'}">
+                                    class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${faved ? 'text-warn' : 'text-dim hover:text-warn'}">
                                 <svg class="w-3.5 h-3.5" fill="${faved ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
                                     <path stroke-linecap="round" stroke-linejoin="round" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>
                                 </svg>
@@ -570,7 +585,7 @@ function renderMessage(message, animate = true) {
                             <!-- 每消息插槽容器（同用户分支，见 chat.message.actions 说明） -->
                             <span class="message-slot-actions flex items-center gap-1" data-message-id="${safeAttrId(message.id)}"></span>
                         </div>
-                        <p class="text-indigo-950 text-sm leading-relaxed whitespace-pre-wrap">${renderMessageText(message.text)}</p>
+                        <p class="text-ink text-sm leading-relaxed whitespace-pre-wrap">${renderMessageText(message.text)}</p>
                         ${voiceCard}
                     </div>
                 </div>

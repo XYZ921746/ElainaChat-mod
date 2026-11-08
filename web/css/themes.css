@@ -689,8 +689,12 @@ html.rd[data-theme-template="glass"][data-theme="dark"] {
     --rd-avatar-user-border: rgba(255, 255, 255, .1);
 }
 
-/* 插件注册的主题：把插件给的 --pixso-* 映射回新结构 token */
-html.rd[data-theme-template]:not([data-theme="dark"]):not([data-theme-template="olive"]):not([data-theme-template="mist"]):not([data-theme-template="glass"]) {
+/* 插件注册的主题：把插件给的 --pixso-* 映射回新结构 token。
+   必须排除 custom：自定义主题已下线，但老安装的偏好里可能还存着这个 id，首帧回放会先把它套上去。
+   那种状态下 head 里注入了 --rd-*，与别名块（--pixso-* → var(--rd-*)）在这里首尾相接成循环，
+   整环变量变 guaranteed-invalid（取色全空、控件褪成灰）。排除后这段时间用注入值正常上色，
+   等 applyStored 把已下线的 id 清掉即回默认主题。 */
+html.rd[data-theme-template]:not([data-theme="dark"]):not([data-theme-template="olive"]):not([data-theme-template="mist"]):not([data-theme-template="glass"]):not([data-theme-template="custom"]) {
     --rd-bg: var(--pixso-canvas);
     --rd-surface: var(--pixso-cream);
     --rd-surface-2: var(--pixso-panel-soft);

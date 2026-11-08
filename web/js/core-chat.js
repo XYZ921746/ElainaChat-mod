@@ -217,6 +217,30 @@ function conversationChatSettings(conv) {
     return chatProviderToSettings(chatProviderById(pair.providerId), pair.model);
 }
 
+// 记忆整理（记忆摘要/日记）用的请求 settings：「对话优化」里指定了整理模型且对仍有效时用它；
+//   未指定或对已失效回落默认模型 —— 整理请求不该因为一个被删掉的提供商而失败。
+function memoryChatSettings() {
+    const s = state.settings;
+    const pair = validChatModelPair(s.memoryModelPair);
+    if (!pair) return activeChatSettings();
+    return chatProviderToSettings(chatProviderById(pair.providerId), pair.model);
+}
+
+// 全部 5 类提供商（对话 / 语音转文字 / 文字转语音 / 嵌入 / 重排序）的 Key 读写统一走这两个助手：
+// 密钥都存 chatProviderKeys 一个通道（API_SECRET_NAMES 与安卓白名单同名），UI 与请求层不许各自直摸。
+function getProviderSecret(id) {
+    const keys = state.settings.chatProviderKeys;
+    return (keys && typeof keys === 'object') ? String(keys[id] || '') : '';
+}
+
+function setProviderSecret(id, key) {
+    const s = state.settings;
+    if (!s.chatProviderKeys || typeof s.chatProviderKeys !== 'object') s.chatProviderKeys = {};
+    const value = String(key || '').trim();
+    if (value) s.chatProviderKeys[id] = value;
+    else delete s.chatProviderKeys[id];
+}
+
 // 当前会话实际生效的模型名（顶栏胶囊显示用）：无覆盖或对失效返回 ''，由调用方回落默认模型名。
 function effectiveConversationModel() {
     const conv = (typeof getCurrentConversation === 'function') ? getCurrentConversation() : null;

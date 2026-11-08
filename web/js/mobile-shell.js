@@ -20,6 +20,7 @@
         mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.7"/><path d="M4.5 20a7.5 7.5 0 0115 0"/></svg>',
         dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
         memory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h7"/><path d="M17 17h3m-1.5-1.5v3"/></svg>',
+        mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="10.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>',
         bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 00-4-5.7V5a2 2 0 10-4 0v.3C7.7 6.2 6 8.4 6 11v3.2c0 .5-.2 1-.6 1.4L4 17h5m6 0v1a3 3 0 11-6 0v-1"/></svg>',
         model: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="14" rx="2.5"/><path d="M7.5 9.5h9M7.5 13h5"/></svg>',
         theme: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>',
@@ -94,7 +95,7 @@
     function syncCapsuleThumb(bar, pad) {
         var thumb = bar && bar.querySelector('.mm-seg-thumb');
         if (!thumb) return;
-        var btn = bar.querySelector('button.active') || bar.querySelector('.tab-active');
+        var btn = bar.querySelector('button.active') || bar.querySelector('button.is-active') || bar.querySelector('.tab-active');
         var inner = bar.clientHeight - pad * 2;
         if (!btn || !bar.clientWidth || inner <= 0) { thumb.style.opacity = '0'; return; }
         var rrWidth = btn.offsetWidth;
@@ -145,6 +146,37 @@
         Array.prototype.forEach.call(document.querySelectorAll('#notesPage .notes-tabs'), function (bar) {
             syncCapsuleThumb(bar, 3);
         });
+        Array.prototype.forEach.call(document.querySelectorAll(SEG_BAR_SELECTOR), function (bar) {
+            syncCapsuleThumb(bar, bar._segPad || 3);
+        });
+    }
+
+    // 宿主其余的分段胶囊（记忆页双页签 / 设置的外观模式与气泡形状 / 扩展页窄屏分类）：与回忆分段条共用同一颗滑块与同一套动效。
+    var SEG_BAR_SELECTOR = '#memoryPage .memory-view-tabs, #settingsOverlay .rd-mode-seg, #settingsOverlay .rd-bubble-seg, #settingsOverlay .ext-mobile-tabs';
+
+    /** 给分段胶囊挂滑块：只建一次；点击走「下一帧对位」，类变化走 MutationObserver —— 程序化同步（主题联动改外观模式、switchExtTab 改扩展分类）不经过点击，也得跟着滑。 */
+    function wireSegThumb(bar) {
+        if (!bar || bar.querySelector('.mm-seg-thumb')) return;
+        var pad = 3;
+        try { pad = parseFloat(getComputedStyle(bar).paddingTop) || 3; } catch (e) { /* 取不到就按 3px */ }
+        bar._segPad = pad;
+        var thumb = document.createElement('span');
+        thumb.className = 'mm-seg-thumb';
+        thumb.setAttribute('aria-hidden', 'true');
+        bar.appendChild(thumb);
+        var sync = function () {
+            if (window.requestAnimationFrame) window.requestAnimationFrame(function () { syncCapsuleThumb(bar, bar._segPad); });
+            else syncCapsuleThumb(bar, bar._segPad);
+        };
+        bar.addEventListener('click', sync);
+        if (window.MutationObserver) {
+            new MutationObserver(sync).observe(bar, { subtree: true, attributes: true, attributeFilter: ['class'] });
+        }
+        syncCapsuleThumb(bar, pad);
+    }
+
+    function wireSegThumbs() {
+        Array.prototype.forEach.call(document.querySelectorAll(SEG_BAR_SELECTOR), wireSegThumb);
     }
 
     function wireNotesSeg() {
@@ -183,6 +215,13 @@
         var panel = document.querySelector('#achievementsOverlay .modal-panel');
         if (!panel || panel.querySelector('.mobile-hub-seg')) return;
         panel.insertBefore(makeHubBar(), panel.firstChild);
+    }
+
+    /** 成就浮层是否「正开着」：退场淡出期间（animate-overlay-out）算已关 —— isOpen() 在淡出的 300ms 里仍返回 true，分段条与底栏的高亮会滞留在成就上，等淡出结束才跳回目标格。 */
+    function achOverlayOpen() {
+        var overlay = byId('achievementsOverlay');
+        if (!overlay) return false;
+        return !overlay.classList.contains('hidden') && !overlay.classList.contains('animate-overlay-out');
     }
 
     function closeAchievements() {
@@ -347,18 +386,18 @@
         leaveOtherModes(key);
         if (key === 'memory' && typeof enterMemoryPage === 'function') enterMemoryPage();
         else if (key === 'notes' && typeof enterNotesMode === 'function') enterNotesMode();
+        // 先把高亮与 active 类落到目标页、再滑滑块：滑块落点读的是 active 按钮，顺序反了会先摆到旧高亮上再跳回目标格。
+        syncNav();
         animateHubSwitch(HUB_PAGE[key], HUB_ORDER.indexOf(key) - HUB_ORDER.indexOf(prev));
         if (prevLeft != null) slideThumbFrom(visibleHubBar(), 4, prevLeft);
-        syncNav();
     }
 
     var HUB_ORDER = ['memory', 'notes', 'ach'];
     var HUB_PAGE = { diary: 'diaryPage', memory: 'memoryPage', notes: 'notesPage' };
 
     function currentHubKey() {
+        if (achOverlayOpen()) return 'ach';
         try {
-            if (window.ElainaAchievements && typeof window.ElainaAchievements.isOpen === 'function'
-                && window.ElainaAchievements.isOpen()) return 'ach';
             if (state.diaryMode) return 'diary';
             if (state.notesMode) return 'notes';
         } catch (e) { /* state 未就绪时按「记忆」算 */ }
@@ -495,10 +534,7 @@
         try {
             if (state.notesMode || state.diaryMode || state.memoryPageMode) active = 'memories';
         } catch (e) { /* state 未就绪时按「对话」显示 */ }
-        try {
-            if (window.ElainaAchievements && typeof window.ElainaAchievements.isOpen === 'function'
-                && window.ElainaAchievements.isOpen()) active = 'memories';
-        } catch (e) { /* 成就模块不在时忽略 */ }
+        if (achOverlayOpen()) active = 'memories';
 
         var minePage = byId('mobileMine');
         if (minePage && minePage.classList.contains('open')) active = 'mine';
@@ -528,8 +564,8 @@
         }
 
         document.body.classList.toggle('mm-in-conv', convOpen);
-        // 设置页保留底栏：退出还可以走左上角返回键与系统返回；点底栏也会顺手关掉设置。
-        nav.classList.toggle('mobile-nav-hidden', composerOpen || convOpen);
+        // 设置页整页下钻：底栏留在下面会压住最后一张卡，也让人分不清“返回”到底退到哪；退出走左上角返回键与系统返回。
+        nav.classList.toggle('mobile-nav-hidden', composerOpen || convOpen || settingsOpen);
 
         Array.prototype.forEach.call(nav.querySelectorAll('[data-mobile-nav]'), function (b) {
             b.classList.toggle('active', b.getAttribute('data-mobile-nav') === active);
@@ -546,10 +582,7 @@
             if (state.diaryMode) active = 'diary';
             else if (state.notesMode) active = 'notes';
         } catch (e) { /* state 未就绪时按「记忆」显示 */ }
-        try {
-            if (window.ElainaAchievements && typeof window.ElainaAchievements.isOpen === 'function'
-                && window.ElainaAchievements.isOpen()) active = 'ach';
-        } catch (e) { /* 成就模块不在时忽略 */ }
+        if (achOverlayOpen()) active = 'ach';
         Array.prototype.forEach.call(document.querySelectorAll('.mobile-hub-seg button'), function (b) {
             b.classList.toggle('active', b.getAttribute('data-hub') === active);
         });
@@ -826,32 +859,29 @@
 
         scroll.appendChild(makeMineNotice());
 
-        scroll.appendChild(makeMineGroup('外观', [
-            { icon: ICONS.theme, title: '外观与主题', desc: themeDesc(), descId: 'mmThemeDesc', onClick: function () { openSettingsAt('tab-appearance'); } }
+        scroll.appendChild(makeMineGroup('个性化', [
+            { icon: ICONS.theme, title: '外观与主题', desc: themeDesc(), descId: 'mmThemeDesc', onClick: function () { openSettingsAt('tab-appearance'); } },
+            { icon: ICONS.mine, title: '人设与世界观', desc: '角色卡 / 世界规则与时代背景', onClick: function () { openSettingsSection('tab-character', ['characterSettingsSection', 'worldSettingsSection'], '人设与世界观'); } }
         ]));
 
-        // 每行都带 scrollId：只给分栏名的话，同一分栏里的几行点进去都是同一页顶部。
-        scroll.appendChild(makeMineGroup('模型与语音', [
-            { icon: ICONS.model, title: '对话模型', desc: '默认模型 / 失败回退 / 多套配置', onClick: function () { openSettingsAt('tab-model', 'settingChatModel'); } },
-            { icon: ICONS.bell, title: '语音输出', desc: 'TTS 服务商与音色', onClick: function () { openSettingsAt('tab-model', 'ttsProviderHome'); } },
-            { icon: ICONS.memory, title: '语音输入', desc: 'ASR 服务商与语言', onClick: function () { openSettingsAt('tab-model', 'asrProviderHome'); } },
-            { icon: MINE_ICONS.capability, title: '对话优化', desc: '思考强度与采样参数', onClick: function () { openSettingsAt('tab-model', 'settingThinkingEffort'); } }
+        // 模型不再按五类拆五行：总览一页就能看全并直接切换，具体提供商进「我的模型」。
+        scroll.appendChild(makeMineGroup('智能', [
+            { icon: ICONS.model, title: '模型与连接', descId: 'mmModelSummary', desc: '五类模型与提供商', onClick: function () { openSettingsAt('tab-model'); } },
+            { icon: ICONS.bell, title: '对话偏好', desc: '默认模型、生成参数与联网搜索', onClick: function () { openSettingsAt('tab-model', 'settingChatModel'); } },
+            { icon: MINE_ICONS.capability, title: '能力与权限', desc: '手机操作 / 文件读写 / 浏览器', onClick: function () { openSettingsAt('tab-capability'); } },
+            { icon: ICONS.memory, title: '记忆整理与检索', desc: '整理模型、每几轮、召回与重排', onClick: function () { openSettingsAt('tab-capability', 'memoryRecallSection'); } }
         ]));
 
-        scroll.appendChild(makeMineGroup('角色与能力', [
-            { icon: ICONS.mine, title: '人设与世界观', desc: '角色卡 / 世界规则与时代背景', onClick: function () { openSettingsSection('tab-character', ['characterSettingsSection', 'worldSettingsSection'], '人设与世界观'); } },
-            { icon: MINE_ICONS.capability, title: '能力与权限', desc: '记忆整理 / 联网 / 手机操作', onClick: function () { openSettingsAt('tab-capability'); } }
+        scroll.appendChild(makeMineGroup('扩展', [
+            { icon: MINE_ICONS.plugins, title: '插件与扩展', desc: '插件 / 技能 / MCP', onClick: function () { openSettingsAt('tab-mods'); } }
         ]));
 
-        scroll.appendChild(makeMineGroup('数据与安全', [
+        // 日志是全局诊断入口，放在「数据与系统」比塞进「扩展」更符合用户找它的路径。
+        scroll.appendChild(makeMineGroup('数据与系统', [
             { icon: MINE_ICONS.data, title: '我的数据', desc: '导入 / 导出 / 局域网共享', onClick: function () { openSettingsSection('tab-advanced', 'dataSettingsSection', '我的数据'); } },
             { icon: MINE_ICONS.lock, title: '访问密码', desc: '本机与局域网登录凭据', onClick: function () { openSettingsSection('tab-advanced', 'authSettingsSection', '访问密码'); } },
+            { icon: MINE_ICONS.log, title: '日志', desc: '按级别与模块排查', onClick: function () { openSettingsAt('tab-log'); } },
             { icon: MINE_ICONS.about, title: '版本与更新', desc: '检测新版本与安装包', onClick: function () { openSettingsSection('tab-advanced', 'updateSettingsSection', '版本与更新'); } }
-        ]));
-
-        scroll.appendChild(makeMineGroup('更多', [
-            { icon: MINE_ICONS.plugins, title: '插件与扩展', desc: '插件 / 技能 / MCP', onClick: function () { openSettingsAt('tab-mods'); } },
-            { icon: MINE_ICONS.log, title: '日志', desc: '按级别与模块排查', onClick: function () { openSettingsAt('tab-log'); } }
         ]));
 
         var version = document.createElement('div');
@@ -915,12 +945,20 @@
         }
     }
 
+    /** 「我的」里模型一行的摘要：每次打开都重算，供应商增删、默认切换后立刻反映。 */
+    function refreshMineModelDescs() {
+        if (typeof describeModelOverview !== 'function') return;
+        var el = byId('mmModelSummary');
+        if (el) el.textContent = describeModelOverview();
+    }
+
     function openMine() {
         buildMine();
         var page = byId('mobileMine');
         if (!page) return;
         var desc = byId('mmThemeDesc');
         if (desc) desc.textContent = themeDesc();
+        refreshMineModelDescs();
         syncMineThemeSeg();
         syncMineProfile();
         page.classList.add('open');
@@ -953,6 +991,39 @@
     }
 
     function settingsTitleText() {
+        // 添加模型是模型分栏里的整页下钻：顶栏标题跟着写到「添加模型」，返回键也退回模型页而不是关设置。
+        var modelTab = byId('tab-model');
+        if (modelTab && modelTab.classList.contains('is-add')) return '添加模型';
+        if (modelTab && modelTab.classList.contains('active-panel')) {
+            var view = modelTab.getAttribute('data-model-view') || 'overview';
+            if (view === 'providers') {
+                if (modelTab.classList.contains('is-detail')) {
+                    // 详情页顶栏直接写提供商名，比继续显示「模型」更容易知道自己退到哪。
+                    // 标题节点可能被 CSS 隐藏（手机上整行详情头不显示），所以按“哪个详情面板可见”取文字，而不是看 offsetParent。
+                    var detailPages = [
+                        ['chatCardPane', 'chatCardTitle', ''],
+                        ['ttsProviderDetail', 'ttsProviderDetailTitle', 'settingTtsProviderName'],
+                        ['asrProviderDetail', 'asrProviderDetailTitle', 'settingAsrProviderName'],
+                        ['embeddingProviderDetail', 'embeddingProviderDetailTitle', 'settingEmbeddingProviderName'],
+                        ['rerankProviderDetail', 'rerankProviderDetailTitle', 'settingRerankProviderName']
+                    ];
+                    for (var i = 0; i < detailPages.length; i += 1) {
+                        var pane = byId(detailPages[i][0]);
+                        if (!pane || pane.classList.contains('hidden')) continue;
+                        var titleEl = byId(detailPages[i][1]);
+                        if (titleEl && titleEl.textContent.trim()) return titleEl.textContent.trim();
+                        var nameInput = detailPages[i][2] ? byId(detailPages[i][2]) : null;
+                        if (nameInput && nameInput.value.trim()) return nameInput.value.trim();
+                    }
+                    var nameEl = document.querySelector('#modelPaneDetail .model-provider-name');
+                    if (nameEl && nameEl.textContent.trim()) return nameEl.textContent.trim();
+                    return '提供商';
+                }
+                return '我的模型';
+            }
+            if (view === 'prefs') return '使用偏好';
+            return '模型';
+        }
         var btn = document.querySelector('#settingsTabNav .settings-tab-btn.active');
         var title = btn ? btn.querySelector('.settings-nav-copy b') : null;
         var label = (title ? title.textContent : (btn ? btn.textContent : '') || '').trim();
@@ -972,12 +1043,15 @@
         if (!window.MutationObserver) return;
         var nav = byId('settingsTabNav');
         if (nav) new MutationObserver(syncSettingsTitle).observe(nav, { subtree: true, attributes: true, attributeFilter: ['class'] });
+        var modelTab = byId('tab-model');
+        if (modelTab) new MutationObserver(syncSettingsTitle).observe(modelTab, { attributes: true, attributeFilter: ['class', 'data-model-view'] });
         var overlay = byId('settingsOverlay');
         if (overlay) {
             new MutationObserver(function () {
-                if (overlay.classList.contains('hidden')) { dropSettingsHistoryEntry(); return; }
+                if (overlay.classList.contains('hidden')) { dropSettingsHistoryEntry(); syncNav(); return; }
                 syncSettingsTitle();
                 pushSettingsHistoryEntry();
+                syncNav();
             }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
         }
         // 分栏切换时内容也滑一次；只在「当前分栏 id 真的变了」时触发 —— 否则动画自己加的那个类会再触发一次观察者，绕成死循环。
@@ -1489,7 +1563,7 @@
     function decorateMessage(item) {
         if (!item || item.getAttribute('data-mm-decor') === '1') return;
         item.setAttribute('data-mm-decor', '1');
-        var stamp = item.querySelector('.text-xs.text-indigo-300');
+        var stamp = item.querySelector('.text-xs.text-dim');
         if (stamp) stamp.textContent = String(stamp.textContent || '').replace(/^(\d{1,2}:\d{2}):\d{2}$/, '$1');
     }
 
@@ -1861,6 +1935,7 @@
         buildHubBars();
         buildConvFilters();
         wireNotesSeg();
+        wireSegThumbs();
         buildMobileHome();
         buildMobileQuote();
         wireHomeComposer();

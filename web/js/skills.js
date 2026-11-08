@@ -11,22 +11,21 @@ function renderSkillCard(s) {
         : escapeHtml(s.description || '');
     const isLocal = s.source === 'local';
     const srcLabel = isLocal
-        ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 ml-1">本地</span>'
-        : '<span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-500 ml-1">来自插件 '
-            + escapeHtml(s.owner || '') + '</span>';
+        ? badge('本地', 'ok')
+        : badge('来自插件 ' + (s.owner || ''), 'accent');
     // 卸载按钮只给本地技能；随附技能只留一句说明（否则按钮点了也没用）
     const delBtn = isLocal
         ? '<button type="button" class="mod-act mod-act-danger skill-del-btn" data-skill-id="' + id + '"'
             + ' data-skill-name="' + name + '" title="卸载这个技能（含安装包）">' + ICON.trash + '</button>'
-        : '<span class="text-[10px] text-indigo-300 ml-1" title="插件随附的技能住在插件目录里，删掉插件就一起没了">随插件删除</span>';
+        : '<span class="text-[10px] text-dim ml-1" title="插件随附的技能住在插件目录里，删掉插件就一起没了">随插件删除</span>';
 
     return '<div class="mod-card" data-fullwidth="' + (desc ? '1' : '0') + '" data-skill-id="' + id + '">'
         + '<span class="mod-avatar" aria-hidden="true">' + glyph + '</span>'
         + '<div class="min-w-0 flex-1">'
           + '<div class="flex items-start gap-2">'
             + '<div class="min-w-0 flex-1">'
-              + '<span class="text-xs font-semibold text-indigo-800">' + name + '</span>' + srcLabel
-              + (desc ? '<div class="mod-desc text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + desc + '</div>' : '')
+              + '<span class="text-xs font-semibold text-ink">' + name + '</span>' + srcLabel
+              + (desc ? '<div class="mod-desc text-[11px] text-dim leading-relaxed mt-0.5">' + desc + '</div>' : '')
             + '</div>'
           + '</div>'
           + '<div class="flex items-center gap-1.5 mt-2">'
@@ -43,7 +42,7 @@ async function refreshSkillsList() {
     if (!box) return;
     const hint = document.getElementById('skillsHint');
     const setHint = (text, cls) => {
-        if (hint) { hint.textContent = text; hint.className = 'text-[11px] ' + (cls || 'text-indigo-400'); }
+        if (hint) { hint.textContent = text; hint.className = 'text-[11px] ' + (cls || 'text-dim'); }
     };
 
     let skills = [];
@@ -62,7 +61,7 @@ async function refreshSkillsList() {
     void syncSkillKnowledge();
 
     if (!skills.length) {
-        box.innerHTML = '<div class="text-[11px] text-indigo-300 py-2 text-center">还没有技能。'
+        box.innerHTML = '<div class="text-[11px] text-dim py-2 text-center">还没有技能。'
             + '把含 <code>SKILL.md</code> 的目录放进项目的 skills/，或点上面的「上传安装」选一个 zip。</div>';
         return;
     }
@@ -89,18 +88,18 @@ async function refreshSkillsList() {
             if (!okToGo) return;
 
             el.disabled = true;
-            setHint('正在卸载 ' + name + '…', 'text-indigo-500');
+            setHint('正在卸载 ' + name + '…', 'text-dim');
             try {
                 const res = await fetch('/api/skills/' + encodeURIComponent(id), { method: 'DELETE' });
                 const data = await res.json().catch(() => null);
                 if (!res.ok || !data || data.ok === false) {
-                    setHint('卸载失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-red-500');
+                    setHint('卸载失败：' + ((data && data.message) || ('HTTP ' + res.status)), 'text-danger');
                 } else {
-                    setHint('已卸载 ' + name, 'text-emerald-600');
+                    setHint('已卸载 ' + name, 'text-ok');
                     void refreshSkillsList();
                 }
             } catch (err) {
-                setHint('卸载失败：' + String((err && err.message) || err), 'text-red-500');
+                setHint('卸载失败：' + String((err && err.message) || err), 'text-danger');
             } finally {
                 el.disabled = false;
             }

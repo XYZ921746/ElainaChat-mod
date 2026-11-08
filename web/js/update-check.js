@@ -223,10 +223,10 @@
         const node = el('appUpdateHint');
         if (!node) return;
         node.textContent = text || '';
-        const color = tone === 'error' ? 'text-red-500'
-            : tone === 'ok' ? 'text-emerald-600'
-            : tone === 'warn' ? 'text-amber-600'
-            : 'text-indigo-300';
+        const color = tone === 'error' ? 'text-danger'
+            : tone === 'ok' ? 'text-ok'
+            : tone === 'warn' ? 'text-warn'
+            : 'text-dim';
         node.className = 'text-[11px] ' + color;
     }
 
@@ -311,7 +311,7 @@
             });
             if (!summary.downloads.length) {
                 const note = document.createElement('span');
-                note.className = 'text-[11px] text-amber-600';
+                note.className = 'text-[11px] text-warn';
                 note.textContent = '这次 Release 没带安装包，请到发布页下载。';
                 downloads.appendChild(note);
             }

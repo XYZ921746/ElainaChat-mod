@@ -64,6 +64,10 @@ async function callAI(text, options = {}, settings = null) {
     }
     // 先探测这台电脑的真实位置再拼提示词（它决定 AI 知不知道桌面在哪）；整段包 try/catch，探测失败不能让对话发不出去。
     try { await detectAgentRoots(); } catch { /* 忽略 */ }
+    // 记忆向量召回要先发一次嵌入请求，异步放在拼提示词之前；失败时缓存为空，记忆段自动退回关键词。
+    if (typeof prefetchMemoryVectorRecall === 'function') {
+        try { await prefetchMemoryVectorRecall(text); } catch { /* 召回失败不影响回复 */ }
+    }
     if (state.settings.thirdPerson) {
         try {
             return await generateThirdPersonReply(text, options, settings);

@@ -20,7 +20,7 @@ async function refreshOverlayStatus() {
     try {
         const res = await plugin.overlayStatus();
         const ok = Boolean(res && res.canDraw);
-        if (dot) dot.className = 'w-2 h-2 rounded-full flex-none ' + (ok ? 'bg-emerald-400' : 'bg-amber-400');
+        if (dot) dot.className = 'w-2 h-2 rounded-full flex-none ' + (ok ? 'bg-ok' : 'bg-warn');
         text.textContent = ok ? '已开启' : '未开启（AI 操作时会提示你开）';
         if (btn) btn.textContent = ok ? '去系统设置检查' : '开启悬浮窗';
     } catch (e) {

@@ -178,7 +178,13 @@ async function handleUserInput(message, conversation) {
                 const every = Math.max(3, state.settings.memoryEvery || 15);
                 if (userCount % every === 0) {
                     console.log(`[记忆] 自动整理触发（第 ${userCount} 轮）`);
-                    setTimeout(() => { requestMemorySummary(conversation.id); }, 800);
+                    setTimeout(() => {
+                        // requestMemorySummary 的错误会向上抛（内部只把 running 复位放进 finally），
+                        // 自动触发没有调用方接住，必须就地 catch，否则成为未处理的 Promise rejection
+                        requestMemorySummary(conversation.id).catch((e) => {
+                            console.warn('[记忆] 自动整理失败:', e);
+                        });
+                    }, 800);
                 }
             }
         };

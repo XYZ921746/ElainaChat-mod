@@ -1232,7 +1232,7 @@ html.rd .conv-filter-btn { display: none; }
 
     /* 名字与时间在气泡里是重复信息（顶栏已经写了是谁），让位给正文。 */
     html.rd .bubble-ai > .flex.items-center.gap-2 > .ai-speaker-name,
-    html.rd .bubble-ai > .flex.items-center.gap-2 > .text-xs.text-indigo-300,
+    html.rd .bubble-ai > .flex.items-center.gap-2 > .text-xs.text-dim,
     html.rd .bubble-user > .flex.items-center.gap-2 > span:first-child,
     html.rd .bubble-user > .flex.items-center.gap-2 > span:nth-child(2) { display: none !important; }
 
@@ -1342,6 +1342,7 @@ html.rd .conv-filter-btn { display: none; }
     #mobileMine .mm-profile .mm-copy .mm-stats > span { display: inline-flex !important; align-items: baseline; gap: 3px; margin: 0; }
     #mobileMine .mm-stats b { font-size: 13.5px; font-weight: 700; color: var(--rd-text); }
 
+    /* 一组一张卡、行间细线：十几个独立气泡会把分组感冲散，连续的行才像一张设置表。 */
     #mobileMine .mm-group {
         margin-top: 14px;
         border: 1px solid var(--rd-border);
@@ -1351,7 +1352,7 @@ html.rd .conv-filter-btn { display: none; }
     }
 
     #mobileMine .mm-group-title {
-        padding: 12px 16px 6px;
+        padding: 13px 16px 3px;
         font-size: 10.5px;
         font-weight: 700;
         letter-spacing: .12em;
@@ -1364,10 +1365,8 @@ html.rd .conv-filter-btn { display: none; }
         align-items: center;
         gap: 12px;
         width: 100%;
-        padding: 13px 16px;
+        padding: 12px 16px;
         border: 0;
-        /* 行与行之间不画线：靠留白和图标区分就够了，一排细线反而更乱 */
-        border-top: 0;
         background: transparent;
         color: inherit;
         text-align: left;
@@ -1375,7 +1374,7 @@ html.rd .conv-filter-btn { display: none; }
         touch-action: manipulation;
     }
 
-    #mobileMine .mm-group > .mm-row:first-of-type { border-top: 0; }
+    #mobileMine .mm-row + .mm-row { border-top: 1px solid var(--rd-border); }
     #mobileMine .mm-row:active { background: var(--rd-hover); }
 
     /* 公告提示条：比普通行更显眼（主题色描边 + 浅底），有未读时带红点。 */
@@ -1424,9 +1423,18 @@ html.rd .conv-filter-btn { display: none; }
         display: grid;
         place-items: center;
     }
-    /* 纯文字 + 箭头：图标方块会把每行压成"图标 + 小字"，标题反而看不出来。 */
-    #mobileMine .mm-ic { display: none; }
-    #mobileMine .mm-ic svg { width: 19px; height: 19px; }
+    /* 图标做成浅色底的小方块：一行里最先被扫到的是它，标题和说明再回答「这是哪一项」。 */
+    #mobileMine .mm-ic {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 9px;
+        background: var(--rd-accent-soft);
+        color: var(--rd-accent);
+    }
+    #mobileMine .mm-ic svg { width: 16px; height: 16px; }
     #mobileMine .mm-copy { flex: 1; min-width: 0; }
     #mobileMine .mm-copy b { display: block; font-size: 13.5px; font-weight: 600; }
     #mobileMine .mm-copy span { display: block; margin-top: 2px; font-size: 11px; color: var(--rd-text-3); }
@@ -1597,3 +1605,26 @@ html.rd .memory-list { grid-template-columns: minmax(0, 1fr); }
 html.rd .memory-tier-input { width: 92px; }
 html.rd .memory-tier-settings-btn span { display: none; }
 html.rd .memory-tier-settings-btn { padding: 6px 9px; }
+
+/* ---------- 模型分栏：窄屏整屏下钻 ---------- */
+/* 桌面是「左列表右详情」双栏；窄屏双栏只会把两边都压扁（列表 40% 高、详情剩半屏）。
+   改成一步一屏：没选提供商时只显示列表，点进去详情占满整屏，返回键回列表。 */
+@media (max-width: 980px) {
+    html.rd #settingsOverlay #settingsContent #modelPageBody { display: block !important; }
+    html.rd #settingsOverlay #settingsContent #modelPageBody .model-pane-list {
+        max-height: none !important;
+        border-bottom: 0 !important;
+    }
+    html.rd #settingsOverlay #settingsContent #modelPageBody.is-detail .model-pane-list { display: none !important; }
+    html.rd #settingsOverlay #settingsContent #modelPageBody:not(.is-detail) .model-pane-detail { display: none !important; }
+    /* 双栏里的列表行是 display:block（桌面不显示箭头）；手机要显示箭头就得用 flex，
+       否则 › 会掉到第二行左端，看着像另一个控件。 */
+    html.rd #settingsOverlay #settingsContent #modelPageBody .prov-row {
+        display: flex !important;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 14px !important;
+    }
+    html.rd #settingsOverlay #settingsContent #modelPageBody .prov-copy { flex: 1; min-width: 0; }
+    html.rd #settingsOverlay #settingsContent #modelPageBody #modelPaneList .prov-chev { display: inline-flex !important; }
+}

@@ -37,6 +37,52 @@
     }
 
 
+    /** 已装插件与商店索引逐条比对：版本号两边都有且不同才算可更新（与卡片 statusOf 同一条判定，任一边缺版本号就不敢动）。 */
+    function updateCandidatesOf(installedList, indexPlugins) {
+        var installed = new Map();
+        var mine = Array.isArray(installedList) ? installedList : [];
+        for (var i = 0; i < mine.length; i++) {
+            if (mine[i] && mine[i].id) installed.set(mine[i].id, mine[i]);
+        }
+        var out = [];
+        var idx = Array.isArray(indexPlugins) ? indexPlugins : [];
+        for (var j = 0; j < idx.length; j++) {
+            var p = idx[j];
+            if (!p || !p.id || !installed.has(p.id)) continue;
+            var cur = String(installed.get(p.id).version || '');
+            var next = String(p.version || '');
+            if (cur && next && cur !== next) out.push({ plugin: p, current: cur });
+        }
+        return out;
+    }
+
+
+    /** 批量更新按依赖先行排序：X 依赖 Y 且同批都更时 Y 先装，重扫时才不会拿新 X 配旧依赖。 */
+    function sortUpdateFirstDeps(items) {
+        var list = Array.isArray(items) ? items.slice() : [];
+        var byId = new Map();
+        for (var i = 0; i < list.length; i++) byId.set(list[i].plugin.id, list[i]);
+        var out = [];
+        var done = new Set();
+        var guard = list.length + 1;   // 依赖成环时靠它退出，环里的按原序补在尾部
+        while (out.length < list.length && guard-- > 0) {
+            var progressed = false;
+            for (var j = 0; j < list.length; j++) {
+                var it = list[j];
+                if (done.has(it.plugin.id)) continue;
+                var deps = Array.isArray(it.plugin.depends) ? it.plugin.depends : [];
+                var ready = deps.every(function (d) { return !byId.has(d) || done.has(d); });
+                if (ready) { out.push(it); done.add(it.plugin.id); progressed = true; }
+            }
+            if (!progressed) break;
+        }
+        for (var k = 0; k < list.length; k++) {
+            if (!done.has(list[k].plugin.id)) out.push(list[k]);
+        }
+        return out;
+    }
+
+
     function isPrerequisiteOnly(p, all) {
         if (!p) return false;
         if (p.prerequisite === true) return true;         // 商店声明：进前置区
@@ -70,6 +116,21 @@
             .concat(Array.isArray(p.depends) ? p.depends : [])
             .join(' ').toLowerCase();
         return hay.indexOf(q) >= 0;
+    }
+
+
+    /** 平台分类：mobile / desktop / universal。缺省与非法值都按 universal（通用）处理：第三方商店源不写这字段时，全部插件照常出现在所有分类里。 */
+    function platformOf(p) {
+        var v = String(p && p.platform || '').toLowerCase();
+        return (v === 'mobile' || v === 'desktop') ? v : 'universal';
+    }
+
+    /** 平台筛选：all = 全部（手机设备上除外 —— 电脑插件默认不进手机列表，点「电脑」分类才看得到）。
+        手机 / 电脑分类各自带上通用插件：通用本来就两边可用，单列一个分类只会逼用户先猜该点哪个。 */
+    function matchesPlatform(p, sel, isMobileDevice) {
+        var plat = platformOf(p);
+        if (sel === 'all') return !(isMobileDevice && plat === 'desktop');
+        return plat === sel || plat === 'universal';
     }
 
 

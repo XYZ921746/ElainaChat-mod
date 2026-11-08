@@ -5,7 +5,7 @@ export function buildInitializeParams({ protocolVersion, version }) {
     return {
         protocolVersion,
         capabilities: { roots: { listChanged: false } },
-        clientInfo: { name: 'ElainaChat', version: String(version || '2.0.1') },
+        clientInfo: { name: 'ElainaChat', version: String(version || '2.1.0') },
     };
 }
 

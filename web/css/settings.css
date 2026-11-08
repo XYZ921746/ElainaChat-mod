@@ -445,8 +445,7 @@ html.rd #settingsOverlay #settingsContent .modal-label .badge {
 
 html.rd #settingsOverlay #settingsContent .rd-field-hint,
 html.rd #settingsOverlay #settingsContent .text-\[11px\],
-html.rd #settingsOverlay #settingsContent .text-indigo-300,
-html.rd #settingsOverlay #settingsContent .text-indigo-400 { color: var(--rd-text-3) !important; }
+html.rd #settingsOverlay #settingsContent .text-dim { color: var(--rd-text-3) !important; }
 html.rd #settingsOverlay #settingsContent .rd-field-hint { margin: 0 0 14px; font-size: 11.5px !important; line-height: 1.65; }
 html.rd #settingsOverlay #settingsContent p,
 html.rd #settingsOverlay #settingsContent li { line-height: 1.65; }
@@ -574,6 +573,7 @@ html.rd #settingsOverlay #settingsContent .rd-display-card .switch.on::after {
 /* 分段控件 */
 html.rd #settingsOverlay #settingsContent .segmented {
     display: inline-flex !important;
+    position: relative;
     gap: 2px !important;
     padding: 3px !important;
     flex: none;
@@ -582,6 +582,8 @@ html.rd #settingsOverlay #settingsContent .segmented {
     background: var(--rd-surface-2) !important;
 }
 html.rd #settingsOverlay #settingsContent .segmented button {
+    position: relative;
+    z-index: 1;
     min-height: 30px;
     padding: 0 12px !important;
     border: 0 !important;
@@ -593,10 +595,28 @@ html.rd #settingsOverlay #settingsContent .segmented button {
     font-weight: 600;
 }
 html.rd #settingsOverlay #settingsContent .segmented button:hover { color: var(--rd-text) !important; }
+/* 选中底色由滑块画（与回忆分段条同一套）：按钮自己不涂背景，否则滑动期间会出现两块色。 */
 html.rd #settingsOverlay #settingsContent .segmented button.active {
-    background: var(--rd-accent) !important;
+    background: transparent !important;
     color: var(--rd-accent-contrast) !important;
-    box-shadow: var(--rd-btn-shadow) !important;
+}
+html.rd #settingsOverlay #settingsContent .segmented .mm-seg-thumb {
+    position: absolute;
+    top: 3px;
+    left: 0;
+    width: 0;
+    height: 0;
+    border-radius: 7px;
+    background: var(--rd-accent);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 0;
+    will-change: transform;
+    transition: transform .42s cubic-bezier(.22, .7, .25, 1), width .2s ease, height .2s ease, opacity .2s ease;
+}
+@media (prefers-reduced-motion: reduce) {
+    html.rd #settingsOverlay #settingsContent .segmented .mm-seg-thumb,
+    html.rd #settingsOverlay .ext-mobile-tabs .mm-seg-thumb { transition-duration: .01ms !important; }
 }
 
 /* 按钮 */
@@ -874,6 +894,46 @@ html.rd #settingsOverlay #settingsContent .prov-desc { color: var(--rd-text-3); 
 html.rd #settingsOverlay #settingsContent .prov-chev { display: grid; place-items: center; color: var(--rd-text-3) !important; font-size: 17px; line-height: 1; }
 html.rd #settingsOverlay #settingsContent .settings-hub-list .prov-row { min-height: 64px; }
 
+/* 模型分栏双栏内：列表行收成极简行（AstrBot 风）—— 覆盖上面的通用 prov-row 卡片皮肤 */
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-row {
+    display: flex !important;
+    align-items: center;
+    gap: 9px;
+    min-height: 52px !important;
+    padding: 8px 10px !important;
+    padding-right: 38px !important;
+    border: 0 !important;
+    border-radius: 10px !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-row:hover { background: var(--rd-hover) !important; transform: none !important; }
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-row.is-active { background: var(--rd-accent-soft) !important; }
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-icon {
+    display: grid !important;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 8px;
+    background: var(--rd-surface-2);
+    color: var(--rd-accent);
+    font-size: 11px;
+    font-weight: 700;
+}
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-copy { flex: 1; min-width: 0; }
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-name { font-size: 12.5px; font-weight: 600 !important; }
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-desc { margin-top: 1px; font-size: 11px; color: var(--rd-text-3); }
+html.rd #settingsOverlay #settingsContent .model-page-body .prov-chev {
+    display: grid !important;
+    place-items: center;
+    flex: none;
+    margin-left: auto;
+    margin-right: 24px;
+    color: var(--rd-text-3);
+    font-size: 15px;
+}
+
 /* 详情页 */
 html.rd #settingsOverlay #settingsContent .prov-detail-head {
     display: flex;
@@ -881,8 +941,7 @@ html.rd #settingsOverlay #settingsContent .prov-detail-head {
     gap: 12px;
     margin: 0 0 16px;
 }
-html.rd #settingsOverlay #settingsContent .prov-back,
-html.rd #settingsOverlay #settingsContent .model-page-back {
+html.rd #settingsOverlay #settingsContent .prov-back {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -898,15 +957,17 @@ html.rd #settingsOverlay #settingsContent .model-page-back {
 }
 html.rd #settingsOverlay #settingsContent .prov-back:hover { border-color: var(--rd-accent-border) !important; color: var(--rd-accent) !important; }
 html.rd #settingsOverlay #settingsContent .prov-detail-title { color: var(--rd-text-3) !important; font-size: 11px; }
+/* 对话详情卡自带名称头，页内那行标题只剩重复；返回在手机由顶栏承担。 */
+html.rd #settingsOverlay #settingsContent #chatCardPane .prov-detail-head { display: none !important; }
 html.rd #settingsOverlay #settingsContent .prov-section { margin: 0; }
 html.rd #settingsOverlay #settingsContent .prov-detail { padding: 0 !important; }
 
-/* 提供商的编辑卡 */
+/* 详情表单不再套一层卡：输入项直接落在右栏背景上，和左侧列表同属一张外卡。 */
 html.rd #settingsOverlay #settingsContent .chat-provider-card {
-    padding: 14px !important;
-    border: 1px solid var(--rd-border) !important;
-    border-radius: 13px !important;
-    background: var(--rd-surface-2) !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
 }
 html.rd #settingsOverlay #settingsContent .cpc-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px !important; }
 html.rd #settingsOverlay #settingsContent .fbc-row {
@@ -1129,7 +1190,7 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
     html.rd #settingsOverlay #settingsContent {
         grid-column: 1;
         grid-row: 2;
-        padding: 16px 14px calc(88px + env(safe-area-inset-bottom, 0px)) !important;
+        padding: 16px 14px calc(28px + env(safe-area-inset-bottom, 0px)) !important;
     }
     html.rd #settingsOverlay #settingsContent > .settings-tab-panel,
     html.rd #settingsOverlay #settingsSubpage { max-width: none; }
@@ -1182,7 +1243,22 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
 
     html.rd #settingsOverlay .bubble-preview { padding: 10px; margin-bottom: 12px; }
     html.rd #settingsOverlay .bubble-preview-stage { padding: 10px; gap: 8px; }
-    html.rd #settingsOverlay .rd-display-card .set-row { gap: 12px; padding: 13px 0 !important; }
+    /* 窄屏的「说明 + 控件」改为上下两段：并排时 320px 的控件把左栏压到 min-width:0，
+       中文会逐字换行成一列（比控件换行难读得多）。 */
+    html.rd #settingsOverlay .rd-display-card .set-row {
+        display: block !important;
+        gap: 0;
+        padding: 13px 0 !important;
+    }
+    html.rd #settingsOverlay .rd-display-card .set-row > .copy { width: 100%; }
+    html.rd #settingsOverlay .rd-display-card .set-row > select {
+        width: 100% !important;
+        max-width: none !important;
+        margin-top: 10px;
+    }
+    html.rd #settingsOverlay .rd-display-card .set-row > .segmented,
+    html.rd #settingsOverlay .rd-display-card .set-row > .fbc-editor,
+    html.rd #settingsOverlay .rd-display-card .set-row > .mod-switch { margin-top: 10px; }
     html.rd #settingsOverlay .rd-display-card .copy b { font-size: 12.5px; }
     html.rd #settingsOverlay .rd-display-card .segmented button { padding: 0 9px !important; font-size: 11px !important; }
 
@@ -1193,6 +1269,7 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
     html.rd #settingsOverlay #settingsContent .prov-icon { width: 32px !important; height: 32px !important; }
     html.rd #settingsOverlay .ext-mobile-tabs {
         display: flex;
+        position: relative;
         gap: 3px;
         margin: 0 0 12px;
         padding: 3px;
@@ -1200,6 +1277,23 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
         border-radius: 12px;
         background: var(--rd-surface);
     }
+    /* 分类胶囊的滑块与回忆分段条同一套：底色由滑块画，选中项文字换对比色。 */
+    html.rd #settingsOverlay .ext-mobile-tabs .mm-seg-thumb { top: 3px; border-radius: 8px; }
+    /* 页内这排是三分胶囊，不是导航下拉的分支子项：等分三格、文字居中，
+       否则 .ext-nav-btn 的 width:100% + flex:0 0 auto 会把后两格挤出胶囊外。 */
+    html.rd #settingsOverlay .ext-mobile-tabs .ext-nav-btn {
+        position: relative;
+        z-index: 1;
+        flex: 1 1 0 !important;
+        width: auto !important;
+        min-width: 0 !important;
+        height: auto !important;
+        justify-content: center !important;
+        text-align: center !important;
+        padding: 7px 6px !important;
+        border-radius: 8px !important;
+    }
+    html.rd #settingsOverlay .ext-mobile-tabs .ext-nav-btn.is-active { color: var(--rd-accent-contrast) !important; }
 }
 
 /* 宽屏分栏面板的轻入场：switchSettingsTab 只在宽屏挂 .settings-panel-in；
@@ -1209,3 +1303,801 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
     to { opacity: 1; transform: none; }
 }
 html.rd .settings-tab-panel.settings-panel-in { animation: settings-panel-in var(--motion-base) var(--ease-out-soft) both; }
+
+/* ---------- 权限与自动化卡：内部分区的层次 ---------- */
+/* 定时任务 / AI 权限 / 手机操作 / 浏览器原本是分栏的直接子节点，各自占满一行；
+   收进同一张卡后要自己拉开层次，否则四个标题会读成四张没边框的卡。 */
+html.rd #settingsOverlay #settingsContent #agentAutomationCard > section + section {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay #settingsContent #agentAutomationCard > section > .modal-label {
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+/* 卡内已有一个 ✦ 主色标题，分区标题的主色星号降为弱化色，避免四个同级主色抢层级。 */
+html.rd #settingsOverlay #settingsContent #agentAutomationCard > section > .modal-label .text-accent {
+    color: var(--rd-text-3) !important;
+}
+
+/* ---------- 模型三段式：总览 / 我的模型 / 使用偏好 ---------- */
+/* 模型页要放下“列表 + 详情”两栏，900px 会把地址与模型名折断；只在模型分栏放宽，其它页仍是单栏阅读宽度。 */
+html.rd #settingsOverlay #settingsContent #tab-model.active-panel { max-width: 1120px; }
+
+html.rd #settingsOverlay .model-page-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+}
+html.rd #settingsOverlay .model-page-head-copy { min-width: 0; }
+html.rd #settingsOverlay .model-page-head .settings-page-sub {
+    max-width: 66ch;
+    margin: 9px 0 0;
+    color: var(--rd-text-2);
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+html.rd #settingsOverlay .model-add-primary { flex: none; min-height: 38px; padding: 0 16px !important; }
+/* 按钮的 display 由设置面板的 .btn-primary 规则接管，.hidden 的普通优先级压不住它。 */
+html.rd #settingsOverlay #settingsContent #modelAddModelBtn.hidden { display: none !important; }
+
+html.rd #settingsOverlay .model-section-tabs {
+    display: flex;
+    gap: 2px;
+    width: fit-content;
+    margin: 0 0 18px;
+    padding: 3px;
+    border: 1px solid var(--rd-border);
+    border-radius: 12px;
+    background: var(--rd-surface-2);
+}
+html.rd #settingsOverlay .model-section-tab {
+    min-height: 32px;
+    padding: 0 15px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: var(--rd-text-3);
+    font-family: var(--rd-font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+html.rd #settingsOverlay .model-section-tab:hover { color: var(--rd-text); }
+html.rd #settingsOverlay .model-section-tab.is-active {
+    background: var(--rd-surface);
+    color: var(--rd-text);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .12);
+}
+html.rd #settingsOverlay .model-tab-count {
+    margin-left: 5px;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+html.rd #settingsOverlay .model-view-pane.hidden { display: none !important; }
+
+/* 三段里的卡片与其它分栏同材质：不能让设置页出现两种卡片皮肤。 */
+html.rd #settingsOverlay #settingsContent #tab-model .model-view-pane > section {
+    flex: none;
+    margin: 0 0 16px !important;
+    padding: 22px 24px !important;
+    border: 1px solid var(--rd-border) !important;
+    border-radius: 18px !important;
+    background: var(--rd-surface) !important;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .03), 0 14px 34px rgba(0, 0, 0, .035) !important;
+}
+html.rd #settingsOverlay #settingsContent #tab-model .model-view-pane > section:last-child { margin-bottom: 0 !important; }
+
+/* 我的模型：分类筛选胶囊 */
+html.rd #settingsOverlay .model-filter-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 12px;
+}
+html.rd #settingsOverlay .model-filter-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 28px;
+    padding: 0 11px;
+    border: 1px solid var(--rd-border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--rd-text-3);
+    font-family: var(--rd-font-ui);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color .15s, background .15s, color .15s;
+}
+html.rd #settingsOverlay .model-filter-btn:hover { border-color: var(--rd-border-strong); color: var(--rd-text); }
+html.rd #settingsOverlay .model-filter-btn.is-active {
+    border-color: var(--rd-accent-border);
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+}
+html.rd #settingsOverlay .model-filter-count { color: var(--rd-text-3); font-size: 10.5px; }
+html.rd #settingsOverlay .model-filter-btn.is-active .model-filter-count { color: var(--rd-accent); opacity: .7; }
+
+/* 总览：当前使用 */
+html.rd #settingsOverlay .mo-overview-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 2px 12px;
+}
+html.rd #settingsOverlay .mo-overview-title {
+    color: var(--rd-text-3);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+}
+html.rd #settingsOverlay .mo-overview-meta { color: var(--rd-text-3); font-size: 11px; }
+
+html.rd #settingsOverlay .mo-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+html.rd #settingsOverlay .mo-card {
+    min-width: 0;
+    padding: 16px;
+    border: 1px solid var(--rd-border);
+    border-radius: 14px;
+    background: var(--rd-surface);
+    transition: border-color .15s;
+}
+html.rd #settingsOverlay .mo-card:hover { border-color: var(--rd-accent-border); }
+html.rd #settingsOverlay .mo-card-wide { grid-column: 1 / -1; }
+html.rd #settingsOverlay .mo-card-head { display: flex; align-items: center; gap: 9px; }
+html.rd #settingsOverlay .mo-kind-dot {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 9px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-size: 13px;
+}
+html.rd #settingsOverlay .mo-kind-label { color: var(--rd-text-2); font-size: 12px; font-weight: 600; }
+html.rd #settingsOverlay .mo-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: auto;
+    color: var(--rd-text-3);
+    font-size: 11px;
+}
+html.rd #settingsOverlay .mo-status::before {
+    content: "";
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--rd-ok);
+}
+html.rd #settingsOverlay .mo-status.is-empty::before { background: var(--rd-warn); }
+html.rd #settingsOverlay .mo-card-body { display: flex; align-items: center; gap: 16px; margin-top: 10px; }
+html.rd #settingsOverlay .mo-main { flex: 1; min-width: 0; }
+html.rd #settingsOverlay .mo-model {
+    overflow: hidden;
+    color: var(--rd-text);
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -.01em;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+html.rd #settingsOverlay .mo-sub {
+    margin-top: 3px;
+    overflow: hidden;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+html.rd #settingsOverlay .mo-control { width: 230px; flex: none; }
+/* 总览下拉：自绘浮层，深色主题下也保持同样的表面与选中金色，不会掉回系统白底蓝高亮。 */
+html.rd #settingsOverlay .mo-picker { position: relative; min-width: 0; }
+html.rd #settingsOverlay .mo-picker-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    height: 42px;
+    padding: 0 12px;
+    border: 1px solid var(--rd-border);
+    border-radius: 11px;
+    background: var(--rd-input);
+    color: var(--rd-text);
+    font-family: var(--rd-font-ui);
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s;
+}
+html.rd #settingsOverlay .mo-picker-btn:hover { border-color: var(--rd-accent-border); }
+html.rd #settingsOverlay .mo-picker-btn:focus-visible { outline: none; border-color: var(--rd-accent); box-shadow: 0 0 0 3px var(--rd-accent-soft); }
+html.rd #settingsOverlay .mo-picker-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.rd #settingsOverlay .mo-picker-chev { flex: none; display: grid; place-items: center; color: var(--rd-text-3); transition: transform .15s; }
+html.rd #settingsOverlay .mo-picker-btn[aria-expanded="true"] .mo-picker-chev { transform: rotate(180deg); }
+html.rd #settingsOverlay .mo-picker-chev svg { width: 14px; height: 14px; }
+html.rd #settingsOverlay .mo-picker-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    display: flex;
+    flex-direction: column;
+    max-height: 260px;
+    padding: 4px;
+    border: 1px solid var(--rd-border-strong);
+    border-radius: 12px;
+    background: var(--rd-surface);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, .18);
+    overflow-y: auto;
+}
+html.rd #settingsOverlay .mo-picker-menu.hidden { display: none; }
+html.rd #settingsOverlay .mo-picker-group-label {
+    padding: 7px 9px 3px;
+    color: var(--rd-text-3);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+}
+html.rd #settingsOverlay .mo-picker-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    min-height: 34px;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--rd-text-2);
+    font-family: var(--rd-font-ui);
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+}
+html.rd #settingsOverlay .mo-picker-option:hover { background: var(--rd-hover); color: var(--rd-text); }
+html.rd #settingsOverlay .mo-picker-option.is-selected { background: var(--rd-accent-soft); color: var(--rd-accent); font-weight: 600; }
+html.rd #settingsOverlay .mo-picker-option-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.rd #settingsOverlay .mo-picker-check { flex: none; font-size: 11px; }
+html.rd #settingsOverlay .mo-fallback {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay .mo-fb-label { color: var(--rd-text-3); font-size: 11px; font-weight: 600; }
+html.rd #settingsOverlay .mo-fb-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 0 6px 0 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 7px;
+    background: var(--rd-surface-2);
+    color: var(--rd-text-2);
+    font-size: 11px;
+}
+html.rd #settingsOverlay .mo-fb-num {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 5px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-size: 10px;
+    font-weight: 700;
+}
+html.rd #settingsOverlay .mo-fb-x {
+    padding: 2px;
+    border: 0;
+    background: transparent;
+    color: var(--rd-text-3);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+html.rd #settingsOverlay .mo-fb-x:hover { color: var(--rd-danger); }
+html.rd #settingsOverlay .mo-fb-empty { color: var(--rd-text-3); font-size: 11px; }
+html.rd #settingsOverlay .mo-picker-fb { width: 170px; flex: none; }
+html.rd #settingsOverlay .mo-picker-btn-sm { height: 28px; padding: 0 9px; border-radius: 8px; font-size: 11px; }
+
+/* 模型双栏不再内部滚动：嵌套滚动条是设置页最明显的“割裂感”来源之一。 */
+html.rd #settingsOverlay #settingsContent #modelPageBody {
+    height: auto;
+    min-height: 420px;
+}
+html.rd #settingsOverlay #settingsContent #modelPaneList,
+html.rd #settingsOverlay #settingsContent #modelPaneDetail {
+    max-height: none;
+    overflow: visible;
+}
+html.rd #settingsOverlay #settingsContent #modelPaneList { width: 300px; }
+
+/* 窄屏：三段与总览卡片都单列，筛选胶囊横向滚动。 */
+@media (max-width: 980px) {
+    html.rd #settingsOverlay .model-page-head { display: block; }
+    html.rd #settingsOverlay .model-add-primary { width: 100%; margin-top: 12px; }
+    html.rd #settingsOverlay .model-page-head .settings-page-sub { font-size: 11.5px; }
+    html.rd #settingsOverlay .model-section-tabs { width: 100%; }
+    html.rd #settingsOverlay .model-section-tab { flex: 1; padding: 0 6px; }
+    html.rd #settingsOverlay .mo-overview-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+    html.rd #settingsOverlay .mo-grid { grid-template-columns: minmax(0, 1fr); }
+    html.rd #settingsOverlay .mo-card-wide { grid-column: auto; }
+    html.rd #settingsOverlay .mo-card-body { flex-direction: column; align-items: stretch; gap: 10px; }
+    html.rd #settingsOverlay .mo-control { width: 100%; }
+    html.rd #settingsOverlay .mo-picker-fb { width: 100%; }
+    html.rd #settingsOverlay .model-filter-nav {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+    }
+    html.rd #settingsOverlay .model-filter-nav::-webkit-scrollbar { display: none; }
+    html.rd #settingsOverlay .model-filter-btn { flex: none; }
+}
+
+/* ---------- 手机模型页：一屏只做一件事 ---------- */
+@media (max-width: 980px) {
+    /* 顶栏已经写着当前子页，页内不再重复大标题、说明与全宽添加按钮。 */
+    html.rd #settingsOverlay #settingsContent #tab-model .model-page-head { display: none !important; }
+
+    /* 总览：一张卡 + 行间细线，选择器放在右侧，先把「用谁」扫完再动手。 */
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-overview-head { margin: 0 0 8px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-overview-title { font-size: 11px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-grid {
+        display: block;
+        border: 1px solid var(--rd-border);
+        border-radius: var(--ms-radius);
+        background: var(--rd-surface);
+        /* 浮层菜单要能探出卡片；圆角只影响容器本身。 */
+        overflow: visible;
+    }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-card,
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-card-wide {
+        padding: 11px 14px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+    }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-card + .mo-card { border-top: 1px solid var(--rd-border); }
+    /* 手机上切换下拉单独占一行、撑满卡片，像人设页的选择器一样，不跟模型名抢宽度。 */
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-card-body {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+        margin-top: 7px;
+    }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-model { font-size: 13.5px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-sub { margin-top: 1px; font-size: 10.5px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-control { width: 100%; flex: none; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-status:not(.is-empty) { display: none; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-fallback { margin-top: 8px; padding-top: 8px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-picker-fb { width: 100%; }
+    html.rd #settingsOverlay #settingsContent #tab-model .mo-picker-btn-sm { height: 32px; }
+
+    /* 我的模型：筛选换行而不是横向藏起来；列表是一张卡，行间细线，删除只在详情。 */
+    html.rd #settingsOverlay #settingsContent #tab-model .model-section-tabs { width: 100%; margin-bottom: 12px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-section-tab { flex: 1; padding: 0 4px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-filter-nav {
+        flex-wrap: wrap;
+        overflow: visible;
+        gap: 5px;
+        padding-bottom: 0;
+    }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-filter-btn { flex: none; }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-page-body {
+        border: 1px solid var(--rd-border) !important;
+        border-radius: var(--ms-radius) !important;
+        background: var(--rd-surface) !important;
+    }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-page-body.is-detail {
+        border: 0 !important;
+        background: transparent !important;
+    }
+    /* 桌面列表固定 300px；窄屏是上下单栏，必须撑满整张卡，否则内容会缩在左边形成偏移。 */
+    html.rd #settingsOverlay #settingsContent #tab-model .model-pane-list { width: 100% !important; padding: 2px 0 !important; }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-pane-head { padding: 10px 14px 2px; margin-bottom: 0; }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-pane-title { font-size: 11px; }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-pane-section + .model-pane-section { border-top: 1px solid var(--rd-border); }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-page-body .prov-row {
+        min-height: 50px !important;
+        padding: 9px 14px !important;
+        border-radius: 0 !important;
+    }
+    html.rd #settingsOverlay #settingsContent #tab-model .model-page-body .prov-row + .prov-row { border-top: 1px solid var(--rd-border) !important; }
+    html.rd #settingsOverlay #settingsContent #tab-model #modelPaneList .prov-del { display: none !important; }
+
+    /* 详情：分段、筛选与页内返回都收起 —— 顶栏已经写着提供商名，左上角返回直接回列表。 */
+    html.rd #settingsOverlay #settingsContent #tab-model.is-detail .model-section-tabs,
+    html.rd #settingsOverlay #settingsContent #tab-model.is-detail #modelFilterNav,
+    html.rd #settingsOverlay #settingsContent #tab-model.is-detail .prov-detail-head { display: none !important; }
+    html.rd #settingsOverlay #settingsContent #tab-model.is-detail .model-pane-detail { padding: 0 !important; }
+
+    /* 使用偏好：说明文字收紧，卡片别一层套一层。 */
+    html.rd #settingsOverlay #settingsContent #tab-model #modelPrefsPane > section { padding: 16px 14px !important; }
+    html.rd #settingsOverlay #settingsContent #tab-model #modelPrefsPane .rd-field-hint { font-size: 10.5px; line-height: 1.55; }
+}
+/* 宽屏的模型详情是右栏常驻，不需要“返回列表”；窄屏才用返回键在列表/详情间下钻。 */
+@media (min-width: 981px) {
+    html.rd #settingsOverlay #settingsContent #modelPaneDetail .prov-back { display: none !important; }
+    /* 宽屏右栏不再把输入框拉到 800px：表单与说明保持一臂长的阅读宽度，居中作为独立配置面板。 */
+    html.rd #settingsOverlay #settingsContent #modelPaneDetail > section,
+    html.rd #settingsOverlay #settingsContent #modelPaneDetail > .prov-detail { max-width: 720px; margin-left: auto; margin-right: auto; }
+}
+
+/* 列表与详情切换时给右栏一次轻入场：硬切会让整块表单像“啪”地贴上来。 */
+@keyframes model-detail-in {
+    from { opacity: 0; transform: translateX(10px); }
+    to { opacity: 1; transform: none; }
+}
+html.rd #settingsOverlay #settingsContent #modelPaneDetail.model-detail-in {
+    animation: model-detail-in .18s cubic-bezier(.22, .7, .25, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+    html.rd #settingsOverlay #settingsContent #modelPaneDetail.model-detail-in { animation: none; }
+}
+
+html.rd #settingsOverlay #settingsContent .prov-empty {
+    margin: 2px 4px 6px;
+    color: var(--rd-text-3);
+    font-size: 11px;
+}
+@media (max-width: 980px) {
+    html.rd #settingsOverlay #settingsContent #modelPageBody { min-height: 0; }
+}
+
+/* 三段切换只换显隐：给新出现的那一段一次轻入场，和分栏切换的 settings-panel-in 同一节奏。 */
+@keyframes model-view-pane-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: none; }
+}
+html.rd #settingsOverlay #settingsContent #tab-model .model-view-pane:not(.hidden) {
+    animation: model-view-pane-in .2s cubic-bezier(.22, .7, .25, 1) both;
+}
+@media (prefers-reduced-motion: reduce) {
+    html.rd #settingsOverlay #settingsContent #tab-model .model-view-pane:not(.hidden) { animation: none; }
+}
+
+/* ---------- 添加模型：独立三步页 ---------- */
+html.rd #settingsOverlay #settingsContent #tab-model.is-add .model-page-head,
+html.rd #settingsOverlay #settingsContent #tab-model.is-add .model-section-tabs { display: none !important; }
+
+html.rd #settingsOverlay .model-add-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+}
+html.rd #settingsOverlay .model-add-head .settings-page-sub {
+    max-width: 66ch;
+    margin: 9px 0 0;
+    color: var(--rd-text-2);
+    font-size: 12.5px;
+    line-height: 1.7;
+}
+html.rd #settingsOverlay #modelAddBackBtn { flex: none; min-height: 36px; }
+
+html.rd #settingsOverlay .model-add-section-title {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 2px 12px;
+}
+html.rd #settingsOverlay .model-add-section-title > b {
+    color: var(--rd-text-3);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+html.rd #settingsOverlay .model-add-section-title > span { color: var(--rd-text-3); font-size: 11px; }
+
+html.rd #settingsOverlay .model-add-steps { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+html.rd #settingsOverlay .model-add-step { display: flex; align-items: center; gap: 7px; color: var(--rd-text-3); font-size: 11px; }
+html.rd #settingsOverlay .model-add-step-num {
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1px solid var(--rd-border);
+    border-radius: 50%;
+    background: var(--rd-surface-2);
+    font-size: 11px;
+    font-weight: 700;
+}
+html.rd #settingsOverlay .model-add-step.is-on { color: var(--rd-text); }
+html.rd #settingsOverlay .model-add-step.is-on .model-add-step-num {
+    border-color: var(--rd-accent);
+    background: var(--rd-accent);
+    color: var(--rd-accent-contrast);
+}
+html.rd #settingsOverlay .model-add-step.is-done .model-add-step-num {
+    border-color: var(--rd-accent-border);
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+}
+html.rd #settingsOverlay .model-add-step-line { width: 26px; height: 1px; background: var(--rd-border); }
+
+html.rd #settingsOverlay .model-add-kind-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+html.rd #settingsOverlay .model-add-kind-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 14px;
+    border: 1px solid var(--rd-border);
+    border-radius: 13px;
+    background: var(--rd-surface);
+    color: var(--rd-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+html.rd #settingsOverlay .model-add-kind-card:hover { border-color: var(--rd-accent-border); background: var(--rd-hover); }
+html.rd #settingsOverlay .model-add-kind-avatar {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-size: 12px;
+    font-weight: 700;
+}
+html.rd #settingsOverlay .model-add-kind-card b { font-size: 12.5px; font-weight: 600; }
+html.rd #settingsOverlay .model-add-kind-card > span:last-child { color: var(--rd-text-3); font-size: 11px; line-height: 1.5; }
+
+html.rd #settingsOverlay .model-add-preset-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+html.rd #settingsOverlay .model-add-preset {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--rd-border);
+    border-radius: 13px;
+    background: var(--rd-surface);
+    color: var(--rd-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+}
+html.rd #settingsOverlay .model-add-preset:hover { border-color: var(--rd-accent-border); background: var(--rd-hover); }
+html.rd #settingsOverlay .model-add-preset.is-custom { border-style: dashed; background: transparent; color: var(--rd-accent); }
+html.rd #settingsOverlay .model-add-preset-logo {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: none;
+    border-radius: 8px;
+    background: var(--rd-surface-2);
+    color: var(--rd-accent);
+    font-size: 11px;
+    font-weight: 700;
+}
+html.rd #settingsOverlay .model-add-preset-copy { min-width: 0; }
+html.rd #settingsOverlay .model-add-preset-copy b { display: block; font-size: 12px; font-weight: 600; }
+html.rd #settingsOverlay .model-add-preset-copy span {
+    display: block;
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+html.rd #settingsOverlay .model-add-card {
+    max-width: 760px;
+    padding: 18px;
+    border: 1px solid var(--rd-border);
+    border-radius: 16px;
+    background: var(--rd-surface);
+}
+html.rd #settingsOverlay .model-add-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+html.rd #settingsOverlay .model-add-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+html.rd #settingsOverlay .model-add-field.is-full { grid-column: 1 / -1; }
+html.rd #settingsOverlay .model-add-field > label { color: var(--rd-text-2); font-size: 11px; font-weight: 600; }
+html.rd #settingsOverlay .model-add-hint { color: var(--rd-text-3); font-size: 11px; line-height: 1.55; }
+html.rd #settingsOverlay .model-add-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
+html.rd #settingsOverlay .model-add-chip {
+    min-height: 24px;
+    padding: 0 9px;
+    border: 1px solid var(--rd-border);
+    border-radius: 7px;
+    background: var(--rd-surface-2);
+    color: var(--rd-text-2);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+}
+html.rd #settingsOverlay .model-add-chip.is-on { border-color: var(--rd-accent-border); background: var(--rd-accent-soft); color: var(--rd-accent); }
+html.rd #settingsOverlay .model-add-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay .model-add-spacer { flex: 1; }
+html.rd #settingsOverlay .model-add-check { display: inline-flex; align-items: center; gap: 7px; color: var(--rd-text-2); font-size: 11px; }
+html.rd #settingsOverlay .model-add-check input { accent-color: var(--rd-accent); }
+
+@media (max-width: 980px) {
+    /* 顶栏已经写着「添加模型」并接管返回，页内不再重复大标题与返回键。 */
+    html.rd #settingsOverlay .model-add-head { display: block; padding: 0 2px 8px; margin-bottom: 0; border-bottom: 0; }
+    html.rd #settingsOverlay .model-add-head h1,
+    html.rd #settingsOverlay .model-add-head .settings-page-eyebrow,
+    html.rd #settingsOverlay #modelAddBackBtn { display: none !important; }
+    html.rd #settingsOverlay .model-add-head .settings-page-sub { margin: 0; font-size: 11.5px; }
+    html.rd #settingsOverlay .model-add-kind-grid,
+    html.rd #settingsOverlay .model-add-preset-grid { grid-template-columns: 1fr 1fr; }
+    html.rd #settingsOverlay .model-add-form-grid { grid-template-columns: 1fr; }
+    html.rd #settingsOverlay .model-add-card { padding: 14px; }
+}
+
+/* 手机宽度下服务商名容易折成两行，预设改单列；保存区把勾选与按钮分成两排，避免按钮被挤到角落。 */
+@media (max-width: 520px) {
+    html.rd #settingsOverlay .model-add-preset-grid { grid-template-columns: 1fr; }
+    html.rd #settingsOverlay .model-add-foot { row-gap: 10px; }
+    html.rd #settingsOverlay .model-add-foot .model-add-check { flex: 1 1 100%; }
+    html.rd #settingsOverlay .model-add-spacer { display: none; }
+    html.rd #settingsOverlay .model-add-foot [data-ma-back],
+    html.rd #settingsOverlay .model-add-foot [data-ma-submit] { flex: 1; }
+}
+
+/* 提供商详情头：名称 / 协议 / 默认 / 模型数 + 测试 / 删除，和总览卡片同一套语汇。 */
+html.rd #settingsOverlay #settingsContent .model-provider-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--rd-border);
+}
+html.rd #settingsOverlay #settingsContent .model-provider-head .prov-icon {
+    display: grid !important;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border-radius: 11px;
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+    font-size: 14px;
+    font-weight: 700;
+}
+html.rd #settingsOverlay #settingsContent .model-provider-head-copy { flex: 1; min-width: 0; }
+html.rd #settingsOverlay #settingsContent .model-provider-name { font-size: 16px; font-weight: 600; }
+html.rd #settingsOverlay #settingsContent .model-provider-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+html.rd #settingsOverlay #settingsContent .model-provider-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 0 7px;
+    border: 1px solid var(--rd-border);
+    border-radius: 6px;
+    background: var(--rd-surface-2);
+    color: var(--rd-text-3);
+    font-size: 11px;
+}
+html.rd #settingsOverlay #settingsContent .model-provider-chip.is-accent {
+    border-color: var(--rd-accent-border);
+    background: var(--rd-accent-soft);
+    color: var(--rd-accent);
+}
+html.rd #settingsOverlay #settingsContent .chat-provider-card .cpc-grid .is-full { grid-column: 1 / -1; }
+
+@media (max-width: 980px) {
+    html.rd #settingsOverlay #settingsContent .model-provider-head { flex-wrap: wrap; }
+}
+
+/* 模型分两段：已配置在上、可选在下；一行一个模型，加入/移除只搬位置，不在同一串 chip 里又勾又取消。 */
+html.rd #settingsOverlay #settingsContent .cpc-models { margin-top: 18px; }
+html.rd #settingsOverlay #settingsContent .cpc-models-head { margin-bottom: 8px; }
+html.rd #settingsOverlay #settingsContent .cpc-models-title { display: block; color: var(--rd-text); font-size: 12px; font-weight: 600; }
+html.rd #settingsOverlay #settingsContent .cpc-models-sub { display: block; margin-top: 2px; color: var(--rd-text-3); font-size: 10.5px; }
+html.rd #settingsOverlay #settingsContent .cpc-configured-list { display: flex; flex-direction: column; gap: 6px; }
+html.rd #settingsOverlay #settingsContent .cpc-configured-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--rd-border);
+    border-radius: 10px;
+    background: var(--rd-surface-2);
+}
+html.rd #settingsOverlay #settingsContent .cpc-configured-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--rd-text);
+    font-size: 12px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+html.rd #settingsOverlay #settingsContent .cpc-configured-actions { display: flex; flex: none; gap: 5px; }
+html.rd #settingsOverlay #settingsContent .cpc-configured-actions .btn-secondary { min-height: 26px; padding: 0 8px !important; font-size: 10.5px !important; }
+html.rd #settingsOverlay #settingsContent .cpc-models-empty { margin: 0; color: var(--rd-text-3); font-size: 11px; line-height: 1.5; }
+html.rd #settingsOverlay #settingsContent .cpc-available-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 16px 0 6px;
+}
+html.rd #settingsOverlay #settingsContent .cpc-available-title { flex: none; color: var(--rd-text-2); font-size: 11.5px; font-weight: 600; }
+html.rd #settingsOverlay #settingsContent .cpc-model-tools { display: flex; flex: 1; min-width: 0; gap: 6px; }
+html.rd #settingsOverlay #settingsContent .cpc-available-list {
+    border: 1px solid var(--rd-border);
+    border-radius: 10px;
+    background: var(--rd-surface-2);
+    overflow: hidden;
+}
+html.rd #settingsOverlay #settingsContent .cpc-available-row { display: flex; align-items: center; gap: 8px; padding: 8px 10px; }
+html.rd #settingsOverlay #settingsContent .cpc-available-row + .cpc-available-row { border-top: 1px solid var(--rd-border); }
+html.rd #settingsOverlay #settingsContent .cpc-available-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--rd-text-2);
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+html.rd #settingsOverlay #settingsContent .cpc-enable-model {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--rd-border);
+    border-radius: 8px;
+    background: var(--rd-surface);
+    color: var(--rd-accent);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+}
+html.rd #settingsOverlay #settingsContent .cpc-enable-model:hover { border-color: var(--rd-accent-border); background: var(--rd-accent-soft); }
+html.rd #settingsOverlay #settingsContent .cpc-danger-zone { margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--rd-border); }
+html.rd #settingsOverlay #settingsContent .cpc-danger-zone .cpc-delete { color: var(--rd-danger) !important; }
+
+@media (max-width: 980px) {
+    html.rd #settingsOverlay #settingsContent .cpc-configured-row { flex-wrap: wrap; }
+    html.rd #settingsOverlay #settingsContent .cpc-configured-name { flex: 1 1 100%; }
+    html.rd #settingsOverlay #settingsContent .cpc-configured-actions { width: 100%; justify-content: flex-end; }
+    html.rd #settingsOverlay #settingsContent .cpc-model-tools { flex-basis: 100%; }
+}

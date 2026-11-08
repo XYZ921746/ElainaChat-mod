@@ -27,7 +27,7 @@
         var el = $('marketHint');
         if (!el) return;
         el.textContent = text;
-        el.className = 'text-[11px] leading-relaxed mb-3 ' + (cls || 'text-indigo-400');
+        el.className = 'text-[11px] leading-relaxed mb-3 ' + (cls || 'text-dim');
     }
 
     /** 镜像源：cdn.jsdelivr.net 在部分网络被重置，gcore/testingcf 能落到包，索引清单也必须与包一致。 */
@@ -104,20 +104,22 @@
                     else if (dep.state === 'disabled') missing.push(d + '（未启用）');
                 }
             }
-            depLine = '<div class="text-[11px] text-indigo-400 leading-relaxed mt-0.5">依赖：' + esc(deps.join('、')) + '</div>';
+            depLine = '<div class="text-[11px] text-dim leading-relaxed mt-0.5">依赖：' + esc(deps.join('、')) + '</div>';
             if (missing.length) {
-                depLine += '<span class="block text-[11px] text-red-500 leading-relaxed mt-1">'
+                depLine += '<span class="block text-[11px] text-danger leading-relaxed mt-1">'
                     + '缺依赖：' + esc(missing.join('、')) + ' —— 先把它装上并打开开关</span>';
             }
         }
 
-        var kindBadge = '<span class="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 ml-1">'
-            + (p.kind === 'resource' ? '公共资源' : '界面') + '</span>';
-        var verBadge = p.version ? '<span class="text-[10px] text-indigo-400 ml-1">v' + esc(p.version) + '</span>' : '';
+        // 通用插件不打角标：多数插件都是通用，全打等于没打。
+        var plat = platformOf(p);
+        var platBadge = (plat === 'universal') ? ''
+            : badge(plat === 'desktop' ? '电脑' : '手机', 'accent');
+        var kindBadge = badge(p.kind === 'resource' ? '公共资源' : '界面', 'neutral');
+        var verBadge = p.version ? '<span class="text-[10px] text-dim ml-1">v' + esc(p.version) + '</span>' : '';
         var stateBadge = (st === 'installed')
-            ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-600 ml-1">已安装</span>'
-            : (st === 'update'
-                ? '<span class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-600 ml-1">可更新</span>' : '');
+            ? badge('已安装', 'ok')
+            : (st === 'update' ? badge('可更新', 'warn') : '');
 
         var btnText = (st === 'installed') ? '已安装' : (st === 'update' ? '更新' : '安装');
         var disabled = (st === 'installed') ? ' disabled' : '';
@@ -129,14 +131,14 @@
             + '<div class="min-w-0 flex-1">'
               + '<div class="flex items-start gap-2">'
                 + '<div class="min-w-0 flex-1">'
-                  + '<span class="text-xs font-semibold text-indigo-800">' + esc(p.name || p.id) + '</span>'
-                  + verBadge + kindBadge + stateBadge
-                  + '<div class="text-[11px] text-indigo-400 leading-relaxed mt-0.5">' + md(p.description) + '</div>'
+                  + '<span class="text-xs font-semibold text-ink">' + esc(p.name || p.id) + '</span>'
+                  + verBadge + platBadge + kindBadge + stateBadge
+                  + '<div class="text-[11px] text-dim leading-relaxed mt-0.5">' + md(p.description) + '</div>'
                   + depLine
                 + '</div>'
                 + '<div class="flex-none pt-0.5">' + btn + '</div>'
               + '</div>'
-              + (size ? '<div class="text-[10px] text-indigo-300 mt-1">包大小 ' + size + '</div>' : '')
+              + (size ? '<div class="text-[10px] text-dim mt-1">包大小 ' + size + '</div>' : '')
             + '</div>'
           + '</div>';
     }
@@ -146,6 +148,31 @@
     function marketQuery() {
         var el = $('marketSearch');
         return el ? String(el.value || '').trim().toLowerCase() : '';
+    }
+
+    /** 设备判定沿用 core.js 的 IS_MOBILE_DEVICE（APK 恒为手机）；guarded 引用，脚本被单独裁剪时不炸。 */
+    function marketIsMobile() {
+        return typeof IS_MOBILE_DEVICE !== 'undefined' && !!IS_MOBILE_DEVICE;
+    }
+
+    /** 平台分类筛选：all / mobile / desktop，单选；打开市场重置，不跨次记忆。 */
+    var marketPlatform = 'all';
+
+    /** 分类 chips 是静态 HTML，不随列表重渲，aria-pressed 要单独同步。 */
+    function syncMarketPlatformPills() {
+        var group = $('marketPlatformPills');
+        if (!group) return;
+        var btns = group.querySelectorAll('button[data-platform]');
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-platform') === marketPlatform ? 'true' : 'false');
+        }
+    }
+
+    /** 只认三个合法值，其余归 all（防自定义索引或传参带脏值）。 */
+    function setMarketPlatform(v) {
+        marketPlatform = (v === 'mobile' || v === 'desktop') ? v : 'all';
+        syncMarketPlatformPills();
+        renderMarketList();
     }
 
     /** 命中 id / 名字 / 说明 / 依赖：用户常按“能干什么”搜，只匹配名字太窄。 */
@@ -158,9 +185,9 @@
         return '<button type="button" id="marketPrereqToggle" class="w-full flex items-baseline gap-2 pt-2 text-left"'
             + ' aria-expanded="' + (marketPrereqOpen ? 'true' : 'false') + '"'
             + ' title="前置扩展默认收起；点一下展开">'
-            + '<span class="text-[11px] font-semibold text-indigo-500">前置扩展</span>'
-            + '<span class="text-[10px] text-indigo-300">' + count + ' 个 · ' + esc(note) + '</span>'
-            + '<span class="ml-auto text-[10px] text-indigo-400" data-prereq-caret>' + caret + '</span>'
+            + '<span class="text-[11px] font-semibold text-dim">前置扩展</span>'
+            + '<span class="text-[10px] text-dim">' + count + ' 个 · ' + esc(note) + '</span>'
+            + '<span class="ml-auto text-[10px] text-dim" data-prereq-caret>' + caret + '</span>'
             + '</button>';
     }
 
@@ -184,13 +211,22 @@
         var all = Array.isArray(lastIndex.plugins) ? lastIndex.plugins : [];
         var groups = splitMarketPlugins(all);
         var q = marketQuery();
-        var normal = groups.normal.filter(function (p) { return matchesQuery(p, q); });
-        var prereq = groups.prereq.filter(function (p) { return matchesQuery(p, q); });
+        var isMobile = marketIsMobile();
+        var byPlatform = function (p) { return matchesPlatform(p, marketPlatform, isMobile) && matchesQuery(p, q); };
+        var normal = groups.normal.filter(byPlatform);
+        var prereq = groups.prereq.filter(byPlatform);
         var hit = normal.length + prereq.length;
+        // 手机端「全部」视图藏着电脑插件时要点名，否则用户会以为商店只有眼前这几个
+        var hiddenDesktop = 0;
+        if (isMobile && marketPlatform === 'all') {
+            for (var i = 0; i < all.length; i++) if (platformOf(all[i]) === 'desktop') hiddenDesktop++;
+        }
+        var desktopNote = hiddenDesktop ? ' 另有 ' + hiddenDesktop + ' 个电脑插件在手机上不显示，点「电脑」分类查看。' : '';
 
         if (!hit) {
-            box.innerHTML = '<div class="text-[11px] text-indigo-400">没有匹配「' + esc(q) + '」的扩展包。</div>';
-            setHint('共 ' + all.length + ' 个扩展包，当前筛选出 0 个。换个词试试，或清空搜索框。', 'text-indigo-400');
+            var why = q ? '没有匹配「' + esc(q) + '」的扩展包。' : '这个分类下暂无扩展包。';
+            box.innerHTML = '<div class="text-[11px] text-dim">' + why + '</div>';
+            setHint('共 ' + all.length + ' 个扩展包，当前筛选出 0 个。换个分类或换个词试试。' + desktopNote, 'text-dim');
             return;
         }
         // 入场动画只在打开市场后的首次渲染播一次：搜索框每敲一键都重渲列表，逐卡重播会闪成一片。
@@ -207,15 +243,15 @@
         setHint('共 ' + all.length + ' 个扩展包'
             + (q ? '，筛选出 ' + hit + ' 个' : '')
             + (!q && prereq.length ? '（其中 ' + prereq.length + ' 个是前置扩展）' : '')
-            + '。装完回到「插件」栏打开开关才会生效。（源：' + marketIndexUrl() + '）',
-            'text-indigo-400');
+            + '。' + desktopNote + '装完回到「插件」栏打开开关才会生效。（源：' + marketIndexUrl() + '）',
+            'text-dim');
     }
 
     /** 拉索引 + 算已装 + 渲染，保留搜索词 */
     async function refreshMarketList() {
         var box = $('marketList');
         if (!box) return;
-        box.innerHTML = '<div class="text-[11px] text-indigo-400">正在读取商店索引…</div>';
+        box.innerHTML = '<div class="text-[11px] text-dim">正在读取商店索引…</div>';
         try {
             await fetchMarketIndex();
             lastInstalled = await installedMap();
@@ -224,7 +260,7 @@
             lastIndex = null;
             box.innerHTML = '';
             setHint('商店索引读取失败：' + String((err && err.message) || err)
-                + '。检查网络，或把下面的「商店源」改成可用的索引地址。', 'text-red-500');
+                + '。检查网络，或把下面的「商店源」改成可用的索引地址。', 'text-danger');
         }
     }
 
@@ -347,13 +383,13 @@
         var pct = (t.tot > 0) ? Math.min(100, Math.floor(t.got / t.tot * 100)) : -1;
         var barCls = 'h-full rounded-full transition-[width] duration-150 ';
         var barStyle = '';
-        if (t.phase === 'done') { barCls += 'bg-emerald-500'; barStyle = 'width:100%'; }
-        else if (t.phase === 'error') { barCls += 'bg-red-400'; barStyle = 'width:100%'; }
+        if (t.phase === 'done') { barCls += 'bg-ok'; barStyle = 'width:100%'; }
+        else if (t.phase === 'error') { barCls += 'bg-danger'; barStyle = 'width:100%'; }
         else if (t.phase === 'stopped') { barCls += 'bg-slate-400'; barStyle = 'width:100%'; }
-        else if (t.phase === 'install') { barCls += 'bg-indigo-400 animate-pulse'; barStyle = 'width:100%'; }
-        else if (t.phase === 'uninstall') { barCls += 'bg-amber-400 animate-pulse'; barStyle = 'width:100%'; }
-        else if (pct >= 0) { barCls += 'bg-indigo-400'; barStyle = 'width:' + pct + '%'; }
-        else { barCls += 'bg-indigo-300 animate-pulse'; barStyle = 'width:100%'; }
+        else if (t.phase === 'install') { barCls += 'bg-accent animate-pulse'; barStyle = 'width:100%'; }
+        else if (t.phase === 'uninstall') { barCls += 'bg-warn animate-pulse'; barStyle = 'width:100%'; }
+        else if (pct >= 0) { barCls += 'bg-accent'; barStyle = 'width:' + pct + '%'; }
+        else { barCls += 'bg-accent animate-pulse'; barStyle = 'width:100%'; }
 
         var note = String(t.note || '');
         if (t.phase === 'download') {
@@ -361,23 +397,23 @@
                 ? ' · ' + (fmtSize(t.got) || '0 KB') + ' / ' + fmtSize(t.tot)
                 : ' · 已下 ' + (fmtSize(t.got) || '0 KB');
         }
-        var noteCls = 'text-[10px] leading-relaxed mt-0.5 ' + (t.phase === 'error' ? 'text-red-500' : 'text-indigo-400');
+        var noteCls = 'text-[10px] leading-relaxed mt-0.5 ' + (t.phase === 'error' ? 'text-danger' : 'text-dim');
         var act = '';
         if (t.phase === 'prep' || t.phase === 'download' || t.phase === 'install') {
-            act = '<button type="button" data-dl-stop="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-red-400 hover:text-red-600" title="停止这次安装（已装上的包会留下）">停止</button>';
+            act = '<button type="button" data-dl-stop="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-danger hover:text-danger" title="停止这次安装（已装上的包会留下）">停止</button>';
         } else if (t.phase === 'done') {
-            act = '<button type="button" data-dl-un="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-400 hover:text-indigo-600" title="卸载这次装上的主插件（公共资源包保留）">卸载</button>'
-                + '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-300 hover:text-indigo-600" title="从列表移掉这一行">✕</button>';
+            act = '<button type="button" data-dl-un="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-dim hover:text-soft" title="卸载这次装上的主插件（公共资源包保留）">卸载</button>'
+                + '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-dim hover:text-soft" title="从列表移掉这一行">✕</button>';
         } else if (t.phase === 'stopped') {
-            act = '<button type="button" data-dl-go="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-emerald-600 hover:text-emerald-700" title="接着装完（已装好的包不会重新下载）">继续</button>'
-                + '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-300 hover:text-indigo-600" title="从列表移掉这一行">✕</button>';
+            act = '<button type="button" data-dl-go="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-ok hover:text-ok" title="接着装完（已装好的包不会重新下载）">继续</button>'
+                + '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-dim hover:text-soft" title="从列表移掉这一行">✕</button>';
         } else {
-            act = '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-indigo-300 hover:text-indigo-600" title="从列表移掉这一行">✕</button>';
+            act = '<button type="button" data-dl-x="' + t.id + '" class="flex-none rounded px-1 text-[10px] text-dim hover:text-soft" title="从列表移掉这一行">✕</button>';
         }
         return '<div class="market-dl-row" data-dl-id="' + t.id + '">'
             + '<div class="flex items-baseline gap-2">'
-              + '<span class="truncate text-[11px] font-semibold text-indigo-800">' + esc(t.title) + '</span>'
-              + '<span class="flex-none text-[10px] text-indigo-400">' + esc(dlPhaseText(t)) + '</span>'
+              + '<span class="truncate text-[11px] font-semibold text-ink">' + esc(t.title) + '</span>'
+              + '<span class="flex-none text-[10px] text-dim">' + esc(dlPhaseText(t)) + '</span>'
               + '<span class="ml-auto flex flex-none items-center gap-0.5">' + act + '</span>'
             + '</div>'
             + (note ? '<div class="' + noteCls + '">' + esc(note) + '</div>' : '')
@@ -445,11 +481,11 @@
                 if (item.missingBehind.length) {
                     setHint('注意：' + (cur.name || cur.id) + ' 依赖的 '
                         + item.missingBehind.join('、') + ' 在商店里找不到，装完可能无法加载。',
-                        'text-amber-600');
+                        'text-warn');
                 }
 
                 var pkgName = packageNameOf(cur);
-                setHint(prefix + '正在下载 ' + (cur.name || cur.id) + ' …', 'text-indigo-400');
+                setHint(prefix + '正在下载 ' + (cur.name || cur.id) + ' …', 'text-dim');
                 var pkgBytes = Number(cur.sizeBytes) || 0;
                 dlTaskPatch(dlId, { phase: 'download', note: prefix + (cur.name || cur.id), got: 0, tot: pkgBytes });
                 var blob = await downloadZip(cur.downloadUrl, pkgBytes, function (got, tot) {
@@ -463,7 +499,7 @@
                 }, tsk && tsk.ctrl ? tsk.ctrl.signal : undefined);
                 if (btn && isMain) btn.textContent = '安装中…';
                 dlTaskPatch(dlId, { phase: 'install', note: prefix + (cur.name || cur.id) });
-                setHint(prefix + '正在安装 ' + (cur.name || cur.id) + ' …', 'text-indigo-400');
+                setHint(prefix + '正在安装 ' + (cur.name || cur.id) + ' …', 'text-dim');
 
                 var res = await fetch('/api/plugins/install?name=' + encodeURIComponent(pkgName), {
                     method: 'POST',
@@ -491,10 +527,11 @@
                 : '';
             setHint((reloaded ? '✅ 已安装并已加载 ' : '✅ 已安装 ')
                 + (p.name || p.id) + extra
-                + (reloaded ? '，已生效。' : '，刷新页面后生效。'), 'text-emerald-600');
+                + (reloaded ? '，已生效。' : '，刷新页面后生效。'), 'text-ok');
             dlTaskDone(dlId, 'done', (reloaded ? '已安装并已加载' : '已安装，刷新页面后生效') + extra);
             if (typeof refreshModsList === 'function') void refreshModsList();
             await refreshMarketList();
+            return true;
         } catch (err) {
             // 主动停止不算失败：收成「已停止」，不标红
             var stopped = !!(tsk && tsk.stopped);
@@ -504,8 +541,26 @@
             setHint(stopped
                 ? '已停止安装 ' + (p.name || p.id) + '。已装上的包保留，想续装再点一次安装。'
                 : '安装失败：' + String((err && err.message) || err),
-                stopped ? 'text-amber-600' : 'text-red-500');
+                stopped ? 'text-warn' : 'text-danger');
+            return false;
         }
+    }
+
+    /** 更新检查：拉一遍商店索引（自定义源优先，多源回退），与本机已装版本逐条比对；索引拉不动就抛给调用方处理。 */
+    async function checkModUpdates(installedList) {
+        await fetchMarketIndex();
+        return sortUpdateFirstDeps(updateCandidatesOf(installedList, lastIndex.plugins));
+    }
+
+    /** 批量更新：逐个走安装管线（右下角悬浮窗逐条显示进度），返回逐条成败，失败的由调用方留在待更清单里。 */
+    async function updateModsBatch(items) {
+        var list = Array.isArray(items) ? items : [];
+        var out = [];
+        for (var i = 0; i < list.length; i++) {
+            var ok = await installFromMarket(list[i].plugin, null);
+            out.push({ id: list[i].plugin.id, ok: ok === true });
+        }
+        return out;
     }
 
     /** 打开市场：每次重拉索引且不预拉，避免拿到设备间过期的列表。 */
@@ -513,6 +568,8 @@
         var overlay = $('marketOverlay');
         if (!overlay) return;
         marketEntrancePending = true;
+        marketPlatform = 'all';
+        syncMarketPlatformPills();
         openOverlayPanel(overlay);
         try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
         dlDismissed = false;   // 进市场 = 想管下载，收起态要解开
@@ -540,6 +597,13 @@
         // 搜索：本地过滤，索引与已装状态已在内存
         $('marketSearch')?.addEventListener('input', function () { renderMarketList(); });
 
+        // 分类 chips：与安装按钮同一套事件委托，单选切换后重渲列表
+        $('marketPlatformPills')?.addEventListener('click', function (ev) {
+            var btn = ev.target && ev.target.closest ? ev.target.closest('button[data-platform]') : null;
+            if (!btn) return;
+            setMarketPlatform(btn.getAttribute('data-platform'));
+        });
+
         $('marketUrlSave')?.addEventListener('click', function () {
             var input = $('marketUrl');
             var v = input ? String(input.value || '').trim() : '';
@@ -557,7 +621,7 @@
             var id = btn.getAttribute('data-market-id');
             var p = (lastIndex && Array.isArray(lastIndex.plugins))
                 ? lastIndex.plugins.find(function (x) { return x.id === id; }) : null;
-            if (!p) { setHint('找不到这个插件的索引条目，请先点刷新。', 'text-red-500'); return; }
+            if (!p) { setHint('找不到这个插件的索引条目，请先点刷新。', 'text-danger'); return; }
             void installFromMarket(p, btn);
         });
 
@@ -599,6 +663,8 @@
         open: openMarket,
         close: closeMarket,
         indexUrl: marketIndexUrl,
+        checkUpdates: checkModUpdates,
+        updateBatch: updateModsBatch,
     };
 
     if (document.readyState === 'loading') {
