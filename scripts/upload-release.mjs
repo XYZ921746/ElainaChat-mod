@@ -32,7 +32,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_REPO = 'XYZ921746/elaina-mod';
+
+/** 默认仓库从 git remote 推出来：写死 owner/repo 会在仓库改名后静默传到错误的地方 */
+function repoFromRemote() {
+    try {
+        const url = execFileSync('git', ['config', '--get', 'remote.origin.url'], { encoding: 'utf8', cwd: ROOT }).trim();
+        const m = url.match(/github\.com[:/]([^/]+)\/([^/]+?)(?:\.git)?$/i);
+        if (m) return m[1] + '/' + m[2];
+    } catch { /* 没有 remote 时交给 --repo */ }
+    return '';
+}
 
 const args = process.argv.slice(2);
 const argValue = (name) => {
@@ -40,7 +49,11 @@ const argValue = (name) => {
     return i >= 0 ? args[i + 1] : undefined;
 };
 const dryRun = args.includes('--dry-run');
-const repo = argValue('--repo') || DEFAULT_REPO;
+const repo = argValue('--repo') || repoFromRemote();
+if (!repo) {
+    console.error('无法从 remote.origin.url 推出仓库，请用 --repo owner/name 指定');
+    process.exit(1);
+}
 const tag = argValue('--tag') || '';
 const notesFile = argValue('--notes');
 const assetsArg = argValue('--assets');
