@@ -234,6 +234,14 @@
             }
             const body = Object.keys(vars).map((k) => '  ' + k + ': ' + vars[k] + ';').join('\n');
             el.textContent = 'html[data-theme-template="' + id + '"]:not([data-theme="dark"]) {\n' + body + '\n}\n';
+            // 插件注册一定晚于启动时的 applyStored：那一刻这个 id 还不在清单里，属性已被当成"下线模板"摘掉。
+            // 用户存的选择仍然是它，模板一可用就得把属性补回去，否则刷新后一直停在默认配色。
+            try {
+                if (Store.getItem(TPL_KEY) === id) {
+                    document.documentElement.setAttribute('data-theme-template', id);
+                    saveBootSnapshot();
+                }
+            } catch (e) { /* 存储不可用：模板仍进选择器，选中后由 setTemplate 落属性 */ }
             refreshPicker();
             return true;
         } catch (e) { return false; }

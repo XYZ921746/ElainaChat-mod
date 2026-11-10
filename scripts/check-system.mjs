@@ -616,9 +616,16 @@ async function caseChatBackup(c) {
             Object.defineProperty(this, 'responseText', { get: () => '{"ok":true,"data":{}}' });
         };
         sandbox.window = sandbox;   // window 指向自己，够用
+        // 记忆正文的权威是 /api/memory/core，页面里由 state.memoryCore 承载：
+        // 备份导出从这里取（Store 键已不再是权威），初始值来自测试给的记忆键。
+        sandbox.state = { memoryCore: null };
         const ctx = vm.createContext(sandbox);
         vm.runInContext(storeSrc, ctx, { filename: 'store.js' });
         for (const [k, v] of store) sandbox.Store.setItem(k, v);
+        try {
+            sandbox.state.memoryCore = JSON.parse(store.get('elaina_open_memory_core') || 'null')
+                || { diary: [], promise: [], preference: [], plan: [], motivation: [], pivotal_memory: [] };
+        } catch { sandbox.state.memoryCore = null; }
         vm.runInContext(src, ctx, { filename: 'chat-backup.js' });
 
         // 测试里的 `store` 是 Store 的视图：断言问真正的存储层，而不是测试自己造的 Map。
@@ -901,8 +908,10 @@ async function caseLaunchScript(c) {
         '端口可用性判据 = 绑得上 + 没人接（含"连一下"探测）');
     c.ok(/if \(await isPortFree\(p, h\)\) return p/.test(serveSrc),
         'pickPort 用的是"绑得上且没人接"的判据（不是裸 canListen）');
-    c.ok(/HTTPS compat entry skipped/.test(serveSrc),
-        '兼容入口端口被占时不起它（不与之共享该端口）');
+    c.ok(/createSecureServer/.test(serveSrc) && /0x16/.test(serveSrc),
+        '同端口按首字节分流 HTTP / HTTPS');
+    c.ok(!/HTTPS_PORT/.test(serveSrc) && !/HTTPS compat entry/.test(serveSrc),
+        '不额外开 port+1 兼容入口（只有一个监听端口）');
 
     // 已有实例在跑 → 不再另起服务；退出码要与启动.bat 的短路对上，否则复用时窗口留着不走。
     c.ok(/EXIT_ALREADY_RUNNING\s*=\s*3/.test(serveSrc),

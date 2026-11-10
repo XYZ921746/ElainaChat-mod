@@ -34,28 +34,126 @@ function emptyMemoryCore() {
     return { diary: [], promise: [], preference: [], plan: [], motivation: [], pivotal_memory: [] };
 }
 
+/* 记忆正文的唯一权威是服务端 /api/memory/core；这里只初始化空结构，
+   真正的数据由 refreshMemoryCore() 异步拉取。旧版本数据由服务端启动迁移直接进库。 */
 function loadMemoryCore() {
-    const raw = Store.getItem('elaina_open_memory_core');
-    if (raw) {
-        try {
-            const parsed = JSON.parse(raw);
-            const core = { ...emptyMemoryCore(), ...parsed };
-            ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory'].forEach(k => {
-                if (!Array.isArray(core[k])) core[k] = [];
-            });
-            state.memoryCore = core;
-            return;
-        } catch (e) {
-            console.error(e);
-        }
-    }
     state.memoryCore = emptyMemoryCore();
+    memoryCoreSnapshotIds(state.memoryCore);
 }
 
-function saveMemoryCore() {
-    if (state.memoryCore) {
-        Store.setItem('elaina_open_memory_core', JSON.stringify(state.memoryCore));
+/* ── 记忆权威（M2b）────────────────────────────────────────────────────
+   服务端 SQLite 可用时正文以 /api/memory/core 为准：启动时先用 Store 键热身
+   （老版本 / Node 版的唯一来源），再异步换成服务端的 canonical 数据（条目带 id）。
+   保存走 PUT core：整类目替换 + dropIds（前端 diff 上一份 canonical 算出的删除清单），
+   服务端事务内 upsert + 删除，并广播 memory-change 让其它设备刷新。
+   服务端不可用（Node 版 404 / ELAINA_MEMORY_DB=0）时回退旧 Store 键 —— 此时它就是权威，
+   读写都走 Store 键，与未启用记忆库时完全一致。 */
+let memoryCoreRemoteState = 'unknown';
+let memoryCoreSavePromise = null;
+/* 上一份已与权威对齐的 id 集合：保存时 diff 出 dropIds。 */
+let memoryCoreSyncedIds = new Set();
+
+function memoryCoreEntryId(kind, entry) {
+    if (kind === 'diary') {
+        return 'diary:' + String(entry && entry.conversationId || '') + '|' + String(entry && entry.date || '');
     }
+    if (kind === 'plan') {
+        const body = [(entry && entry.date), (entry && entry.content)].filter(Boolean).join(' · ');
+        return 'plan:' + memoryVectorHash(body);
+    }
+    return kind + ':' + memoryVectorHash(String(entry || ''));
+}
+
+/* 记录当前 core 里每一条的 id（条目自带 id 优先；旧数据没有就按规则算，与服务端同口径）。 */
+function memoryCoreCollectIds(core) {
+    const ids = new Set();
+    if (!core) return ids;
+    (Array.isArray(core.diary) ? core.diary : []).forEach(e => { if (e) ids.add(e.id || memoryCoreEntryId('diary', e)); });
+    (Array.isArray(core.plan) ? core.plan : []).forEach(e => { if (e) ids.add(e.id || memoryCoreEntryId('plan', e)); });
+    ['promise', 'preference', 'motivation', 'pivotal_memory'].forEach(kind => {
+        (Array.isArray(core[kind]) ? core[kind] : []).forEach(text => { ids.add(memoryCoreEntryId(kind, text)); });
+    });
+    return ids;
+}
+
+function memoryCoreSnapshotIds(core) {
+    memoryCoreSyncedIds = memoryCoreCollectIds(core);
+}
+
+function normalizeMemoryCoreShape(core) {
+    const out = { ...emptyMemoryCore(), ...(core || {}) };
+    ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory'].forEach(k => {
+        if (!Array.isArray(out[k])) out[k] = [];
+    });
+    return out;
+}
+
+function adoptMemoryCore(core) {
+    state.memoryCore = normalizeMemoryCoreShape(core);
+    memoryCoreSnapshotIds(state.memoryCore);
+    // 记忆变了 → 相关缓存/提示跟着失效（能调就调，缺了不影响）。
+    try { if (typeof updateNotesBadge === 'function') updateNotesBadge(); } catch (e) { /* 忽略 */ }
+}
+
+/* 服务端记忆库是否可用。Node 版 404 / 开关关闭都会归到 unavailable，
+   此时旧 Store 键就是权威。结果缓存到本次页面生命周期。 */
+async function memoryCoreApiAvailable() {
+    if (memoryCoreRemoteState === 'unavailable' && typeof window !== 'undefined' && window.__nodeBase) {
+        memoryCoreRemoteState = 'unknown';
+    }
+    if (memoryCoreRemoteState === 'unknown') {
+        memoryCoreRemoteState = (typeof memoryItemsProbe === 'function')
+            ? await memoryItemsProbe() : 'unavailable';
+    }
+    return memoryCoreRemoteState === 'available';
+}
+
+/* 从服务端拉 canonical 六类目并替换本地。返回是否成功（失败保持本地不动）。 */
+async function refreshMemoryCore() {
+    if (!(await memoryCoreApiAvailable())) return false;
+    try {
+        const payload = await memoryItemsFetch('/core', {}, MEMORY_ITEMS_TIMEOUT_MS);
+        if (payload && payload.core) {
+            adoptMemoryCore(payload.core);
+            return true;
+        }
+    } catch (error) {
+        console.warn('[记忆] 读取服务端记忆失败，保留本地数据', error);
+    }
+    return false;
+}
+
+/* diff 出本次保存要删除的 id：上一份已对齐快照里有、现在没有的。 */
+function memoryCoreDroppedIds() {
+    const current = memoryCoreCollectIds(state.memoryCore);
+    const drops = [];
+    memoryCoreSyncedIds.forEach(id => { if (!current.has(id)) drops.push(id); });
+    return drops;
+}
+
+async function saveMemoryCore() {
+    if (!state.memoryCore) return;
+    if (await memoryCoreApiAvailable()) {
+        if (memoryCoreSavePromise) await memoryCoreSavePromise.catch(() => {});
+        memoryCoreSavePromise = (async () => {
+            const body = JSON.stringify({
+                core: state.memoryCore,
+                dropIds: memoryCoreDroppedIds(),
+                client: (typeof Store !== 'undefined' && typeof Store.clientId === 'function')
+                    ? Store.clientId() : ''
+            });
+            const payload = await memoryItemsFetch('/core', { method: 'POST', body });
+            adoptMemoryCore(payload.core);
+        })().catch((error) => {
+            // 服务端在但写入失败：不写 Store（那里已经不是权威），下一次保存会重试。
+            console.warn('[记忆] 保存到服务端失败，本轮只保留在页面', error);
+        }).finally(() => { memoryCoreSavePromise = null; });
+        await memoryCoreSavePromise;
+        return;
+    }
+    // 记忆库不可用（Node 版 / 开关关闭）：没有可写的权威，只保留在页面内存，
+    // 等记忆库恢复后的下一次保存写入。绝不写 Store 键——那里已经不是权威。
+    console.warn('[记忆] 记忆库不可用，本轮改动只保留在页面');
 }
 
 function todayDateStr() {
@@ -296,7 +394,24 @@ function getRelatedMemories(userText) {
             matched_essence: '',
             semantic: true
         }));
-    const all = vectorDiary.concat(matchEssencesWithText(userText));
+    // 结构化索引（服务端 FTS5）命中同样映射回 Store 里的日记条目：
+    // 正文与展示日期都以 Store 为准，索引只回答「哪几条相关」。
+    const itemHits = (typeof getPrefetchedMemoryItemHits === 'function') ? getPrefetchedMemoryItemHits(userText) : null;
+    const itemDiary = [];
+    if (Array.isArray(itemHits) && itemHits.length && typeof memoryItemsDiaryLookup === 'function') {
+        const lookup = memoryItemsDiaryLookup();
+        itemHits.forEach(hit => {
+            if (!hit || hit.kind !== 'diary') return;
+            const local = lookup.get(String(hit.id || ''));
+            itemDiary.push({
+                date: (local && local.date) || '',
+                content: (local && local.content) || hit.content || '',
+                matched_essence: '',
+                semantic: true
+            });
+        });
+    }
+    const all = itemDiary.concat(vectorDiary, matchEssencesWithText(userText));
     const unique = [];
     const seenDates = new Set();
     for (const memory of all) {

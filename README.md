@@ -2,14 +2,14 @@
 
 本地优先的 BYOK AI 角色聊天应用。程序本体只内置**文字聊天 + Agent 能力**，角色的呈现方式与界面细节交给**可装可卸的扩展包（mod）**：宿主不认识任何具体插件，插件只通过一份收窄的 host API 与固定的宿主插槽接入。
 
-- **零依赖、免构建**：克隆下来 `node start.mjs` 就能跑（Node.js ≥ 20），不需要 `npm install`，也没有构建步骤。
+- **零依赖、免构建**：克隆下来 `node web/serve.mjs` 就能跑（Node.js ≥ 20），不需要 `npm install`，也没有构建步骤。
 - **BYOK，数据全在本机**：接入你自己的大模型 API Key，请求从本机直接发给服务商；没有作者网关、共享套餐或内置密钥。
 - **mod 优先**：扩展包决定立绘、Live2D、桌宠、场景背景、情景演绎（galgame）等呈现；装了坏插件会被隔离并写盘自动停用，只在那张插件卡片上说明原因，不影响宿主与其它插件。Windows 桌面壳还允许插件申请**原生透明置顶窗**（桌宠浮在桌面上、可拖动、可点开菜单）；纯浏览器里该能力不可用，插件自带兜底。
 - **Agent 操作**：模型可以读写文件、执行命令、操作手机（点击 / 滑动 / 输入 / 截图 / 读通知短信通讯录日历）、写日记记忆（如 `recall_search` 凭日记找回历史原话）、创建定时任务；操作说明书按需下发，权限分档。
 - **AI 联网搜索与浏览器**：需要"现在的事实"时 AI 自己去搜（内置 **Tavily**，另有**自定义搜索源**），或者真的开一个独立浏览器窗口看页面、点按钮、填表单。
 - **MCP 客户端**：在「设置 → 扩展 → MCP」里加一台 MCP 服务器 —— 远程服务填一个 `https://…/mcp` 地址（Streamable HTTP），本地服务填一条启动命令（stdio），它提供的工具会自动出现在 AI 的能力清单里。只做客户端方向 —— **不会**把本机的文件与命令执行能力暴露出去。
 - **语音**：云端 ASR 识别（阿里百炼 / 小米 MiMo）与多服务商 TTS（MiMo / MiniMax 克隆音色 / 千问 Qwen-TTS / 兼容 OpenAI TTS）。
-- **自带访问控制**：局域网设备接入需要访问密码，设置密码后本机打开应用也要输入；没设置密码时局域网接口直接关闭、只有本机可用。密码有强度校验与三层防爆破，服务端同时支持 HTTPS 自签证书（手机端语音输入要用）。
+- **自带访问控制**：默认只监听 `127.0.0.1`，仅本机可用；要局域网访问，把 `data/config.json` 的 `host` 改成 `0.0.0.0`，并设置访问密码。密码可写在 `data/config.json` 的 `password` 统一管理，也可在设置里修改（落盘为 `data/auth.json` 的哈希）；有强度校验与三层防爆破。服务端在同一端口同时支持 HTTP/HTTPS（局域网页面自动跳 HTTPS，自签证书首次访问需点「高级 → 继续前往」）；端口、HTTPS 开关与自定义证书也在同一份配置里。
 - **数据备份与局域网共享**：在「设置 → 高级设置 → 我的数据」导出 / 导入标准 zip（`data/` + `mods/` + `skills/`）；同一局域网的两台设备也能直接开启共享、用 IP / 端口与访问密码互相拉取，不必先拷文件（需先设置访问密码）。
 - **版本检测**：设置 → 高级设置「版本与更新」直接查 GitHub 仓库的最新 Release；按当前运行形态（手机版 APK / 桌面版 exe / 电脑版源码）给出对应安装包，更新说明按 Markdown 渲染（与插件 README 同一套渲染器），**只提示与下载，不自动替换程序**。GitHub 被 hosts / DNS 指偏时自动改用公共 DNS 解析真实 IP 直连（证书仍按 api.github.com 校验，不改系统设置）。
 - **PWA**：浏览器打开后点顶栏「安装」，即可装成桌面独立应用。
@@ -39,7 +39,7 @@
 - **BYOK 直连**：支持 OpenAI 兼容（DeepSeek / 硅基流动 / OneAPI / Ollama…）、Anthropic、OpenAI Responses 三种对话协议，可填自己的 Base URL；可以配多个提供商、每家勾选多个模型，选一个默认模型并设置失败回退顺序（设置 → 模型：总览 / 我的模型 / 使用偏好）；各家 API Key 分开存。
 - **AI 权限分档**：「关闭 / 逐条确认 / 自动通过（禁止删除）/ 完全访问（含删除）」四档，前三档同时管电脑与手机。
 - **局域网访问**：手机 / 平板用局域网地址打开，凭启动窗口打印的访问密码登录；本机（127.0.0.1）免密。
-- **软件内日志**：日志按级别与模块查看、可导出；敏感字段（含 API Key）落盘前脱敏。
+- **软件内日志**：时间 / 模块 / 级别 / 正文分色显示，可按级别与模块筛选、可导出；控制台同一套配色。敏感字段（含 API Key）落盘前脱敏。
 
 ## 下载与安装
 
@@ -53,7 +53,7 @@
 ElainaChat/
 ├─ ElainaChat.exe     # WebView2 外壳：自动拉起内置 node 并打开界面，托盘常驻
 ├─ node/node.exe      # 随包携带的 Node 运行时
-├─ shell.json         # 外壳配置（入口 start.mjs、端口）
+├─ shell.json         # 外壳配置（入口 web/serve.mjs、端口）
 ├─ app/               # 程序本体（web/ server/ scripts/ …）与 app\data\
 └─ README.md          # 便携版使用说明
 ```
@@ -64,14 +64,14 @@ ElainaChat/
 
 ### 安卓版
 
-下载 `ElainaChat-mod-x.y.z.apk`（仅 arm64-v8a；debug 构建另带 x86_64 供模拟器用），在手机上允许「安装未知来源应用」后安装。APK 把 `web/` 打进 WebView，并在 `:node` 独立进程里内嵌 Node 运行时来承载需要服务端的那部分能力 —— 是否打包 Node 由构建开关 `ELAINA_NODE_RUNTIME` 决定，关掉时前端自动回落到原生实现，APK 体积也会小很多。
+下载 `ElainaChat-mod-x.y.z.apk`（仅 arm64-v8a；debug 构建另带 x86_64 供模拟器用），在手机上允许「安装未知来源应用」后安装。APK 把 `web/` 打进 WebView，服务端是静态编译的 Go 单文件（`libelaina_server.so`，跑在 `:node` 独立进程里，不需要 Node 运行时）；构建开关 `ELAINA_LOCAL_SERVER` 关掉时不打包服务二进制，前端回落到原生实现，APK 体积也会小很多。
 
 > 包名与发布文件名可能随版本调整，**以 Releases 页面实际列出的文件为准**。
 
 ## 从源码运行
 
 ```bash
-node start.mjs
+node web/serve.mjs
 # 浏览器打开 http://127.0.0.1:3999
 ```
 
@@ -95,7 +95,7 @@ node start.mjs
 | AI 读写手机文件 | 不支持 | 支持（Agent 工作区 + 你授权的一个文件夹） |
 | 插件安装 / 卸载 | 支持（丢进 `mods/`、应用内市场或「上传安装」） | 支持（只能应用内市场 / 「上传安装」） |
 | 插件的桌面置顶窗（`host.desktopWindow`） | 支持（只有 WebView2 桌面壳有；纯浏览器里 `available()` 为 false） | 不支持 |
-| 插件的服务端半边（`manifest.server`） | 支持（`web/serve.mjs` 装载） | 支持（内嵌 Node 装载同一份 `server/mod-server.mjs`；未打包 Node 时回落原生兜底） |
+| 插件的服务端半边（`manifest.server`） | 支持（`web/serve.mjs` 装载） | 支持（`libelaina_server.so` 在 `:node` 进程里装载同一套服务端契约；未打包服务二进制时回落原生兜底） |
 | AI 用浏览器 / MCP 客户端 | 支持 | 不支持（这两项依赖电脑侧的本机服务） |
 | 数据备份 | 导出标准 zip：`data/`（聊天数据）+ `mods/`（插件）+ `skills/`（技能），解压即见三类 | 导出到手机存储（`data/`），可与电脑版互相导入；插件 / 技能需在电脑版恢复 |
 
@@ -137,13 +137,12 @@ ElainaChat-mod/
 ├─ skills/                  # 技能目录（给 AI 的纯文本指令与知识；自带 mod-authoring-guide）
 ├─ mods/                    # 扩展包安装位（插件源码不入库；经应用内市场安装）
 ├─ data/                    # 运行时数据（主 data + 对话 data，见下）
-├─ start.mjs                # 启动入口（端口策略在 web/serve.mjs）
 ├─ 启动.bat                 # Windows 双击启动
 ├─ 开发文档.md               # 架构、契约表与变更史
 └─ package.json
 ```
 
-- **`data/` 分两层**：`main/` 是软件级记录（设置、密钥、人设卡、记忆、音色样本），`conversations/` 是一个对话一个 JSON。`logs/`、`auth.json`、`sessions.json`、`cert.pem`/`key.pem` 是服务自身的运行件。目录结构见 [`开发文档.md`](开发文档.md) 第 2 节。
+- **`data/` 分两层**：`main/` 是软件级记录（设置、密钥、人设卡、记忆、音色样本），`conversations/` 是一个对话一个 JSON。`logs/`、`auth.json`、`sessions.json`、`cert.pem`/`key.pem`（自签证书）与 `config.json`（端口 / 监听地址 / HTTPS / 自定义证书 / 访问密码）是服务自身的运行件。目录结构见 [`开发文档.md`](开发文档.md) 第 2 节。
 - **打包不进仓库**：Windows 外壳 / NSIS 安装器与产物都在本地的 `dist/`，APK 工程在上一级的 `android-app/`；仓库只保留 `dist/Android/scripts/sync-web.mjs` 作为检查夹具。
 
 ## 开发
@@ -156,7 +155,7 @@ ElainaChat-mod/
 ## 隐私与数据
 
 - 聊天记录、设置、API Key 全部存在本地 `data/`，不进仓库、不上传作者服务器；请求由本机直连你填的服务商。
-- 局域网访问密码在 `data/auth.json`；本机 HTTPS 自签证书在 `data/cert.pem` 与 `data/key.pem`（首次启动自动生成）。
+- 访问密码可写在 `data/config.json` 的 `password`（启动时同步为 `data/auth.json` 的哈希），也可在设置里修改；`data/` 已被 `.gitignore` 排除。自签 HTTPS 证书默认在 `data/cert.pem` 与 `data/key.pem`；也可替换这两个文件（或在 `data/config.json` 里指定其它路径），应用不会覆盖 subject 不含应用名的证书。
 - 日志写入 `data/logs/`，敏感字段（含各类 API Key）落盘前脱敏；启动窗口里的访问密码不会写进日志文件。
 - 手机版把数据放在应用私有目录，API Key 走 Android Keystore 加密。
 

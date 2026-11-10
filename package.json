@@ -1,11 +1,11 @@
 {
   "name": "elainachat-mod",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "license": "GPL-3.0-or-later",
   "main": "web/serve.mjs",
   "scripts": {
-    "start": "node start.mjs",
+    "start": "node web/serve.mjs",
     "check": "node scripts/run-checks.mjs",
     "check:serial": "node scripts/run-checks.mjs --serial",
     "check:fast": "node scripts/run-checks.mjs --only mod",

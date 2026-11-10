@@ -24,6 +24,27 @@ function getNativeSecretsPlugin() {
     // 原生密钥插件只在 APK 的 Capacitor 里注册；Web 上自然为 undefined，不需再判断平台（D5）。
     return window.Capacitor?.Plugins?.ByokSecrets || null;
 }
+/** Web 密钥表 → 内存（只读） */
+function readWebApiSecretsIntoState() {
+    const raw = (() => {
+        try { return Store.getItem('elainachat_open_api_secrets') || ''; } catch { return ''; }
+    })();
+    try {
+        const parsed = JSON.parse(raw || '{}');
+        API_SECRET_NAMES.forEach(name => { state.settings[name] = String(parsed?.[name] || ''); });
+    } catch {
+        API_SECRET_NAMES.forEach(name => { state.settings[name] = ''; });
+    }
+}
+/** 多设备同步只重读密钥，不跑迁移：迁移会 persistSettings，同步时重跑会把本地刚排进队列的设置包冲掉。 */
+function reloadApiSecretsFromStore() {
+    if (getNativeSecretsPlugin()) {
+        void loadApiSecrets().catch(() => { /* 读不到就保留现值，下次同步再试 */ });
+        return;
+    }
+    readWebApiSecretsIntoState();
+    restoreObjectSecrets();
+}
 async function loadApiSecrets() {
     const nativePlugin = getNativeSecretsPlugin();
     if (nativePlugin?.getSecret) {
@@ -39,15 +60,7 @@ async function loadApiSecrets() {
         Object.assign(state.settings, Object.fromEntries(values.filter(Boolean)));
     } else {
         // Web 版：API Key 按用户选择存进 data/（store.js 持久化到 data/store.json）。
-        const raw = (() => {
-            try { return Store.getItem('elainachat_open_api_secrets') || ''; } catch { return ''; }
-        })();
-        try {
-            const parsed = JSON.parse(raw || '{}');
-            API_SECRET_NAMES.forEach(name => { state.settings[name] = String(parsed?.[name] || ''); });
-        } catch {
-            API_SECRET_NAMES.forEach(name => { state.settings[name] = ''; });
-        }
+        readWebApiSecretsIntoState();
     }
     restoreObjectSecrets();
     // 密钥读完后再跑老配置共用凭据迁移：上面的赋值会把新键覆盖成空值。
@@ -219,7 +232,7 @@ async function migrateLegacySharedMimoCredentials() {
     // 版本标记写进普通设置，不在 API_SECRET_NAMES 里，不会被密钥库覆盖。
     try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
     // 迁移出的 TTS Key 必须同时写进密钥库，否则下次启动会被空值覆盖，而版本标记已置位不再重迁。
-    // 必须传整个 state.settings：saveApiSecrets 会按传入对象归一化每个密钥名，只传部分会把其余写成空值。
+    // 传整个 state.settings：迁移同时可能改到多个密钥名，少传一个那条迁移就白写。
     try { await saveApiSecrets(state.settings); }
     catch (e) { console.warn('[BYOK] MiMo 凭据迁移写入密钥库失败', e); }
 }
@@ -250,20 +263,28 @@ function migrateAgentReadDefaultsToOff() {
     try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
 }
 
+/* 只落盘调用方明确给出的密钥名，并与已存密钥表合并。
+   不能按 API_SECRET_NAMES 全量归一化再整体替换：state.settings 可能因为别处的合并（多设备同步只重载设置包、
+   密钥还没回填）少了某个名字，全量写回会把"缺失"当成"用户清空"，把密钥库连同其它设备的 Key 一起冲掉。 */
 async function saveApiSecrets(secrets) {
-    const normalized = Object.fromEntries(API_SECRET_NAMES.map(name => {
-        const value = secrets?.[name];
+    const source = (secrets && typeof secrets === 'object') ? secrets : {};
+    const provided = API_SECRET_NAMES.filter(name => Object.prototype.hasOwnProperty.call(source, name));
+    const normalized = {};
+    provided.forEach(name => {
+        const value = source[name];
         // chatProviderKeys 是唯一的对象值条目，序列化成 JSON 串进密钥库；其余名字保持字符串。
-        const serialized = (value && typeof value === 'object') ? JSON.stringify(value) : String(value || '').trim();
-        return [name, serialized];
-    }));
+        normalized[name] = (value && typeof value === 'object') ? JSON.stringify(value) : String(value || '').trim();
+    });
     const nativePlugin = getNativeSecretsPlugin();
     if (nativePlugin?.setSecret) {
-        await Promise.all(API_SECRET_NAMES.map(name => nativePlugin.setSecret({ name, value: normalized[name] })));
-    } else {
-        const raw = JSON.stringify(normalized);
+        await Promise.all(provided.map(name => nativePlugin.setSecret({ name, value: normalized[name] })));
+    } else if (provided.length) {
+        let stored = {};
+        try { stored = JSON.parse(Store.getItem('elainachat_open_api_secrets') || '{}') || {}; } catch (e) { stored = {}; }
+        if (!stored || typeof stored !== 'object' || Array.isArray(stored)) stored = {};
+        Object.assign(stored, normalized);
         // API Key 随其它数据一起进 data/；代价是拷走 data/ 就等于拷走密钥。
-        try { Store.setItem('elainachat_open_api_secrets', raw); }
+        try { Store.setItem('elainachat_open_api_secrets', JSON.stringify(stored)); }
         catch (e) { console.warn('[BYOK] API Key 保存失败', e); }
     }
     Object.assign(state.settings, normalized);

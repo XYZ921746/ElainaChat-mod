@@ -2753,9 +2753,15 @@
         .log-line[data-level="ERROR"] .log-lv { color: #f87171; }
         .log-line[data-level="CRITICAL"] .log-lv { color: #fca5a5; font-weight: 700; }
         .log-time { color: #64748b; }
+        /* 模块色由 renderEntry 按模块名内联（与服务端同一套色板），这条只作兜底 */
         .log-tag { color: #a78bfa; }
         .log-loc { color: #64748b; }
         .log-msg { color: #cbd5e1; }
+        /* 正文随级别变色，与控制台一致：长日志里不必逐行读级别列，扫颜色就能分出提示与报错 */
+        .log-line[data-level="DEBUG"] .log-msg { color: #94a3b8; }
+        .log-line[data-level="WARN"] .log-msg { color: #fcd34d; }
+        .log-line[data-level="ERROR"] .log-msg { color: #fca5a5; }
+        .log-line[data-level="CRITICAL"] .log-msg { color: #fecaca; font-weight: 600; }
         .log-empty { color: #64748b; padding: 12px 4px; }
 
         /* ---- 状态栏 ---- */

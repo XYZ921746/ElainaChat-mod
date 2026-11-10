@@ -2186,6 +2186,7 @@ function readProviderSettingsForm() {
     const chat = readChatProvidersFromDom();
     const visionPairSelect = document.getElementById('settingVisionModelPair');
     const visionPair = visionPairSelect ? parseChatModelKey(visionPairSelect.value) : { providerId: '', model: '' };
+    const isLegacyVision = Boolean(visionPairSelect && visionPair.providerId === LEGACY_VISION_PROVIDER);
     const memoryModelSelect = document.getElementById('settingMemoryModel');
     // 默认/回退的 DOM 现在在「模型」顶层页里：元素在就以 DOM 为准（比 state 新），
     // 元素不在（模型页没进出过）保留 state。
@@ -2208,15 +2209,18 @@ function readProviderSettingsForm() {
                 .filter((p) => p.providerId && p.model)
             : (Array.isArray(state.settings.fallbackChatModels) ? state.settings.fallbackChatModels : []),
         // 不再是开关：下拉选了模型 = 开，选「不使用」= 关（显式清绑定）；下拉不在 DOM 里时保留 state。
+        // 「独立地址」是下拉里的保留项：它没有 providerId，不能按"空 = 不使用"处理，否则升级后第一次保存就把它静默关掉。
         visionEnabled: visionPairSelect
-            ? Boolean(visionPair.providerId && visionPair.model)
+            ? (isLegacyVision || Boolean(visionPair.providerId && visionPair.model))
             : (state.settings.visionEnabled === true),
-        visionProviderId: visionPairSelect
-            ? visionPair.providerId
-            : String(state.settings.visionProviderId || ''),
-        visionModel: visionPairSelect
-            ? visionPair.model
-            : String(state.settings.visionModel || ''),
+        visionProviderId: isLegacyVision
+            ? ''
+            : (visionPairSelect ? visionPair.providerId : String(state.settings.visionProviderId || '')),
+        visionModel: isLegacyVision
+            ? String(state.settings.visionModel || '')
+            : (visionPairSelect
+                ? visionPair.model
+                : String(state.settings.visionModel || '')),
         visionBaseUrl: String(state.settings.visionBaseUrl || ''),
         visionApiKey: String(state.settings.visionApiKey || ''),
         // 记忆整理三态：off = 关闭；'' = 沿用当前对话模型；具体键 = 单独指定的整理模型。控件缺失时保留 state，不误关记忆。
@@ -2259,9 +2263,29 @@ function fillTavilySettings() {
     updateTavilyHint();
 }
 
+/** 直接填「独立地址 + Key」的视觉配置在提供商池里没有对应项（visionProviderId 为空），
+    下拉里用一个保留键代表它，否则升级后它既显示不出来、又会在保存时被当成"不使用"关掉。 */
+const LEGACY_VISION_PROVIDER = '__legacy_vision__';
+
+function legacyVisionModel() {
+    const s = state.settings;
+    if (!String(s.visionBaseUrl || '').trim() || !String(s.visionApiKey || '').trim()) return '';
+    return String(s.visionModel || '').trim();
+}
+
 /** 视觉模型下拉：候选与一级「默认模型」同一份（提供商 × 已勾选模型），不另配一套模型名。 */
 function visionModelPairOptions() {
-    return chatModelPairOptions(Array.isArray(state.settings.chatProviders) ? state.settings.chatProviders : []);
+    const out = chatModelPairOptions(Array.isArray(state.settings.chatProviders) ? state.settings.chatProviders : []);
+    const legacy = legacyVisionModel();
+    if (legacy) {
+        out.push({
+            key: chatModelKey({ providerId: LEGACY_VISION_PROVIDER, model: '' }),
+            providerId: LEGACY_VISION_PROVIDER,
+            model: '',
+            label: '独立地址 · ' + legacy
+        });
+    }
+    return out;
 }
 
 /** 当前视觉配置对应的下拉键；只存了模型名（旧数据）时按模型名在库里反查一家。 */
@@ -2271,6 +2295,10 @@ function currentVisionPairKey() {
     if (!model) return '';
     const providerId = String(s.visionProviderId || '');
     if (providerId) return chatModelKey({ providerId, model });
+    // 没有 providerId 但独立地址可用：只有开关确实开着才算"选中旧配置"，关着时仍显示「不使用」。
+    if (legacyVisionModel() && s.visionEnabled === true) {
+        return chatModelKey({ providerId: LEGACY_VISION_PROVIDER, model: '' });
+    }
     const hit = visionModelPairOptions().find((o) => o.model === model);
     return hit ? hit.key : '';
 }

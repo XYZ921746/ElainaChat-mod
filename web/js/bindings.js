@@ -494,7 +494,13 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         if (state.notesMode) exitNotesMode();
         else if (state.diaryMode) exitDiaryMode();
         else if (state.memoryPageMode) exitMemoryPage();
-        else syncRailActive();
+        else {
+            syncRailActive();
+            // 宽屏对话页默认把侧栏收成竖栏；点「对话」应把列表展开出来，否则看起来像点了没反应。
+            if (window.innerWidth > 980 && document.documentElement.classList.contains('rd-sidebar-collapsed')) {
+                expandSidebarPanel();
+            }
+        }
     });
     // 侧栏这三个入口是「去哪一页」而不是开关：已经在该页时再点保持原页与滚动位置，
     // 回对话只走左侧「对话」或页面自己的返回键。

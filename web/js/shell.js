@@ -45,6 +45,8 @@ function keepFocusedComposerVisible(input) {
 }
 
 // 宽屏：对话面板的展开 / 收起 —— 只收起「对话列表 + 分类」栏，76px 竖栏保留；窄屏是抽屉，不参与布局。
+let sidebarPinnedOpen = false;
+
 function setSidebarCollapsed(collapsed) {
     if (window.innerWidth <= 980) return;
     const on = document.documentElement.classList.toggle('rd-sidebar-collapsed', Boolean(collapsed));
@@ -56,14 +58,23 @@ function setSidebarCollapsed(collapsed) {
     }
 }
 
-function toggleSidebarPanel() {
+/** 用户手动展开：对话页默认收起，但手动打开后不能被 syncSidePanelForView 立刻收回去。 */
+function expandSidebarPanel() {
     if (window.innerWidth <= 980) return;
-    setSidebarCollapsed(!document.documentElement.classList.contains('rd-sidebar-collapsed'));
+    sidebarPinnedOpen = true;
+    setSidebarCollapsed(false);
 }
 
-/** 只有首页展开（要挑对话），对话、回忆整页、设置 / 成就 / 市场都收起。 */
-function syncSidePanelForView() {
+function toggleSidebarPanel() {
     if (window.innerWidth <= 980) return;
+    const collapsed = !document.documentElement.classList.contains('rd-sidebar-collapsed');
+    sidebarPinnedOpen = !collapsed;
+    setSidebarCollapsed(collapsed);
+}
+
+/** 只有首页展开（要挑对话），对话、回忆整页、设置 / 成就 / 市场都收起；对话页手动展开过则保持。 */
+function syncSidePanelForView() {
+    if (window.innerWidth <= 980) { sidebarPinnedOpen = false; return; }
     const initEl = document.getElementById('initialState');
     const home = initEl ? !initEl.classList.contains('hidden') : false;
     let overlayOpen = false;
@@ -73,7 +84,18 @@ function syncSidePanelForView() {
     });
     let onPage = false;
     try { onPage = Boolean(state.notesMode || state.diaryMode || state.memoryPageMode); } catch (e) { onPage = false; }
-    setSidebarCollapsed(overlayOpen || onPage || !home);
+    if (overlayOpen || onPage) {
+        sidebarPinnedOpen = false;
+        setSidebarCollapsed(true);
+        return;
+    }
+    if (home) {
+        sidebarPinnedOpen = false;
+        setSidebarCollapsed(false);
+        return;
+    }
+    // 对话页默认收起；用户手动展开过就保持展开，直到他自己收起或进入整页 / 弹层。
+    if (!sidebarPinnedOpen) setSidebarCollapsed(true);
 }
 
 /** 用观察整页容器的显隐来同步面板，而不是在每个 enter/exit 里各补一句：入口太多（竖栏、设置分栏、插件跳转、系统返回），漏一处就有一条路径不收起。 */

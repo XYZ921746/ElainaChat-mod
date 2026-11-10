@@ -41,6 +41,11 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
     let installReport = { at: 0, results: [] };
     const INSTALL_REPORT_TTL = 5 * 60 * 1000;   // 5 分钟，足够用户打开设置页看到
     let indexWriteQueue = Promise.resolve();
+    /** 同一插件目录的安装链：见 writePluginFiles 的包装 */
+    const installChains = new Map();
+    /** 安装临时目录多久算「陈旧」：扫描在 /api/plugins 与 /mods/index.json 上都会跑，
+        正在安装的 staging 目录还很新，无条件删会让安装中途丢掉自己正在写的文件。 */
+    const INSTALL_STAGING_STALE_MS = 10 * 60 * 1000;
 
     /** 读 manifest.json（优先）或从目录名推断：id 的权威来源是 manifest.id（插件作者声明的身份，也是资源路径与依赖引用的基准），只有缺失/非法时才回落到目录名并走 normalizeModId 剥版本号；MOD_ID_RE 校验必须保留 —— manifest 是外部输入，不能直接信 */
     async function readManifest(dir, fallbackId) {
@@ -72,8 +77,19 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         return writePluginFiles(buf, id);
     }
 
+    /** 同一插件目录的安装串行化：两个请求各自「删旧目录 + 重命名」会交错，Windows 上第二个 rename 直接 EPERM。
+        排队而不是拒绝：调用方各自会重扫，串行后两次安装都完整。 */
+    function writePluginFiles(buf, id) {
+        const prev = installChains.get(id) || Promise.resolve();
+        const run = prev.then(() => writePluginFilesNow(buf, id), () => writePluginFilesNow(buf, id));
+        const tail = run.catch(() => {});
+        installChains.set(id, tail);
+        tail.finally(() => { if (installChains.get(id) === tail) installChains.delete(id); });
+        return run;
+    }
+
     /** 解压并落盘（extractPluginZip 与 installFromBuffer 的公共实现）：id 先过白名单，每条目解析后的绝对路径必须仍在插件目录内，危险的可执行类型跳过，总体积封顶；抽成一份是为了让"从文件装"和"从上传装"走同一条安全路径 */
-    async function writePluginFiles(buf, id) {
+    async function writePluginFilesNow(buf, id) {
         // allowScripts: true —— mod 的本质就是 JS（默认黑名单会拦掉 .js/.mjs，解 mod 包会得到只有 manifest.json 的残缺插件）；路径穿越 / 绝对路径 / 体积上限 / .exe 等仍全部拦截。
         const { files } = unzip(buf, { allowScripts: true });
 
@@ -175,9 +191,14 @@ export function createModManager({ modsDir, unzip, isUnsafeEntryName, effectiveE
         const entries = await readdir(modsDir, { withFileTypes: true }).catch(() => []);
 
         // 顺手清掉安装中途留下的 `.installing-*` 临时目录：进程被杀时它会留在磁盘上，隐藏、不会被扫成插件，但白占几十 MB 且用户看不见。
+        // 只清陈旧的：扫描可能在别人的安装请求进行中被调用（插件列表 / 清单都会触发），删掉新鲜的 staging 等于替对方删掉半成品。
         const stale = [];
         for (const e of entries) {
-            if (e.isDirectory() && e.name.startsWith('.installing-')) stale.push(e.name);
+            if (!e.isDirectory() || !e.name.startsWith('.installing-')) continue;
+            try {
+                const st = await stat(path.join(modsDir, e.name));
+                if (Date.now() - st.mtimeMs >= INSTALL_STAGING_STALE_MS) stale.push(e.name);
+            } catch (e) { /* 目录已被并发安装改名/删除：下一轮再说 */ }
         }
         if (stale.length) {
             for (const name of stale) {

@@ -192,15 +192,42 @@ async function runRecallSearch(args) {
                 const item = hit && hit.item;
                 if (!item) return false;
                 if (convHint && !String(item.title || '').toLowerCase().includes(convHint)) return false;
-                if (dateHint && !recallDiaryDateMatches(dateHint, item.date)) return false;
+                // 日期提示只对日记/计划这类真有日历日期的条目生效：对话原文的 date 是时刻串（21:54:32），
+                // 拿它比日历日期永远不匹配，会把带日期提问时的 msg 命中整批过滤掉。
+                if (dateHint && item.kind !== 'msg' && !recallDiaryDateMatches(dateHint, item.date)) return false;
                 return true;
             });
         }
     }
 
     // ① 日记命中：向量语义命中排在前，其后是日期/对话/关键词的字面命中。
+    // 结构化索引（服务端 FTS5）命中作为补充候选，正文与日期仍取 Store 里的日记条目。
     const diary = (state.memoryCore && Array.isArray(state.memoryCore.diary)) ? state.memoryCore.diary : [];
-    const semanticDiary = (vectorHits || [])
+    let itemDiary = [];
+    if (query && typeof searchMemoryItems === 'function') {
+        try {
+            const hits = await searchMemoryItems(query, { limit: 30, kind: 'diary' });
+            if (Array.isArray(hits) && hits.length) {
+                const lookup = (typeof memoryItemsDiaryLookup === 'function') ? memoryItemsDiaryLookup() : new Map();
+                itemDiary = hits.map((hit) => {
+                    const local = lookup.get(String((hit && hit.id) || ''));
+                    return {
+                        date: (local && local.date) || '',
+                        content: (local && local.content) || (hit && hit.content) || '',
+                        conversationId: (local && local.conversationId) || (hit && hit.scopeId) || '',
+                        conversationTitle: (local && local.conversationTitle) || '',
+                        essences: []
+                    };
+                }).filter((entry) => {
+                    // 与关键词/向量命中同一套过滤：给了日期或对话提示就不该混进范围外的日记。
+                    if (convHint && !String(entry.conversationTitle || '').toLowerCase().includes(convHint)) return false;
+                    if (dateHint && !recallDiaryDateMatches(dateHint, entry.date)) return false;
+                    return true;
+                });
+            }
+        } catch (e) { itemDiary = []; }
+    }
+    const semanticDiary = itemDiary.concat((vectorHits || [])
         .filter((hit) => hit.item && hit.item.kind === 'diary')
         .map((hit) => ({
             date: hit.item.date || '',
@@ -208,7 +235,7 @@ async function runRecallSearch(args) {
             conversationId: hit.item.convId || '',
             conversationTitle: hit.item.title || '',
             essences: []
-        }));
+        })));
     const keywordDiary = diary.filter((e) => {
         if (convHint && !String(e && e.conversationTitle || '').toLowerCase().includes(convHint)) return false;
         const dateOk = !dateHint || recallDiaryDateMatches(dateHint, e && e.date);

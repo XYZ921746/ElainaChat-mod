@@ -10,10 +10,17 @@ async function refreshAuthStatus() {
         if (!res.ok) { box.textContent = '无法获取鉴权状态（HTTP ' + res.status + '）'; return; }
         const json = await res.json();
         if (!json.ok) { box.textContent = '无法获取鉴权状态'; return; }
+        const managed = Boolean(json.passwordManagedByConfig);
+        ['authNewPwd', 'authNewPwd2', 'authChangeBtn'].forEach((id) => {
+            const el = document.getElementById(id);
+            if (el) el.disabled = managed;
+        });
         if (json.isAdmin) {
-            box.innerHTML = json.isDefaultPassword
-                ? '当前是本机。<b>尚未设置访问密码</b>：此时只有本机能用，局域网接口是关闭的；请在下方设置一个密码。'
-                : '当前是本机管理员（已登录）。访问密码已设置：本机与局域网设备打开应用都需要输入这个密码。';
+            box.innerHTML = managed
+                ? '当前是本机管理员。访问密码由 <code>data/config.json</code> 的 <code>password</code> 管理：修改配置文件后重启应用生效。'
+                : (json.isDefaultPassword
+                    ? '当前是本机。<b>尚未设置访问密码</b>：此时只有本机能用，局域网接口是关闭的；请在下方设置一个密码。'
+                    : '当前是本机管理员（已登录）。访问密码已设置：本机与局域网设备打开应用都需要输入这个密码。');
         } else {
             box.textContent = '当前设备已登录（非本机）。如需修改访问密码，请在这台电脑上打开本应用操作。';
         }

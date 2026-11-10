@@ -31,12 +31,17 @@ function startMultiDeviceSync() {
                     if (typeof loadCharacterCard === 'function') loadCharacterCard();
                     if (typeof renderCardSelect === 'function') renderCardSelect();
                 }
-                if (has('elaina_open_memory_core') && typeof loadMemoryCore === 'function') loadMemoryCore();
+                if (typeof loadMemoryCore === 'function') loadMemoryCore();
                 if (has('elaina_open_favorites') && typeof loadFavorites === 'function') loadFavorites();
                 // 用户资料（称呼/头像/AI 印象）：名称变了消息行的称呼才对，其它设备也要跟着变。
                 if (has('elaina_user_profile') && typeof loadUserProfile === 'function') loadUserProfile();
                 if (has('elaina_open_tasks') && typeof renderScheduledTaskList === 'function') renderScheduledTaskList();
-                if (has('elaina_open_settings')) loadSettings();
+                if (has('elaina_open_settings') || has('elainachat_open_api_secrets')) {
+                    if (has('elaina_open_settings')) loadSettings();
+                    // 设置包里不含密钥（loadSettings 会剔掉它们）：只重载设置会把内存里的 Key 清空，
+                    // 之后任何一次保存（含自动保存）都会把空值写回密钥库。密钥必须跟着重新读一遍。
+                    if (typeof reloadApiSecretsFromStore === 'function') reloadApiSecretsFromStore();
+                }
                 if ((has('elaina_theme_template') || has('elaina_theme') || has('elaina_theme_custom'))
                     && window.ElainaTheme && typeof window.ElainaTheme.applyStored === 'function') {
                     window.ElainaTheme.applyStored();
@@ -103,6 +108,9 @@ async function init() {
     loadConversations();
     loadFavorites();
     loadMemoryCore();
+    // 记忆权威在服务端 SQLite（M2b）：先用 Store 键热身，再异步换成 canonical 数据。
+    // 失败（Node 版 / 记忆库关闭）静默保留本地数据，读写保持不变。
+    if (typeof refreshMemoryCore === 'function') refreshMemoryCore().catch(() => {});
     loadUserProfile();
     // 成就系统与「星屑之日」生日模式：必须排在 Store.bootstrap() 之后 refresh（见 ready 闸门）—— 其脚本在 bootstrap 之前求值，那时 Store 缓存为空，读到的成就表必空、生日状态必丢；生日模式住在 birthday 插件里，收到 app-ready 广播后自己读盘并启动看门狗。
     try { if (window.ElainaAchievements) window.ElainaAchievements.refresh(); } catch (e) { /* 忽略 */ }

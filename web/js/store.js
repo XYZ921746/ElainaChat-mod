@@ -232,7 +232,15 @@
             eventSource.onmessage = function (ev) {
                 var msg;
                 try { msg = JSON.parse(ev.data || '{}'); } catch (e) { return; }
-                if (!msg || msg.type !== 'store-change' || !msg.data) return;
+                if (!msg || !msg.type) return;
+                // 记忆权威在服务端（M2b）：别的设备改了记忆就重拉 canonical 数据。
+                if (msg.type === 'memory-change') {
+                    if (typeof window.refreshMemoryCore === 'function') {
+                        window.refreshMemoryCore().catch(function () { /* 刷新失败保留本地 */ });
+                    }
+                    return;
+                }
+                if (msg.type !== 'store-change' || !msg.data) return;
                 // 服务端已按 clientId 跳过发起方；sendBeacon 那条路带不了 clientId，这里再挡一道。
                 if (msg.from && msg.from === clientId) return;
 

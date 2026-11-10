@@ -50,24 +50,47 @@ import { createBrowserSession, runBrowserAction, findBrowserExecutable } from '.
 const scryptAsync = promisify(scrypt);
 
 const root = path.dirname(fileURLToPath(import.meta.url));
-// 应用根目录（web 的上一级）：证书与端侧数据都放这里；它在静态根 web/ 之外，不会被直接下载走
+// 应用根目录（web 的上一级）：端侧数据与证书都放这里；它在静态根 web/ 之外，不会被直接下载走
 const APP_ROOT = path.resolve(root, '..');
 // DATA_DIR 可用环境变量覆盖：自动化检查要跑真实读写，不能落到用户真实 data/
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(APP_ROOT, 'data');
 const STORE_FILE = path.join(DATA_DIR, 'store.json');
-const CERT_FILE = path.join(DATA_DIR, 'cert.pem');
-const KEY_FILE = path.join(DATA_DIR, 'key.pem');
 const STORE_MAX_BYTES = 32 * 1024 * 1024; // 端侧数据（聊天记录等）单次提交上限
 // 单个键超限必须**报错**而不是丢弃：聊天记录全在一个键里，丢弃等于"保存成功但什么都没写"
 const STORE_KEY_MAX_CHARS = 8 * 1024 * 1024;
+
+// 配置文件放在 DATA_DIR/config.json；ELAINA_CONFIG_FILE 可覆盖（检查用临时文件）。
+const CONFIG_FILE = process.env.ELAINA_CONFIG_FILE
+    ? path.resolve(process.env.ELAINA_CONFIG_FILE)
+    : path.join(DATA_DIR, 'config.json');
+
+let FILE_CONFIG;
+try {
+    FILE_CONFIG = loadServerConfig(CONFIG_FILE);
+} catch (err) {
+    console.error('[boot] CRITICAL: ' + String((err && err.message) || err));
+    process.exit(1);
+}
+ensureSampleConfig();
+
 // 默认监听 0.0.0.0：局域网内其他设备可通过 http://<本机IP>:4173 访问；HOST 环境变量可覆盖（如 127.0.0.1 仅本机）。
-const host = process.env.HOST || '0.0.0.0';
+const host = process.env.HOST || FILE_CONFIG.host || '127.0.0.1';
 /**
- * 端口默认从 3999 起、被占用就往上找；显式传 PORT 时按给定端口、占用即报错退出
+ * 端口默认从 3999 起、被占用就往上找；显式传 PORT（或配置里给了具体端口）时按给定端口、占用即报错退出
  * （自动化检查各自传临时端口，静默漂移会断言对不上、并发用例会互抢端口）。
  */
-const PORT_EXPLICIT = process.env.PORT !== undefined && String(process.env.PORT).trim() !== '';
-const PORT_START = Number(PORT_EXPLICIT ? process.env.PORT : 3999);
+const PORT_ENV = process.env.PORT !== undefined && String(process.env.PORT).trim() !== '';
+const PORT_EXPLICIT = PORT_ENV || (FILE_CONFIG.portSet && FILE_CONFIG.port > 0);
+const PORT_START = Number(PORT_ENV ? process.env.PORT : (PORT_EXPLICIT ? FILE_CONFIG.port : 3999));
+// HTTPS 默认开；配置或环境变量可关掉（纯 HTTP，不生成/读取证书）。
+const HTTPS_ENABLED = (() => {
+    const raw = process.env.ELAINA_HTTPS;
+    if (raw !== undefined && String(raw).trim() !== '') {
+        return !['0', 'false', 'no', 'off'].includes(String(raw).trim().toLowerCase());
+    }
+    return FILE_CONFIG.https !== false;
+})();
+const CERT_PATHS = resolveCertPaths();
 /** 往上最多找多少个端口（3999 → 4098）。够用，又不至于卡住启动。 */
 const PORT_SCAN_SPAN = 100;
 /** 本项目另一实例已在跑时的退出码：启动.bat 认这个码就不再 pause（此分支没有服务可看） */
@@ -216,6 +239,31 @@ const LEVEL_COLOR = {
 };
 const ANSI_RESET = '\x1b[0m';
 const ANSI_TIME = '\x1b[32m';   // 时间绿色，同 AstrBot 的 <green>{time}</green>
+const ANSI_LOC = '\x1b[90m';    // 来源位置压暗：它是排查用的元信息，不该和正文抢注意力
+// 正文按级别上色：长日志里不必逐行读级别列，扫颜色就能分出提示与报错。INFO 用终端默认前景色，深底浅底都可读。
+const BODY_COLOR = {
+    DEBUG: '\x1b[90m', INFO: '', WARN: '\x1b[33m',
+    ERROR: '\x1b[91m', CRITICAL: '\x1b[1;91m',
+};
+// 模块配色：一条日志里时间（绿）、模块（按名字）、级别（按严重度）、正文（随级别）各占一色。
+// 固定模块用固定色（排查时"绿的那条是 Chat"能形成肌肉记忆），插件等新模块按名字散列，保证同一模块每次都是同一种颜色。
+const TAG_PALETTE = [
+    '\x1b[38;5;111m', '\x1b[38;5;141m', '\x1b[38;5;114m', '\x1b[38;5;180m',
+    '\x1b[38;5;116m', '\x1b[38;5;176m', '\x1b[38;5;151m', '\x1b[38;5;147m',
+    '\x1b[38;5;210m', '\x1b[38;5;117m', '\x1b[38;5;144m', '\x1b[38;5;182m',
+];
+const TAG_FIXED = {
+    Core: 0, Relay: 1, Chat: 2, Agent: 3, Store: 4, HTTP: 5, Mod: 6, Auth: 7,
+    Cert: 8, MCP: 9, Skill: 10, TTS: 11, ASR: 11, Vision: 9, Page: 4, Live2D: 2,
+};
+/** 模块名 → 颜色码；散列只是兜底，固定表保证常见模块的颜色稳定可记 */
+function tagColor(tag) {
+    const fixed = TAG_FIXED[tag];
+    if (fixed !== undefined) return TAG_PALETTE[fixed];
+    let h = 0;
+    for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
+    return TAG_PALETTE[h % TAG_PALETTE.length];
+}
 
 // 版本号：WARN 及以上附在级别后（同 AstrBot 的 astrbot_version_tag）；打包形态里 package.json 在 asar 内，桌面壳通过 APP_VERSION 传版本号。
 let APP_VERSION = process.env.APP_VERSION || '0.0.0';
@@ -268,9 +316,12 @@ function captureLocation() {
     return 'serve.mjs:?';
 }
 
-// 控制台是否上色：hasColors() 尊重 NO_COLOR / FORCE_COLOR；非 TTY 时返回 false，重定向不会带转义码。
+// 控制台是否上色：ELAINA_LOG_COLOR 显式覆盖（强制开/关），否则 hasColors() 尊重 NO_COLOR / FORCE_COLOR；非 TTY 时返回 false，重定向不会带转义码。
 const CONSOLE_COLOR = (() => {
     try {
+        const override = String(process.env.ELAINA_LOG_COLOR || '').trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(override)) return true;
+        if (['0', 'false', 'no', 'off'].includes(override)) return false;
         if (!process.stdout.isTTY) return false;
         if (typeof process.stdout.hasColors === 'function') return process.stdout.hasColors();
         return !process.env.NO_COLOR;
@@ -422,10 +473,16 @@ function emitLog(level, args) {
 
     // 控制台：按控制台级别过滤；正文保持原样（人看的）。被过滤的记录进了缓冲与（若达标）文件，需要时切级别或开查看器都能找回来。
     if (!shouldLogToConsole(level)) return;
-    const head = CONSOLE_COLOR
-        ? `${ANSI_TIME}[${logTimeShort(now)}]${ANSI_RESET} [${tag}] ${LEVEL_COLOR[level] || ''}[${short}]${ANSI_RESET}${verTag} [${loc}]: `
-        : `[${logTimeShort(now)}] [${tag}] [${short}]${verTag} [${loc}]: `;
-    consoleOriginal.log(head + body);
+    if (!CONSOLE_COLOR) {
+        consoleOriginal.log(`[${logTimeShort(now)}] [${tag}] [${short}]${verTag} [${loc}]: ` + body);
+        return;
+    }
+    const head = `${ANSI_TIME}[${logTimeShort(now)}]${ANSI_RESET} `
+        + `${tagColor(tag)}[${tag}]${ANSI_RESET} `
+        + `${LEVEL_COLOR[level] || ''}[${short}]${ANSI_RESET}${verTag} `
+        + `${ANSI_LOC}[${loc}]:${ANSI_RESET} `;
+    const bodyColor = BODY_COLOR[level];
+    consoleOriginal.log(head + (bodyColor ? bodyColor + body + ANSI_RESET : body));
 }
 
 /**
@@ -615,7 +672,7 @@ const packageBackup = createPackageBackup({
 const HOST_API_PREFIXES = [
     '/api/server-info', '/api/auth', '/api/relay', '/api/client-log',
     '/api/logs', '/api/store', '/api/data',
-    '/api/plugins', '/api/skills', '/api/agent',
+    '/api/plugins', '/api/skills', '/api/agent', '/api/memory',
     // '/api/live2d' 不在清单里：它是 live2d-models 插件自己声明的地址；宿主交出这块地址时必须同时删掉这一行。
 ];
 
@@ -1234,8 +1291,10 @@ async function agentDelete(request, res, privileged) {
 }
 
 // 来源校验：Host 白名单 + 同站校验 —— Agent 文件接口的权限模式由请求方传参决定、"是否本机"只看 remoteAddress，DNS rebinding 可同时满足两者，所以必须校验 Host 头本身。
-const EXTRA_ALLOWED_HOSTS = String(process.env.ALLOWED_HOSTS || '')
-    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+const EXTRA_ALLOWED_HOSTS = [
+    ...String(process.env.ALLOWED_HOSTS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+    ...(FILE_CONFIG.allowedHosts || []),
+];
 
 const allowedHostNames = (() => {
     const set = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
@@ -1396,6 +1455,111 @@ async function findRunningInstance(start, span) {
     return 0;
 }
 
+// data/config.json：未知键忽略，已知键类型写错直接报错并带文件路径。
+function loadServerConfig(file) {
+    const out = { port: 0, portSet: false, host: '', https: true, cert: '', key: '', password: '', allowedHosts: [] };
+    let raw;
+    try {
+        raw = readFileSync(file, 'utf8');
+    } catch (err) {
+        if (err && err.code === 'ENOENT') return out;
+        throw err;
+    }
+    let doc;
+    try {
+        doc = JSON.parse(raw);
+    } catch (err) {
+        throw new Error(`${file}: JSON 解析失败：${String((err && err.message) || err)}`);
+    }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+        throw new Error(`${file}: 顶层必须是 JSON 对象`);
+    }
+    if (doc.port !== undefined && doc.port !== null) {
+        if (!Number.isInteger(doc.port) || doc.port < 0 || doc.port > 65535) {
+            throw new Error(`${file}: port 不是合法端口：${doc.port}`);
+        }
+        out.port = doc.port;
+        out.portSet = true;
+    }
+    if (doc.host !== undefined && doc.host !== null) {
+        if (typeof doc.host !== 'string') throw new Error(`${file}: host 必须是字符串`);
+        out.host = doc.host;
+    }
+    if (doc.https !== undefined && doc.https !== null) {
+        if (typeof doc.https !== 'boolean') throw new Error(`${file}: https 必须是 true/false`);
+        out.https = doc.https;
+    }
+    if (doc.cert !== undefined && doc.cert !== null) {
+        if (typeof doc.cert !== 'string') throw new Error(`${file}: cert 必须是字符串`);
+        out.cert = doc.cert;
+    }
+    if (doc.key !== undefined && doc.key !== null) {
+        if (typeof doc.key !== 'string') throw new Error(`${file}: key 必须是字符串`);
+        out.key = doc.key;
+    }
+    if (doc.password !== undefined && doc.password !== null) {
+        if (typeof doc.password !== 'string') throw new Error(`${file}: password 必须是字符串`);
+        out.password = doc.password;
+    }
+    if (doc.allowed_hosts !== undefined && doc.allowed_hosts !== null) {
+        if (!Array.isArray(doc.allowed_hosts)) throw new Error(`${file}: allowed_hosts 必须是数组`);
+        out.allowedHosts = doc.allowed_hosts.map((h) => {
+            if (typeof h !== 'string') throw new Error(`${file}: allowed_hosts 只能放字符串`);
+            return h.trim().toLowerCase();
+        }).filter(Boolean);
+    }
+    return out;
+}
+
+function ensureSampleConfig() {
+    const file = CONFIG_FILE;
+    try {
+        if (existsSync(file)) return;
+        mkdirSync(path.dirname(file), { recursive: true });
+        const tmp = `${file}.${process.pid}.tmp`;
+        writeFileSync(tmp, `{
+  "port": 3999,
+  "host": "127.0.0.1",
+  "https": true,
+  "cert": null,
+  "key": null,
+  "password": "",
+  "allowed_hosts": []
+}
+`, { encoding: 'utf8', mode: 0o600 });
+        // 先写临时文件再改名：两个实例同时首启时不会读到写了一半的 JSON。
+        renameSync(tmp, file);
+    } catch (err) {
+        console.warn('[config] 写入配置样例失败：' + String((err && err.message) || err));
+    }
+}
+
+function resolveCertPaths() {
+    const configDir = path.dirname(CONFIG_FILE);
+    const resolvePath = (raw) => (path.isAbsolute(raw) ? raw : path.join(configDir, raw));
+    const cert = String(process.env.ELAINA_CERT_FILE || FILE_CONFIG.cert || '').trim();
+    const key = String(process.env.ELAINA_KEY_FILE || FILE_CONFIG.key || '').trim();
+    if ((cert === '') !== (key === '')) {
+        console.error('[boot] CRITICAL: cert 与 key 必须同时配置（当前只给了一个）');
+        process.exit(1);
+    }
+    if (cert) {
+        const certPath = resolvePath(cert);
+        const keyPath = resolvePath(key);
+        if (!existsSync(certPath) || !existsSync(keyPath)) {
+            console.error('[boot] CRITICAL: 配置的证书或私钥不存在：' + certPath);
+            process.exit(1);
+        }
+        return { cert: certPath, key: keyPath, explicit: true };
+    }
+    const autoCert = path.join(configDir, 'cert.pem');
+    const autoKey = path.join(configDir, 'key.pem');
+    if (existsSync(autoCert) && existsSync(autoKey)) {
+        return { cert: autoCert, key: autoKey, explicit: false };
+    }
+    return { cert: path.join(DATA_DIR, 'cert.pem'), key: path.join(DATA_DIR, 'key.pem'), explicit: false };
+}
+
 function findOpenssl() {
     const candidates = [
         process.env.OPENSSL_PATH,
@@ -1426,36 +1590,39 @@ function describeCert(certBuf) {
 }
 
 async function ensureCertificate(force = false) {
-    if (!force) {
-        try {
-            const [cert, key] = await Promise.all([readFile(CERT_FILE), readFile(KEY_FILE)]);
-            if (cert.length && key.length) {
-                const info = describeCert(cert);
-                // 用户自己换的证书一律不动；只有我们自己签的才做自动续期
-                if (!info.selfMade || info.daysLeft >= 30) {
-                    return { cert, key, generated: false, daysLeft: info.daysLeft };
-                }
-                console.log('[HTTPS] 自签证书还有 ' + Math.max(0, Math.floor(info.daysLeft)) + ' 天到期，自动换新');
+    try {
+        const [cert, key] = await Promise.all([readFile(CERT_PATHS.cert), readFile(CERT_PATHS.key)]);
+        if (cert.length && key.length) {
+            const info = describeCert(cert);
+            // 用户自己换的证书一律不动；只有我们自己签的才做自动续期。
+            if (!info.selfMade) return { cert, key, generated: false, custom: true, daysLeft: info.daysLeft };
+            if (!force && info.daysLeft >= 30) {
+                return { cert, key, generated: false, daysLeft: info.daysLeft };
             }
-        } catch { /* 还没有证书，往下生成 */ }
-    }
+        }
+    } catch { /* 还没有证书，往下生成 */ }
 
     const openssl = findOpenssl();
     if (!openssl) return null;
 
     try {
-        await mkdir(DATA_DIR, { recursive: true });
-        // SAN 必须带上局域网 IP，否则手机访问时证书主体对不上，浏览器连"继续访问"都不给
-        const sans = ['DNS:localhost', 'IP:127.0.0.1'];
+        await mkdir(path.dirname(CERT_PATHS.cert), { recursive: true });
+        await mkdir(path.dirname(CERT_PATHS.key), { recursive: true });
+        // SAN 必须带上局域网 IP 与主机名，否则用对应地址访问时证书主体对不上。
+        const sans = ['DNS:localhost', 'IP:127.0.0.1', 'IP:::1'];
+        try {
+            const hostname = os.hostname();
+            if (hostname && hostname.toLowerCase() !== 'localhost') sans.push('DNS:' + hostname);
+        } catch { /* 拿不到主机名就不加 */ }
         for (const ip of localIPv4List()) sans.push('IP:' + ip);
         execFileSync(openssl, [
             'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-            '-keyout', KEY_FILE, '-out', CERT_FILE,
+            '-keyout', CERT_PATHS.key, '-out', CERT_PATHS.cert,
             '-days', '825',
             '-subj', '/CN=ElainaChat',
             '-addext', 'subjectAltName=' + sans.join(','),
         ], { stdio: 'ignore', timeout: 60000 });
-        const [cert, key] = await Promise.all([readFile(CERT_FILE), readFile(KEY_FILE)]);
+        const [cert, key] = await Promise.all([readFile(CERT_PATHS.cert), readFile(CERT_PATHS.key)]);
         return { cert, key, generated: true, daysLeft: describeCert(cert).daysLeft };
     } catch (err) {
         console.warn('  ! HTTPS 自签证书生成失败：' + (err && err.message ? err.message : err));
@@ -2053,7 +2220,6 @@ function loginPageHtml() {
       .then(function (j) {
         var p = j && j.httpsPort;
         if (!p) return;
-        // 登录页本身不该被带过去，指向根路径更合适（打开后没登录会自己跳回来）
         var path = location.pathname === '/login' ? '/' : location.pathname;
         var url = 'https://' + location.hostname + ':' + p + path + location.search;
         var a = document.getElementById('httpsLink');
@@ -2155,7 +2321,7 @@ const requestHandler = async (request, response) => {
         if (pathname === '/api/server-info' && request.method === 'GET') {
             return jsonResponse(response, 200, {
                 ok: true,
-                // 现在**同一个端口**就支持 https，所以返回主端口本身
+                // 同一个端口同时支持 https，所以返回主端口本身
                 httpsPort: certInfo ? port : 0,
                 httpPort: port,
                 // 版本与运行形态：设置页要显示当前版本并按形态给安装包；不含敏感信息，登录页也拿得到。
@@ -2416,11 +2582,15 @@ const requestHandler = async (request, response) => {
                 isDefaultPassword: Boolean(auth && auth.isDefault),
                 passwordHint: (admin && auth && auth.isDefault && auth.password) ? auth.password : '',
                 authFile: admin ? AUTH_FILE : '',
+                passwordManagedByConfig: Boolean(FILE_CONFIG.password),
             });
         }
         if (pathname === '/api/auth/change-password' && request.method === 'POST') {
             if (!isAdmin(request) || !isAuthenticated(request)) {
                 return jsonResponse(response, 403, { ok: false, message: '只有本机（已登录的管理员）可以修改访问密码' });
+            }
+            if (FILE_CONFIG.password) {
+                return jsonResponse(response, 409, { ok: false, message: '访问密码由 data/config.json 管理，请修改配置文件里的 password 后重启应用' });
             }
             let body;
             try { body = await readJsonBody(request); } catch { return jsonResponse(response, 400, { ok: false, message: '请求无效' }); }
@@ -3036,7 +3206,7 @@ function printListenError(err, which, usedPort) {
         logCritical(`[boot] CRITICAL: ${which} port ${usedPort} already in use - server not started`
             + `\n  cause: another process is bound to this port (most likely a previous instance that is still running)`
             + `\n  fix 1: find & kill it:  netstat -ano | findstr :${usedPort}  then  taskkill /PID <pid> /F`
-            + `\n  fix 2: use other ports:  set PORT=${alt} && set HTTPS_PORT=${alt + 1} && node web/serve.mjs`
+            + `\n  fix 2: use another port:  set PORT=${alt} && node web/serve.mjs`
             + `\n  （一句话：端口被占用，多半是上一个实例还开着 —— 关掉它或按上面换端口重启）`);
     } else {
         logCritical(`[boot] CRITICAL: ${which} listen failed: ${String((err && err.message) || err)}`);
@@ -3051,6 +3221,18 @@ if (process.argv.includes('--reset-password')) {
     console.log('[鉴权] 已按 --reset-password 清除旧密码，将重新生成');
 }
 const authInfo = await ensureAuth();
+if (FILE_CONFIG.password) {
+    const strength = validatePasswordStrength(FILE_CONFIG.password);
+    if (!strength.ok) {
+        console.error('[boot] CRITICAL: data/config.json 的 password 不满足强度要求：' + strength.message);
+        process.exit(1);
+    }
+    if (!(await verifyPassword(FILE_CONFIG.password))) {
+        await setPassword(FILE_CONFIG.password);
+        authInfo.isDefault = false;
+        console.log('[鉴权] 访问密码已按 data/config.json 更新（其它设备需重新登录）');
+    }
+}
 await loadSessions();
 
 // 数据存储迁移：单文件 store.json 把聊天记录/人设卡/记忆挤在一起，按类别拆开（见 server/store.mjs）；在监听之前跑完，幂等。
@@ -3063,16 +3245,20 @@ try {
     console.error('[store] 迁移失败（服务继续启动，旧数据未受影响）:', err && err.message ? err.message : err);
 }
 
-// --reset-cert：强制换一张新的自签证书（比如 SAN 里的局域网 IP 变了、或者怀疑证书坏了）
+// --reset-cert：换一张新的自签证书；用户自己的证书不会被覆盖。
 const forceNewCert = process.argv.includes('--reset-cert');
-if (forceNewCert) {
-    await rm(CERT_FILE, { force: true });
-    await rm(KEY_FILE, { force: true });
-    console.log('[HTTPS] 已按 --reset-cert 清除旧证书，将重新生成');
+const certInfo = HTTPS_ENABLED ? await ensureCertificate(forceNewCert) : null;
+if (certInfo && certInfo.custom) {
+    console.log('[boot] 使用自定义 HTTPS 证书：' + CERT_PATHS.cert);
+} else if (certInfo && certInfo.generated) {
+    console.log('[boot] 已生成 HTTPS 自签证书（有效期 825 天）');
+} else if (!HTTPS_ENABLED) {
+    console.log('[boot] HTTPS 已在配置中关闭，只跑 HTTP');
+} else if (!certInfo) {
+    console.warn('[boot] HTTPS 不可用（openssl 缺失或证书生成失败），本次只跑 HTTP');
 }
-const certInfo = await ensureCertificate(forceNewCert);
 
-// 监听入口：协议分路器 —— 地址栏只输 IP 会自动补 http://，而麦克风只在 https / localhost 下可用，所以让同一端口同时认两种协议。
+// 监听入口：同一个端口按首字节分流 HTTP / HTTPS；未设置访问密码时，局域网连接在 TCP 层就销毁。
 const httpServer = createServer(requestHandler);
 const httpsServer = certInfo
     ? createSecureServer({ key: certInfo.key, cert: certInfo.cert }, requestHandler)
@@ -3092,7 +3278,7 @@ const muxSocket = (socket) => {
         try { socket.destroy(); } catch (e) { /* 已关 */ }
         return;
     }
-    // 客户端"连上又立刻断开"（DevTools 自动探测）会让裸 socket 抛 ECONNRESET，分路之前没人接这个错误会带崩进程；兜底只销毁连接。
+    // 客户端"连上又立刻断开"（DevTools 自动探测）会让裸 socket 抛 ECONNRESET，分路之前没人接这个错误会带崩进程。
     socket.on('error', () => { try { socket.destroy(); } catch (e) { /* 已关 */ } });
     socket.once('data', (buf) => {
         if (!buf || !buf.length) { socket.destroy(); return; }
@@ -3119,9 +3305,6 @@ if (!PORT_EXPLICIT) {
         process.exit(1);
     }
 }
-// HTTPS 兼容入口跟着主端口走（否则 4174 链接会指向别人）；显式指定 HTTPS_PORT 时以它为准。
-const HTTPS_PORT = Number(process.env.HTTPS_PORT || (port + 1));
-
 mainServer.on('error', (err) => printListenError(err, 'HTTP/HTTPS', port));
 
 // exclusive 在 Windows 上闸住"同一地址:端口被别的进程再绑一次"，但挡不住共享；端口归谁由 isPortFree 的探针决定，这里只补一道闸。
@@ -3131,7 +3314,7 @@ mainServer.listen({ port, host, exclusive: true }, async () => {
     if ((host === '0.0.0.0' || host === '::') && hasAccessPassword()) {
         for (const ip of localIPv4List()) urls.push('http://' + ip + ':' + port);
     }
-    console.log(`[boot] listening on ${urls.join(', ')} (HTTP+HTTPS on the same port)`);
+    console.log(`[boot] listening on ${urls.join(', ')}${certInfo ? ' (HTTP+HTTPS on the same port)' : ''}`);
 
     // 自动打开浏览器（只在用户双击启动那条路下做，判定收在 openBrowser 里）；地址用实际监听到的端口，端口漂移后写死 3999 是打不开的。
     openBrowser('http://127.0.0.1:' + port);
@@ -3200,51 +3383,3 @@ function openBrowser(url) {
     }
 }
 
-// 兼容入口：老的 https://IP:4174 链接继续可用（两个端口都支持双协议）；明文 http 访问时自动跳到同端口的 https。
-if (httpsServer && HTTPS_PORT !== port) {
-    const legacyServer = createNetServer((socket) => {
-        socket.on('error', () => { try { socket.destroy(); } catch (e) { /* 已关 */ } });
-        socket.once('data', (buf) => {
-            if (!buf || !buf.length) { socket.destroy(); return; }
-            socket.pause();
-            if (buf[0] === 0x16) {
-                socket.unshift(buf);
-                httpsServer.emit('connection', socket);
-                process.nextTick(() => socket.resume());
-                return;
-            }
-            const text = buf.toString('latin1');
-            const hostMatch = /^host:\s*([^\r\n]+)/im.exec(text);
-            const lineMatch = /^[A-Z]+\s+(\S+)/.exec(text);
-            const hostHeader = (hostMatch ? hostMatch[1].trim() : '')
-                || (String(socket.localAddress || '127.0.0.1') + ':' + HTTPS_PORT);
-            let target = lineMatch ? lineMatch[1] : '/';
-            if (!target.startsWith('/')) target = '/' + target;
-            // Host 与请求路径都是攻击者可控输入（Host 头可伪造、路径可带脚本），原样拼进 HTML 就是反射 XSS；这里按 HTML 属性值转义，Location 头另按 RFC 只留合法字符。
-            const to = 'https://' + hostHeader + target;
-            const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-            const toHeader = to.replace(/[\r\n"'<>\s]/g, '');
-            const body = '<!doctype html><meta charset="utf-8"><title>跳转到 HTTPS</title>'
-                + '<p style="font:15px/1.7 system-ui,sans-serif;padding:40px">'
-                + '正在跳转到 <a href="' + esc(to) + '">' + esc(to) + '</a></p>';
-            socket.end('HTTP/1.1 302 Found\r\n'
-                + 'Location: ' + toHeader + '\r\n'
-                + 'Content-Type: text/html; charset=utf-8\r\n'
-                + 'Content-Length: ' + Buffer.byteLength(body) + '\r\n'
-                + 'Cache-Control: no-store\r\n'
-                + 'Connection: close\r\n\r\n' + body);
-        });
-    });
-    // 兼容入口是旁路（只为老 https 链接）：端口被占着就不起它，否则会与占用者共享同一端口；起不来只警告，不影响主服务。
-    legacyServer.on('error', (err) => {
-        console.warn('[boot] HTTPS compat entry unavailable on port ' + HTTPS_PORT + ': '
-            + String((err && err.message) || err));
-    });
-    // isPortFree 先探一次（绑得上 + 此刻没人在上面收连接）；探测与绑定之间被抢走那种竞态由上面的警告兜住。
-    if (await isPortFree(HTTPS_PORT, host)) {
-        legacyServer.listen({ port: HTTPS_PORT, host, exclusive: true });
-    } else {
-        console.log(`[boot] HTTPS compat entry skipped: port ${HTTPS_PORT} is busy`);
-    }
-}

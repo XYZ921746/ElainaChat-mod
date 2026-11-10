@@ -720,6 +720,16 @@ function syncModsUpdateBar() {
 async function runModsUpdates(list, btn) {
     if (!window.ElainaMarket || typeof window.ElainaMarket.updateBatch !== 'function') return;
     if (modsUpdateBusy || !list.length) return;
+    // 覆盖安装会先删掉 mods/<id> 再换新包，原有文件不保留：动手前把要换的版本摆给用户看。
+    if (typeof showCustomConfirm === 'function') {
+        const lines = list.map((u) => '「' + (u.plugin.name || u.plugin.id) + '」v' + u.current + ' → v' + (u.plugin.version || '?'));
+        const agreed = await showCustomConfirm(
+            '将用商店里的版本覆盖安装 ' + list.length + ' 个插件：\n\n' + lines.join('\n')
+            + '\n\n覆盖会替换整个插件目录，原有文件不保留。',
+            list.length > 1 ? '更新 ' + list.length + ' 个插件' : '更新插件'
+        );
+        if (!agreed) return;
+    }
     modsUpdateBusy = true;
     // 卡片上的更新按钮是图标按钮（innerHTML 是 svg），标签存取必须走 innerHTML，textContent 会把图标弄丢
     const label = btn ? btn.innerHTML : '';

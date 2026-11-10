@@ -1033,6 +1033,28 @@ async function caseDiary(c) {
             const errs = [];
             page.on('pageerror', (e) => errs.push(e.message));
 
+            // 记忆正文的权威是 /api/memory/core（M2b）：Node 夹具没有这个接口，
+            // 在浏览器层把请求拦下并返回夹具 canonical —— 页面走的仍是真实路径
+            //（refreshMemoryCore → adopt → 渲染），不是往 state 里硬塞。
+            const memoryCoreFixture = {
+                diary: [
+                    { id: 'diary:cA|2026年10月14日', conversationId: 'cA', conversationTitle: '雪之街的相遇', date: '2026年10月14日', content: 'A 的故事：' + '长'.repeat(500), essences: ['雪之街'], timestamp: '2026-10-14T10:00:00.000Z' },
+                    { id: 'diary:cB|2026年10月14日', conversationId: 'cB', conversationTitle: '咖啡馆的午后', date: '2026年10月14日', content: 'B 的故事：咖啡馆', essences: ['咖啡馆'], timestamp: '2026-10-14T11:00:00.000Z' },
+                ],
+                promise: [], preference: [], plan: [], motivation: [], pivotal_memory: [],
+            };
+            // 探测接口也要接住：refreshMemoryCore 先探 /index/status，404 会让它整段跳过。
+            await page.route('**/api/memory/index/status', (route) => route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ ok: true, available: true, count: memoryCoreFixture.diary.length }),
+            }));
+            await page.route('**/api/memory/core', (route) => route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ ok: true, core: memoryCoreFixture }),
+            }));
+
             const nav = await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
             c.ok(nav && nav.status() === 200, '页面能打开', 'status=' + (nav ? nav.status() : '?'));
             await page.waitForTimeout(1500);
@@ -1050,7 +1072,7 @@ async function caseDiary(c) {
                 countText: (document.getElementById('diaryCount') || {}).textContent,
                 enterBtns: document.querySelectorAll('.diary-group-enter').length,
             }));
-            c.ok(grouped.cards === 2, '★★ 两条日记都渲染出来了（拆分文件的数据能读到）', JSON.stringify(grouped));
+            c.ok(grouped.cards === 2, '★★ 两条日记都渲染出来了（canonical 数据经 /api/memory/core 读到）', JSON.stringify(grouped));
             c.ok(grouped.groups.includes('雪之街的相遇') && grouped.groups.includes('咖啡馆的午后'),
                 '★★ 按对话分成两组，组标题是各自的对话名', JSON.stringify(grouped.groups));
             c.ok(grouped.enterBtns === 2, '★ 每个可跳转的组都有「进入对话」按钮');

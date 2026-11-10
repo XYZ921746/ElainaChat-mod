@@ -8,11 +8,17 @@
 //   node scripts/run-checks.mjs --bail          第一个失败就停（不启动后续模块）
 
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+// 配置文件属于软件配置，默认在 <DATA_DIR>/config.json；检查统一指向临时文件，
+// 避免开发者本地的端口 / HTTPS / 证书设置影响断言。先写一个空 JSON，多个模块并发起服务时不会争着写样例。
+process.env.ELAINA_CONFIG_FILE = path.join(os.tmpdir(), `elaina-check-config-${process.pid}-${Date.now()}.json`);
+writeFileSync(process.env.ELAINA_CONFIG_FILE, '{}\n', 'utf8');
 
 /**
  * 检查模块清单。

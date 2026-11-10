@@ -1503,6 +1503,155 @@ async function caseZipMerge(c) {
     }
 }
 
+// 6. 记忆权威（M2b）：正文以服务端 /api/memory/core 为准，前端保存 = 整类目替换 + dropIds。
+//    服务端不可用（Node 版 / 记忆库关闭）时回退旧 Store 键——那时它就是权威，行为与旧版一致。
+async function caseMemoryItemsIndex(c) {
+    const ok = (cond, label, extra) => c.ok(cond, label, extra);
+    const memVectors = readFileSync(path.join(ROOT, 'web', 'js', 'memory-vectors.js'), 'utf8');
+    // memory.js 先于 memory-vectors.js 加载（index.html 的顺序）：保存路径要用到后者的
+    // memoryVectorHash / memoryItemsFetch / memoryItemsProbe。
+    const memCore = readFileSync(path.join(ROOT, 'web', 'js', 'memory.js'), 'utf8');
+
+    const legacyCore = {
+        diary: [{
+            conversationId: 'c1', conversationTitle: '咖啡店', date: '2026年11月9日',
+            content: '今天和用户在咖啡店聊了很远的旅行计划', essences: ['咖啡店', '旅行计划'],
+        }],
+        promise: ['每周日一起看一部电影'],
+        preference: [], plan: [], motivation: [], pivotal_memory: [],
+    };
+    // 服务端 canonical 形状：条目带 id（前端 diff dropIds 靠它）。
+    const serverCore = {
+        diary: [{ ...legacyCore.diary[0], id: 'diary:c1|2026年11月9日' }],
+        promise: legacyCore.promise,
+        preference: [], plan: [], motivation: [], pivotal_memory: [],
+    };
+
+    function makeSandbox({ unavailable = false, server = serverCore } = {}) {
+        const calls = [];
+        let current = JSON.parse(JSON.stringify(server));
+        const sandbox = {
+            console: { log() {}, warn() {}, error() {}, info() {} },
+            Object, Array, JSON, String, Number, Boolean, Error, Promise, Date, RegExp, Map, Set, Math,
+            setTimeout, clearTimeout,
+            btoa: (x) => Buffer.from(x, 'binary').toString('base64'),
+            atob: (x) => Buffer.from(x, 'base64').toString('binary'),
+            state: { memoryCore: null },
+            Store: {
+                clientId: () => 'test-client',
+                getItem: (key) => (key === 'elaina_open_memory_core' ? JSON.stringify(legacyCore) : null),
+                setItem: (key, value) => { calls.push({ storeWrite: key, value }); },
+            },
+            fetch: async (url, init = {}) => {
+                calls.push({ url, method: (init.method || 'GET').toUpperCase(), body: init.body });
+                if (unavailable) {
+                    return { ok: false, status: 404, json: async () => ({ ok: false, message: 'HTTP 404' }) };
+                }
+                if (url.includes('/index/status')) {
+                    return { ok: true, status: 200, json: async () => ({ ok: true, available: true }) };
+                }
+                if (url.includes('/core') && (init.method || '').toUpperCase() === 'POST') {
+                    const body = JSON.parse(init.body);
+                    // 服务端 MergeCore 语义：按 id upsert 本份 core，再删 dropIds。
+                    const drop = new Set(body.dropIds || []);
+                    const next = JSON.parse(JSON.stringify(body.core));
+                    for (const kind of ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory']) {
+                        const list = Array.isArray(next[kind]) ? next[kind] : [];
+                        next[kind] = list.filter((e, i) => {
+                            const id = kind === 'diary' || kind === 'plan'
+                                ? e.id : kind + ':' + h16(typeof e === 'string' ? e : '');
+                            return !drop.has(id) || list.findIndex(x => x === e) !== i;
+                        });
+                    }
+                    current = next;
+                    return {
+                        ok: true, status: 200,
+                        json: async () => ({ ok: true, core: current, upserted: 1, deleted: drop.size }),
+                    };
+                }
+                if (url.includes('/core')) {
+                    return { ok: true, status: 200, json: async () => ({ ok: true, core: current }) };
+                }
+                return { ok: false, status: 500, json: async () => ({ ok: false }) };
+            },
+        };
+        // 与前端 memoryVectorHash 同源的 FNV（测试沙箱里对字符串类目算 id 用）。
+        sandbox.memoryVectorHash = function (text) {
+            let h = 0x811c9dc5;
+            const str = String(text || '');
+            for (let i = 0; i < str.length; i += 1) {
+                h ^= str.charCodeAt(i);
+                h = Math.imul(h, 0x01000193);
+            }
+            return (h >>> 0).toString(16);
+        };
+        sandbox.window = sandbox;
+        sandbox.globalThis = sandbox;
+        const ctx = vm.createContext(sandbox);
+        vm.runInContext(memCore, ctx, { filename: 'memory.js' });
+        vm.runInContext(memVectors, ctx, { filename: 'memory-vectors.js' });
+        return { sandbox, calls, getCurrent: () => current };
+    }
+
+    console.log('\n=== 6. 记忆权威（canonical 读写 / dropIds / 不可用跳过）===');
+    {
+        const { sandbox, calls } = makeSandbox();
+        sandbox.loadMemoryCore();
+        ok(Array.isArray(sandbox.state.memoryCore.diary) && sandbox.state.memoryCore.diary.length === 0,
+            '启动初始化为空结构：正文只来自服务端 canonical（旧数据由启动迁移直接进库）');
+        ok(!calls.some(x => x.storeWrite), '初始化不写 Store 键');
+        ok(typeof sandbox.memoryCoreEntryId('diary', { conversationId: 'c1', date: '2026年11月9日' }) === 'string',
+            '本地能为条目算出与服务端同口径的 id');
+    }
+    {
+        const { sandbox, calls } = makeSandbox();
+        sandbox.loadMemoryCore();
+        const refreshed = await sandbox.refreshMemoryCore();
+        ok(refreshed === true, '服务端可用时异步换成 canonical 数据');
+        ok(sandbox.state.memoryCore.diary[0].id === 'diary:c1|2026年11月9日',
+            'canonical 条目带 id（dropIds 与删除都靠它）');
+        ok(!calls.some(x => x.storeWrite), '刷新不应写 Store 键（那里已不是权威）');
+
+        // 保存：删掉一条日记 + 整类目替换 promise
+        sandbox.state.memoryCore.diary = [];
+        sandbox.state.memoryCore.promise = ['改后的约定'];
+        await sandbox.saveMemoryCore();
+        const put = calls.find(x => x.url.includes('/core') && x.method === 'POST');
+        ok(!!put, '保存走 POST /api/memory/core');
+        const body = JSON.parse(put.body);
+        ok(Array.isArray(body.dropIds) && body.dropIds.includes('diary:c1|2026年11月9日'),
+            '被删条目的 id 进了 dropIds', body.dropIds);
+        ok(body.dropIds.includes('promise:cdfa01cf'),
+            '字符串类目的删除按内容哈希算 id（与 Go 端同口径）', body.dropIds);
+        ok(body.client === 'test-client', '带上客户端标识（服务端据此跳过发起方的广播）');
+        ok(sandbox.state.memoryCore.promise[0] === '改后的约定',
+            '保存后采纳服务端返回的 canonical core');
+        ok(!calls.some(x => x.storeWrite), 'API 可用时不再写 Store 键（不产生第二份权威）');
+    }
+    {
+        const { sandbox, calls } = makeSandbox({ unavailable: true });
+        sandbox.loadMemoryCore();
+        sandbox.state.memoryCore.promise = ['本地新增的约定'];
+        await sandbox.saveMemoryCore();
+        ok(!calls.some(x => x.url && x.url.includes('/core') && x.method === 'POST'),
+            '服务端不可用时不发 core 请求');
+        ok(await sandbox.refreshMemoryCore() === false, '不可用时刷新返回 false，本地数据不动');
+        ok(!calls.some(x => x.storeWrite === 'elaina_open_memory_core'),
+            '★ 不可用时也不再写 Store 键（旧路径已删，不留第二份权威）');
+        ok(sandbox.state.memoryCore.promise[0] === '本地新增的约定',
+            '改动只保留在页面内存，等记忆库恢复后的下一次保存写入');
+    }
+    {
+        const lineComment = new RegExp('(^|[^:])//[^\\n]*', 'g');
+        const blockComment = /\/\*[\s\S]*?\*\//g;
+        const stripped = memVectors.replace(blockComment, '').replace(lineComment, '$1');
+        ok(!/localStorage/.test(stripped), '不直用 localStorage（走 Store）');
+        ok(!/Store\.setItem\(\s*['"]elaina_memory_items/.test(stripped), '不为派生索引新增 Store 键');
+        ok(/MEMORY_ITEMS_API_BASE\s*=\s*['"]\/api\/memory['"]/.test(stripped),
+            '接口前缀固定 /api/memory（APK 由 NODE_FIXED_PREFIXES 转发）');
+    }
+}
+
 // 按命令行参数过滤用例（便于只跑其中一段）
 const only = process.argv[2];
 const allCases = [
@@ -1512,6 +1661,7 @@ const allCases = [
     { name: '分类存储与 zip 备份', fn: caseStoreLayout },
     { name: '多设备实时同步', fn: caseMultiDeviceSync },
     { name: 'zip 解压单一来源', fn: caseZipMerge },
+    { name: '记忆权威迁移', fn: caseMemoryItemsIndex },
 ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 

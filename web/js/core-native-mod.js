@@ -254,12 +254,12 @@ async function nativePluginsFetch(url, options) {
     }
 }
 
-// 原生模式下拦截 /api/live2d/ 与 /api/plugins/ 请求；内嵌 Node 就绪后按前缀清单转发一部分接口，转发不了的回落本地实现（「node 不可用」是默认形态）。
+// 原生模式下拦截 /api/live2d/ 与 /api/plugins/ 请求；本地服务就绪后按前缀清单转发一部分接口，转发不了的回落本地实现（「本地服务不可用」是默认形态）。
 if (IS_NATIVE_APP) {
     const nativeOrigFetch = window.fetch.bind(window);
 
-    // 内嵌 Node 转发。转发清单 = 固定清单（日志接口，bootstrap 自己实现）+ 动态清单（已装载插件的路由前缀，来自 /api/ping 的 modRoutes）；固定清单可以写死，插件路由不能，只能按 node 报告的清单转发。
-    const NODE_FIXED_PREFIXES = ['/api/logs/', '/api/client-log', '/api/mods/status'];
+    // 本地服务转发。转发清单 = 固定清单（日志接口，bootstrap 自己实现）+ 动态清单（已装载插件的路由前缀，来自 /api/ping 的 modRoutes）；固定清单可以写死，插件路由不能，只能按服务报告的清单转发。
+    const NODE_FIXED_PREFIXES = ['/api/logs/', '/api/client-log', '/api/mods/status', '/api/memory/'];
     // 转发超时：普通请求 30s，上传放宽到 5 分钟（200MB 上限按慢网络也要走得完）；调用方自带 AbortSignal 时透传。
     const NODE_TIMEOUT_MS = 30000;
     const NODE_UPLOAD_TIMEOUT_MS = 300000;
@@ -400,7 +400,7 @@ if (IS_NATIVE_APP) {
 
     window.fetch = async (input, options) => {
         const u = typeof input === 'string' ? input : String((input && input.url) || input);
-        // 内嵌 Node 转发：命中清单（固定清单 + 插件路由）且 node 就绪。只对绝对路径匹配 —— http(s):// 与 _capacitor_file_ 的完整 URL 一律放行，别劫持引擎 / 图片请求。
+        // 本地服务转发：命中清单（固定清单 + 插件路由）且服务就绪。只对绝对路径匹配 —— http(s):// 与 _capacitor_file_ 的完整 URL 一律放行，别劫持引擎 / 图片请求。
         if (window.__nodeBase && !nodeDown && u.startsWith('/api/') && nodeRouteHit(u)) {
             try {
                 const res = await forwardToNode(u, options);
@@ -426,14 +426,14 @@ if (IS_NATIVE_APP) {
         return nativeOrigFetch(input, options);
     };
 
-    // 内嵌 Node 就绪链（独立链，不复用播种 / 插件根那两条）：start() → 轮询 status 到 ready → 轮询 /api/ping 到 modsLoaded 有结论 → 才缓存路由清单。
+    // 本地服务就绪链（独立链，不复用播种 / 插件根那两条）：start() → 轮询 status 到 ready → 轮询 /api/ping 到 modsLoaded 有结论 → 才缓存路由清单。
     // 必须等结论：HTTP listen 返回后就能 accept，而 loadAll 在它之后，先到的 ping 必然看到空清单，当终态缓存就永远是空的。
     window.__nodeReadyPromise = (async () => {
         try {
             // Capacitor 插件是异步注入到 window.Capacitor.Plugins 的，页面脚本执行时常常还没注册完；一上来就取会拿到 undefined，于是「插件不可用」被吞掉、只剩 status 轮询 —— 先等它出现（最多 5 秒）。
             const node = await waitForNodePlugin(5000);
             if (!node || typeof node.start !== 'function' || typeof node.status !== 'function') {
-                throw new Error('ElainaNode 插件不可用（构建未启用内嵌 Node）');
+                throw new Error('ElainaNode 插件不可用（构建未启用本地服务）');
             }
             await node.start();   // 幂等；只调一次，不依赖停止后重启（行为未验证）
             const startedAt = Date.now();

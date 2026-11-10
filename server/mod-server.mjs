@@ -3,7 +3,11 @@
 
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { stat } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdir, readFile, writeFile, readdir, rm, rename, stat } from 'node:fs/promises';
+
+const execFileAsync = promisify(execFile);
 
 /** 插件 id 的合法性（与 server/mods.mjs 保持一致：id 是身份，收得紧） */
 const MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -20,6 +24,10 @@ const CAPABILITY_NAMES = new Set([
     'static-read',      // 读 server.static 声明的目录
     'host-utils',       // 使用宿主共享工具（解压等加固实现）
     'net-outbound',     // 由插件自己发外部网络请求
+    'fs-read',          // 读插件目录内的文件
+    'fs-write',         // 写 / 删 / 重命名插件目录内的文件
+    'exec',             // 执行本机命令（能力面最重，必须显式声明）
+    'zip',              // 使用宿主解压（危险类型与体积上限由宿主实现负责）
 ]);
 
 /** 装载入口模块的超时（毫秒）。第三方代码可能同步死循环或永远不 resolve。 */
@@ -266,15 +274,97 @@ export function createModServer({
      * 构造交给插件 register(ctx) 的上下文：每个有副作用的成员都先经 need() 校验能力声明，manifest 里没写就当场报错，而不是给一个静默的空实现。
      */
     function createModContext({ modId, dir, decl, caps, need, added }) {
+        const safeCtxPath = (raw) => {
+            if (typeof raw !== 'string' || !raw.trim()) throw new Error('路径为空');
+            const abs = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(dir, raw);
+            const rel = path.relative(dir, abs);
+            if (rel === '..' || rel.startsWith('..' + path.sep) || path.isAbsolute(rel)) {
+                throw new Error('路径越出了插件目录：' + raw);
+            }
+            return abs;
+        };
         return {
             modId,
             dir,
             log: (...a) => log('[' + modId + '] ' + a.map((x) => (typeof x === 'string' ? x : String(x))).join(' ')),
             json: jsonResponse,
-            readJson: readJsonBody,
+            // 请求体已在 handle() 里一次性读进 request.body：再按流读第二次只会拿到空串，
+            // 表现为「插件收到的 JSON 永远是 {}」。
+            readJson: async (request) => {
+                if (request && Buffer.isBuffer(request.body)) {
+                    const text = request.body.toString('utf8');
+                    return JSON.parse(text || '{}');
+                }
+                return readJsonBody(request);
+            },
             /** 本插件声明的能力清单（只读，供插件自查与日志） */
             capabilities: () => [...caps],
             hasCapability: (cap) => caps.has(String(cap || '')),
+            /**
+             * ctx.fs 只允许碰插件目录内的路径。收窄 API 的意义就是插件摸不到别人的目录；
+             * 路径校验写在宿主里，而不是指望每个插件自觉。
+             */
+            fs: {
+                async readFile(p) {
+                    need('fs-read', 'ctx.fs.readFile（读文件）');
+                    return await readFile(safeCtxPath(p), 'utf8');
+                },
+                async readdir(p) {
+                    need('fs-read', 'ctx.fs.readdir（列目录）');
+                    return await readdir(safeCtxPath(p), { withFileTypes: true });
+                },
+                async stat(p) {
+                    need('fs-read', 'ctx.fs.stat（文件信息）');
+                    return await stat(safeCtxPath(p));
+                },
+                async writeFile(p, data) {
+                    need('fs-write', 'ctx.fs.writeFile（写文件）');
+                    const target = safeCtxPath(p);
+                    await mkdir(path.dirname(target), { recursive: true });
+                    return await writeFile(target, data);
+                },
+                async mkdir(p) {
+                    need('fs-write', 'ctx.fs.mkdir（建目录）');
+                    return await mkdir(safeCtxPath(p), { recursive: true });
+                },
+                async rm(p) {
+                    need('fs-write', 'ctx.fs.rm（删除）');
+                    const target = safeCtxPath(p);
+                    if (target === dir) throw new Error('不能删除插件根目录');
+                    return await rm(target, { recursive: true, force: true });
+                },
+                async rename(from, to) {
+                    need('fs-write', 'ctx.fs.rename（重命名）');
+                    return await rename(safeCtxPath(from), safeCtxPath(to));
+                },
+            },
+            path: {
+                join: (...parts) => path.join(...parts),
+                basename: (p) => path.basename(p),
+                dirname: (p) => path.dirname(p),
+                sep: path.sep,
+                posix: path.posix,
+            },
+            zip: {
+                maxUpload: hostUtils.MAX_UPLOAD,
+                async unzip(buf) {
+                    need('zip', 'ctx.zip.unzip（解压）');
+                    if (typeof hostUtils.readZip !== 'function') throw new Error('宿主未提供解压工具');
+                    return hostUtils.readZip(Buffer.from(buf));
+                },
+                isUnsafeEntryName: hostUtils.isUnsafeEntryName,
+                effectiveExt: hostUtils.effectiveExt,
+            },
+            exec: async (command, args, opts) => {
+                need('exec', 'ctx.exec（执行本机命令）');
+                const timeout = (opts && Number(opts.timeoutMs)) || 30000;
+                const { stdout, stderr } = await execFileAsync(command, Array.isArray(args) ? args : [],
+                    { timeout, windowsHide: true, maxBuffer: 32 * 1024 * 1024 });
+                return { stdout, stderr };
+            },
+            base64: {
+                encodeUtf16LE: (text) => Buffer.from(String(text), 'utf16le').toString('base64'),
+            },
             /** 宿主提供的共享工具（解压 / 危险类型判定 / 读请求体）：故意不让 mod 自己 import —— 解压是安全敏感代码，实现只有一份（见 server/zip.mjs）；需要 host-utils 能力，解压能写任意文件，不能白给 */
             get utils() {
                 need('host-utils', 'ctx.utils（宿主共享工具，含解压）');
@@ -496,9 +586,35 @@ export function createModServer({
      */
     async function handle(request, response, info) {
         const pathname = info.pathname;
-        for (const r of [...routes]) {
-            if (r.method !== '*' && r.method !== request.method) continue;
-            if (pathname !== r.prefix && !pathname.startsWith(r.prefix + '/')) continue;
+        const candidates = [...routes].filter((r) => {
+            if (r.method !== '*' && r.method !== request.method) return false;
+            return pathname === r.prefix || pathname.startsWith(r.prefix + '/');
+        });
+        if (!candidates.length) return false;
+
+        // 插件契约里 req.body 是 Buffer，不再把请求流暴露给插件：
+        // 流只能读一次，多个候选路由（含返回 false 的）会互相抢数据。
+        const MAX_UPLOAD = hostUtils.MAX_UPLOAD || 200 * 1024 * 1024;
+        const chunks = [];
+        let total = 0;
+        let overflow = false;
+        if (request.method !== 'GET' && request.method !== 'HEAD') {
+            for await (const chunk of request) {
+                total += chunk.length;
+                if (total > MAX_UPLOAD) { overflow = true; chunks.length = 0; continue; }
+                chunks.push(chunk);
+            }
+        }
+        if (overflow) {
+            jsonResponse(response, 413, {
+                ok: false,
+                message: `请求体超过 ${Math.round(MAX_UPLOAD / 1024 / 1024)}MB 上限`,
+            });
+            return true;
+        }
+        request.body = Buffer.concat(chunks);
+
+        for (const r of candidates) {
             const rest = pathname.slice(r.prefix.length);
             try {
                 const result = await r.handler(request, response, {

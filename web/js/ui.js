@@ -531,7 +531,7 @@ function renderMessage(message, animate = true) {
                     <div class="bubble-user rounded-2xl p-4">
                         <div class="flex items-center gap-2 mb-2">
                             <span class="text-xs font-medium text-dim">${escapeHtml(getUserProfileName() || '旅人')}</span>
-                            <span class="text-xs text-dim">${escapeHtml(message.timestamp)}</span>
+                            <span class="text-xs text-dim message-time">${escapeHtml(message.timestamp)}</span>
                             <button onclick="event.stopPropagation(); handleMessageFavoriteClick('${safeAttrId(message.id)}')"
                                     class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${isMessageFavorited(state.currentConversationId, message.id) ? 'text-warn' : 'text-dim hover:text-warn'}">
                                 <svg class="w-3.5 h-3.5" fill="${isMessageFavorited(state.currentConversationId, message.id) ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
@@ -574,7 +574,7 @@ function renderMessage(message, animate = true) {
                     <div class="bubble-ai rounded-2xl p-4">
                         <div class="flex items-center gap-2 mb-2">
                             <span class="ai-speaker-name">${escapeHtml(name)}</span>
-                            <span class="text-xs text-dim">${escapeHtml(message.timestamp)}</span>
+                            <span class="text-xs text-dim message-time">${escapeHtml(message.timestamp)}</span>
                             <button onclick="event.stopPropagation(); handleMessageFavoriteClick('${safeAttrId(message.id)}')"
                                     class="message-action-btn ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-all flex items-center gap-1 ${faved ? 'text-warn' : 'text-dim hover:text-warn'}">
                                 <svg class="w-3.5 h-3.5" fill="${faved ? 'currentColor' : 'none'}" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">

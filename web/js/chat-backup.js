@@ -245,23 +245,18 @@
         return out;
     }
 
-    // memory/：与后端同构，按类目拆成一类一文件。前端是一个对象（diary/promise/preference/plan/
-    // motivation/pivotal_memory），逐类目写出去（未知类目也写，不丢数据）。
-    function buildMemoryEntries(data) {
-        if (typeof data['elaina_open_memory_core'] !== 'string') return [];
+    // memory/：与后端同构，按类目拆成一类一文件。记忆正文的权威是 /api/memory/core
+    //（页面里由 state.memoryCore 承载），不再读 Store 键——那里已不是权威。
+    function buildMemoryEntries(core) {
+        if (!core || typeof core !== 'object' || Array.isArray(core)) return [];
         const out = [];
-        try {
-            const memObj = JSON.parse(data['elaina_open_memory_core']);
-            if (memObj && typeof memObj === 'object' && !Array.isArray(memObj)) {
-                for (const [category, value] of Object.entries(memObj)) {
-                    if (!/^[A-Za-z0-9_-]{1,80}$/.test(category)) continue;   // 类目名当文件名，必须过白名单
-                    out.push({
-                        name: `${DATA_PREFIX}memory/${category}.json`,
-                        text: JSON.stringify({ version: 1, value }, null, 2),
-                    });
-                }
-            }
-        } catch { /* 记忆不是合法 JSON 就跳过，不阻塞其它数据 */ }
+        for (const [category, value] of Object.entries(core)) {
+            if (!/^[A-Za-z0-9_-]{1,80}$/.test(category)) continue;   // 类目名当文件名，必须过白名单
+            out.push({
+                name: `${DATA_PREFIX}memory/${category}.json`,
+                text: JSON.stringify({ version: 1, value }, null, 2),
+            });
+        }
         return out;
     }
 
@@ -275,12 +270,17 @@
         try { cards = JSON.parse(data['elaina_open_character_cards'] || '[]'); } catch { /* 忽略 */ }
         try { convs = JSON.parse(data['elaina_open_conversations'] || '[]'); } catch { /* 忽略 */ }
 
+        // 记忆来自权威副本：state.memoryCore（刷新完成前为空结构，导出为空是如实的）。
+        let memoryCore = null;
+        try {
+            if (typeof state !== 'undefined' && state && state.memoryCore) memoryCore = state.memoryCore;
+        } catch { /* 拿不到就导出空记忆 */ }
         const entries = [
             buildManifestEntry(cards, convs),
             buildSettingsEntry(data),
             ...buildCharacterEntries(data, cards),
             ...buildConversationEntries(convs),
-            ...buildMemoryEntries(data),
+            ...buildMemoryEntries(memoryCore),
         ];
         return buildZip(entries);
     }
@@ -383,6 +383,27 @@
         return { source: 'zip', data };
     }
 
+    // 把备份里的六类目 JSON 写进记忆权威（/api/memory/core，整类目替换、无删除）。
+    // 返回 false 表示服务端没接住（Node 版 / 记忆库关闭），调用方再走暂存。
+    async function restoreMemoryCore(raw) {
+        if (typeof fetch !== 'function') return false;
+        let core;
+        try {
+            core = JSON.parse(raw);
+            if (!core || typeof core !== 'object' || Array.isArray(core)) return false;
+        } catch { return false; }
+        try {
+            const response = await fetch('/api/memory/core', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ core, dropIds: [], reason: 'backup-import' }),
+            });
+            let payload = null;
+            try { payload = await response.json(); } catch { /* 忽略 */ }
+            return Boolean(response.ok && payload && payload.ok !== false);
+        } catch { return false; }
+    }
+
     // 导入：把备份写回 Store（合并模式）→ 落进 data/（Web 落 data/store.json，APK 落应用私有目录）
     // @returns { keys, source }
     async function applyBackup(file) {
@@ -393,8 +414,19 @@
         const allowed = new Set(backupKeys());
         let written = 0;
         for (const [k, v] of Object.entries(data)) {
-            if (!allowed.has(k)) continue;
+            if (!allowed.has(k) || k === 'elaina_open_memory_core') continue;
             try { Store.setItem(k, v); written++; } catch { /* 写入失败：跳过 */ }
+        }
+        // 记忆的权威是服务端 SQLite：备份里的六类目 JSON 直接写进库；
+        // 服务端不可用（无 fetch / 记忆库关闭）才暂存 Store 键——下次启动的迁移会把它回灌进库。
+        if (typeof data['elaina_open_memory_core'] === 'string') {
+            const memoryRestored = await restoreMemoryCore(data['elaina_open_memory_core']);
+            if (memoryRestored) {
+                written++;
+            } else {
+                try { Store.setItem('elaina_open_memory_core', data['elaina_open_memory_core']); written++; }
+                catch { /* 暂存失败：跳过 */ }
+            }
         }
         if (!written) throw new Error('备份里的数据都不在可导入范围内');
         return { keys: written, source };

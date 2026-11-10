@@ -456,6 +456,124 @@
         if (box) box.classList.remove('open');
     }
 
+    // 系统返回（安卓硬件键 / 返回手势）交给页面自己决定：壳层只把这次返回转成一次调用，页面从最上层往下关。
+    // 不维护自己的层级栈 —— 各层状态本来就由各自模块用 class / state 表达，另存一份迟早会和真实界面不同步。
+    // 返回 false 表示已经在主界面；主界面要连按两次（第一次只提示），第二次才交还原生壳退出。
+
+    var OVERLAY_CLOSE_BY_ID = {
+        // 取消按钮在只读提示里是隐藏的，退到确定按钮；输入框 / 确认框里点取消才符合"返回 = 放弃"。
+        customModal: ['customModalCancelBtn', 'customModalConfirmBtn'],
+        categoriesModalOverlay: ['categoriesModalClose'],
+        announcementOverlay: ['announcementConfirmBtn'],
+        serverAnnounceOverlay: ['serverAnnounceClose'],
+        backendPanel: ['backendPanelClose']
+    };
+
+    // 宿主弹层的关闭键命名不统一，这里按可访问名称收口；设置页例外（它自己的返回键要先退二级页）。
+    var OVERLAY_CLOSE_SELECTOR = '.page-secondary-back, .mss-close, .readme-close, [aria-label^="关闭"], [aria-label^="返回"], [aria-label^="取消"], [aria-label^="收起"]';
+
+    /** 当前视觉上最上层的弹层：按 z-index 取最大，同层取 DOM 里靠后的那个（后插入的压在上面）。 */
+    function topVisibleOverlay() {
+        var all = document.querySelectorAll('.modal-overlay');
+        var best = null;
+        var bestZ = -Infinity;
+        for (var i = 0; i < all.length; i += 1) {
+            var el = all[i];
+            if (!el.classList || el.classList.contains('hidden')) continue;
+            try { if (!el.getClientRects().length) continue; } catch (e) { /* 老 WebView 没有 getClientRects 时按可见处理 */ }
+            var z = 0;
+            try { z = parseInt(window.getComputedStyle(el).zIndex, 10); } catch (e) { z = 0; }
+            if (!isFinite(z)) z = 0;
+            if (z >= bestZ) { bestZ = z; best = el; }
+        }
+        return best;
+    }
+
+    function visibleToUser(el) {
+        if (!el || el.classList.contains('hidden') || el.disabled) return false;
+        try { return el.getClientRects().length > 0; } catch (e) { return true; }
+    }
+
+    /** 关掉一层弹层：优先点它自己的关闭键，其次点遮罩（宿主弹层普遍绑了"点空白处关闭"）。 */
+    function dismissOverlay(el) {
+        var ids = OVERLAY_CLOSE_BY_ID[el.id];
+        if (ids) {
+            for (var i = 0; i < ids.length; i += 1) {
+                var btn = byId(ids[i]);
+                if (visibleToUser(btn)) { btn.click(); return true; }
+            }
+        }
+        var close = el.querySelector(OVERLAY_CLOSE_SELECTOR);
+        if (visibleToUser(close)) { close.click(); return true; }
+        try {
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            return true;
+        } catch (e) {
+            try { el.click(); return true; } catch (e2) { return false; }
+        }
+    }
+
+    // 从最上层往下关一层：弹层 → 侧栏 → 多选 → 更多面板 → 公告 → 我的 → 笔记/日记/记忆页 → 会话。
+    // 返回 false 表示已经在主界面，由 handleSystemBack 决定是提示还是退出。
+    function closeTopLayer() {
+        var overlay = topVisibleOverlay();
+        if (overlay) {
+            if (overlay.id === 'settingsOverlay') {
+                // 顶栏返回键自己会先退「添加模型 / 提供商详情」这些设置内的二级页，退到根才关设置。
+                if (clickExisting('closeSettings')) return true;
+            }
+            return dismissOverlay(overlay);
+        }
+
+        if (document.body.classList.contains('sidebar-open') && typeof closeSidebarDrawer === 'function') {
+            closeSidebarDrawer();
+            return true;
+        }
+
+        if (convSelect.on) { askCancelConvSelect(); return true; }
+
+        var sheet = byId('mobileShellSheet');
+        if (sheet && sheet.classList.contains('open')) { closeSheet(); return true; }
+
+        var announce = byId('announcePanel');
+        if (announce && !announce.classList.contains('hidden') && typeof closeAnnouncePanel === 'function') {
+            closeAnnouncePanel();
+            return true;
+        }
+
+        var mine = byId('mobileMine');
+        if (mine && mine.classList.contains('open')) { closeMine(); return true; }
+
+        try {
+            if (state.notesMode && typeof exitNotesMode === 'function') { exitNotesMode(); return true; }
+            if (state.diaryMode && typeof exitDiaryMode === 'function') { exitDiaryMode(); return true; }
+            if (state.memoryPageMode && typeof exitMemoryPage === 'function') { exitMemoryPage(); return true; }
+        } catch (e) { /* state 未就绪时按主界面处理 */ }
+
+        if (inConversationView()) { showMobileList(); return true; }
+
+        return false;
+    }
+
+    // 主界面连按两次才退出：第一次只提示，避免误触直接退到桌面。窗口取安卓常见的 2 秒。
+    var BACK_EXIT_WINDOW_MS = 2000;
+    var backExitArmedAt = 0;
+
+    function handleSystemBack() {
+        if (closeTopLayer()) {
+            backExitArmedAt = 0;   // 这次返回已经用掉，下一次重新从「第一次」算起
+            return true;
+        }
+        var now = Date.now();
+        if (backExitArmedAt && now - backExitArmedAt <= BACK_EXIT_WINDOW_MS) {
+            backExitArmedAt = 0;
+            return false;          // 交还原生壳退出
+        }
+        backExitArmedAt = now;
+        if (typeof showToast === 'function') showToast('再按一次返回键退出', { kind: 'warn', duration: 1800 });
+        return true;
+    }
+
     function themeMode() {
         var mode = 'system';
         try {
@@ -1559,11 +1677,12 @@
         if (convSelect.on && ev.key === 'Escape') askCancelConvSelect();
     });
 
-    /** 气泡里不写名字和秒级时间：消息节点与 AI 头像由 ui.js 渲染（.ai-msg-avatar），这里只把时间裁到分钟，不再另插头像（插了会和业务渲染撞成两份）。 */
+    /** 气泡里不写名字和秒级时间：消息节点与 AI 头像由 ui.js 渲染（.ai-msg-avatar），这里只把时间裁到分钟，不再另插头像（插了会和业务渲染撞成两份）。
+        时间必须按 .message-time 选：气泡里还有名字等同样带 .text-xs.text-dim 的 span，按样式类选会命中名字，replace 静默空转。 */
     function decorateMessage(item) {
         if (!item || item.getAttribute('data-mm-decor') === '1') return;
         item.setAttribute('data-mm-decor', '1');
-        var stamp = item.querySelector('.text-xs.text-dim');
+        var stamp = item.querySelector('.message-time');
         if (stamp) stamp.textContent = String(stamp.textContent || '').replace(/^(\d{1,2}:\d{2}):\d{2}$/, '$1');
     }
 
@@ -1922,6 +2041,8 @@
     }
 
     function init() {
+        // 原生壳的唯一入口：硬件返回键不能由页面直接接收（BACK 键先到 Activity），只能经宿主接口回调（D14）。
+        if (window.ElainaHost) window.ElainaHost.systemBack = handleSystemBack;
         wireScrollbarFade();
         window.addEventListener('resize', function () { syncAllCapsuleThumbs(); });
         window.addEventListener('orientationchange', function () { window.setTimeout(syncAllCapsuleThumbs, 220); });

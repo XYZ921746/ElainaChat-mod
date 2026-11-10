@@ -13,6 +13,26 @@
     ];
     const LEVEL_SHORT = { DEBUG: 'DBUG', INFO: 'INFO', WARN: 'WARN', ERROR: 'ERRO', CRITICAL: 'CRIT' };
 
+    // 模块配色与控制台同一套色板（下标顺序与 serve.mjs / logx 的 TAG_PALETTE 一致）：
+    // 同一个模块在启动窗口、日志文件查看器、软件内查看器里都是同一种颜色，切换窗口不用重新认。
+    const TAG_COLORS = [
+        '#87afff', '#af87ff', '#87d787', '#d7af87',
+        '#87d7d7', '#d787d7', '#afd7af', '#afafff',
+        '#ff8787', '#87d7ff', '#afaf87', '#d7afd7',
+    ];
+    const TAG_FIXED = {
+        Core: 0, Relay: 1, Chat: 2, Agent: 3, Store: 4, HTTP: 5, Mod: 6, Auth: 7,
+        Cert: 8, MCP: 9, Skill: 10, TTS: 11, ASR: 11, Vision: 9, Page: 4, Live2D: 2,
+    };
+    /** 与 serve.mjs 的 tagColor 同算法：插件等新模块按名字散列，保证同名同色 */
+    function tagColor(tag) {
+        const fixed = TAG_FIXED[tag];
+        if (fixed !== undefined) return TAG_COLORS[fixed];
+        let h = 0;
+        for (let i = 0; i < tag.length; i++) h = (h * 31 + tag.charCodeAt(i)) >>> 0;
+        return TAG_COLORS[h % TAG_COLORS.length];
+    }
+
     // "排除用户对话"的判据刻意窄（只认这几种正文）：这些行含真实聊天内容，排障时是噪音、分享日志时是隐私面；不用"含中文就排除"这类宽判据，那会把要看的中文报错一起藏掉。
     const CHAT_LINE_RE = /^(提问|回复|提问来自自动功能)/;
 
@@ -71,7 +91,7 @@
         const short = LEVEL_SHORT[e.level] || e.level;
         return `<div class="log-line" data-level="${esc(e.level)}">`
             + `<span class="log-time">[${fmtTime(e.ts)}]</span> `
-            + `<span class="log-tag">[${esc(e.tag)}]</span> `
+            + `<span class="log-tag" style="color:${tagColor(e.tag)}">[${esc(e.tag)}]</span> `
             + `<span class="log-lv">[${esc(short)}]</span> `
             + (e.loc ? `<span class="log-loc">[${esc(e.loc)}]:</span> ` : '')
             + `<span class="log-msg">${esc(e.message)}</span></div>`;

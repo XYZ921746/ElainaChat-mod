@@ -7,11 +7,15 @@
     var DEFAULT_INDEX_URL = 'https://xyz921746.github.io/web/store/index.json';
     /** 自定义商店源的 Store 键（必须在 store.js 的 DATA_KEYS 白名单里，否则写入被丢弃） */
     var URL_KEY = 'elaina_market_url';
+    /** 索引请求超时：源站接住连接却不回包时，fetch 默认要挂到浏览器自己的上限（分钟级），而检查是自动发起的。 */
+    var MARKET_INDEX_TIMEOUT_MS = 8000;
 
     var $ = function (id) { return document.getElementById(id); };
 
     var lastIndex = null;
     var lastInstalled = null;
+    /** 批量更新正在逐条安装（此时 modsUpdateBusy 也为真，安装管线自己的调用不能被那道闸挡住） */
+    var batchInstalling = false;
     // 打开市场后下一次 renderMarketList 播卡片入场，之后（搜索/刷新）不再播。
     var marketEntrancePending = false;
 
@@ -53,15 +57,25 @@
         var lastErr = null;
         var urls = marketIndexUrls();
         for (var i = 0; i < urls.length; i++) {
+            var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+            var timer = ctrl ? setTimeout(function () {
+                try { ctrl.abort(); } catch (e) { /* 忽略 */ }
+            }, MARKET_INDEX_TIMEOUT_MS) : 0;
             try {
-                var res = await fetch(urls[i], { cache: 'no-cache' });
+                var res = await fetch(urls[i], { cache: 'no-cache', signal: ctrl ? ctrl.signal : undefined });
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 var data = await res.json();
                 var plugins = (data && Array.isArray(data.plugins)) ? data.plugins : [];
                 if (!plugins.length) throw new Error('索引里没有插件');
                 lastIndex = data;
                 return { data: data, plugins: plugins };
-            } catch (e) { lastErr = e; }
+            } catch (e) {
+                lastErr = (e && e.name === 'AbortError')
+                    ? new Error('商店源响应超时（' + Math.round(MARKET_INDEX_TIMEOUT_MS / 1000) + 's）')
+                    : e;
+            } finally {
+                if (timer) clearTimeout(timer);
+            }
         }
         throw lastErr || new Error('没有可用的商店源');
     }
@@ -451,6 +465,12 @@
 
     /** 安装插件及其依赖：下载 → 复用上传安装协议 → 重扫加载并刷新两栏。 */
     async function installFromMarket(p, btn, reuseDlId) {
+        // 批量更新跑着时不再从市场/卡片另起一条安装链：同一个插件 id 的两条「删目录 + 重命名」会交错，
+        // 第二个 rename 在 Windows 上直接 EPERM。等这一轮结束再来。
+        if (!batchInstalling && typeof modsUpdateBusy !== 'undefined' && modsUpdateBusy) {
+            if (typeof showCustomAlert === 'function') showCustomAlert('正在更新插件，等这一轮结束再安装。', '请稍候');
+            return false;
+        }
         var name = packageNameOf(p);
         var label = btn ? btn.textContent : '';
         if (btn) { btn.disabled = true; btn.textContent = '准备中…'; }
@@ -556,9 +576,14 @@
     async function updateModsBatch(items) {
         var list = Array.isArray(items) ? items : [];
         var out = [];
-        for (var i = 0; i < list.length; i++) {
-            var ok = await installFromMarket(list[i].plugin, null);
-            out.push({ id: list[i].plugin.id, ok: ok === true });
+        batchInstalling = true;
+        try {
+            for (var i = 0; i < list.length; i++) {
+                var ok = await installFromMarket(list[i].plugin, null);
+                out.push({ id: list[i].plugin.id, ok: ok === true });
+            }
+        } finally {
+            batchInstalling = false;
         }
         return out;
     }

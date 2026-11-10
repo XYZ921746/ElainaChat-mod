@@ -5,7 +5,6 @@
 // APK 没有本地服务，走 chat-backup.js 直接读写 localStorage（数据在私有目录，卸载即丢，最需要备份）。
 async function refreshDataSettings() {
     const box = document.getElementById('dataStatusBox');
-    const section = document.getElementById('dataSettingsSection');
     if (!box) return;
 
     if (IS_NATIVE_APP && window.ChatBackup) {
@@ -15,7 +14,7 @@ async function refreshDataSettings() {
             let mem = 0;
             try { cards = JSON.parse(Store.getItem('elaina_open_character_cards') || '[]').length; } catch { /* 忽略 */ }
             try { convs = JSON.parse(Store.getItem('elaina_open_conversations') || '[]').length; } catch { /* 忽略 */ }
-            try { mem = (JSON.parse(Store.getItem('elaina_open_memory_core') || '{}').diary || []).length; } catch { /* 忽略 */ }
+            try { mem = (state.memoryCore && Array.isArray(state.memoryCore.diary)) ? state.memoryCore.diary.length : 0; } catch { /* 忽略 */ }
             box.innerHTML = '数据位置：<code class="text-dim">应用私有目录</code>'
                 + '<span class="text-dim">（安卓应用数据，卸载会一并删除）</span><br>'
                 + '人设卡 <b>' + escapeHtml(String(cards)) + '</b> 张'
@@ -31,9 +30,18 @@ async function refreshDataSettings() {
 
     try {
         const res = await fetch('/api/data/info');
-        if (!res.ok) { if (section) section.classList.add('hidden'); return; }
+        if (!res.ok) {
+            // 鉴权失效时保留区块并说明原因：整块隐藏会让用户以为功能被删了。
+            box.textContent = res.status === 401
+                ? '需要重新登录后才能读取数据统计。'
+                : '读取数据统计失败（HTTP ' + res.status + '），请稍后重试。';
+            return;
+        }
         const json = await res.json();
-        if (!json.ok) { if (section) section.classList.add('hidden'); return; }
+        if (!json.ok) {
+            box.textContent = '读取数据统计失败：' + (json.message || '服务端未返回统计');
+            return;
+        }
         const c = json.counts || {};
         box.innerHTML = '数据位置：<code class="text-dim">' + escapeHtml(json.dir || 'data')
             + '</code><br>'
@@ -44,7 +52,7 @@ async function refreshDataSettings() {
             + ' · 技能 <b>' + escapeHtml(String(c.skills || 0)) + '</b> 个';
         ['lanShareOpenBtn', 'lanShareReceiveBtn', 'lanShareHintLine'].forEach((id) => document.getElementById(id)?.classList.remove('hidden'));
     } catch (e) {
-        if (section) section.classList.add('hidden');
+        box.textContent = '读取数据统计失败：' + (e && e.message ? e.message : e);
     }
 }
 

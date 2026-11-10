@@ -6,7 +6,7 @@
 import { spawn } from 'node:child_process';
 import {
     mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, mkdirSync,
-    openSync, closeSync, cpSync,
+    openSync, closeSync, cpSync, utimesSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -846,7 +846,8 @@ async function caseModId(c) {
         }
 
         // 2.7 装载只认"完整的一段"：解压逐文件落盘而清单每次请求都重扫，直接往 mods/<id>/ 写会出现
-        // "目录在、index.js 未写完"被扫进清单的中间态（前端取脚本 404 并当场停用）；钉住临时目录不被扫成插件、装完必有完整一份
+        // "目录在、index.js 未写完"被扫进清单的中间态（前端取脚本 404 并当场停用）；钉住临时目录不被扫成插件、装完必有完整一份。
+        // 清理必须按"陈旧"判定：扫描在插件列表与清单请求上都会跑，删掉新鲜的 staging 等于替并发安装删掉半成品。
         {
             const dir = newDir();
             const staging = path.join(dir, `.installing-elaina-avatar-${process.pid}-1`);
@@ -858,8 +859,16 @@ async function caseModId(c) {
             c.ok(!r.installed.some((p) => p.id === 'elaina-avatar'),
                 '★ 安装中途的临时目录不被扫成已装插件（否则脚本会 404 并当场停用）',
                 JSON.stringify(r.installed.map((p) => p.id)));
+            c.ok(readdirSync(dir).includes(path.basename(staging)),
+                '★ 还在安装中的临时目录不被删除（否则并发安装会丢掉自己正在写的文件）',
+                JSON.stringify(readdirSync(dir)));
+
+            // 改成"进程被杀后留下的那类"（超过 stale 阈值），下一次扫描才该清掉。
+            const old = new Date(Date.now() - 11 * 60 * 1000);
+            utimesSync(staging, old, old);
+            await mkMgr(dir).scanAndSync();
             c.ok(!readdirSync(dir).some((n) => n.startsWith('.installing-')),
-                '★ 扫描会清掉安装未完成留下的临时目录（否则白占几十 MB 且用户看不见）',
+                '★ 陈旧的安装残留会被清掉（否则白占几十 MB 且用户看不见）',
                 JSON.stringify(readdirSync(dir)));
 
             writeFileSync(path.join(dir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
