@@ -24,30 +24,111 @@ function getNativeSecretsPlugin() {
     // 原生密钥插件只在 APK 的 Capacitor 里注册；Web 上自然为 undefined，不需再判断平台（D5）。
     return window.Capacitor?.Plugins?.ByokSecrets || null;
 }
+/** Web 密钥表原文（对象）：服务端/页面迁移可能把旧设置包里的 Key 转存在这里，
+    APK 原生通道读不到的名字要从这里补。 */
+function readWebSecretsObject() {
+    try {
+        const parsed = JSON.parse(Store.getItem('elainachat_open_api_secrets') || '{}');
+        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+    } catch {
+        return {};
+    }
+}
+/** Web 密钥表 → 内存（只读） */
+function readWebApiSecretsIntoState() {
+    const parsed = readWebSecretsObject();
+    API_SECRET_NAMES.forEach(name => { state.settings[name] = String(parsed?.[name] || ''); });
+}
+/** 多设备同步只重读密钥，不跑迁移：迁移会 persistSettings，同步时重跑会把本地刚排进队列的设置包冲掉。 */
+function reloadApiSecretsFromStore() {
+    if (getNativeSecretsPlugin()) {
+        void loadApiSecrets().catch(() => { /* 读不到就保留现值，下次同步再试 */ });
+        return;
+    }
+    readWebApiSecretsIntoState();
+    restoreObjectSecrets();
+}
+/* 原生密钥库的回填是异步的：回填没落地时 state.settings 里还是空值，
+   这中间任何一次「保存模型设置」都会把空值写回密钥库（等于清空 Key）。
+   写入方必须等最近一次回填结束再取值；迁移函数在回填流程内部调用自己，
+   带 inline 标记绕开等待，否则就是自己等自己。 */
+let nativeSecretsBackfill = Promise.resolve();
+
+/* 一个密钥名是否有「真实的值」。不能只看字符串非空：chatProviderKeys 是 JSON 串，
+   空壳 `{"prov_x":""}` / `{}` 都是非空字符串，但它不承载任何 Key。
+   把它当"有值"会让回填永久跳过 —— 表现为「只有 provider keys 丢了，apiKey 反而正常」，
+   因为 apiKey 是空串、回填能进，而 chatProviderKeys 的旧空壳挡住了它自己。 */
+function secretHasValue(name, value) {
+    if (value === undefined || value === null) return false;
+    const text = String(value).trim();
+    if (!text) return false;
+    if (name !== 'chatProviderKeys') return true;
+    try {
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+        return Object.values(parsed).some((v) => String(v === undefined || v === null ? '' : v).trim() !== '');
+    } catch (e) {
+        return false;
+    }
+}
+
 async function loadApiSecrets() {
+    const run = doLoadApiSecrets();
+    nativeSecretsBackfill = run;
+    return run;
+}
+
+async function doLoadApiSecrets() {
     const nativePlugin = getNativeSecretsPlugin();
     if (nativePlugin?.getSecret) {
+        const unreadable = [];
         const values = await Promise.all(API_SECRET_NAMES.map(async name => {
             try { return [name, String((await nativePlugin.getSecret({ name }))?.value || '')]; }
             catch (error) {
                 // 读取失败 ≠ Key 为空：返回空串会让启动流程用空值覆盖用户填好的 Key（如白名单漏配）。
                 // 返回 null 表示"这项读不到"，下面按名字过滤，设置里已有的值不会被冲掉。
-                console.warn(`[BYOK] 无法读取 ${name}，保留现有值`, error);
+                // 密钥库解不开（Keystore 密钥失效）是用户必须知道的事：不提示的话，
+                // 用户只会看到"某个服务的 Key 空了"，不知道是自己没填还是程序丢了。
+                if (String(error?.code || '') === 'SECRET_UNREADABLE') unreadable.push(name);
+                else console.warn(`[BYOK] 无法读取 ${name}，保留现有值`, error);
                 return null;
             }
         }));
-        Object.assign(state.settings, Object.fromEntries(values.filter(Boolean)));
+        const resolved = Object.fromEntries(values.filter(Boolean));
+        // 服务端 / 页面迁移会把旧设置包里内嵌的 Key 转进 Store 密钥表；Keystore 还没有的名字
+        // 从这里补，并回填进 Keystore。Store 那份不删：它仍是 Web 端与多设备同步的权威。
+        const stored = readWebSecretsObject();
+        const backfill = {};
+        API_SECRET_NAMES.forEach((name) => {
+            if (secretHasValue(name, resolved[name])) return;
+            const value = stored[name];
+            if (secretHasValue(name, value)) backfill[name] = String(value);
+        });
+        if (Object.keys(backfill).length) {
+            try {
+                await saveApiSecrets(backfill, { inline: true });
+                console.info('[BYOK] 已把 Store 密钥表里的 Key 回填进 Keystore（' + Object.keys(backfill).length + ' 项）');
+            } catch (error) {
+                console.warn('[BYOK] 密钥回填 Keystore 失败（下次启动重试，Store 那份仍在）', error);
+            }
+        }
+        Object.assign(state.settings, resolved);
+        Object.assign(state.settings, backfill);
+        // 有名字解不开时必须说清是哪几个：用户只看到「Key 变空」无从判断是自己没填还是程序丢了。
+        // 密文已被原生层隔离保留，重填会覆盖它，所以提示的下一步就是重填。
+        if (unreadable.length) {
+            const names = unreadable.join('、');
+            console.warn('[BYOK] 以下密钥无法解密，需要重新填写：' + names);
+            try {
+                if (typeof showToast === 'function') {
+                    showToast('有 ' + unreadable.length + ' 项 API Key 无法解密（' + names + '），请到设置里重新填写',
+                        { kind: 'danger', duration: 15000 });
+                }
+            } catch (e) { /* 提示失败不影响启动 */ }
+        }
     } else {
         // Web 版：API Key 按用户选择存进 data/（store.js 持久化到 data/store.json）。
-        const raw = (() => {
-            try { return Store.getItem('elainachat_open_api_secrets') || ''; } catch { return ''; }
-        })();
-        try {
-            const parsed = JSON.parse(raw || '{}');
-            API_SECRET_NAMES.forEach(name => { state.settings[name] = String(parsed?.[name] || ''); });
-        } catch {
-            API_SECRET_NAMES.forEach(name => { state.settings[name] = ''; });
-        }
+        readWebApiSecretsIntoState();
     }
     restoreObjectSecrets();
     // 密钥读完后再跑老配置共用凭据迁移：上面的赋值会把新键覆盖成空值。
@@ -198,7 +279,8 @@ async function migrateLegacyTtsAsrProviders() {
         s.asrProviderMigrated = true;
     }
     // 合成结果只在这一刻完整：立刻把 Key 写进密钥库、设置（含迁移标记）写进设置包，之后不再重迁。
-    try { await saveApiSecrets(s); } catch (e) { console.warn('[BYOK] 语音提供商迁移写入密钥库失败', e); }
+    // inline：本函数跑在回填流程内部，等待回填会变成自己等自己。
+    try { await saveApiSecrets(s, { inline: true }); } catch (e) { console.warn('[BYOK] 语音提供商迁移写入密钥库失败', e); }
     try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
 }
 
@@ -219,8 +301,9 @@ async function migrateLegacySharedMimoCredentials() {
     // 版本标记写进普通设置，不在 API_SECRET_NAMES 里，不会被密钥库覆盖。
     try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
     // 迁移出的 TTS Key 必须同时写进密钥库，否则下次启动会被空值覆盖，而版本标记已置位不再重迁。
-    // 必须传整个 state.settings：saveApiSecrets 会按传入对象归一化每个密钥名，只传部分会把其余写成空值。
-    try { await saveApiSecrets(state.settings); }
+    // 传整个 state.settings：迁移同时可能改到多个密钥名，少传一个那条迁移就白写。
+    // inline：跑在回填流程内部，等待回填会变成自己等自己。
+    try { await saveApiSecrets(state.settings, { inline: true }); }
     catch (e) { console.warn('[BYOK] MiMo 凭据迁移写入密钥库失败', e); }
 }
 
@@ -234,36 +317,37 @@ async function migrateLegacySharedAsrKey() {
     }
     state.settings.asrKeySplitMigrated = ASR_KEY_MIGRATION_VERSION;
     try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
-    try { await saveApiSecrets(state.settings); }
+    try { await saveApiSecrets(state.settings, { inline: true }); }
     catch (e) { console.warn('[BYOK] 阿里百炼 ASR Key 迁移写入密钥库失败', e); }
 }
-// 六个隐私开关默认关闭。只改 DEFAULTS 无效：设置是"默认值 + 已存值"合并的，老用户已存 true。
-// 一次性迁移强制置关并写版本号；之后用户自己怎么拨按他的选择走。
-const AGENT_READ_DEFAULTS_OFF_VERSION = 1;
-function migrateAgentReadDefaultsToOff() {
-    if (state.settings.agentReadDefaultsOff === AGENT_READ_DEFAULTS_OFF_VERSION) return;
-    for (const key of ['agentReadApps', 'agentReadNotifications', 'agentReadDevice',
-        'agentReadSms', 'agentReadContacts', 'agentReadCalendar']) {
-        state.settings[key] = false;
-    }
-    state.settings.agentReadDefaultsOff = AGENT_READ_DEFAULTS_OFF_VERSION;
-    try { persistSettings(); } catch (e) { /* 落盘失败不阻断启动 */ }
-}
 
-async function saveApiSecrets(secrets) {
-    const normalized = Object.fromEntries(API_SECRET_NAMES.map(name => {
-        const value = secrets?.[name];
-        // chatProviderKeys 是唯一的对象值条目，序列化成 JSON 串进密钥库；其余名字保持字符串。
-        const serialized = (value && typeof value === 'object') ? JSON.stringify(value) : String(value || '').trim();
-        return [name, serialized];
-    }));
+/* 只落盘调用方明确给出的密钥名，并与已存密钥表合并。
+   不能按 API_SECRET_NAMES 全量归一化再整体替换：state.settings 可能因为别处的合并（多设备同步只重载设置包、
+   密钥还没回填）少了某个名字，全量写回会把"缺失"当成"用户清空"，把密钥库连同其它设备的 Key 一起冲掉。
+   原生通道的写入先等回填结束（inline=true 的是回填流程内部的迁移调用，不等待），
+   等待后再从 state.settings 取值 —— 它是活引用，拿到的是回填 + 用户改动之后的最新值。 */
+async function saveApiSecrets(secrets, { inline = false } = {}) {
     const nativePlugin = getNativeSecretsPlugin();
+    if (nativePlugin?.setSecret && !inline) {
+        try { await nativeSecretsBackfill; } catch (e) { /* 回填失败不拦保存 */ }
+    }
+    const source = (secrets && typeof secrets === 'object') ? secrets : {};
+    const provided = API_SECRET_NAMES.filter(name => Object.prototype.hasOwnProperty.call(source, name));
+    const normalized = {};
+    provided.forEach(name => {
+        const value = source[name];
+        // chatProviderKeys 是唯一的对象值条目，序列化成 JSON 串进密钥库；其余名字保持字符串。
+        normalized[name] = (value && typeof value === 'object') ? JSON.stringify(value) : String(value || '').trim();
+    });
     if (nativePlugin?.setSecret) {
-        await Promise.all(API_SECRET_NAMES.map(name => nativePlugin.setSecret({ name, value: normalized[name] })));
-    } else {
-        const raw = JSON.stringify(normalized);
+        await Promise.all(provided.map(name => nativePlugin.setSecret({ name, value: normalized[name] })));
+    } else if (provided.length) {
+        let stored = {};
+        try { stored = JSON.parse(Store.getItem('elainachat_open_api_secrets') || '{}') || {}; } catch (e) { stored = {}; }
+        if (!stored || typeof stored !== 'object' || Array.isArray(stored)) stored = {};
+        Object.assign(stored, normalized);
         // API Key 随其它数据一起进 data/；代价是拷走 data/ 就等于拷走密钥。
-        try { Store.setItem('elainachat_open_api_secrets', raw); }
+        try { Store.setItem('elainachat_open_api_secrets', JSON.stringify(stored)); }
         catch (e) { console.warn('[BYOK] API Key 保存失败', e); }
     }
     Object.assign(state.settings, normalized);
@@ -277,7 +361,8 @@ async function clearStoredApiSecrets() {
     state.settings.chatProviderKeys = {};
 }
 function saveCharacterCard() {
-    Store.setItem('elaina_open_character_card', JSON.stringify(state.characterCard));
+    // 旧单卡镜像不再写：cards 列表与 current_card 才是权威。
+    // 旧键的清理放在 loadCharacterCard() 的启动迁移里，读取成功后才删。
 }
 
 function normalizeGreeting(greeting) {

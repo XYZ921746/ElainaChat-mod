@@ -34,14 +34,28 @@ async function exportSecretsHeader() {
 /** 导入备份后把备份里的密钥灌进 Keystore。
     手机上 Key 只住 Keystore，而备份里的 Key 落在 data/ 的密钥表（Store）里。
     loadApiSecrets 的回填方向是「Keystore 缺的才从 Store 补」—— 所以 Keystore 里
-    已经有旧 Key 时，备份里的新 Key 永远补不进去，表现为「导入成功但 Key 还是旧的」。
+    已经有值（哪怕是旧值）时，备份里的新 Key 永远补不进去，表现为「导入成功但 Key 还是旧的」。
     这里在重载页面前反向写一次：备份里有的名字一律以备份为准。
-    读不到备份密钥表（Web 形态 / 备份里没带 Key）时什么都不做。 */
+
+    ⚠️ 必须读服务端刚导入的那份，不能读 Store.getItem：它读的是页面内存缓存，
+    导入只改了服务端磁盘，此刻缓存还是导入前的旧值。把旧值写进 Keystore 反而更糟 ——
+    chatProviderKeys 的旧值是个非空字符串（如 `{"prov_x":""}`），会让回填永久跳过，
+    结果是「provider keys 全丢、而 apiKey 因为是空串反而能回填」这种半好半坏的状态。
+    读不到（Web 形态 / 服务端不可用）时什么都不做。 */
 async function applyImportedSecrets() {
     const nativePlugin = getNativeSecretsPlugin();
     if (!nativePlugin?.setSecret) return;
     let stored = {};
-    try { stored = JSON.parse(Store.getItem('elainachat_open_api_secrets') || '{}') || {}; } catch (e) { return; }
+    try {
+        const res = await fetch(dataApiUrl('/api/store'), { cache: 'no-store' });
+        if (!res.ok) return;
+        const json = await res.json();
+        const raw = json && json.data ? json.data['elainachat_open_api_secrets'] : '';
+        if (!raw) return;
+        stored = JSON.parse(String(raw)) || {};
+    } catch (e) {
+        return;
+    }
     if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return;
     const payload = {};
     API_SECRET_NAMES.forEach((name) => {
