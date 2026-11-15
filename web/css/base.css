@@ -62,6 +62,34 @@
             --text-glass-body: var(--pixso-brown-soft);
             --text-glass-muted: #5a5041;
             --ink: var(--pixso-brown);
+
+            /* --rd-* 的首帧兜底：本文件里的文字色 / 图标色 / 边框 / 阴影全部取 var(--rd-*)，
+               而这些变量的**唯一定义**在 themes.css 的 html.rd 里，那份样式表在 <head> 里
+               晚约 1700 行才加载。在它到达之前，凡是 var(--rd-*) 的声明都因变量未定义而失效：
+               文字没有颜色（继承成近乎透明）、图标没有尺寸约束、阴影与边框消失 —— 表现为
+               "整个页面文字乱放、图标错位"的无样式闪烁（电脑版每次刷新都会看到）。
+               这里只补 base.css 自己用到的那 19 个，值抄自 themes.css 的默认浅色主题；
+               themes.css 到达后 html.rd 会整体覆盖，两者同名同值，不会打架。
+               ⚠️ 改 themes.css 的默认浅色主题时，同步改这里，否则首帧与稳定态会有色差。 */
+            --rd-text: #241f18;
+            --rd-text-2: #5a5041;
+            --rd-text-3: #8b7f6b;
+            --rd-accent: #8a6a1f;
+            --rd-accent-2: #5c6f8a;
+            --rd-accent-soft: rgba(138, 106, 31, .1);
+            --rd-accent-border: rgba(138, 106, 31, .22);
+            --rd-surface-2: #f1e8d7;
+            --rd-border: rgba(74, 56, 32, .13);
+            --rd-ok: #5f8a5b;
+            --rd-ok-soft: rgba(95, 138, 91, .14);
+            --rd-warn: #a6761f;
+            --rd-warn-bg: rgba(255, 247, 237, .75);
+            --rd-warn-border: #e8cf9e;
+            --rd-danger: #a7473f;
+            --rd-danger-soft: rgba(167, 71, 63, .08);
+            --rd-danger-border: rgba(167, 71, 63, .24);
+            --rd-glow-1: rgba(178, 144, 74, .2);
+            --rd-glow-2: rgba(96, 120, 154, .1);
         }
 
         html, body {
@@ -103,6 +131,31 @@
 
         html { box-sizing: border-box; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
         *, *::before, *::after { box-sizing: inherit; }
+
+        /* 首帧门：首屏真正建好之前先不画内容，只留底色。
+           样式表都在 head 里、阻塞解析，所以 body 出现时它们已经就位；但首屏并不是 HTML 里那份骨架 ——
+           手机壳层（首页头像 / 问候 / 金句卡 / 底栏）与首页状态由 JS 在启动末尾现建，tailwind.js 也要
+           扫完 DOM 才异步产出 `.hidden` / `.flex` / `.w-9`。这段窗口里画出来的是桌面版骨架：
+           顶栏是汉堡 + 对话名、金句卡还不存在，看起来就是"顶栏不对、内容缺一块"。
+           这里把内容整体藏起来，由 index.html 的就绪探针在「工具类生效 + 首屏建好」后摘掉 data-ui-boot。
+           用 visibility 而不是 display：后者会让 #appShell 的尺寸在揭示瞬间从 0 跳到最终值，
+           挂在它上面的居中/固定定位元素会跟着抖一下。子元素一律继承隐藏，
+           因为隐藏期间任何一条自带 visibility:visible 的规则都会把局部内容漏出来。
+           揭示时配一段淡入（见下面的 data-ui-in），避免"空底突然跳出整页"的硬切。 */
+        html[data-ui-boot] body,
+        html[data-ui-boot] body * { visibility: hidden !important; }
+
+        /* 揭示后的入场淡入：只在摘掉 data-ui-boot、还带着 data-ui-in 的那一小段生效，
+           由探针在动画结束后摘掉属性 —— 留着会让之后所有子元素继承这段过渡。 */
+        html[data-ui-in] body { animation: ui-boot-in 220ms ease-out both; }
+        @keyframes ui-boot-in {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: none; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            /* 与主题切换、插件光晕同一口径：reduce-motion 用户不要这段位移动画。 */
+            html[data-ui-in] body { animation: none; }
+        }
 
         body {
             /* 这里的 background 会被文件后面那条同级更靠后的 body 规则覆盖；
@@ -2753,9 +2806,15 @@
         .log-line[data-level="ERROR"] .log-lv { color: #f87171; }
         .log-line[data-level="CRITICAL"] .log-lv { color: #fca5a5; font-weight: 700; }
         .log-time { color: #64748b; }
+        /* 模块色由 renderEntry 按模块名内联（与服务端同一套色板），这条只作兜底 */
         .log-tag { color: #a78bfa; }
         .log-loc { color: #64748b; }
         .log-msg { color: #cbd5e1; }
+        /* 正文随级别变色，与控制台一致：长日志里不必逐行读级别列，扫颜色就能分出提示与报错 */
+        .log-line[data-level="DEBUG"] .log-msg { color: #94a3b8; }
+        .log-line[data-level="WARN"] .log-msg { color: #fcd34d; }
+        .log-line[data-level="ERROR"] .log-msg { color: #fca5a5; }
+        .log-line[data-level="CRITICAL"] .log-msg { color: #fecaca; font-weight: 600; }
         .log-empty { color: #64748b; padding: 12px 4px; }
 
         /* ---- 状态栏 ---- */
@@ -3119,8 +3178,8 @@ box-sizing: border-box;}
         color: var(--pixso-brown-soft) !important;
     }
 
-    /* 「读取信息」每行右侧的系统权限现状小徽标：它回答"应用能不能拿到"，
-       与同一行那个 .mod-switch（管"让不让 AI 知道"）是两道独立的闸，所以两样都要显示。
+    /* 「手机权限」每行的系统状态小徽标：它回答"应用能不能拿到"。应用内不再有"让不让 AI 知道"
+       的开关（那层由系统权限取代），所以徽标只读、不可点；动作全在右侧的 .agent-perm-act 按钮上。
        配色只走主题变量 + 回调色，不写死 Tailwind 色。 */
     #agentPhoneSection .agent-perm-badge {
         flex: none;
@@ -3134,16 +3193,117 @@ box-sizing: border-box;}
     }
     #agentPhoneSection .agent-perm-badge.is-ok { color: var(--pixso-green, #6d6aa8); }
     #agentPhoneSection .agent-perm-badge.is-no { color: var(--pixso-warn, #b45309); }
-    /* 可点的徽标：只给指针 + 一点 hover/焦点反馈，不加内边距、不做成实心按钮，
-       以免又变回一排按钮。 */
-    #agentPhoneSection .agent-perm-badge.is-actionable { cursor: pointer; }
-    #agentPhoneSection .agent-perm-badge.is-actionable:hover {
-        background: var(--pixso-cream, #fbf7ef);
-        border-color: var(--pixso-brown-soft, #5d5878);
+
+    /* 摘要行：标题 + 汇总徽标 + 右侧「!」。用 flex 而不是 grid —— 标题文字长短随语言变，
+       汇总徽标要紧跟在它后面，只有「!」固定靠右。 */
+    #agentPhoneSection .agent-perm-head {
+        display: flex; align-items: center; gap: 8px;
     }
-    #agentPhoneSection .agent-perm-badge.is-actionable:focus-visible {
+    /* 「!」是纯图标按钮：圆形、无实心底、有 hover/focus 反馈。用文字「!」而不是 svg，
+       是为了让它在 10px 徽标旁边仍读得出来是"信息"，而不是又一个状态标签。 */
+    #agentPhoneSection .agent-perm-info-btn {
+        flex: none;
+        margin-left: auto;
+        width: 22px; height: 22px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border: 1px solid var(--pixso-line, #d3cadd);
+        border-radius: 50%;
+        background: transparent;
+        color: var(--pixso-brown-soft, #5d5878);
+        font-size: 12px; font-weight: 700; line-height: 1;
+        cursor: pointer;
+        transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+    }
+    #agentPhoneSection .agent-perm-info-btn:hover {
+        border-color: var(--pixso-brown-soft, #5d5878);
+        color: var(--pixso-brown, #3f3a55);
+        background: var(--pixso-cream, #fbf7ef);
+    }
+    #agentPhoneSection .agent-perm-info-btn:focus-visible {
         outline: 2px solid var(--pixso-green, #6d6aa8);
         outline-offset: 2px;
+    }
+    /* 展开态：底色实一点，表示"这块内容由这个按钮管" */
+    #agentPhoneSection .agent-perm-info-btn[aria-expanded="true"] {
+        border-color: var(--pixso-brown-soft, #5d5878);
+        background: var(--pixso-cream, #fbf7ef);
+        color: var(--pixso-brown, #3f3a55);
+    }
+
+    /* 明细是浮层（#agentPermSheet），不在设置卡片里就地展开 —— 所以这里的行 / 按钮 / 圆点
+       都按浮层容器选择，卡片里只剩「!」与「一键授权」两样。 */
+    #agentPermSheet .agent-perm-row {
+        display: flex; align-items: center; gap: 8px;
+        min-width: 0;
+        padding: 6px 0;
+    }
+    /* 相邻行之间只画一条淡线：八行全框起来会像表格，反而不像权限清单。 */
+    #agentPermSheet .agent-perm-row + .agent-perm-row { border-top: 1px solid var(--pixso-line, #d3cadd); }
+    #agentPermSheet .agent-perm-name {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 12px;
+        line-height: 1.5;
+        color: var(--pixso-brown, #3f3a55);
+    }
+    /* 状态圆点：绿=已开、红=未开、灰=无法检测。不写文字 —— 八行重复八遍反而看不清哪项没开。 */
+    .agent-perm-dot {
+        flex: none;
+        width: 9px; height: 9px;
+        border-radius: 50%;
+        background: var(--pixso-line, #d3cadd);
+        box-shadow: 0 0 0 2px transparent;
+    }
+    .agent-perm-dot.is-ok { background: var(--rd-ok, #4e9a6b); }
+    .agent-perm-dot.is-no { background: var(--rd-danger, #c2554f); }
+    .agent-perm-dot.is-unknown { background: var(--pixso-brown-soft, #5d5878); opacity: .45; }
+
+    /* 动作按钮：卡片与浮层共用一套外观。 */
+    #agentPhoneSection .agent-perm-act,
+    #agentPermSheet .agent-perm-act {
+        flex: none;
+        padding: 2px 8px;
+        border: 1px solid var(--pixso-line, #d3cadd);
+        border-radius: 7px;
+        background: transparent;
+        color: var(--pixso-brown-soft, #5d5878);
+        font-size: 11px; line-height: 1.6;
+        white-space: nowrap;
+        cursor: pointer;
+        transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+    }
+    #agentPhoneSection .agent-perm-act:hover,
+    #agentPermSheet .agent-perm-act:hover {
+        border-color: var(--pixso-brown-soft, #5d5878);
+        color: var(--pixso-brown, #3f3a55);
+        background: var(--pixso-cream, #fbf7ef);
+    }
+    #agentPhoneSection .agent-perm-act:focus-visible,
+    #agentPermSheet .agent-perm-act:focus-visible {
+        outline: 2px solid var(--pixso-green, #6d6aa8);
+        outline-offset: 2px;
+    }
+    /* 「一键授权」是卡片里唯一的主按钮：实心一点，让人一眼看到该点哪个。
+       必须带 ID 前缀 —— 上面 #agentPhoneSection .agent-perm-act 的优先级更高，光靠两个类压不过它。
+       用 --pixso-brown-soft 而不是 --pixso-green：后者在浅色主题里被映射成强调色，不是绿。 */
+    #agentPhoneSection .agent-perm-act.is-primary,
+    #agentPermSheet .agent-perm-act.is-primary {
+        border-color: var(--pixso-brown-soft, #5d5878);
+        background: var(--pixso-brown-soft, #5d5878);
+        color: #fff;
+        font-weight: 600;
+        padding: 4px 12px;
+    }
+    #agentPhoneSection .agent-perm-act.is-primary:hover,
+    #agentPermSheet .agent-perm-act.is-primary:hover {
+        filter: brightness(1.1);
+        background: var(--pixso-brown-soft, #5d5878);
+        color: #fff;
+    }
+    #agentPhoneSection .agent-perm-actions,
+    #agentPermSheet .agent-perm-actions {
+        display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+        margin-top: 2px;
     }
 
     /* 卡片分组：每个分组一张卡片（标题栏 + 分隔线 + 内容），纯 CSS 改造不动那 285 行 HTML

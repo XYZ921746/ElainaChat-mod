@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN" class="rd">
+<!-- style 内联黑色底：在任何样式表加载之前，html 元素自身先有一层深色。
+     不写的话浏览器（以及 APK 的 WebView）默认给白底，从"原生启动图"切到"页面首帧"
+     之间会露一帧白 —— 用户实测到的"启动闪白"就是这一帧。
+     内联 style 的优先级高于外部样式表，首帧兜底脚本（见 head 末尾）会按实际主题覆盖它。 -->
+<html lang="zh-CN" class="rd" style="background-color:#0b0e15">
 <head>
     <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
@@ -12,19 +16,109 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="ElainaChat">
     <script>
-        // 启动主题回放：把 theme.js 存的快照（sessionStorage['elaina_theme_boot']）在首帧渲染前套到 <html> 上，
-        // 消除刷新时的默认色首帧。快照只含算好的结果（属性 + 自定义变量文本），主题推导逻辑都在 theme.js 里，
-        // 这里机械回放、不做任何推导。整体 try/catch：快照缺失或损坏时走默认主题，绝不阻塞启动。
+        // 启动主题回放：把 theme.js 存的快照在首帧渲染前套到 <html> 上，消除刷新与冷启动时的默认色首帧。
+        // 快照只含算好的结果（属性 + 自定义变量文本），主题推导逻辑都在 theme.js 里，这里机械回放、不做任何推导。
+        // 整体 try/catch：快照缺失或损坏时走默认主题，绝不阻塞启动。
+        //
+        // 这个内联脚本排在 store.js 之前执行（首帧必须早于任何 defer 脚本），所以此刻
+        // window.Store 还不存在 —— 只能直接读 localStorage。写入侧统一走
+        // Store.bootThemeSnapshot（store.js），读取侧这里是唯一例外，理由同上一行。
+        // 用 localStorage 而非 sessionStorage：后者在进程被杀后清空，而 APK 每次冷启动都是新进程，
+        // 那样手机端每次启动都会先闪一帧默认浅色再切回用户的深色主题。
         (function () {
             try {
-                var snap = JSON.parse(sessionStorage.getItem('elaina_theme_boot') || 'null');
-                if (!snap) return;
+                var raw = '';
+                try { raw = localStorage.getItem('elaina_theme_boot') || ''; } catch (e) { raw = ''; }
+                var snap = JSON.parse(raw || 'null');
+                if (!snap) {
+                    // 首次安装没有快照：按系统深浅色给个底色，别让首帧透出默认画布色。
+                    // 之后 applyStored 读到 data/ 里的真实设置会覆盖它。
+                    // 必须显式覆盖 <html> 的内联黑底（那是启动阶段防白闪用的），否则浅色用户
+                    // 会一直停在深色底上。
+                    var sysDark = !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                    var firstBg = sysDark ? '#0b0e15' : '#f4eee1';
+                    document.documentElement.style.backgroundColor = firstBg;
+                    document.documentElement.setAttribute('data-elaina-boot', '1');
+                    var s0 = document.createElement('style');
+                    s0.id = 'elainaBootBg';
+                    // 选择器与下面的快照分支保持一致：必须逐个打过高优先级来源（见那边的说明）。
+                    // html / body 也要带 html.rd 前缀：redesign.css 里有 `html.rd body { background:
+                    // var(--rd-body-bg) !important }`，特异性 0-0-1-2，比裸 `html,body`（0-0-0-1）高，
+                    // 两者都带 !important 时后者胜出 —— 变量未定义时整页会算成透明（实测）。
+                    s0.textContent =
+                        'html,body{background:' + firstBg + ' !important;}'
+                        + 'html.rd[data-elaina-boot] body,html.rd[data-elaina-boot]{background:' + firstBg + ' !important;}'
+                        + 'html.rd[data-elaina-boot] #mainContent,html.rd[data-elaina-boot] #chatHeader,'
+                        + 'html.rd[data-elaina-boot] #sidebar,html.rd[data-elaina-boot] .glass-panel{'
+                        + 'background:' + firstBg + ' !important;}';
+                    document.head.appendChild(s0);
+                    return;
+                }
                 var root = document.documentElement;
                 if (snap.template) root.setAttribute('data-theme-template', snap.template);
                 else root.removeAttribute('data-theme-template');
                 if (snap.dark) root.setAttribute('data-theme', snap.dark);
                 else root.removeAttribute('data-theme');
                 if (snap.colorScheme) root.style.colorScheme = snap.colorScheme;
+                // 底色也内联钉住：base.css 最先加载、它的 body 背景取 var(--pixso-canvas)，
+                // 而该变量由 themes.css 定义（在 <head> 里晚 1700 行才到）。中间这段变量未定义，
+                // background 计算失败会透出默认画布色 —— 就是"布局已出来、底色还是浅的"那一帧。
+                // 内联到 <html> 上，优先级高于任何未加载完的样式表。
+                //
+                // 老快照（升级前存的）没有 bg 字段：按 dark 字段兜一个底色，否则升级后第一次启动
+                // 仍会闪一帧浅色（用户实测就是这个现象）。两个值与 themes.css 的 rd-bg 默认值/深色值一致。
+                var isDark = snap.dark === 'dark';
+                var bootBg = snap.bg || (isDark ? '#0b0e15' : '#f4eee1');
+                root.style.backgroundColor = bootBg;
+                root.setAttribute('data-elaina-boot', '1');
+                // base.css 的 :root 兜底是浅色主题的值；深色用户必须在这里把文字/强调色
+                // 一起改掉，否则会出现"深底 + 深字"（实测 textInk 读到 #241f18，几乎看不见）。
+                // 值取自 themes.css 的 html.rd[data-theme="dark"]。
+                if (isDark) {
+                    var dv = document.documentElement.style;
+                    dv.setProperty('--rd-text', '#f0e8d8');
+                    dv.setProperty('--rd-text-2', '#b6ac98');
+                    dv.setProperty('--rd-text-3', '#7f7767');
+                    dv.setProperty('--rd-accent', '#d3b36a');
+                    dv.setProperty('--rd-accent-2', '#8fa9c9');
+                    dv.setProperty('--rd-accent-soft', 'rgba(211, 179, 106, .12)');
+                    dv.setProperty('--rd-accent-border', 'rgba(211, 179, 106, .24)');
+                    dv.setProperty('--rd-surface-2', '#171e2a');
+                    dv.setProperty('--rd-border', 'rgba(255, 255, 255, .1)');
+                    dv.setProperty('--rd-ok', '#7fae7a');
+                    dv.setProperty('--rd-ok-soft', 'rgba(127, 174, 122, .14)');
+                    dv.setProperty('--rd-warn', '#d0a24e');
+                    dv.setProperty('--rd-warn-bg', 'rgba(208, 162, 78, .12)');
+                    dv.setProperty('--rd-warn-border', 'rgba(208, 162, 78, .28)');
+                    dv.setProperty('--rd-danger', '#d9796f');
+                    dv.setProperty('--rd-danger-soft', 'rgba(217, 121, 111, .12)');
+                    dv.setProperty('--rd-danger-border', 'rgba(217, 121, 111, .26)');
+                    dv.setProperty('--rd-glow-1', 'rgba(211, 179, 106, .12)');
+                    dv.setProperty('--rd-glow-2', 'rgba(120, 150, 190, .1)');
+                }
+                var bst = document.getElementById('elainaBootBg');
+                if (!bst) {
+                    bst = document.createElement('style');
+                    bst.id = 'elainaBootBg';
+                    // 这里的选择器必须**逐个打过高优先级来源**，否则会被压回去：
+                    //   · #mainContent ← redesign.css 的 `html.rd #mainContent`（0-1-1-0）
+                    //   · #chatHeader  ← mobile-shell.css 的 `html.rd #chatHeader`（0-1-1-0）
+                    //     这条尤其关键：它的 background 取 var(--rd-surface)，而该变量由
+                    //     themes.css 定义。变量未定义时 background 计算失败，顶栏会回落到
+                    //     浅米色 #efe7d7 —— 这就是"顶栏那条横条闪一下浅色"的真因
+                    //     （实测复现：手机视口 + 延迟 themes.css，bg = rgb(239,231,215)）。
+                    // 用 `html.rd #id` 与来源同权重、再靠后加载取胜。
+                    // html / body 必须带 html.rd 前缀：redesign.css 的
+                    // `html.rd body { background: var(--rd-body-bg) !important }` 特异性更高，
+                    // 变量未定义时会算成透明并把兜底盖掉（实测 bodyBg = rgba(0,0,0,0)）。
+                    bst.textContent =
+                        'html,body{background:' + bootBg + ' !important;}'
+                        + 'html.rd[data-elaina-boot] body,html.rd[data-elaina-boot]{background:' + bootBg + ' !important;}'
+                        + 'html.rd[data-elaina-boot] #mainContent,html.rd[data-elaina-boot] #chatHeader,'
+                        + 'html.rd[data-elaina-boot] #sidebar,html.rd[data-elaina-boot] .glass-panel{'
+                        + 'background:' + bootBg + ' !important;}';
+                    document.head.appendChild(bst);
+                }
                 if (snap.css) {
                     var st = document.createElement('style');
                     st.id = 'elainaCustomTheme';   // 与 theme.js 的 applyCustomTheme 同 id：它晚到时会原地替换内容
@@ -34,13 +128,75 @@
             } catch (e) { /* 快照损坏按无快照处理 */ }
         })();
     </script>
+    <script>
+        // 首帧门：首屏真正建好之前，先别把半成品画出来。
+        // 必须在 body 解析之前挂上 data-ui-boot，否则第一帧已经露出来了；隐藏规则住在 base.css
+        // （内联样式块被前端结构检查禁止），这里只负责挂属性与判定何时摘掉。
+        //
+        // 判定要等两件事：
+        //   ① 工具类生效 —— tailwind.js 扫完 DOM 才异步产出 `.hidden` / `.flex` / `.w-9`，
+        //      在那之前布局类全部不生效（该藏的弹窗铺满屏、卡片没有尺寸）。
+        //   ② 首屏建好 —— HTML 里那份只是骨架：手机壳层（首页头像 / 问候 / 金句卡 / 底栏）
+        //      与首页状态都由 JS 在启动末尾现建。只等 ① 就揭示的话，露出的是桌面版骨架
+        //      （顶栏是汉堡 + 对话名、金句卡还不存在），正是"顶栏不对、内容缺一块"。
+        //      信号由 init() 在启动末尾发（window.ElainaUiGate.ready），见 init.js。
+        // 不逐份检查 <link> 是否加载成功：某份样式表 404 时那个条件永远不成立，页面会被白挡到超时。
+        // 超时兜底必须留：探针出错、脚本报错或引擎挂了时，宁可露出半成品也不能把页面永久藏住。
+        // 探针全程 try/catch —— 它跑在首帧路径上，抛错就等于白屏。
+        (function () {
+            var root = document.documentElement;
+            root.setAttribute('data-ui-boot', '1');
+            var t0 = Date.now();
+            var stable = 0;
+            var appReady = false;
+            var revealed = false;
+            window.ElainaUiGate = {
+                // init() 在启动末尾调：Store 已读完、首页状态已定、手机壳层已建。
+                ready: function () { appReady = true; }
+            };
+            function utilsReady() {
+                // 引擎已宣告失败时不再等它：base.css 的 .fallback-ready 兜底规则接手。
+                if (document.body.classList.contains('fallback-ready')) return true;
+                var probe = document.createElement('div');
+                probe.className = 'hidden';
+                probe.style.cssText = 'position:absolute;left:-9999px;top:0';
+                document.body.appendChild(probe);
+                var ok = getComputedStyle(probe).display === 'none';
+                probe.remove();
+                return ok;
+            }
+            function reveal() {
+                if (revealed) return;
+                revealed = true;
+                root.removeAttribute('data-ui-boot');
+                // 入场淡入：只在揭示这一段生效，动画结束就摘掉属性，
+                // 否则之后所有子元素都会继承这段过渡（切页/弹窗的动效会被拖慢）。
+                root.setAttribute('data-ui-in', '1');
+                window.setTimeout(function () { root.removeAttribute('data-ui-in'); }, 260);
+            }
+            function tick() {
+                try {
+                    if (Date.now() - t0 > 3000) { reveal(); return; }
+                    if (document.body && appReady && utilsReady()) {
+                        if (++stable >= 2) { reveal(); return; }
+                    } else {
+                        stable = 0;
+                    }
+                } catch (e) {
+                    reveal();
+                    return;
+                }
+                requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        })();
+    </script>
     <script src="/vendor/tailwind.js"></script>
     <link rel="stylesheet" href="/vendor/katex/katex.min.css">
     <script src="/vendor/katex/katex.min.js"></script>
-    <!-- 加载顺序（defer 脚本按书写顺序执行）：store.js 必须最先（提供 window.Store —— data/ 是唯一权威存储，Web 走 /api/store、APK 走 Capacitor Filesystem，业务层一行平台判断都不写）；chat-providers.js 在主脚本之前（主脚本会挂 window.ChatDeps 供它取依赖）；katex / readme-view 缺失时 renderMessageText 静默回落纯文本；字体样式表必须非阻塞（media="print" + onload 切回 all），否则整页打不开。 -->
+    <!-- 加载顺序（defer 脚本按书写顺序执行）：store.js 必须最先（提供 window.Store —— data/ 是唯一权威存储，Web 与 APK 都走 /api/store，业务层一行平台判断都不写）；chat-providers.js 在主脚本之前（主脚本会挂 window.ChatDeps 供它取依赖）；katex / readme-view 缺失时 renderMessageText 静默回落纯文本；字体样式表必须非阻塞（media="print" + onload 切回 all），否则整页打不开。 -->
     <script defer src="/js/store.js"></script>
     <script defer src="/js/chat-providers.js"></script>
-    <script defer src="/js/chat-backup.js"></script>
     <script defer src="/js/data-sync.js"></script>
     <script defer src="/js/frontend-log.js"></script>
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/outfit@5.2.8/index.css">
@@ -49,7 +205,19 @@
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-600.css">
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-sc@5.2.8/chinese-simplified-700.css">
     <link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600;700&display=swap">
+    <!-- 覆盖层样式表必须全部住在 <head>，不能留到 body 末尾。
+         浏览器解析到 <link> 才发起请求；放在 body 末尾时，首帧已经用「只有 base.css」的规则渲染过一遍：
+         base.css 里大量声明取 var(--rd-*)，而那些变量由 themes.css 定义 —— 变量未定义时这些声明整条失效，
+         表现为文字没有颜色、图标没有尺寸约束、卡片没有圆角与边框，也就是刷新瞬间的"文字错乱、页面显示不全"。
+         放回 head 后它们与 base.css 一起阻塞首屏解析，首帧就是完整样式。 -->
     <link rel="stylesheet" href="/css/base.css">
+    <link rel="stylesheet" href="/css/themes.css">
+    <link rel="stylesheet" href="/css/achievements.css">
+    <link rel="stylesheet" href="/css/redesign.css">
+    <link rel="stylesheet" href="/css/layout-full.css">
+    <link rel="stylesheet" href="/css/pages-luxe.css">
+    <link rel="stylesheet" href="/css/mobile-shell.css">
+    <link rel="stylesheet" href="/css/settings.css">
 </head>
 <body>
     <script>
@@ -135,7 +303,7 @@
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div id="sidebarFooter" class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <div id="appVersionFooter" data-version="2.1.0" class="text-center text-[10px] text-dim select-none">v2.1.0 · 魔女之旅</div>
+                <div id="appVersionFooter" data-version="2.2.0" class="text-center text-[10px] text-dim select-none">v2.2.0 · 魔女之旅</div>
             </div>
         </aside>
 
@@ -1281,7 +1449,7 @@
                      免得定时任务、权限、手机操作、浏览器四个分区在长页里各据一方。 -->
                 <section id="agentAutomationCard" class="rd-display-card settings-span-2">
                 <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 权限与自动化</div>
-                <p class="rd-field-hint mb-2">AI 能替你做哪些事、做到什么程度；这些开关同时管电脑与手机，手机侧另有独立开关。</p>
+                <p class="rd-field-hint mb-2">AI 能替你做哪些事、做到什么程度；这些开关同时管电脑与手机，手机能不能读到数据另由系统权限决定。</p>
 
                 <section id="scheduledTaskSection">
                     <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 定时任务（AI 未来消息）</div>
@@ -1289,11 +1457,17 @@
                     <div id="scheduledTaskList" class="space-y-2">
                         <p class="text-[11px] text-dim">（暂无任务）</p>
                     </div>
+                    <!-- 定时任务靠应用内的轮询触发：进程被系统清掉就没人叫醒它。这条提示放在任务列表下方，
+                         因为用户是在这里发现"任务没来"的，而不是先去翻权限明细。 -->
+                    <p id="scheduledTaskKeepAliveHint" class="text-[11px] leading-relaxed mt-2 set-warn-text">
+                        ⚠️ 应用被系统清掉或划掉后台后，到点任务<b>不会自己醒来</b>：需要在下方「手机权限」的
+                        <b>!</b> 里允许<b>自启动</b>、把应用加进<b>电池优化白名单</b>，并在最近任务里<b>锁定后台</b>。
+                    </p>
                 </section>
 
                     <section id="agentPermissionSection" class="settings-span-2">
                         <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> AI 权限</div>
-                        <div class="rd-field-hint mb-2">前三档<b>同时管电脑与手机</b>；手机侧另有开关。</div>
+                        <div class="rd-field-hint mb-2">前三档<b>同时管电脑与手机</b>；手机读取数据的权限在下方「手机权限」里。</div>
 
                         <div class="space-y-2 mb-3">
                             <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
@@ -1357,6 +1531,8 @@
                             <div class="flex items-center gap-2 mt-2">
                                 <button id="settingBackendChooseBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">选择实现方式</button>
                                 <button id="settingBackendRefreshBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">重新检测</button>
+                                <button id="settingScreenWatchBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px"
+                                    title="后台运行时查看 AI 在副屏上操作了什么">看副屏画面</button>
                             </div>
                         </div>
 
@@ -1378,84 +1554,27 @@
                             </p>
                         </div>
 
+                        <!-- 手机权限：只有系统层一道闸，应用内不给"让不让 AI 读"的开关。
+                             能弹系统框的那几项收成一行「一键授权」，需要人工去系统页的走明细里的跳转；
+                             明细做成浮层而不是就地展开 —— 八项权限摊在卡片里会把「手机操作」挤成一屏。 -->
                         <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold text-soft mb-1">读取信息（隐私）</div>
-                            <p class="text-[11px] text-dim leading-relaxed mb-2">
-                                这些<b>隐私数据</b>会进入对话上下文；关掉某项开关，AI 就读不到。
+                            <div class="agent-perm-head">
+                                <span class="text-[11px] font-semibold text-soft">手机权限</span>
+                                <span id="agentPermSummaryBadge" class="agent-perm-badge">检测中…</span>
+                                <button id="agentPermDetailBtn" type="button" class="agent-perm-info-btn"
+                                    aria-label="查看各项权限的授权情况" aria-expanded="false" aria-controls="agentPermSheet"
+                                    title="查看各项权限的授权情况">!</button>
+                            </div>
+                            <p class="text-[11px] text-dim leading-relaxed mt-1">
+                                这些<b>隐私数据</b>会进入对话上下文；能不能读到，只由系统权限决定。
                             </p>
-                            <div class="space-y-2">
-                                <div class="flex items-center gap-3">
-                                    <div class="text-xs text-soft flex-1 min-w-0">
-                                        已安装应用列表
-                                        <span class="text-[11px] text-dim">（包名 + 应用名，用于"帮我打开某某"）</span>
-                                    </div>
-                                    <span id="agentPermBadgeApps" class="agent-perm-badge">检测中…</span>
-                                    <label class="mod-switch" title="开启 / 关闭已安装应用列表">
-                                        <input type="checkbox" id="settingAgentReadApps" aria-label="已安装应用列表">
-                                        <span class="track"></span><span class="knob"></span>
-                                    </label>
-                                </div>
-                                <div class="flex items-center gap-3">
-                                    <div class="text-xs text-soft flex-1 min-w-0">
-                                        通知内容
-                                        <span class="text-[11px] text-dim">（哪个应用发来什么消息 —— <b>最敏感的一项</b>）</span>
-                                    </div>
-                                    <span id="agentPermBadgeNotifications" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里打开系统的「通知使用权」设置">检测中…</span>
-                                    <label class="mod-switch" title="开启 / 关闭通知内容">
-                                        <input type="checkbox" id="settingAgentReadNotifications" aria-label="通知内容">
-                                        <span class="track"></span><span class="knob"></span>
-                                    </label>
-                                </div>
-                                <div class="flex items-center gap-3">
-                                    <div class="text-xs text-soft flex-1 min-w-0">
-                                        设备与前台状态
-                                        <span class="text-[11px] text-dim">（电量、网络、当前前台应用）</span>
-                                    </div>
-                                    <span id="agentPermBadgeDevice" class="agent-perm-badge">检测中…</span>
-                                    <label class="mod-switch" title="开启 / 关闭设备与前台状态">
-                                        <input type="checkbox" id="settingAgentReadDevice" aria-label="设备与前台状态">
-                                        <span class="track"></span><span class="knob"></span>
-                                    </label>
-                                </div>
-                                <div class="flex items-center gap-3">
-                                    <div class="text-xs text-soft flex-1 min-w-0">
-                                        短信
-                                        <span class="text-[11px] text-dim">（最近短信内容与发件人）</span>
-                                    </div>
-                                    <span id="agentPermBadgeSms" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里申请短信权限">检测中…</span>
-                                    <label class="mod-switch" title="开启 / 关闭短信读取">
-                                        <input type="checkbox" id="settingAgentReadSms" aria-label="短信">
-                                        <span class="track"></span><span class="knob"></span>
-                                    </label>
-                                </div>
-                                <div class="flex items-center gap-3">
-                                    <div class="text-xs text-soft flex-1 min-w-0">
-                                        通讯录
-                                        <span class="text-[11px] text-dim">（联系人姓名与号码）</span>
-                                    </div>
-                                    <span id="agentPermBadgeContacts" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里申请通讯录权限">检测中…</span>
-                                    <label class="mod-switch" title="开启 / 关闭通讯录读取">
-                                        <input type="checkbox" id="settingAgentReadContacts" aria-label="通讯录">
-                                        <span class="track"></span><span class="knob"></span>
-                                    </label>
-                                </div>
-                                <div class="flex items-center gap-3">
-                                    <div class="text-xs text-soft flex-1 min-w-0">
-                                        日历
-                                        <span class="text-[11px] text-dim">（近期日程）</span>
-                                    </div>
-                                    <span id="agentPermBadgeCalendar" class="agent-perm-badge is-actionable" role="button" tabindex="0" title="点这里申请日历权限">检测中…</span>
-                                    <label class="mod-switch" title="开启 / 关闭日历读取">
-                                        <input type="checkbox" id="settingAgentReadCalendar" aria-label="日历">
-                                        <span class="track"></span><span class="knob"></span>
-                                    </label>
-                                </div>
+                            <div class="agent-perm-actions mt-2">
+                                <button type="button" class="agent-perm-act is-primary" data-perm-act="requestAll">一键授权</button>
+                                <span class="text-[11px] text-dim leading-relaxed">不需要的话点系统弹窗里的「拒绝」即可。</span>
                             </div>
                             <p class="text-[11px] text-dim leading-relaxed mt-2">
-                                右侧标记是当前系统状态，<b>点一下</b>可直接去申请权限。
-                            </p>
-                            <p class="text-[11px] leading-relaxed mt-1.5 set-warn-text">
-                                ⚠️ 要彻底关掉某项，去系统设置撤销对应权限（短信 / 通讯录 / 日历在应用权限，通知在「通知使用权」）。
+                                <b>后台加锁</b>：允许自启动之后，还要在最近任务里把本应用<b>锁定 / 加锁</b>，
+                                否则划掉后台或系统清理时，定时任务不会到点醒来。
                             </p>
                         </div>
 
@@ -1545,7 +1664,7 @@
                                 <span id="dataActionHint" class="text-[11px] text-dim"></span>
                             </div>
                             <div id="lanShareHintLine" class="text-[11px] text-dim leading-relaxed mt-1">
-                                把弹窗里的 IP、端口与访问密码告诉对方，对方填入即可。
+                                把弹窗里的 IP、端口告诉对方，对方用这台设备的访问密码登录即可。
                             </div>
                         </section>
 
@@ -1554,12 +1673,12 @@
                                 <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 访问密码（局域网）</div>
                                 <div id="authStatusBox" class="text-[11px] text-dim mb-2 leading-relaxed">检测中…</div>
                                 <div class="flex flex-wrap items-center gap-2">
-                                    <input id="authNewPwd" type="password" class="modal-input text-sm flex-1 min-w-[150px] py-1.5" placeholder="新密码（≥8 位）" autocomplete="new-password">
+                                    <input id="authNewPwd" type="password" class="modal-input text-sm flex-1 min-w-[150px] py-1.5" placeholder="新密码（≥8 位，数字+字母/符号）" autocomplete="new-password">
                                     <input id="authNewPwd2" type="password" class="modal-input text-sm flex-1 min-w-[150px] py-1.5" placeholder="再输一次" autocomplete="new-password">
                                     <button id="authChangeBtn" class="btn-secondary text-xs" type="button">修改访问密码</button>
                                 </div>
                                 <div class="mt-2 set-note set-note-warn">
-                                    <p class="text-[11px] leading-relaxed set-warn-text">⚠️ 这个密码是<b>整台电脑的钥匙</b>，请用 ≥8 位强密码；连错会逐次延长锁定。忘记密码：删数据目录下的 <code>auth.json</code> 再重启。</p>
+                                    <p class="text-[11px] leading-relaxed set-warn-text">⚠️ 这个密码是<b>整台电脑的钥匙</b>，请用 ≥8 位、同时含数字和其他字符（字母或符号）的密码；连错会逐次延长锁定。修改后密码会写入 <code>data/config.json</code>（明文，注意 data/ 备份安全），旧版的 <code>auth.json</code> 兼容读取、改密后删除。忘记密码：改 <code>data/config.json</code> 的 <code>password</code> 并重启；没有写就删除数据目录下的 <code>auth.json</code> 后重启，再回这里设置。</p>
                                 </div>
                             </section>
 
@@ -1815,14 +1934,6 @@
         </div>
     </div>
 
-    <link rel="stylesheet" href="/css/themes.css">
-    <link rel="stylesheet" href="/css/achievements.css">
-    <link rel="stylesheet" href="/css/redesign.css">
-    <link rel="stylesheet" href="/css/layout-full.css">
-    <link rel="stylesheet" href="/css/pages-luxe.css">
-    <link rel="stylesheet" href="/css/mobile-shell.css">
-    <link rel="stylesheet" href="/css/settings.css">
-
     <div id="agentRunBar" class="agent-run-bar hidden fixed items-center gap-2" role="status" aria-live="polite"
          style="left:50%;transform:translateX(-50%);top:88px;z-index:100000;max-width:min(92vw,430px);
                 padding:7px 9px 7px 12px;border-radius:16px;background:rgba(28,25,42,.94);
@@ -1881,7 +1992,7 @@
     </div>
 
     <!-- 应用主脚本按功能分区拆成多个外置脚本，共享同一全局词法环境（顶层 function / const / let 互相可见），拆分不改调用点；⚠️ 顺序即依赖：必须按下面书写的顺序加载（加新模块插进合适位置、别追加到末尾）—— pwa.js / chat-stream.js 在 core.js 之后，agent-ops.js 在 agent-tags.js 之前，mcp.js 在 agent.js 之后且 init.js 之前，mods-*.js 全部在 mods.js 之前、host-slots.js 紧随 mods.js 之后（两者都在 init.js 之前），theme.js / diagnostics.js 在 mods.js 之前，theme.js / redesign-extras.js 必须在 init.js 之前（init 的启动重放要调到它们暴露的命名空间）。
-     样式表顺序：base.css 在 head 内最早；themes.css 零 !important，规则挂在 html.rd / html.rd[data-theme-template=…] 之下，靠属性选择器的特异性取胜（比 base 层的同名规则高半级）；mobile-shell.css 排在 settings.css 之前（settings.css 是设置页的收口层，必须最后加载）；⚠️ 本注释里不要写脚本开标签字面量 —— 会骗过「内联脚本语法检查」的扫描。 -->
+     样式表顺序（全部在 head 内）：base.css 最先；themes.css 零 !important，规则挂在 html.rd / html.rd[data-theme-template=…] 之下，靠属性选择器的特异性取胜（比 base 层的同名规则高半级）；mobile-shell.css 排在 settings.css 之前（settings.css 是设置页的收口层，必须最后加载）；⚠️ 本注释里不要写脚本开标签字面量 —— 会骗过「内联脚本语法检查」的扫描。 -->
     <script defer src="/js/core-native.js"></script>
 <script defer src="/js/core-search.js"></script>
 <script defer src="/js/core-chat.js"></script>
@@ -1985,6 +2096,75 @@
     <script defer src="/js/redesign-extras.js"></script>
 <script defer src="/js/init.js"></script>
     <script defer src="/js/mobile-shell.js"></script>
+
+<div id="agentPermSheet" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
+        <div class="modal-panel agent-perm-sheet w-full max-w-md max-h-[80vh] flex flex-col overflow-hidden animate-modal-pop">
+            <div class="flex items-center gap-3 px-5 py-4 border-b border-white/60 flex-shrink-0">
+                <div class="text-sm font-bold text-ink">手机权限</div>
+                <span id="agentPermSheetSummary" class="agent-perm-badge">检测中…</span>
+                <button id="agentPermSheetClose" class="ml-auto p-1.5 rounded-lg hover:bg-white/60 transition-colors" type="button" title="关闭" aria-label="关闭">
+                    <svg class="w-4 h-4 text-dim" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+            </div>
+            <div id="agentPermSheetBody" class="flex-1 overflow-y-auto scroll-soft px-5 py-4">
+                <!-- 能弹系统框的：直接给「授权」按钮；只能人工去系统页开的：给「去设置」。
+                     每行末尾的圆点是状态 —— 绿=已开、红=未开，不写文字。 -->
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">短信<span class="text-[11px] text-dim">（最近短信内容与发件人）</span></div>
+                    <button type="button" class="agent-perm-act" data-perm-act="sms">授权</button>
+                    <span id="agentPermBadgeSms" class="agent-perm-dot"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">通讯录<span class="text-[11px] text-dim">（联系人姓名与号码）</span></div>
+                    <button type="button" class="agent-perm-act" data-perm-act="contacts">授权</button>
+                    <span id="agentPermBadgeContacts" class="agent-perm-dot"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">日历<span class="text-[11px] text-dim">（近期日程）</span></div>
+                    <button type="button" class="agent-perm-act" data-perm-act="calendar">授权</button>
+                    <span id="agentPermBadgeCalendar" class="agent-perm-dot"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">通知内容<span class="text-[11px] text-dim">（哪个应用发来什么消息）</span></div>
+                    <button type="button" class="agent-perm-act" data-perm-act="notifications">去设置</button>
+                    <span id="agentPermBadgeNotifications" class="agent-perm-dot"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">电池优化白名单<span class="text-[11px] text-dim">（不被省电策略掐掉）</span></div>
+                    <button type="button" class="agent-perm-act" data-perm-act="battery">授权</button>
+                    <span id="agentPermBadgeBattery" class="agent-perm-dot"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">自启动<span class="text-[11px] text-dim">（被清掉后任务能拉起应用）</span></div>
+                    <button type="button" class="agent-perm-act" data-perm-act="autostart">去设置</button>
+                    <span id="agentPermBadgeAutostart" class="agent-perm-dot is-unknown"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">已安装应用列表<span class="text-[11px] text-dim">（用于"帮我打开某某"）</span></div>
+                    <span id="agentPermBadgeApps" class="agent-perm-dot"></span>
+                </div>
+                <div class="agent-perm-row">
+                    <div class="agent-perm-name">设备与前台状态<span class="text-[11px] text-dim">（电量、网络、前台应用）</span></div>
+                    <span id="agentPermBadgeDevice" class="agent-perm-dot"></span>
+                </div>
+
+                <div class="agent-perm-actions">
+                    <button type="button" class="agent-perm-act is-primary" data-perm-act="requestAll">一键授权</button>
+                    <button type="button" class="agent-perm-act" data-perm-act="appSettings">打开应用信息</button>
+                </div>
+
+                <p class="text-[11px] text-dim leading-relaxed mt-3">
+                    绿点 = 已开启，红点 = 未开启，灰点 = 无法检测。<b>点「授权」会弹系统框</b>，不需要就点「拒绝」；
+                    「去设置」会跳到对应系统页，需要你手动打开。
+                </p>
+                <p class="text-[11px] leading-relaxed mt-1 set-warn-text">
+                    ⚠️ 本应用<b>没有关闭权限的入口</b>：要撤销哪一项，只能去系统设置关 ——
+                    短信 / 通讯录 / 日历在「应用权限」，通知在「通知使用权」，
+                    电池在「电池优化」，自启动在厂商的「自启动管理」。
+                </p>
+            </div>
+        </div>
+    </div>
 
 <div id="modSettingsOverlay" class="hidden fixed inset-0 z-50 items-center justify-center p-4 modal-overlay">
         <div class="modal-panel w-full max-w-2xl max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">

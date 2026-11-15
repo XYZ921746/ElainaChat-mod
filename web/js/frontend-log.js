@@ -21,8 +21,20 @@
             return parts.join(' ').slice(0, 2000);
         }
 
+        // 浏览器扩展注入的监控脚本会往每个页面（含本应用）刷告警，这些不是本应用的输出，
+        // 转发进服务端日志只会淹没自己的错误。命中前缀的直接丢弃。
+        var thirdPartyNoisePrefixes = ['[RUM]'];
+
+        function isThirdPartyNoise(text) {
+            for (var i = 0; i < thirdPartyNoisePrefixes.length; i++) {
+                if (text.indexOf(thirdPartyNoisePrefixes[i]) === 0) return true;
+            }
+            return false;
+        }
+
         function push(level, text) {
             if (!text) return;
+            if (isThirdPartyNoise(text)) return;
             queue.push({ level: level, text: text, page: location.pathname + location.hash.slice(0, 20) });
             if (queue.length > 40) queue.splice(0, queue.length - 40);
             if (!timer) timer = setTimeout(flush, 1200);

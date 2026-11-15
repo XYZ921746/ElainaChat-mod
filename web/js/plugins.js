@@ -1,14 +1,14 @@
 // 插件设置栏：插件卡片 / 分组 / 拖拽排序 / 启用停用 / 安装删除 / 前置区 / README。
 'use strict';
 
-// 平台说明只能按实情写：电脑版可把 zip 丢进 mods/ 自动安装，APK 没有本地服务端、碰不到私有目录，只能「上传安装」。
+// 平台说明只能按实情写：电脑版可把 zip 丢进 mods/ 自动安装，APK 碰不到 mods/ 私有目录，只能「上传安装」。
 function applyModsPlatformHint() {
     const el = document.getElementById('modsPlatformHint');
     if (!el) return;
     const common = '<b>安装插件等于信任它的代码</b>（它在页面同源环境里运行），请只装自己信得过的。'
         + '拖插件卡片到某个分栏的标题上可以归类；拖分栏标题本身可以调分栏顺序。';
     el.innerHTML = IS_NATIVE_APP
-        ? '可选功能的开关。安卓版没有本地服务端，装插件请点右上角<b>「上传安装」</b>选一个 zip；'
+        ? '可选功能的开关。安卓版碰不到 mods/ 目录，装插件请点右上角<b>「上传安装」</b>选一个 zip；'
             + '卸载点卡片上的 🗑。' + common
         : '可选功能的开关。插件放在项目根的 <code class="px-1 rounded bg-white/60">mods/</code> 下，'
             + '把 <code class="px-1 rounded bg-white/60">xxx.zip</code> 丢进去即会自动安装'
@@ -720,6 +720,16 @@ function syncModsUpdateBar() {
 async function runModsUpdates(list, btn) {
     if (!window.ElainaMarket || typeof window.ElainaMarket.updateBatch !== 'function') return;
     if (modsUpdateBusy || !list.length) return;
+    // 覆盖安装会先删掉 mods/<id> 再换新包，原有文件不保留：动手前把要换的版本摆给用户看。
+    if (typeof showCustomConfirm === 'function') {
+        const lines = list.map((u) => '「' + (u.plugin.name || u.plugin.id) + '」v' + u.current + ' → v' + (u.plugin.version || '?'));
+        const agreed = await showCustomConfirm(
+            '将用商店里的版本覆盖安装 ' + list.length + ' 个插件：\n\n' + lines.join('\n')
+            + '\n\n覆盖会替换整个插件目录，原有文件不保留。',
+            list.length > 1 ? '更新 ' + list.length + ' 个插件' : '更新插件'
+        );
+        if (!agreed) return;
+    }
     modsUpdateBusy = true;
     // 卡片上的更新按钮是图标按钮（innerHTML 是 svg），标签存取必须走 innerHTML，textContent 会把图标弄丢
     const label = btn ? btn.innerHTML : '';

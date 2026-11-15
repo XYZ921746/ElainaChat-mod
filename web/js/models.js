@@ -2,11 +2,13 @@
 'use strict';
 
 function modelsEndpointFor(baseUrl, apiFormat) {
-    let base = String(baseUrl || '').trim().replace(/\/+$/, '');
+    // 用户可能把完整的功能地址整条粘进来（chat/completions、responses、messages），先剥掉再拼。
+    // 剥离规则与对话运行时同一份（core-chat.js 的 stripChatFunctionSuffix），否则会出现
+    // "对话能通、获取模型 404"。
+    const base = stripChatFunctionSuffix(baseUrl);
     if (!base) throw new Error('请先填写 API Base URL');
-    // 用户可能把完整的功能地址整条粘进来（chat/completions、responses、messages），先剥掉再拼
-    base = base.replace(/\/(?:chat\/completions|responses|messages)$/i, '');
     if (/\/models$/i.test(base)) return base;
+    // 版本段不猜：base 带 /v4 就查 /v4/models，只有 Anthropic 缺版本段时才补 /v1。
     if (apiFormat === 'anthropic' && !/\/v\d+$/i.test(base)) return base + '/v1/models';
     return base + '/models';
 }
@@ -50,7 +52,15 @@ async function fetchModelList(baseUrl, apiKey, apiFormat) {
             const looksHtml = /^\s*<(!doctype|html|head|body)/i.test(String(result.rawText || ''));
             const baseNoModels = endpoint.replace(/\/models$/, '');
             if (!result.ok) {
-                failure = new Error(fromPayload || ('HTTP ' + result.status));
+                // 空 Key + 401/403 是最常见的“看起来像连不上”的失败：直接点明先填 Key，
+                // 别把服务商的英文原文丢给用户。本地 Ollama 这类无需 Key 的服务通常不会回 401。
+                if ((result.status === 401 || result.status === 403) && !key) {
+                    failure = new Error('没有填写 API Key：这家服务商要求鉴权。'
+                        + '\n· 请在「API Key」里填入这家提供商的 Key（本地 Ollama / LM Studio 等无需 Key 的服务可留空）。'
+                        + (fromPayload ? '\n· 服务商原话：' + fromPayload : ''));
+                } else {
+                    failure = new Error(fromPayload || ('HTTP ' + result.status));
+                }
             } else if (looksHtml) {
                 failure = new Error('接口返回的是网页（HTML），不是 API 响应'
                     + '\n· 实际请求：' + attempt.url

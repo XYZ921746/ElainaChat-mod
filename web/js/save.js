@@ -84,7 +84,6 @@ async function saveSettings(opts) {
         searchCustomResultsPath: String(document.getElementById('settingSearchCustomResultsPath')?.value || '').trim(),
         // 深度只认两个合法值，其余回落 basic：非法值发给服务商也会被拒，不如当场收敛
         tavilySearchDepth: document.getElementById('settingTavilySearchDepth')?.value === 'advanced' ? 'advanced' : 'basic',
-        ...readAgentReadToggles(),
         // thinkingMode 由思考强度档**派生**：请求层与折叠栏仍读这个布尔量，两处必须同一来源；这里再读一次以覆盖"改了控件没点保存又点保存"的路径。
         thinkingMode: elements.settingThinkingEffort.value !== 'off'
             && THINKING_EFFORTS.includes(elements.settingThinkingEffort.value),

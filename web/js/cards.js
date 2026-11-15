@@ -237,6 +237,8 @@ function loadCharacterCard() {
     if (saved) {
         try {
             state.characterCard = normalizeCharacterCard(JSON.parse(saved));
+            // 读取成功后才删旧键：解析失败时留着原值，便于排查/手工恢复。
+            try { Store.removeItem('elaina_open_character_card'); } catch (e) { /* 删除失败只是多留一份旧数据 */ }
         } catch (e) {
             console.error(e);
         }

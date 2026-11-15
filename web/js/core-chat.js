@@ -168,6 +168,14 @@ function getChatBaseUrl(settings = state.settings) {
     return raw;
 }
 
+// 从用户填的地址里剥掉"功能段"，只留 base：很多人会把整条端点粘进来
+// （…/v4/chat/completions、…/v1/responses、…/v1/messages），而拼接方各自只该管"在 base 后面加什么"。
+// 版本段一律不猜、不改写：base 里写 /v4 就按 /v4 拼，网关用什么版本由用户和服务商决定。
+const CHAT_FUNCTION_SUFFIX_RE = /\/(?:chat\/completions|completions|responses|messages)$/i;
+function stripChatFunctionSuffix(baseUrl) {
+    return String(baseUrl || '').trim().replace(/\/+$/, '').replace(CHAT_FUNCTION_SUFFIX_RE, '');
+}
+
 // 多提供商对话模型（配置见 settings.chatProviders，UI 在设置页「模型」分栏）
 
 function chatProviderById(id) {

@@ -53,7 +53,7 @@ async function refreshSkillsList() {
             skills = Array.isArray(data && data.skills) ? data.skills : [];
         }
     } catch (e) {
-        // 与插件列表同理：APK 端没有服务端时这个接口不存在，属正常，不必惊动用户
+        // 与插件列表同理：APK 不转发 /api/skills，属正常，不必惊动用户
         box.innerHTML = '';
         return;
     }

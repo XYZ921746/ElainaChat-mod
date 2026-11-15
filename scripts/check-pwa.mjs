@@ -1,6 +1,7 @@
 // 「网页版装成桌面应用」（PWA）的回归检查。坏掉时很安静：安装按钮就是不出现。
 // 钉三件事：三段拼装齐全（manifest / 真 PNG 图标 / SW 接管）、SW 不缓存任何东西
-// （本项目全部 no-store，无构建期 hash）、安装入口只有浏览器一个裁判（按钮默认 hidden）。
+// （缓存交给浏览器按 no-cache + ETag 做条件校验，本项目无构建期 hash）、
+// 安装入口只有浏览器一个裁判（按钮默认 hidden）。
 // 图标必须 PNG（JPEG 时 Chrome 报 manifest-missing-suitable-icon，按钮不出现）；
 // pwa.js 不许摸 Capacitor / isNativePlatform（D5，平台判断只在 core.js 适配段）。
 // 用法：node scripts/check-pwa.mjs           跑全部
@@ -11,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { runChecks, ROOT, wait, freePort } from './check-harness.mjs';
+import { runChecks, ROOT, wait, startGoServer } from './check-harness.mjs';
 
 const WEB = path.join(ROOT, 'web');
 const HTML_FILE = path.join(WEB, 'index.html');
@@ -146,9 +147,10 @@ runChecks({
                 // 可安装性判据要求 SW 处理 fetch，没有它 Chrome 不给 beforeinstallprompt
                 c.ok(/addEventListener\(\s*['"]fetch['"]/.test(code), '★ SW 注册了 fetch 监听器（可安装性的硬要求）');
 
-                // 本项目明确不缓存（全部 no-store，无构建期 hash）：出现 Cache API 即判红，有意为之
+                // 缓存交给浏览器按 no-cache + ETag 做条件校验（本项目无构建期 hash）：
+                // SW 再叠一层 Cache API 会绕开这套校验，改完文件仍是旧的
                 c.ok(!/caches\s*\.\s*(open|match|add|addAll|put)\b/.test(code),
-                    '★ SW 不调用 Cache API（本项目所有资源都是 no-store，缓存住会让改动不生效）');
+                    '★ SW 不调用 Cache API（缓存交给浏览器按 ETag 复验，SW 缓存会让改动不生效）');
 
                 c.ok(!/cachedResponse|respondWith\s*\(/.test(code),
                     'SW 的 fetch 监听器不接管响应（请求直连网络，行为与没有 SW 时一致）');
@@ -213,28 +215,16 @@ runChecks({
             name: '服务端按正确 MIME 发这三样',
             fn: async (c) => {
                 const tmp = mkdtempSync(path.join(tmpdir(), 'elaina-pwa-'));
-                const port = await freePort();
-                const child = spawn(process.execPath, [path.join(WEB, 'serve.mjs')], {
-                    cwd: ROOT,
+                                const srv = await startGoServer({
                     env: {
-                        ...process.env,
-                        PORT: String(port), HOST: '127.0.0.1', OPEN_BROWSER: '0',
                         DATA_DIR: path.join(tmp, 'data'), LOG_DIR: path.join(tmp, 'logs'),
                         MODS_DIR: path.join(tmp, 'mods'), SKILLS_DIR: path.join(tmp, 'skills'),
-                        LOG_TO_FILE: '0',
                     },
-                    stdio: ['ignore', 'pipe', 'pipe'],
                 });
-                let out = '';
-                child.stdout.on('data', (d) => { out += d; });
-                child.stderr.on('data', (d) => { out += d; });
-
+                const child = srv ? srv.child : null;
+                const port = srv ? srv.port : 0;
                 try {
-                    let ready = false;
-                    for (let i = 0; i < 80 && !ready; i++) {
-                        try { ready = (await fetch(`http://127.0.0.1:${port}/api/server-info`)).ok; }
-                        catch { await wait(200); }
-                    }
+                    const ready = Boolean(srv && srv.up);
                     c.ok(ready, '服务已就绪', ready ? '' : out.slice(-400));
                     if (!ready) return;
 

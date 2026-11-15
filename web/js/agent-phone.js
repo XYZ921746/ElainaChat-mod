@@ -88,20 +88,6 @@ let lastUsedBackendId = '';
 let overlayPromptDeclined = false;
 
 
-
-const PHONE_READ_OPS = [
-    '手机应用列表', '手机通知', '手机设备信息', '手机通讯录', '手机日历', '手机短信',
-];
-
-/** 隐私开关管「能力是否存在」（提示词也不注入），phoneTierAllows 管「要不要问」；不通过时给能照做的提示，不静默失败。 */
-function phoneReadBlockedReason(action) {
-    if (!PHONE_READ_OPS.includes(action)) return '';
-    if (phoneReadAllowed(action)) return '';
-    return '已跳过「' + action + '」：你在「设置 → 能力 → 手机操作 → 读取信息（隐私）」里'
-        + '关闭了这项权限。需要的话去那里打开，或让我用别的方式帮你。';
-}
-
-
 async function execPhoneOperation(parsed) {
     const dev = deviceBridge();
     if (!dev || typeof dev.exec !== 'function') {
@@ -208,6 +194,118 @@ async function callDeviceQuietly(action, args) {
     }
 }
 
+// ==================== 应用名 → 包名 ====================
+//
+// 「手机打开」的底层只认包名，而用户和模型说的都是应用名（「哔哩哔哩」）。
+// 让模型从应用列表里自己挑一行、或凭记忆写包名，写错就会打开**别的**应用
+// （真机反馈：让它打开哔哩哔哩，前台却变成了另一个 App）。
+// 所以这里按系统给的应用列表解析：精确匹配优先、包含匹配其次；
+// 命中多个就列候选让模型指定，**绝不猜一个最近的**。
+const PHONE_APP_LIST_TTL_MS = 5 * 60 * 1000;
+let phoneAppListCache = null;   // { at, entries: [{ label, pkg }] }
+
+function parsePhoneAppListText(text) {
+    const entries = [];
+    for (const line of String(text || '').split('\n')) {
+        // 原生格式：应用名 | 包名
+        const m = line.match(/^\s*(.+?)\s*\|\s*([A-Za-z0-9_.]+)\s*$/);
+        if (m) entries.push({ label: m[1].trim(), pkg: m[2].trim() });
+    }
+    return entries;
+}
+
+async function phoneAppEntries(force) {
+    if (!force && phoneAppListCache && Date.now() - phoneAppListCache.at < PHONE_APP_LIST_TTL_MS) {
+        return phoneAppListCache.entries;
+    }
+    const res = await callDeviceQuietly('手机应用列表', '');
+    const entries = parsePhoneAppListText((res && (res.text || res.message)) || '');
+    if (entries.length) phoneAppListCache = { at: Date.now(), entries };
+    return entries;
+}
+
+function normalizeAppQuery(text) {
+    return String(text || '').toLowerCase().replace(/[\s「」『』（）()]/g, '');
+}
+
+/** 形如 com.tencent.mm 或 com.tencent.mm/.MainActivity —— 已经是包名，别再按应用名解析。 */
+function looksLikePhonePackage(text) {
+    return /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+(\/[\w$.]+)?$/.test(String(text || '').trim());
+}
+
+function matchPhoneAppEntries(entries, query) {
+    const q = normalizeAppQuery(query);
+    if (!q) return [];
+    const exact = entries.filter((e) => normalizeAppQuery(e.label) === q);
+    if (exact.length) return exact;
+    return entries.filter((e) => {
+        const label = normalizeAppQuery(e.label);
+        return label.includes(q) || q.includes(label);
+    });
+}
+
+/** 解析「手机打开」的目标：返回 { pkg } 或 { error }（error 文本会原样回灌给模型）。 */
+async function resolvePhoneOpenTarget(raw) {
+    const text = String(raw || '').trim();
+    if (!text) {
+        return { error: '「手机打开」需要应用名或包名，例如「手机打开 哔哩哔哩」或「手机打开 tv.danmaku.bili」。' };
+    }
+    if (looksLikePhonePackage(text)) return { pkg: text };
+
+    let entries = await phoneAppEntries(false);
+    let hits = matchPhoneAppEntries(entries, text);
+    if (!hits.length) {
+        // 缓存可能比新装的应用旧：强制刷新一次再判，避免"刚装的找不到"。
+        entries = await phoneAppEntries(true);
+        hits = matchPhoneAppEntries(entries, text);
+    }
+    if (hits.length === 1) return { pkg: hits[0].pkg, label: hits[0].label };
+    if (hits.length > 1) {
+        return { error: '「' + text + '」对应多个已安装应用：'
+            + hits.slice(0, 8).map((e) => e.label + '（' + e.pkg + '）').join('、')
+            + (hits.length > 8 ? ' 等' : '')
+            + '。请用包名指定要打开哪一个，例如 [操作:手机打开 ' + hits[0].pkg + ']。' };
+    }
+    return { error: '没找到名为「' + text + '」的应用。先用 [操作:手机应用列表] 看看它的准确名称，或直接写包名。' };
+}
+
+/** 启动后核对前台应用（只对无障碍后端有效：模块后端跑在虚拟副屏上，物理屏前台本来就不是它）。
+ *  返回空串 = 前台就是目标；否则返回一句必须让模型看到的告警。 */
+function isPhoneTransientForeground(fg) {
+    const pkg = String((fg && fg.pkg) || '').toLowerCase();
+    const label = String((fg && fg.label) || '');
+    // 还停在本应用：目标应用还没拉起来（冷启动的游戏常见几秒）。
+    if (/elainachat/i.test(pkg) || /elainachat/i.test(label)) return true;
+    // 桌面 / 系统界面：应用启动过程中会短暂出现，不能当成"打开了别的应用"。
+    if (/launcher|systemui/.test(pkg) || pkg === 'android') return true;
+    return false;
+}
+
+async function verifyPhoneOpenTarget(expectedPkg) {
+    const want = String(expectedPkg || '').split('/')[0].trim();
+    if (!want) return '';
+    let last = null;
+    // 目标应用出现就立刻返回；前台已经是"另一个真实应用"也立刻判失败；
+    // 只有本应用 / 桌面这种过渡态才继续等（冷启动的游戏可能要好几秒）。
+    for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, i < 3 ? 600 : 1000));
+        const info = await callDeviceQuietly('手机设备信息', '');
+        const text = (info && (info.text || info.message)) || '';
+        const m = text.match(/前台应用：(.+?)（([A-Za-z0-9_.]+)）/);
+        if (!m) return '';        // 读不到前台（没开无障碍）就别猜，免得误报
+        last = { label: m[1].trim(), pkg: m[2].trim() };
+        if (last.pkg === want) return '';
+        if (!isPhoneTransientForeground(last)) break;
+    }
+    if (!last) return '';
+    if (isPhoneTransientForeground(last)) {
+        return '⚠️ 启动后前台仍停在「' + last.label + '」（' + last.pkg + '），没看到 ' + want
+            + ' 起来。可能还在冷启动或启动被系统拦了 —— 不要当成已打开，先 [操作:手机设备信息] 看看，再决定下一步。';
+    }
+    return '⚠️ 启动后前台应用是「' + last.label + '」（' + last.pkg + '），不是你要打开的 ' + want
+        + '。可能应用没起来、或被别的应用抢了前台 —— 不要当成已打开，先 [操作:手机设备信息] 看看，再决定下一步。';
+}
+
 // 控件树一行形如：#3 “发送” id=btn_send 可点 [540,1200]；只取可点 / 可输入的行，容器节点给模型只是噪音。
 const UI_NODE_LINE = /^#(\d+)\s+(.*?)\s*\[(-?\d+),(-?\d+)\]\s*$/;
 function parseUiNodes(dumpText) {
@@ -261,6 +359,12 @@ function summarizeUiDumpForModel(dumpText) {
     if (nodes.length > limit) {
         out.push('…还有 ' + (nodes.length - limit) + ' 个没列出（需要时再读一次界面，或用截图看画面）。');
     }
+    // 稀疏清单不可当成完整界面：画布类界面（游戏 / 视频 / H5）里控件都画在像素上，无障碍只读得到零星外壳。
+    // 不点破这一点，模型会以为「屏幕上只有这一个按钮」，然后在同一处反复点（实测就这么卡死的）。
+    if (nodes.length < 4) {
+        out.push('⚠️ 这份清单可能不完整：游戏、视频这类画面应用里的东西大多没有控件节点。'
+            + '清单里找不到你要点的东西时，用 [操作:手机截图] 看画面（截图带坐标网格），照网格读坐标再点击 / 滑动。');
+    }
     return out.join('\n');
 }
 
@@ -310,6 +414,60 @@ function annotateScreenshot(dataUrl, nodes) {
     });
 }
 
+/** 给截图叠一层坐标网格（每 100px 一条，边上标数值，画在原分辨率上 —— 模型照标签读出的就是屏幕坐标）。
+ * 棋盘 / 游戏这类画面没有控件树，视觉模型只能凭空估像素，实测偏差能有几十像素、滑到格子间的空隙上；
+ * 有标尺可读时它把目标对到格心，误差能压进半格。失败返回 null，调用方退回原图。 */
+function annotateGrid(dataUrl) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            try {
+                const w = img.naturalWidth || img.width;
+                const h = img.naturalHeight || img.height;
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                // 网格标签必须标**真实屏幕坐标**：图可能被原生缩过（长边收进 1024），
+                // 这时图片像素 ≠ 屏幕像素，标图片坐标会让模型点歪。
+                const screenW = (lastScreenSize && lastScreenSize.width) || w;
+                const screenH = (lastScreenSize && lastScreenSize.height) || h;
+                const ratioX = w / Math.max(1, screenW);
+                const ratioY = h / Math.max(1, screenH);
+                // 真实坐标每 50px 一条线。为什么是 50：实测棋盘格子只有约 88-90px 宽（半格 44px），
+                // 而模型照网格读数的最坏误差是半个格距 —— 100px 网格意味着最坏偏 50px，已经超过半格，
+                // 必然点到隔壁格子上（表现为"一直滑无效配对、步数不减少"）。50px 网格把最坏误差压到 25px，
+                // 稳稳落在同一格内。线多一倍但都是细线，不影响辨认。
+                const stepScreen = 50;
+                const stepX = Math.max(6, stepScreen * ratioX);
+                const stepY = Math.max(6, stepScreen * ratioY);
+                ctx.lineWidth = 1;
+                ctx.strokeStyle = 'rgba(255,255,255,0.42)';
+                ctx.fillStyle = 'rgba(220,38,38,0.9)';
+                ctx.font = 'bold 20px monospace';
+                for (let sx = stepScreen; sx <= screenW; sx += stepScreen) {
+                    const x = sx * ratioX;
+                    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+                    // 每 100px 标一次数字（每 50 标会糊成一片），线条仍按 50 画
+                    if (sx % 100 === 0) ctx.fillText(String(sx), x + 3, 22);
+                }
+                for (let sy = stepScreen; sy <= screenH; sy += stepScreen) {
+                    const y = sy * ratioY;
+                    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+                    if (sy % 100 === 0) ctx.fillText(String(sy), 4, y - 4);
+                }
+                resolve(canvas.toDataURL('image/jpeg', 0.85));
+            } catch (err) {
+                console.warn('[Agent] 坐标网格绘制失败:', err);
+                resolve(null);
+            }
+        };
+        img.onerror = () => resolve(null);
+        img.src = dataUrl;
+    });
+}
+
 /** 截图交给视觉模型看，另给一份可点元素清单；坐标永远来自控件树，不从图片上估像素。 */
 async function describePhoneScreenshot(res, fallbackText) {
     const dataUrl = 'data:' + (res.imageMime || 'image/jpeg') + ';base64,' + res.imageBase64;
@@ -326,10 +484,18 @@ async function describePhoneScreenshot(res, fallbackText) {
         console.warn('[Agent] 截图前读取控件树失败:', err);
     }
     const nodeList = formatNodeListForModel(nodes);
+    // 控件清单稀疏（0 个，或只有一两个）说明这是画布类界面：游戏、视频、H5 —— 棋盘、按钮全画在像素里，
+    // 无障碍只能读到零星外壳控件。此时坐标只能从画面读，网格与「照网格读坐标」的说明必须给。
+    // 判据用「少于 4 个」而不是「等于 0」：实测游戏里恰好吃到一个外壳控件（顶部客服图标之类），
+    // 清单非空却完全没用，而旧逻辑一旦非空就撤掉网格、还叮嘱「别从图片估像素」，模型当场没路可走。
+    const canvasLike = nodes.length < 4;
     const listBlock = nodeList
         ? '\n\n【可点元素（编号 → 控件 / 坐标）】\n' + nodeList
-            + '\n（要操作某个控件就用它后面的坐标写 [操作:手机点击 x y]；'
-            + '或按 id 用 [操作:手机按键 id:<id>] 直接点。不要把图片上的位置换算成像素。）'
+            + (canvasLike
+                ? '\n（这份清单不完整 —— 画布类界面里大部分东西读不到。清单里没有你要操作的目标时，'
+                    + '就照截图的坐标网格读位置，再写 [操作:手机点击 x y] / [操作:手机滑动 x1 y1 x2 y2]。）'
+                : '\n（要操作某个控件就用它后面的坐标写 [操作:手机点击 x y]；'
+                    + '或按 id 用 [操作:手机按键 id:<id>] 直接点。不要把图片上的位置换算成像素。）')
         : '';
 
     const hasVision = Boolean(
@@ -343,19 +509,38 @@ async function describePhoneScreenshot(res, fallbackText) {
         if (state._agentImageUnsupported || modelVerdict === false) {
             return fallbackText + '\n（已实测当前主模型不支持图片，看不到画面；先用下面的可点元素清单操作。）' + listBlock;
         }
-        setPendingAgentImage(dataUrl);
-        return fallbackText + '\n（已把这张截图直接附给你，请直接看图判断；'
+        // 画布类界面没有可用的控件清单，网格就是唯一的坐标来源：模型照着网格标签读，比凭空估像素准得多。
+        const gridded = canvasLike ? ((await annotateGrid(dataUrl)) || dataUrl) : dataUrl;
+        const gridNote = canvasLike
+            ? '\n（截图上叠了白色坐标网格：每 50px 一条线，每 100px 标一次数值，标的是屏幕坐标。'
+                + '画面里没有可点的控件清单，就看图判断目标位置，按网格读出它的 x / y 坐标来点 —— 例如想把 (450,700) 的方块往左移，'
+                + '就写 [操作:手机滑动 450 700 350 700]。坐标照网格标签读，不要自己换算。'
+                + '⚠️ 这类棋盘 / 列表的每个格子通常只有 80-100px 宽，读坐标时要读到格子的**正中心**：'
+                + '先看目标格左右两条线在哪，取它们的中点；差半个格就会点到隔壁。'
+                + '滑动时起点和终点都要取格心，且只跨一格（约 90px）。）'
+            : '';
+        setPendingAgentImage(gridded);
+        return fallbackText + gridNote
+            + '\n（已把这张截图直接附给你，请直接看图判断；'
             + '如果收不到图片，说明当前主模型不支持图片，可改用界面清单或配置视觉模型。）' + listBlock;
     }
 
     try {
-        const picture = nodes.length ? ((await annotateScreenshot(dataUrl, nodes)) || dataUrl) : dataUrl;
+        const withGrid = await annotateGrid(dataUrl);
+        const base = withGrid || dataUrl;
+        const picture = nodes.length ? ((await annotateScreenshot(base, nodes)) || base) : base;
         const prompt = '这是手机当前屏幕的截图。'
             + (nodes.length ? '图上用红色圆点标了可交互元素的编号（1、2、3…）。' : '')
-            + '请简短回答：1) 这是什么应用、什么页面；'
+            + '图上叠了白色坐标网格（每 100px 一条，边上标着屏幕坐标数值）。'
+            + '请回答：1) 这是什么应用、什么页面；'
             + '2) 屏幕上主要有哪些文字和按钮；'
             + '3) 有没有明显的输入框或弹窗。'
-            + (nodes.length ? '不要逐个复述编号，只说你确实看到的。' : '')
+            + (canvasLike
+                ? '4) 这可能是游戏 / 棋盘这类靠图形互动的画面：列出主要图形元素的种类（颜色 / 形状）'
+                    + '和各自的屏幕坐标（照网格标签读，精确到格心，最多列 40 个），'
+                    + '然后给出你建议的下一步操作 —— 点击或滑动的起点与终点坐标，附一句理由。'
+                    + '这一项要具体到坐标，其他项保持简短。'
+                : '')
             + '只描述你真实看到的，不要编造。';
         const described = await describeImageWithVision(prompt, picture);
         const visual = described && described.trim() ? described.trim() : '';
@@ -402,17 +587,11 @@ async function runAgentPhoneOperation(raw, traceItem) {
     if (!parsed) {
         const m = '无法识别的手机操作：' + String(raw || '').trim()
             + '\n可用写法：手机状态 / 手机查看界面 / 手机截图 / 手机点击 x y / 手机滑动 x1 y1 x2 y2 [时长] / '
-            + '手机输入 文字 / 手机按键 返回|主页|回车 / 手机打开 包名 / 手机等待 毫秒 / '
+            + '手机输入 文字 / 手机按键 返回|主页|回车 / 手机打开 应用名或包名 / 手机等待 毫秒 / '
             + '手机应用列表 / 手机通知 / 手机设备信息 / 手机短信 [条数] / 手机通讯录 [关键词] / 手机日历 [天数] / '
             + '手机列出文件 [路径] / 手机读文件 路径 / 手机写文件 路径|内容 / 手机删除文件 路径';
         insertAgentResult(m);
         return { ok: false, text: m };
-    }
-    // 隐私开关的第二道闸（第一道是提示词不注入该能力）：模型可能从历史或用户的话里猜到标签名。
-    const blocked = phoneReadBlockedReason(parsed.action);
-    if (blocked) {
-        insertAgentResult(blocked);
-        return { ok: false, text: blocked };
     }
     // 总开关关掉直接拒绝，放在探测之前：不必去 ping 原生，这个理由对用户也最直接。
     if (state.settings.agentPhoneEnabled === false) {
@@ -447,6 +626,18 @@ async function runAgentPhoneOperation(raw, traceItem) {
         insertAgentResult(m);
         return { ok: false, text: m };
     }
+    // 「手机打开」先把应用名解析成包名：解析不出来就停在这里并列出候选。
+    // 把一个猜错的包名交给原生，代价不是"没打开"，而是"打开了别的应用"。
+    let openPkg = '';
+    if (parsed.action === '手机打开') {
+        const resolved = await resolvePhoneOpenTarget(parsed.args);
+        if (resolved.error) {
+            insertAgentResult(resolved.error);
+            return { ok: false, text: resolved.error };
+        }
+        openPkg = resolved.pkg;
+        parsed.args = resolved.pkg;
+    }
     if (phoneActionNeedsScreen(parsed.action)) {
         if (!runModeDecision) {
             const picked = await pickPhoneRunMode();
@@ -466,6 +657,13 @@ async function runAgentPhoneOperation(raw, traceItem) {
             insertAgentResult(m, { continueLoop: false });
             return { ok: false, text: m };
         }
+        // 等运行方式弹窗期间用户可能已经按了停止：这里再判一次，
+        // 避免刚 beginRun 又把状态条闪出来、多走一遍授权。
+        if (rt.isHalted && rt.isHalted()) {
+            const m = '已停止：用户中止了本次操作，这一步（' + parsed.action + '）没有执行。';
+            insertAgentResult(m, { asContext: true });
+            return { ok: false, text: m };
+        }
     }
     const coordProblem = phoneCoordsOutOfScreen(parsed);
     if (coordProblem) {
@@ -476,30 +674,36 @@ async function runAgentPhoneOperation(raw, traceItem) {
     clearTimeout(phoneRunEndTimer);
     if (!rt.isRunning()) {
         rt.beginRun();
-        // 悬浮窗浮在目标 App 之上，用户不用切回应用就能停；这一步不阻塞，拿不到权限只是少了便利。
-        if (rt.showOverlay) {
-            void rt.showOverlay('AI 正在操作手机').then(async (ok) => {
-                if (ok !== 'need-permission') return;
-                // 授权入口藏得深，不主动引导就等于「应用从不请求悬浮窗权限」；只问一次（拒绝过就不再拦），跳去授权后回来仍可再问。
-                if (overlayPromptDeclined) return;
-                const go = await showCustomModal({
-                    title: '需要悬浮窗权限',
-                    message: 'AI 正在操作手机。\n\n'
-                        + '没有悬浮窗权限时，每一步确认都要你切回本应用来点 ——\n'
-                        + '而切回来会让被操作的应用退到后台，那一步操作就可能失败，\n'
-                        + 'AI 只能重试，看起来像卡住了。\n\n'
-                        + '开了之后屏幕上会浮一个小条：随时点停止、需要确认时就地允许，\n'
-                        + '全程不用切回本应用。\n\n'
-                        + '现在去系统设置里打开「显示在其他应用上层」？',
-                    confirmText: '去开启',
-                    cancelText: '这次不用',
-                }).catch(() => false);
-                if (go) {
-                    await enableOverlay({ quiet: true });   // 跳系统设置（quiet：不叠说明框）
-                } else {
-                    overlayPromptDeclined = true;
+        // 悬浮条只在 AI 把界面切走时出现（由 visibilitychange 同步）：
+        // 留在应用里时状态条上就有停止按钮，再浮一条只是重复。
+        // 这里只查权限并引导 —— 缺权限时趁用户还在应用里当场问，别等切走了才发现没有。
+        if (rt.syncOverlayWithVisibility) {
+            void (async () => {
+                const perm = rt.checkOverlayPermission ? await rt.checkOverlayPermission() : 'unavailable';
+                if (perm === 'ok') {
+                    rt.syncOverlayWithVisibility();
+                } else if (perm === 'need-permission' && !overlayPromptDeclined) {
+                    // 授权入口藏得深，不主动引导就等于「应用从不请求悬浮窗权限」；只问一次（拒绝过就不再拦），跳去授权后回来仍可再问。
+                    const go = await showCustomModal({
+                        title: '需要悬浮窗权限',
+                        message: 'AI 正在操作手机。\n\n'
+                            + '没有悬浮窗权限时，每一步确认都要你切回本应用来点 ——\n'
+                            + '而切回来会让被操作的应用退到后台，那一步操作就可能失败，\n'
+                            + 'AI 只能重试，看起来像卡住了。\n\n'
+                            + '开了之后，AI 切到别的应用时屏幕上会浮一个小条：\n'
+                            + '随时点停止、需要确认时就地允许，全程不用切回本应用。\n'
+                            + '（在本应用里仍然用对话上方的状态条，不会多浮一条。）\n\n'
+                            + '现在去系统设置里打开「显示在其他应用上层」？',
+                        confirmText: '去开启',
+                        cancelText: '这次不用',
+                    }).catch(() => false);
+                    if (go) {
+                        await enableOverlay({ quiet: true });   // 跳系统设置（quiet：不叠说明框）
+                    } else {
+                        overlayPromptDeclined = true;
+                    }
                 }
-            });
+            })();
         }
     }
     try {
@@ -533,12 +737,20 @@ async function runAgentPhoneOperation(raw, traceItem) {
         }
         rt.assertNotStopped();
         const fullResult = await execPhoneOperation(parsed);
+        // 启动成功 ≠ 打开的是它：真机上出现过「让它打开 A、前台却是 B」。
+        // 用设备信息核对一次前台，把差异如实交给模型（只对无障碍后端有意义，模块跑在副屏上）。
+        rt.assertNotStopped();
+        let verifiedResult = fullResult;
+        if (openPkg && lastUsedBackendId === 'accessibility') {
+            const warning = await verifyPhoneOpenTarget(openPkg);
+            if (warning) verifiedResult = String(fullResult || '') + '\n' + warning;
+        }
         if (parsed.action === '手机查看界面' && !phoneVisionModelConfigured() && !state._agentImageUnsupported
             && (typeof cachedModelImageVerdict !== 'function' || cachedModelImageVerdict() !== false)) {
             await maybeStashScreenImage();
         }
-        updateTurnTool(traceItem, { state: 'ok', result: fullResult });
-        const opResult = parsed.action === '手机查看界面' ? summarizeUiDumpForModel(fullResult) : fullResult;
+        updateTurnTool(traceItem, { state: 'ok', result: verifiedResult });
+        const opResult = parsed.action === '手机查看界面' ? summarizeUiDumpForModel(verifiedResult) : verifiedResult;
         if (ownTrace) insertAgentResult(opResult, { continueLoop: true, asContext: true });
         return { ok: true, text: String(opResult || '') };
     } catch (err) {

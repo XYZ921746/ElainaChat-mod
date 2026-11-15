@@ -8,6 +8,7 @@
 //   node scripts/run-checks.mjs --bail          第一个失败就停（不启动后续模块）
 
 import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +21,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
  * 缺它是环境问题不是代码错），而不是要求人记住怎么调。
  */
 const MODULES = [
+    // Go 服务端是运行时本体：编译 / vet / 测试排在最前，失败时无需再跑前端模块。
+    { name: 'check-go' },
     { name: 'check-frontend', args: ['--experimental-vm-modules'] },
     { name: 'check-agent' },
     { name: 'check-chat' },
@@ -32,7 +35,6 @@ const MODULES = [
     { name: 'check-pwa' },
     { name: 'check-system' },
     { name: 'check-update' },
-    { name: 'check-exe' },
     // 浏览器能力（CDP）：没装 Chrome/Edge 的机器上，真浏览器用例按环境性跳过（不判红）
     { name: 'check-browser' },
 ];
@@ -59,12 +61,23 @@ function parseArgs(argv) {
     return out;
 }
 
-/** 跑一个模块，收集输出与耗时；不打印（由调用方按完成顺序打印） */
-function runModule(mod, timeoutMs) {
+/** 跑一个模块，收集输出与耗时；不打印（由调用方按完成顺序打印）。
+ *  portBase 给子进程一个专属端口区间（ELAINA_CHECK_PORT_BASE）：并发模块各自起真实服务，
+ *  freePort 的绑定-关闭-复用窗口会让两个模块抢到同一端口，整段用例打在别人的服务上。
+ *  configPath 给子进程一份独立配置：改密类用例会把 password 写进 ELAINA_CONFIG_FILE 指向的
+ *  文件，共享一份会让后启动的模块整个带起密码（全量 401 假红）。 */
+function runModule(mod, timeoutMs, portBase) {
     return new Promise((resolve) => {
         const started = Date.now();
+        const configPath = path.join(os.tmpdir(), `elaina-check-config-${process.pid}-${portBase}.json`);
+        try { writeFileSync(configPath, '{}\n', 'utf8'); } catch { /* 写不出就继承父环境 */ }
         const child = spawn(process.execPath, [...(mod.args || []), path.join('scripts', mod.name + '.mjs')], {
             cwd: ROOT,
+            env: {
+                ...process.env,
+                ELAINA_CHECK_PORT_BASE: String(portBase),
+                ELAINA_CONFIG_FILE: configPath,
+            },
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
         });
@@ -139,14 +152,16 @@ async function main() {
     let next = 0;
     let bail = false;
 
-    // 固定大小的并发池：谁先完成谁先打印，避免所有输出挤在最后一起刷
-    async function worker() {
+    // 固定大小的并发池：谁先完成谁先打印，避免所有输出挤在最后一起刷。
+    // 每个 worker 分一段 1000 宽的端口区间（20000 起，6 并发最多占 6000），区间互不相交。
+    async function worker(index) {
+        const portBase = 20000 + index * 1000 + 1000;
         for (;;) {
             if (bail) return;
             const i = next++;
             if (i >= list.length) return;
             const mod = list[i];
-            const r = await runModule(mod, opts.timeoutMs);
+            const r = await runModule(mod, opts.timeoutMs, portBase);
             results.push(r);
             const mark = r.code === 0 ? 'PASS' : 'FAIL';
             const s = summaryOf(r.out);
@@ -158,7 +173,7 @@ async function main() {
             }
         }
     }
-    await Promise.all(Array.from({ length: Math.min(opts.jobs, list.length) }, worker));
+    await Promise.all(Array.from({ length: Math.min(opts.jobs, list.length) }, (_, i) => worker(i)));
 
     // 汇总：按耗时排序，一眼看出谁在拖时间
     const totalMs = Date.now() - startedAll;

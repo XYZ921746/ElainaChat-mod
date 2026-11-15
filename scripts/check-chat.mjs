@@ -120,6 +120,9 @@ async function caseProviders(c) {
                 constructor(code, message) { super(message); this.code = code; this.name = 'ClientApiError'; }
             },
                 getChatBaseUrl: (settings) => settings.baseUrl,
+                // 真实实现住在 core-chat.js：这里按同一语义镜像，保证"粘完整端点"的地址在假环境里也走同一条规则。
+                stripChatFunctionSuffix: (url) => String(url || '').trim().replace(/\/+$/, '')
+                    .replace(/\/(?:chat\/completions|completions|responses|messages)$/i, ''),
                 isDeepSeekOfficial: (url) => /api\.deepseek\.com/i.test(url),
                 normalizeChatReply: (content, reasoning) => ({ content, reasoning: reasoning || '' }),
                 throwProviderResponseError: async (result, fallback) => {
@@ -342,7 +345,7 @@ async function caseAnthropicRequest(c) {
     const chatSandbox = makeVmSandbox({ window: fakeWindow, URL, TextEncoder, TextDecoder });
     vm.runInContext(
         ['DEEPSEEK_DIRECT_BASE_URL', 'ANTHROPIC_MIN_MAX_TOKENS', 'CHAT_TIMEOUT_DEFAULT_MS',
-            'CHAT_TIMEOUT_THINKING_MS', 'THINKING_EFFORTS', 'CHAT_API_FORMATS']
+            'CHAT_TIMEOUT_THINKING_MS', 'THINKING_EFFORTS', 'CHAT_API_FORMATS', 'CHAT_FUNCTION_SUFFIX_RE']
             .map((n) => extractVariable(coreSrc, n)).join('\n')
         + '\n' + extractTopLevelFunctions(coreSrc),
         chatSandbox,
@@ -384,6 +387,7 @@ async function caseAnthropicRequest(c) {
             getClientErrorPresentation: globalThis.getClientErrorPresentation,
             ClientApiError: globalThis.ClientApiError,
             getChatBaseUrl: globalThis.getChatBaseUrl,
+            stripChatFunctionSuffix: globalThis.stripChatFunctionSuffix,
             isDeepSeekOfficial: globalThis.isDeepSeekOfficial,
             normalizeChatReply: globalThis.normalizeChatReply,
             postJsonFromDevice: globalThis.postJsonFromDevice,
@@ -403,6 +407,7 @@ async function caseAnthropicRequest(c) {
     fakeWindow.ChatDeps = {
         ClientApiError: raw.ClientApiError,
         getChatBaseUrl: raw.getChatBaseUrl,
+        stripChatFunctionSuffix: raw.stripChatFunctionSuffix,
         isDeepSeekOfficial: raw.isDeepSeekOfficial,
         normalizeChatReply: raw.normalizeChatReply,
         postJsonFromDevice: raw.postJsonFromDevice,
@@ -755,7 +760,8 @@ async function caseModelList(c) {
     const fakeWindow = {};
     const modelSandbox = makeVmSandbox({ window: fakeWindow, URL, TextEncoder, TextDecoder });
     vm.runInContext(
-        ['ANTHROPIC_MIN_MAX_TOKENS', 'THINKING_EFFORTS'].map((n) => extractVariable(coreSrc, n)).join('\n')
+        ['ANTHROPIC_MIN_MAX_TOKENS', 'THINKING_EFFORTS', 'CHAT_FUNCTION_SUFFIX_RE']
+            .map((n) => extractVariable(coreSrc, n)).join('\n')
         + '\n' + extractTopLevelFunctions(coreSrc)
         + '\n' + extractTopLevelFunctions(initSrc),
         modelSandbox,
@@ -798,6 +804,7 @@ async function caseModelList(c) {
             fetchModelList: globalThis.fetchModelList,
             ClientApiError: globalThis.ClientApiError,
             getChatBaseUrl: globalThis.getChatBaseUrl,
+            stripChatFunctionSuffix: globalThis.stripChatFunctionSuffix,
             normalizeChatReply: globalThis.normalizeChatReply,
             postJsonFromDevice: globalThis.postJsonFromDevice,
             buildThinkingParams: globalThis.buildThinkingParams,
@@ -820,6 +827,7 @@ async function caseModelList(c) {
         getChatBaseUrl: ctx.getChatBaseUrl,
         normalizeChatReply: ctx.normalizeChatReply,
         postJsonFromDevice: ctx.postJsonFromDevice,
+        stripChatFunctionSuffix: ctx.stripChatFunctionSuffix,
         requestChatJson: async (endpoint, body, headers, opts) =>
             await ctx.postJsonFromDevice(endpoint, body, headers, opts?.timeoutMs, opts?.signal),
         buildThinkingParams: ctx.buildThinkingParams,
@@ -894,7 +902,26 @@ async function caseModelList(c) {
     check('Responses 粘了 /responses → 剥掉',
         modelsEndpointFor('https://api.openai.com/v1/responses', 'openai-responses'),
         'https://api.openai.com/v1/models');
+    // 版本段不是 /v1 的服务（如 /v4）必须原样保留：网关用哪个版本由用户与服务商决定，猜不得。
+    check('★ OpenAI 兼容 + /v4 → /v4/models（版本段不猜、不改写）',
+        modelsEndpointFor('https://gw.example.com/v4', 'openai-compatible'),
+        'https://gw.example.com/v4/models');
+    check('★ 粘了 /v4/chat/completions → 剥掉功能段、保留 /v4',
+        modelsEndpointFor('https://gw.example.com/v4/chat/completions', 'openai-compatible'),
+        'https://gw.example.com/v4/models');
     throws('没填 Base URL → 明确报"请先填写"', () => modelsEndpointFor('', 'anthropic'), '请先填写');
+
+    // 版本段归一后，调用点不能再拼一次 /v1：baseUrl 已经"含到版本段为止"，拼 /v1/chat/completions
+    // 会变成 …/v1/v1/chat/completions。这类"变量改了、调用点没跟着改"的重复拼接只能靠扫源码发现。
+    console.log('\n— 版本段归一后不得重复拼 /v1 —');
+    for (const rel of ['asr.js', 'tts.js', 'providers.js']) {
+        const src = readFileSync(path.join(ROOT, 'web', 'js', rel), 'utf8');
+        const dup = src.split('\n')
+            .map((line, i) => ({ line, n: i + 1 }))
+            .filter((x) => !/^\s*\/\//.test(x.line))
+            .filter((x) => /baseUrl\s*\+\s*['"`]\/v1\//.test(x.line));
+        check(`${rel} 没有 baseUrl + '/v1/…' 的重复拼接`, dup.map((x) => 'L' + x.n).join(',') || 'none', 'none');
+    }
 
     // 核心不变量：模型列表地址必须和对话地址同源（只差最后一段），否则"对话能通、获取模型 404"。
     console.log('\n— 不变量：与对话地址同源 —');
@@ -902,11 +929,68 @@ async function caseModelList(c) {
         await callAnthropicChat([{ role: 'user', content: 'hi' }], {}, { apiKey: 'k', model: 'claude-sonnet-4-5', baseUrl });
         return lastPost().url;
     }
-    for (const base of ['https://api.anthropic.com', 'https://api.anthropic.com/v1', 'https://newapi.gay', 'https://newapi.gay/v1/']) {
+    for (const base of ['https://api.anthropic.com', 'https://api.anthropic.com/v1', 'https://newapi.gay', 'https://newapi.gay/v1/', 'https://gw.example.com/v4']) {
         const chat = await chatEndpoint(base);
         check(`${base} → 模型地址 == 对话地址换掉末段`,
             modelsEndpointFor(base, 'anthropic'),
             chat.replace(/\/messages$/, '/models'));
+    }
+    // 粘完整端点时不能再拼一次功能段（…/v1/messages/messages 必然 404）。
+    check('★ Anthropic 粘了完整 /v4/messages → 不重复拼功能段',
+        await chatEndpoint('https://gw.example.com/v4/messages'),
+        'https://gw.example.com/v4/messages');
+
+    // 探测判定：401 不能抢在更靠前的证据之前定案（先鉴权后路由的网关对任何路径都回 401）。
+    // 地址形态与所存协议明显矛盾时，加载设置要纠正旧条目（否则改了代码，老条目照样 404）。
+    console.log('\n— 协议探测：只查模型列表、不发计费请求 —');
+    {
+        const provSrc = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8');
+        // 抠出探测函数体做局部断言，避免被文件里其它 POST 调用干扰。
+        const start = provSrc.indexOf('async function detectChatProtocolForCreate');
+        const end = provSrc.indexOf('function detectTtsProtocolByHost');
+        const body = (start >= 0 && end > start) ? provSrc.slice(start, end) : '';
+        check('找得到 detectChatProtocolForCreate 的函数体', body.length > 200, true);
+        // 注释里会提到这些词（解释"为什么不用 POST"），断言只看代码。
+        const bodyCode = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+        // ★★ 探测绝不能发对话请求：那是真调用、按 token 计费，而探测是改地址就自动重跑的。
+        check('★★ 探测里没有任何 POST 对话请求（不产生计费）',
+            /postJsonFromDevice|chat\/completions|'\/responses'/.test(bodyCode), false);
+        check('★ 探测只走 GET 模型列表（getJsonFromDevice）', /getJsonFromDevice\(/.test(bodyCode), true);
+        check('★ 用 /models 端点判定，不靠对话响应', /\/models/.test(body), true);
+        check('★★ 空模型列表不算命中（有些网关对任何路径都回 200 + 空 data）',
+            /parseModelList\(result\.payload\)[\s\S]{0,120}if \(models\.length\)/.test(body), true);
+        check('401 不抢判（先鉴权后路由的网关对任何路径都回 401）',
+            /result\.status === 401[\s\S]{0,200}if \(!evidence\) evidence =/.test(body), true);
+        // 历史数据：地址形态与所存协议明显矛盾时纠正（否则改了代码，老条目照样 404）。
+        const dataSrc = readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
+        check('★ 加载设置时纠正"地址是 OpenAI 风格、协议存成 anthropic"的旧条目',
+            /compatible-mode[\s\S]{0,200}p\.apiFormat = 'openai-compatible'/.test(dataSrc), true);
+    }
+
+    console.log('\n— 供应商模型清单的归属 —');
+    {
+        const provSrc = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8');
+        const commitStart = provSrc.indexOf('function commitChatProviderDetail');
+        const commitEnd = provSrc.indexOf('function openChatProviderDetail');
+        const commitFn = (commitStart >= 0 && commitEnd > commitStart) ? provSrc.slice(commitStart, commitEnd) : '';
+        // 候选清单与已配置清单必须分开：并集会把手输入、又未被服务商返回的模型永远留在「可选模型」。
+        check('★★ 切详情不再把已配置模型反向并入候选清单', /prov\.models\s*=/.test(commitFn), false);
+
+        const removeStart = provSrc.indexOf('function removeChatProviderModelById');
+        const removeEnd = provSrc.indexOf('async function deleteChatProviderById');
+        const removeFn = (removeStart >= 0 && removeEnd > removeStart) ? provSrc.slice(removeStart, removeEnd) : '';
+        check('★ 移除模型同时移出已配置与候选清单',
+            /selectedModels[\s\S]{0,200}\.filter/.test(removeFn) && /prov\.models[\s\S]{0,200}\.filter/.test(removeFn), true);
+
+        const addStart = provSrc.indexOf("if (ev.target.closest('.cpc-add-model'))");
+        const addEnd = provSrc.indexOf("if (ev.target.closest('.cpc-enable-model'))");
+        const addBlock = (addStart >= 0 && addEnd > addStart) ? provSrc.slice(addStart, addEnd) : '';
+        check('★ 手工添加只进已配置模型（不再写入候选清单）',
+            /prov\.selectedModels/.test(addBlock) && !/prov\.models\s*=/.test(addBlock), true);
+
+        // 添加供应商页不再要求“先保存再进详情获取”：保存前就能拉候选。
+        check('★ 添加页有「获取模型」入口', /data-ma-fetch/.test(provSrc) && /async function fetchModelAddModels/.test(provSrc), true);
+        check('★ 候选清单里的历史遗留条目可单独删除', /cpc-forget-model/.test(provSrc), true);
     }
 
     console.log('\n— 认证头 —');
@@ -923,6 +1007,16 @@ async function caseModelList(c) {
     check('OpenAI 兼容用 Bearer', lastGet().headers.Authorization, 'Bearer sk-test');
     check('OpenAI 兼容不带 anthropic-version', 'anthropic-version' in lastGet().headers, false);
     check('OpenAI 兼容不加 limit 参数（不是所有服务都认）', lastGet().url, 'https://api.deepseek.com/models');
+
+    // 空 Key + 401：中文先说明“没填 Key”，不要让用户对着英文原文猜。
+    setGetResults([{ ok: false, status: 401, payload: { error: { message: "You didn't provide an API key." } } }]);
+    let emptyKeyErr = null;
+    try { await fetchModelList('https://api.example.com/v1', '', 'openai-compatible'); }
+    catch (e) { emptyKeyErr = e; }
+    check('★★ 空 Key + 401 → 中文提示先填 Key',
+        /没有填写 API Key/.test(String(emptyKeyErr && emptyKeyErr.message)), true);
+    check('★ 空 Key 的提示保留服务商原话',
+        /You didn't provide an API key/.test(String(emptyKeyErr && emptyKeyErr.message)), true);
 
     console.log('\n— 响应解析 —');
     check('Anthropic 的 data[].id（display_name 不参与取值）',
@@ -1087,6 +1181,9 @@ async function caseThinkingCompat(c) {
                 constructor(code, message, extra) { super(message); this.code = code; Object.assign(this, extra || {}); }
             },
             getChatBaseUrl: (s) => String(s.baseUrl || '').replace(/\/$/, ''),
+            // 与 core-chat.js 同语义：剥掉功能段再拼，避免 …/chat/completions/chat/completions。
+            stripChatFunctionSuffix: (u) => String(u || '').trim().replace(/\/+$/, '')
+                .replace(/\/(?:chat\/completions|completions|responses|messages)$/i, ''),
             isDeepSeekOfficial: (u) => /deepseek\.com/.test(u || ''),
             buildThinkingParams: null,   // 下面注入真实现（从 core.js 截取）
             normalizeChatReply: (content, reasoning) => ({ content, reasoning }),
@@ -1155,6 +1252,8 @@ async function caseThinkingCompat(c) {
     }
 
     // 场景 A2：AMD 网关 + 普通模型（vendor=generic）：一律发 thinking，靠 400 降级后成功。
+    // baseUrl 与场景 A 刻意不同：思考参数拒绝缓存按 baseUrl 记（见 chat-providers.js），共用地址会让 A3 的「首发已剥」提前到这里发生。
+    const amd2Base = 'https://developer.amd.com.cn/radeon/api/v1-generic';
     {
         const captured = [];
         const amd = makeDeps(null, captured);
@@ -1167,12 +1266,29 @@ async function caseThinkingCompat(c) {
             return { ok: true, status: 200, payload: { choices: [{ message: { content: 'GENERIC_OK' } }] } };
         };
         win.ChatDeps = amd;
-        const r = await ChatProviders.callOpenAICompatibleChat([{ role: 'user', content: 'hi' }], opts, settings);
+        const r = await ChatProviders.callOpenAICompatibleChat([{ role: 'user', content: 'hi' }], opts, { ...settings, baseUrl: amd2Base });
         c.ok(r.content === 'GENERIC_OK', '★ 普通模型 + AMD 网关：降级后成功');
         c.ok(captured.length === 2, '首次带 thinking 被 400，重试剥掉后通过', String(captured.length));
         c.ok('thinking' in captured[0].body && !('thinking' in captured[1].body),
             '★ 关思考请求第一次也带显式 disabled（DeepSeek 系网关需要它）',
             JSON.stringify(captured[0]?.body.thinking));
+    }
+
+    // 场景 A3：同一网关的后续调用不再首发被拒字段 —— 严格网关对同一字段的回答永远是同一个 400，
+    // 每次都白付一轮往返会让 agent 连续操作的延迟翻倍（缓存按 baseUrl 记，DeepSeek 官方这类需要该字段的地址永远不进缓存）。
+    {
+        const captured = [];
+        const amd = makeDeps(null, captured);
+        amd.buildThinkingParams = realBuildThinkingParams;
+        amd.requestChatJson = async (endpoint, body) => {
+            captured.push({ endpoint, body });
+            return { ok: true, status: 200, payload: { choices: [{ message: { content: 'CACHED_OK' } }] } };
+        };
+        win.ChatDeps = amd;
+        const r = await ChatProviders.callOpenAICompatibleChat([{ role: 'user', content: 'hi' }], opts, { ...settings, baseUrl: amd2Base });
+        c.ok(r.content === 'CACHED_OK', '★ 同网关再次调用：成功');
+        c.ok(captured.length === 1, '★ 被拒过的思考参数不再首发（省一次注定失败的往返）', String(captured.length));
+        c.ok(!('thinking' in captured[0].body), '★ 该次请求不带 thinking 字段', JSON.stringify(captured[0]?.body));
     }
 
     {
@@ -1216,6 +1332,20 @@ async function caseThinkingCompat(c) {
     {
         c.ok(/\[Provider\] gateway rejected "\$\{param\}"/.test(src),
             '★ 降级重试留一行英文 warn（可 grep）');
+    }
+
+    console.log('\n=== 4. 只有思考没有正文时的预算重试 ===');
+    {
+        // 网关强制开思考且拒收 thinking 字段时，闲聊的 900 会在正文开始前被思考吃光 ——
+        // 主聊天路径必须能用更大预算重试一次，否则用户那句消息直接报错（真机实测踩到）。
+        const chatSrc = readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8');
+        const configSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8');
+        c.ok(/const EMPTY_OUTPUT_RETRY_TOKEN_LIMIT = 4096;/.test(configSrc),
+            '★ 常量 EMPTY_OUTPUT_RETRY_TOKEN_LIMIT 在 core-config.js 定义（4096）');
+        c.ok(/err\.code === 'EMPTY_MODEL_OUTPUT'/.test(chatSrc) && /_emptyOutputRetried/.test(chatSrc),
+            '★ callAI 只对 EMPTY_MODEL_OUTPUT 重试一次（其它失败不白付请求）');
+        c.ok(/maxTokens: EMPTY_OUTPUT_RETRY_TOKEN_LIMIT/.test(chatSrc),
+            '★ 重试时显式抬高输出预算');
     }
 }
 

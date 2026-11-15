@@ -27,17 +27,56 @@
     }
 
 
+    /* 插件版本按 semver（manifest.version）比方向。只比"不等"的话，本地比商店新也会挂更新角标，
+       一键更新就是用商店里的版本覆盖掉更晚的本地版本，而覆盖安装会先删目录、被覆盖的内容不可恢复。
+       两边任一解析不了（发布者写了非 semver）就退回"不等即可更新"，否则改个版本写法就永远看不到更新。 */
+    function comparePluginVersions(a, b) {
+        var parse = function (v) {
+            var m = /^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?$/.exec(String(v || '').trim());
+            return m ? { nums: m[1].split('.').map(Number), pre: m[2] || '' } : null;
+        };
+        var x = parse(a), y = parse(b);
+        if (!x || !y) return null;
+        var len = Math.max(x.nums.length, y.nums.length);
+        for (var i = 0; i < len; i++) {
+            var xa = x.nums[i] || 0, ya = y.nums[i] || 0;
+            if (xa !== ya) return xa > ya ? 1 : -1;
+        }
+        if (x.pre === y.pre) return 0;
+        if (!x.pre) return 1;   // 正式版 > 预发布版
+        if (!y.pre) return -1;
+        var xs = x.pre.split('.'), ys = y.pre.split('.');
+        var plen = Math.max(xs.length, ys.length);
+        for (var j = 0; j < plen; j++) {
+            if (xs[j] === undefined) return -1;
+            if (ys[j] === undefined) return 1;
+            if (xs[j] === ys[j]) continue;
+            var xn = /^\d+$/.test(xs[j]), yn = /^\d+$/.test(ys[j]);
+            if (xn && yn) return Number(xs[j]) > Number(ys[j]) ? 1 : -1;
+            if (xn !== yn) return xn ? -1 : 1;   // 数字段 < 字母段
+            return xs[j] > ys[j] ? 1 : -1;
+        }
+        return 0;
+    }
+
+    /** 商店版本是否真的比本地新；解析不了时按"不同即可更新"保守处理。 */
+    function isNewerVersion(next, cur) {
+        var cmp = comparePluginVersions(next, cur);
+        if (cmp == null) return String(next || '') !== String(cur || '');
+        return cmp > 0;
+    }
+
     /** 卡片状态：未安装 / 已安装 / 可更新 */
     function statusOf(p, installed) {
         var cur = installed.get(p.id);
         if (!cur) return 'absent';
         var mine = String(cur.version || ''), theirs = String(p.version || '');
-        if (mine && theirs && mine !== theirs) return 'update';
+        if (mine && theirs && isNewerVersion(theirs, mine)) return 'update';
         return 'installed';
     }
 
 
-    /** 已装插件与商店索引逐条比对：版本号两边都有且不同才算可更新（与卡片 statusOf 同一条判定，任一边缺版本号就不敢动）。 */
+    /** 已装插件与商店索引逐条比对：只有商店版本更高才算可更新（与卡片 statusOf 同一条判定，任一边缺版本号就不敢动）。 */
     function updateCandidatesOf(installedList, indexPlugins) {
         var installed = new Map();
         var mine = Array.isArray(installedList) ? installedList : [];
@@ -51,7 +90,7 @@
             if (!p || !p.id || !installed.has(p.id)) continue;
             var cur = String(installed.get(p.id).version || '');
             var next = String(p.version || '');
-            if (cur && next && cur !== next) out.push({ plugin: p, current: cur });
+            if (cur && next && isNewerVersion(next, cur)) out.push({ plugin: p, current: cur });
         }
         return out;
     }

@@ -10,7 +10,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
 import { launchTestBrowser } from './test-browser.mjs';
-import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
+import { runChecks, ROOT, wait, waitServerUp, freePort, startGoServer } from './check-harness.mjs';
 import { extractFunction as extractFnFrom, stripComments as stripCommentsOf } from './check-source.mjs';
 
 const WEB = path.join(ROOT, 'web');
@@ -235,9 +235,11 @@ async function caseNativeResponse(c) {
         c.ok(/const makeRes\s*=/.test(body), '用统一的 makeRes 构造响应（避免下次又漏一个）');
     }
 
-    // 清单**可能不存在** —— `npm run sync:web:lite`（纯净版 APK）不打包模型，改走扩展包分发：lite 模式下 www/live2d/models 整个目录都不存在。
-    const MANIFEST = path.join(ROOT, '..', 'android-app', 'www', 'live2d', 'models', 'manifest.json');
-    const MODELS_DIR = path.join(ROOT, '..', 'android-app', 'www', 'live2d', 'models');
+    // 清单**可能不存在** —— `sync-web.mjs --lite`（纯净版 APK）不打包模型，改走扩展包分发：
+    // lite 模式下 www/live2d/models 整个目录都不存在。www/ 是同步产物、不入库，干净克隆里同样没有。
+    const ANDROID_WWW = path.join(ROOT, 'dist', 'Android', 'www');
+    const MANIFEST = path.join(ANDROID_WWW, 'live2d', 'models', 'manifest.json');
+    const MODELS_DIR = path.join(ANDROID_WWW, 'live2d', 'models');
     const liteMode = !existsSync(MODELS_DIR);
 
     if (liteMode) {
@@ -419,16 +421,10 @@ async function caseSceneBackgrounds(c) {
         const BASE = `http://127.0.0.1:${PORT}`;
         const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-bg-data-'));
         const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-bg-log-'));
-        const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
-            cwd: ROOT,
-            env: {
-                ...process.env, PORT: String(PORT), HTTPS_PORT: String(HTTPS_PORT),
-                HOST: '127.0.0.1', DATA_DIR, LOG_DIR, LOG_TO_FILE: '0',
-            },
-            stdio: ['ignore', 'ignore', 'ignore'],
-        });
+        const srv = await startGoServer({ env: { PORT: String(PORT), DATA_DIR, LOG_DIR } });
+        const child = srv ? srv.child : null;
         try {
-            const up = await waitServerUp(BASE);
+            const up = Boolean(srv && srv.up);
             c.ok(up, '服务已启动');
             if (up) {
                 const indexSrc = dir ? readFileSync(path.join(MODS, dir, 'index.js'), 'utf8') : '';
@@ -453,7 +449,7 @@ async function caseSceneBackgrounds(c) {
     }
 }
 
-// 多主题系统（源码层）：浏览器端的行为验证在 android-app/test/theme.test.mjs（那里有 playwright），这里只做静态检查 —— 根目录脚本不依赖浏览器。
+// 多主题系统（源码层）：浏览器端的行为验证在 dist/Android/test/theme.test.mjs（那里有 playwright），这里只做静态检查 —— 根目录脚本不依赖浏览器。
 
 /** 把所有同名 `marker { ... }` 块拼接（配对扫描）：默认外观拆成尺寸/配色多个 html.rd 块，只取第一个会漏掉配色令牌。 */
 function cssBlocksAfter(text, marker) {
@@ -634,6 +630,41 @@ async function caseTheme(c) {
                 c.ok(block.includes(v + ':'), `★ 主题 ${tpl} 定义了 ${v}`);
             }
         }
+
+        // 首帧回放为深色用户在内联上钉了一批 --rd-*（index.html），theme.js 必须在 themes.css
+        // 就绪后把它们摘掉交还样式表 —— 两侧缺一不可：回放删了则深色用户首帧又闪浅色，
+        // 清理删了则浅色模式下文字/强调色/控件表面永远停在深色值。
+        const clearSrc = readFileSync(path.join(WEB, 'js', 'theme.js'), 'utf8');
+        c.ok(/--rd-text'/.test(html) && /--rd-accent'/.test(html),
+            '★ 首帧回放仍在钉内联变量（深色用户首帧不闪浅色）');
+        c.ok(/function clearBootInlineVars/.test(clearSrc) && /clearBootInlineVars\(\);/.test(clearSrc),
+            '★★ theme.js 存在内联主题变量清理并在启动路径调用');
+        const clearFn = clearSrc.slice(clearSrc.indexOf('function clearBootInlineVars'));
+        c.ok(/startsWith\('--rd-'\)/.test(clearFn) && /removeProperty/.test(clearFn),
+            '★ 清理按 --rd- 前缀摘除（不动 backgroundColor / colorScheme）');
+        const appliedAt = clearSrc.indexOf('clearBootInlineVars();');
+        const attrRemovedAt = clearSrc.indexOf("removeAttribute('data-elaina-boot')");
+        const darkAppliedAt = clearSrc.indexOf('applyDarkMode(darkMode());');
+        c.ok(appliedAt > attrRemovedAt && appliedAt < darkAppliedAt,
+            '★ 清理发生在 varsReady 分支内（themes.css 未就绪时不能摘，否则整页变量失效）');
+
+        // 窄屏扩展分类胶囊（ext-mobile-tabs）复用了 ext-nav-label，而 label 的显隐动画
+        // 选择器只配了侧栏分支 —— 窄屏下三段文字会永久停在 opacity:0（金色滑块上无字）。
+        // 窄屏块里必须显式放开（规则在 settings.css，故用 readHtmlAndStyles 取全文）。
+        const settingsCss = readHtmlAndStyles();
+        c.ok(/\.ext-mobile-tabs \.ext-nav-label\s*\{[^}]*opacity:\s*1/.test(settingsCss),
+            '★★ 窄屏分类胶囊的 label 必须显式可见（否则金底无字，见第 75 周期）');
+
+        // WebView 合成器对主题切换的重绘失效（computed 已换、屏幕残留旧帧）：applyDarkMode
+        // 的 mutate 内必须做一次"body 移出布局再放回"的整树光栅化强制 —— 删了它，深转浅
+        // 在手机上会"像没切成功"（真机 WebView 110 实测，见开发文档第 73 周期）。
+        c.ok(/function forceRepaintAfterThemeChange/.test(clearSrc) && /forceRepaintAfterThemeChange\(\);/.test(clearSrc),
+            '★★ 主题切换后强制整树重新光栅化（WebView 重绘失效的绕过）');
+        const paintFn = clearSrc.slice(clearSrc.indexOf('function forceRepaintAfterThemeChange'));
+        c.ok(/style\.display = 'none'/.test(paintFn) && /offsetHeight/.test(paintFn) && /style\.display = ''/.test(paintFn),
+            '★ 抖动实现是 display 移出布局再放回（同任务内完成，无中间渲染帧）');
+        c.ok(clearSrc.indexOf('forceRepaintAfterThemeChange();') > clearSrc.indexOf('const mutate = () => {'),
+            '★ 抖动在 mutate 内调用（VT 与非 VT 两条切换路径都覆盖）');
 
         for (const v of ['--rd-warn', '--rd-warn-strong', '--rd-warn-bg', '--rd-warn-border']) {
             c.ok(css.includes(v + ':'), `★ 定义了 ${v}（警示色与品牌主色分开）`);
@@ -874,7 +905,7 @@ async function caseTheme(c) {
 
 }
 
-// 旅行日记的浏览体验（按对话分组 / 点侧栏筛选 / 弹窗看全文）：真起一次 serve.mjs + Playwright 点页面 ——
+// 旅行日记的浏览体验（按对话分组 / 点侧栏筛选 / 弹窗看全文）：真起一次 Go 服务端 + Playwright 点页面 ——
 // 这一块的 bug 全是"点着点着不对"，纯源码断言抓不到。
 
 async function caseDiary(c) {
@@ -1009,18 +1040,9 @@ async function caseDiary(c) {
         }
     }
 
-    const serverLogPath = path.join(LOG_DIR, 'server-output.log');
-    const outFd = openSync(serverLogPath, 'a');
-    const child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
-        cwd: ROOT,
-        env: {
-            ...process.env, PORT: String(PORT), HTTPS_PORT: String(HTTPS_PORT),
-            HOST: '127.0.0.1', DATA_DIR, LOG_DIR, LOG_TO_FILE: '0', MODS_DIR,
-        },
-        stdio: ['ignore', outFd, outFd],
-    });
-    const serverOut = () => { try { return readFileSync(serverLogPath, 'utf8'); } catch { return ''; } };
-
+    const srv = await startGoServer({ env: { PORT: String(PORT), DATA_DIR, LOG_DIR, MODS_DIR } });
+const child = srv ? srv.child : null;
+const serverOut = () => (srv ? srv.bootLog : '');
     let browser = null;
     try {
         const up = await waitServerUp(BASE);
@@ -1032,6 +1054,54 @@ async function caseDiary(c) {
             const page = await ctx.newPage();
             const errs = [];
             page.on('pageerror', (e) => errs.push(e.message));
+
+            // 记忆正文的权威是 /api/memory/core（M2b）：Node 夹具没有这个接口，
+            // 在浏览器层把请求拦下并返回夹具 canonical —— 页面走的仍是真实路径
+            //（refreshMemoryCore → adopt → 渲染），不是往 state 里硬塞。
+            const memoryCoreFixture = {
+                diary: [
+                    { id: 'diary:cA|2026年10月14日', conversationId: 'cA', conversationTitle: '雪之街的相遇', date: '2026年10月14日', content: 'A 的故事：' + '长'.repeat(500), essences: ['雪之街'], timestamp: '2026-10-14T10:00:00.000Z' },
+                    { id: 'diary:cB|2026年10月14日', conversationId: 'cB', conversationTitle: '咖啡馆的午后', date: '2026年10月14日', content: 'B 的故事：咖啡馆', essences: ['咖啡馆'], timestamp: '2026-10-14T11:00:00.000Z' },
+                ],
+                promise: [], preference: [], plan: [], motivation: [], pivotal_memory: [],
+            };
+            // 探测接口也要接住：refreshMemoryCore 先探 /index/status，404 会让它整段跳过。
+            await page.route('**/api/memory/index/status', (route) => route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ ok: true, available: true, count: memoryCoreFixture.diary.length }),
+            }));
+            // POST /core 必须按真实语义处理（整类目 upsert + dropIds 删除）并返回合并后的 canonical：
+            // 删除对话的级联清理会 await saveMemoryCore —— 若 POST 原样回显旧 canonical，
+            // adopt 会把刚删掉/刚写入的记忆用旧快照盖回去，测试与真实行为都会失真。
+            await page.route('**/api/memory/core', async (route) => {
+                const req = route.request();
+                if (req.method() === 'POST') {
+                    try {
+                        const body = JSON.parse(req.postData() || '{}');
+                        const drops = new Set(Array.isArray(body.dropIds) ? body.dropIds : []);
+                        const core = body.core || {};
+                        if (Array.isArray(core.diary)) {
+                            const kept = memoryCoreFixture.diary.filter((e) => !drops.has(e.id));
+                            for (const e of core.diary) {
+                                const id = e.id || ('diary:' + String(e.conversationId || '') + '|' + String(e.date || ''));
+                                const at = kept.findIndex((x) => x.id === id);
+                                if (at >= 0) kept[at] = { ...e, id };
+                                else kept.push({ ...e, id });
+                            }
+                            memoryCoreFixture.diary = kept;
+                        }
+                        for (const k of ['promise', 'preference', 'plan', 'motivation', 'pivotal_memory']) {
+                            if (Array.isArray(core[k])) memoryCoreFixture[k] = core[k];
+                        }
+                    } catch (e) { /* 解析失败按原样返回当前 canonical */ }
+                }
+                await route.fulfill({
+                    status: 200,
+                    contentType: 'application/json',
+                    body: JSON.stringify({ ok: true, core: memoryCoreFixture }),
+                });
+            });
 
             const nav = await page.goto(BASE, { waitUntil: 'domcontentloaded', timeout: 60000 });
             c.ok(nav && nav.status() === 200, '页面能打开', 'status=' + (nav ? nav.status() : '?'));
@@ -1050,7 +1120,7 @@ async function caseDiary(c) {
                 countText: (document.getElementById('diaryCount') || {}).textContent,
                 enterBtns: document.querySelectorAll('.diary-group-enter').length,
             }));
-            c.ok(grouped.cards === 2, '★★ 两条日记都渲染出来了（拆分文件的数据能读到）', JSON.stringify(grouped));
+            c.ok(grouped.cards === 2, '★★ 两条日记都渲染出来了（canonical 数据经 /api/memory/core 读到）', JSON.stringify(grouped));
             c.ok(grouped.groups.includes('雪之街的相遇') && grouped.groups.includes('咖啡馆的午后'),
                 '★★ 按对话分成两组，组标题是各自的对话名', JSON.stringify(grouped.groups));
             c.ok(grouped.enterBtns === 2, '★ 每个可跳转的组都有「进入对话」按钮');
@@ -1318,6 +1388,37 @@ async function caseDiary(c) {
                 JSON.stringify(back));
             c.ok(back.diaryMode === false && back.filter === '',
                 '★ 离开日记页时筛选也清掉了');
+
+            // 首帧回放为深色用户把一批 --rd-* 变量内联钉在 html.style 上（见 index.html 回放脚本）。
+            // 那批内联只该顶到 themes.css 就绪为止：留着的话浅色模式下文字 / 强调色 / 控件表面
+            // 永远是深色值 —— 表现就是「浅色下字看不清」「深转浅像没切成功」。这里钉住清理路径。
+            const bootVars = await page.evaluate(async () => {
+                const dv = document.documentElement.style;
+                dv.setProperty('--rd-text', '#f0e8d8');
+                dv.setProperty('--rd-accent', '#d3b36a');
+                dv.setProperty('--rd-surface-2', '#171e2a');
+                const polluted = getComputedStyle(document.documentElement).getPropertyValue('--rd-text').trim();
+                if (typeof window.ElainaTheme === 'undefined' || typeof window.ElainaTheme.applyStored !== 'function') {
+                    return { err: 'no ElainaTheme.applyStored', polluted };
+                }
+                window.ElainaTheme.applyStored();
+                const root = getComputedStyle(document.documentElement);
+                return {
+                    polluted,
+                    textAfter: root.getPropertyValue('--rd-text').trim(),
+                    accentAfter: root.getPropertyValue('--rd-accent').trim(),
+                    surface2After: root.getPropertyValue('--rd-surface-2').trim(),
+                    inlineLeft: [...Array(dv.length)].map((_, i) => dv.item(i)).filter((n) => n.startsWith('--rd-')).length,
+                };
+            });
+            c.ok(bootVars.err === undefined && bootVars.polluted === '#f0e8d8',
+                '（准备）内联钉住了深色文字值', JSON.stringify(bootVars));
+            c.ok(bootVars.err === undefined && bootVars.textAfter === '#241f18' && bootVars.accentAfter === '#8a6a1f',
+                '★★★ 首帧回放钉住的内联主题变量在样式就绪后必须交还样式表（浅色下文字才看得清）',
+                JSON.stringify(bootVars));
+            c.ok(bootVars.err === undefined && bootVars.surface2After === '#f1e8d7' && bootVars.inlineLeft === 0,
+                '★★ 控件表面与 --rd- 内联全部摘除（浅色下分段控件不再黑底）',
+                JSON.stringify({ s: bootVars.surface2After, left: bootVars.inlineLeft }));
 
             console.log('  页面错误:', errs.length ? errs.slice(0, 3).join(' | ') : '(无)');
             c.ok(errs.length === 0, '★ 全程没有页面 JS 报错', errs.slice(0, 2).join(' | '));

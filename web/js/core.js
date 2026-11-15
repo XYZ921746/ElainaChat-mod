@@ -12,7 +12,7 @@ if (window.Element && !Element.prototype.replaceChildren) {
 }
 
 
-// 原生（Capacitor APK）Live2D 模型存储适配：APK 没有 Node 后端，/api/live2d/ 下接口在本机用 Capacitor Filesystem 实现。
+// 原生（Capacitor APK）Live2D 模型存储适配：APK 的本机服务不提供模型目录接口，/api/live2d/ 下接口在本机用 Capacitor Filesystem 实现。
 const IS_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
 // 这个浏览器有没有「安装到桌面」入口：判据只有会不会发 beforeinstallprompt，不用 UA 名单（套壳浏览器 UA 五花八门）。
@@ -73,7 +73,7 @@ function getNativeByokHttpPlugin() {
     return window.Capacitor?.Plugins?.ByokHttp || null;
 }
 
-// 桌面/文档/下载 的真实位置由同源 serve.mjs 从注册表读出：用户可能移动过，AI 按惯例猜会失败。
+// 桌面/文档/下载 的真实位置由同源 Go 服务端从注册表读出：用户可能移动过，AI 按惯例猜会失败。
 let agentRootsProbe = null;
 let agentRootsCache = null;
 function detectAgentRoots() {
@@ -166,6 +166,7 @@ function mergeLeadingSystemMessages(messages) {
 window.ChatDeps = {
     ClientApiError,
     getChatBaseUrl,
+    stripChatFunctionSuffix,
     isDeepSeekOfficial,
     postJsonFromDevice,
     requestChatJson,

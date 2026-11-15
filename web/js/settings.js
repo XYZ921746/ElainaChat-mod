@@ -97,9 +97,8 @@ function fillSettingsForm() {
     fillTavilySettings();
     renderChatBindings();
     fillVisionSettings();
-    fillAgentReadToggles();
     renderAgentFolderSummary();
-    void refreshAgentReadPermStatus();
+    void refreshAgentPermStatus();
     syncAgentSectionsByDevice();
 
     renderCardSelect();

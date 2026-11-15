@@ -3,7 +3,7 @@
 
 // 与「电脑命令」的分工：命令通道文本进文本出，AI 看不到页面；这条通道是看页面 → 决定 → 真点一下。
 // 请求落在服务端：浏览器进程在服务端那台机器上，且调试端口能读全部 cookie，
-// 只可对本机开放（见 serve.mjs 的 browserDenyReason），放前端等于交给任何能打开页面的人。
+// 只可对本机开放（见 server/internal/httpapi/browser.go 的 browserDenyReason），放前端等于交给任何能打开页面的人。
 
 /** 动作名 → 过程行标题（用户看的是"做了什么"，不是"调了什么工具"） */
 const BROWSER_ACTION_LABEL = {
@@ -37,9 +37,9 @@ async function runAgentBrowserOperation(args, traceItem) {
     } else {
         updateTurnTool(traceItem, { kind: 'browser', title: '浏览器 · ' + (label || '操作'), summary: summarizeBrowserArgs(args) });
     }
-    // APK 上没有本机服务端，也就没有浏览器进程可起。
+    // APK 不转发 /api/agent/browser，也没有桌面浏览器进程可起。
     if (IS_NATIVE_APP) {
-        const m = '当前是安卓 App，没有本机服务端，用不了浏览器功能。请在电脑上运行本应用。';
+        const m = '当前是安卓 App，浏览器功能只支持电脑侧。请在电脑上运行本应用。';
         updateTurnTool(traceItem, { state: 'stopped', result: m });
         return { ok: false, text: m };
     }

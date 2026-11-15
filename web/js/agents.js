@@ -1,42 +1,10 @@
-// Agent 设置 / 扩展分栏：手机读取信息开关、工作区授权摘要、扩展分栏切换与菜单定位。
+// Agent 设置 / 扩展分栏：工作区授权摘要、扩展分栏切换与菜单定位。
+// 手机「读取信息」没有应用层开关：能不能读只由系统权限决定（见 agent-permissions.js），
+// 应用内再放一道"让不让 AI 知道"的闸只会让人以为权限被收回，而系统权限其实还在。
 'use strict';
 
-// 手机「读取信息」隐私开关：默认全关，关掉后 AI 连标签都看不到（"根本没这个能力"而不是"读了不说"）；开关 id ↔ 设置字段 ↔ 手机操作名集中在这张表。
-const AGENT_READ_TOGGLES = [
-    { id: 'settingAgentReadApps', key: 'agentReadApps', action: '手机应用列表', label: '已安装应用列表' },
-    { id: 'settingAgentReadNotifications', key: 'agentReadNotifications', action: '手机通知', label: '通知内容' },
-    { id: 'settingAgentReadDevice', key: 'agentReadDevice', action: '手机设备信息', label: '设备与前台状态' },
-    { id: 'settingAgentReadSms', key: 'agentReadSms', action: '手机短信', label: '短信' },
-    { id: 'settingAgentReadContacts', key: 'agentReadContacts', action: '手机通讯录', label: '通讯录' },
-    { id: 'settingAgentReadCalendar', key: 'agentReadCalendar', action: '手机日历', label: '日历' },
-];
-
-function fillAgentReadToggles() {
-    for (const t of AGENT_READ_TOGGLES) {
-        const el = document.getElementById(t.id);
-        // 默认关（与 core.js 的 DEFAULTS 一致）：这些是隐私数据，不能因为用户没表态就当同意，只有存过的值为 true 才勾上。
-        if (el) el.checked = state.settings[t.key] === true;
-    }
-}
-
-// 从界面开关读回一份设置补丁。元素不在时保留原值：saveSettings 是整体替换，漏一个键等于把用户的开关重置回默认。
-function readAgentReadToggles() {
-    const patch = {};
-    for (const t of AGENT_READ_TOGGLES) {
-        const el = document.getElementById(t.id);
-        patch[t.key] = el ? el.checked : (state.settings[t.key] !== false);
-    }
-    return patch;
-}
-
-// 某个读取类操作现在允许吗（供 agent.js 的分发与提示词用）。找不到对应开关的操作一律放行：那张表只列隐私数据。
-function phoneReadAllowed(action) {
-    const t = AGENT_READ_TOGGLES.find((x) => x.action === action);
-    if (!t) return true;
-    return state.settings[t.key] !== false;
-}
-
 // Agent 工作区 / 用户授权文件夹
+
 
 function renderAgentFolderSummary() {
     const el = document.getElementById('agentFolderSummary');

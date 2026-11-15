@@ -30,7 +30,8 @@ function agentAccessAsksBeforeChange() {
     return currentAgentAccess() === 'strict';
 }
 
-// 手机侧不做确认、一律放行（无障碍方式破坏力有限，模块后端 root 的风险由设置页免责声明承担）：放行策略集中一处便于将来收紧；它管"要不要问"，隐私开关 phoneReadAllowed 管"能力存不存在"。
+// 手机侧不做确认、一律放行（无障碍方式破坏力有限，模块后端 root 的风险由设置页免责声明承担）：放行策略集中一处便于将来收紧。
+// 它只管"要不要问"，"能不能读到"由安卓系统权限决定。
 function phoneTierAllows(action) {
     return true;
 }

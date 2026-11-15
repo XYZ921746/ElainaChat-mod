@@ -194,12 +194,13 @@ function renderChatProviderModels(block, p) {
         + '<span class="cpc-configured-name" title="' + escapeHtml(m) + '">' + escapeHtml(m) + '</span>'
         + '<div class="cpc-configured-actions">'
         + '<button type="button" class="btn-secondary text-xs cpc-test-model" data-cpc-model="' + escapeHtml(m) + '">检测</button>'
-        + '<button type="button" class="btn-secondary text-xs cpc-remove-model" data-cpc-model="' + escapeHtml(m) + '">移除</button>'
+        + '<button type="button" class="btn-secondary text-xs cpc-remove-model" data-cpc-model="' + escapeHtml(m) + '" title="移除模型（同时从候选清单删除；重新「获取模型」可找回）">移除</button>'
         + '</div></div>').join('') : '<p class="cpc-models-empty">还没有已配置模型，从下方可选模型里点「＋」加入。</p>';
 
     const available = models.filter((m) => selected.indexOf(m) === -1);
     availableBox.innerHTML = available.length ? available.map((m) => '<div class="cpc-available-row" data-model-name="' + escapeHtml(String(m).toLowerCase()) + '">'
         + '<span class="cpc-available-name" title="' + escapeHtml(m) + '">' + escapeHtml(m) + '</span>'
+        + '<button type="button" class="cpc-forget-model" data-cpc-model="' + escapeHtml(m) + '" title="从候选列表删除" aria-label="从候选列表删除">✕</button>'
         + '<button type="button" class="cpc-enable-model" data-cpc-model="' + escapeHtml(m) + '" title="加入已配置模型" aria-label="加入已配置模型">＋</button>'
         + '</div>').join('')
         : '<p class="cpc-models-empty">' + (models.length ? '所有模型都已加入。' : '还没有候选模型：点「获取模型」拉取，或手动输入添加。') + '</p>';
@@ -421,28 +422,65 @@ function newProviderId(prefix) {
 
 // ---------- 协议自动识别 ----------
 // 用户只填地址 / Key / 模型，协议由探测结果决定：
-//   对话类对 /chat/completions、/responses、/messages 逐一发一条 1 token 的探测请求，2xx 即命中（401/403 = 端点存在但 Key 不对）；
-//   TTS/ASR 按地址域名即时识别（未知地址回落通用协议）；嵌入/重排序只有一种协议，无需检测。
+//   对话类只查 GET /models（不计费）；TTS/ASR 按地址域名即时识别（未知地址回落通用协议）；
+//   嵌入/重排序只有一种协议，无需检测。
 
-// 对话类协议探测：按常见度排序逐个端点试；网络层失败与 404 都换下一个候选。
-async function detectChatProtocolForCreate(baseUrl, apiKey, model) {
-    const base = String(baseUrl || '').trim().replace(/\/+$/, '');
+// 对话类协议探测 —— **只发 GET /models，不发任何对话请求**。
+// 为什么不用"发一条 1 token 试试"：那是真调用，按 token 计费。探测是自动触发的（改地址就重跑），
+// 用户不该为此付费，也不该在账单上看到莫名其妙的消耗。列表接口是免费的，足够区分协议。
+//
+// 判定依据是"哪个协议能取到模型列表"：
+//   OpenAI 系（compatible / responses）→ GET {base}/models，Bearer 认证；
+//   Anthropic → GET {base}/v1/models，x-api-key 认证（也接受 Bearer，中转常见）。
+// 返回 200 且有非空 data[] 才算命中；401/403 记为"端点存在但 Key 被拒"（不立即定案，
+// 因为先鉴权后路由的网关对任何路径都回 401）；404 与网络失败算端点不存在。
+// 两家都取不到时按常见度取证据（OpenAI 兼容优先）。
+// model 参数保留只为兼容调用方签名：列表接口不需要模型名，探测也不再发对话请求。
+async function detectChatProtocolForCreate(baseUrl, apiKey) {
+    // 用户可能把整条端点粘进来（…/v4/chat/completions）：先剥掉功能段再拼候选。
+    const base = stripChatFunctionSuffix(baseUrl);
+    if (!base) return null;
     const key = String(apiKey || '').trim();
     const bearer = key ? { Authorization: 'Bearer ' + key } : {};
+    // Anthropic 的候选地址与运行时同一条规则：带版本段拼 /models；不带则先试 /v1/models。
+    // 版本段不猜 —— /v4 就查 /v4/models。
+    const anthropicUrls = /\/v\d+$/i.test(base)
+        ? [base + '/models']
+        : [base + '/v1/models', base + '/models'];
     const candidates = [
-        { id: 'openai-compatible', label: 'OpenAI 兼容', url: base + '/chat/completions', headers: { ...bearer, 'Content-Type': 'application/json' }, body: { model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 } },
-        { id: 'openai-responses', label: 'OpenAI 官方', url: base + '/responses', headers: { ...bearer, 'Content-Type': 'application/json' }, body: { model, input: 'hi', max_output_tokens: 16 } },
-        { id: 'anthropic', label: 'Anthropic Claude', url: base + '/messages', headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' }, body: { model, max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] } }
+        { id: 'openai-compatible', label: 'OpenAI 兼容', urls: [base + '/models'], headers: bearer },
+        ...anthropicUrls.map((url) => ({
+            id: 'anthropic', label: 'Anthropic Claude', urls: [url],
+            headers: { 'x-api-key': key, ...bearer, 'anthropic-version': '2023-06-01' },
+        })),
     ];
+    let evidence = null;
     for (const c of candidates) {
-        try {
-            const result = await postJsonFromDevice(c.url, c.body, c.headers, { timeoutMs: 15000 });
-            if (result.ok) return { id: c.id, label: c.label, keyOk: true };
-            // 401/403 = 端点存在、协议可识别，只是 Key 不对：同样报告识别结果
-            if (result.status === 401 || result.status === 403) return { id: c.id, label: c.label, keyOk: false };
-        } catch (e) { /* 换下一个端点 */ }
+        for (const url of c.urls) {
+            try {
+                const result = await getJsonFromDevice(url, c.headers, 15000);
+                const models = result.ok ? parseModelList(result.payload) : [];
+                // 有模型列表 = 这个协议对。空列表不算命中（有些网关对任何路径都回 200 + 空 data）。
+                if (models.length) {
+                    return { id: c.id, label: c.label, keyOk: true, models };
+                }
+                if (result.ok) {
+                    if (!evidence) evidence = { id: c.id, label: c.label, keyOk: false, reason: 'empty' };
+                    continue;
+                }
+                if (result.status === 401 || result.status === 403) {
+                    // 端点存在但 Key 被拒。不立即定案：先鉴权后路由的网关对任何路径都回 401，
+                    // 让更靠前的候选（OpenAI 兼容）先有机会给出更强的证据。
+                    if (!evidence) evidence = { id: c.id, label: c.label, keyOk: false, reason: 'auth' };
+                    continue;
+                }
+                if (result.status === 400 || result.status === 405 || result.status === 422 || result.status === 429) {
+                    if (!evidence) evidence = { id: c.id, label: c.label, keyOk: false, reason: 'rejected' };
+                }
+            } catch (e) { /* 换下一个地址 */ }
+        }
     }
-    return null;
+    return evidence;
 }
 
 function detectTtsProtocolByHost(baseUrl) {
@@ -813,7 +851,10 @@ async function testAsrProviderDraft() {
                         + '（HTTP ' + (result.status || '?') + '）', false);
                 }
             } else {
-                const result = await postJsonFromDevice(baseUrl.replace(/\/+$/, '') + '/v1/chat/completions', {
+                // 与 asr.js 的 MiMo 运行时同一条规则：已有版本段（可能是 /v4）就原样用，缺才补 /v1。
+                const strippedAsrBase = stripChatFunctionSuffix(baseUrl);
+                const asrBase = /\/v\d+$/i.test(strippedAsrBase) ? strippedAsrBase : strippedAsrBase + '/v1';
+                const result = await postJsonFromDevice(asrBase + '/chat/completions', {
                     model,
                     messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: `data:audio/wav;base64,${float32ToWavBase64(samples, ASR_TARGET_SAMPLE_RATE)}`, format: 'wav' } }] }],
                     asr_options: { language: 'zh' },
@@ -1828,17 +1869,49 @@ function renderModelAddModelChips() {
     const preset = modelAddPresets(s.kind).find((p) => p.id === s.presetId);
     const models = s.models.length ? s.models : (preset && preset.models ? preset.models : []);
     if (!models.length) {
-        return '<div class="model-add-chip-row"><span class="model-add-hint">保存后可在提供商详情里「获取模型」</span></div>';
+        const hint = modelAddSupportsFetch()
+            ? '点「获取模型」拉取候选，或在上面直接输入模型名。'
+            : '选择上方预设，或直接输入模型名。';
+        return '<div class="model-add-chip-row"><span class="model-add-hint">' + hint + '</span></div>';
     }
+    // 服务商的 /models 可能上百条（中转站尤其常见）；chips 只展示前 60 个，
+    // 其余仍保留在候选清单里，用户可以直接输入模型名，保存后也能在详情里筛选。
+    const shown = models.slice(0, 60);
+    const more = models.length > shown.length
+        ? '<span class="model-add-hint">… 共 ' + models.length + ' 个，可直接输入模型名，保存后可在详情里筛选。</span>'
+        : '';
     return '<div class="model-add-chip-row">'
-        + models.map((m) => '<button type="button" class="model-add-chip' + (m === s.model ? ' is-on' : '') + '" data-ma-model="' + escapeHtml(m) + '">'
+        + shown.map((m) => '<button type="button" class="model-add-chip' + (m === s.model ? ' is-on' : '') + '" data-ma-model="' + escapeHtml(m) + '">'
             + (m === s.model ? '✓ ' : '') + escapeHtml(m) + '</button>').join('')
+        + more
         + '</div>';
+}
+
+/** 只替换候选 chips，不重渲染整张表单：探测/获取模型是异步的，重渲染会打断正在输入的字段。 */
+function refreshModelAddChips() {
+    const box = document.querySelector('#modelAddBody [data-ma-model-chips]');
+    if (!box || !modelAddState) return;
+    box.innerHTML = renderModelAddModelChips();
+}
+
+/** 添加页是否提供「获取模型」：对话/嵌入/重排序都走 OpenAI 兼容的 /models；TTS/ASR 是固定模型。 */
+function modelAddSupportsFetch() {
+    const s = modelAddState;
+    return Boolean(s && !s.fixed && (s.kind === 'chat' || s.kind === 'embedding' || s.kind === 'rerank'));
 }
 
 function renderModelAddForm() {
     const s = modelAddState;
     const meta = MODEL_SECTION_ENTRIES.find((entry) => entry.key === s.kind);
+    // 协议状态行：识别结果在保存前就亮出来 —— 探测一旦误判，用户在"保存并打开"之前就能看到并改地址，
+    // 而不是存完才发现提供商被标成了别的协议（对话协议在详情页不可改，只能删了重加）。
+    const protocolRow = (s.kind === 'chat' && !s.fixed)
+        ? '<div class="model-add-field is-full"><label>协议</label>'
+          + '<span class="model-add-hint" data-ma-protocol-status>填写地址后自动识别</span></div>'
+        : '';
+    const fetchButton = modelAddSupportsFetch()
+        ? '<button type="button" class="btn-secondary text-xs" data-ma-fetch>获取模型</button>'
+        : '';
     return '<div class="model-add-card">'
         + '<div class="model-add-form-grid">'
         + '<div class="model-add-field"><label>名称</label>'
@@ -1850,8 +1923,12 @@ function renderModelAddForm() {
         + '<span class="model-add-hint">' + (s.fixed ? '官方固定端点，无需填写地址。' : '带版本段（如 /v1）。') + '</span></div>'
         + '<div class="model-add-field is-full"><label>API Key</label>'
         + '<input class="modal-input" data-ma-key type="password" autocomplete="new-password" value="' + escapeHtml(s.key) + '" placeholder="sk-...（只保存在本机）"></div>'
+        + protocolRow
         + '</div>'
-        + '<div class="model-add-field is-full"><label>可用模型</label>' + renderModelAddModelChips() + '</div>'
+        + '<div class="model-add-field is-full">'
+        + '<div class="model-add-field-head"><label>可用模型</label>' + fetchButton + '</div>'
+        + '<div data-ma-model-chips>' + renderModelAddModelChips() + '</div>'
+        + '</div>'
         + '<div class="model-add-foot">'
         + '<label class="model-add-check"><input type="checkbox" data-ma-default ' + (s.setDefault ? 'checked' : '') + '> 保存后设为「' + escapeHtml((meta && meta.name) || '') + '」默认</label>'
         + '<span class="model-add-spacer"></span>'
@@ -1867,6 +1944,8 @@ function renderModelAddPage() {
         + (modelAddState.step === 1 ? renderModelAddKind()
             : modelAddState.step === 2 ? renderModelAddPreset()
                 : renderModelAddForm());
+    // 重渲染会重置状态行的文本，这里按当前 state 补写一次（探测还在途时显示"自动识别"占位）。
+    updateModelAddProtocolStatus();
 }
 
 function applyModelAddPreset(presetId) {
@@ -1910,28 +1989,57 @@ function openModelAddCustom() {
 }
 
 let modelAddDetectTimer = null;
+// 探测是异步的：连续输入会叠出多个在途请求，只有最新一次的结果允许落状态，否则先慢后快会把判定闪回去。
+let modelAddDetectSeq = 0;
+
+/** 把识别结论写进表单的协议状态行（只改文本，不重渲染 —— 重渲染会打断正在输入的焦点）。 */
+function updateModelAddProtocolStatus() {
+    const s = modelAddState;
+    const el = document.querySelector('#modelAddBody [data-ma-protocol-status]');
+    if (!el || !s || s.kind !== 'chat' || s.fixed) return;
+    if (!String(s.url || '').trim()) {
+        el.textContent = '填写接口地址后自动识别';
+        return;
+    }
+    if (s.detected) {
+        const format = CHAT_API_FORMATS[s.detected.id];
+        const suffix = s.detected.reason === 'auth' ? '（地址连通但 Key 被拒，保存后请检查 Key）'
+            : s.detected.reason === 'empty' ? '（地址连通但没返回模型列表，可能是 Key 权限或地址不全）'
+                : s.detected.reason === 'rejected' ? '（端点连通但请求被拒，请核对地址）'
+                    : '';
+        el.textContent = '识别为「' + ((format && format.label) || s.detected.label || s.detected.id) + '」' + suffix;
+    } else {
+        el.textContent = '未能识别，将按「OpenAI 兼容」保存';
+    }
+}
 
 async function runModelAddDetect() {
     const s = modelAddState;
     if (!s || s.fixed) return;
+    const runId = ++modelAddDetectSeq;
     const base = String(s.url || '').trim().replace(/\/+$/, '');
     if (!base) {
         s.detected = null;
-        return;
-    }
-    if (s.kind === 'chat' && !String(s.model || '').trim()) {
-        s.detected = null;
+        updateModelAddProtocolStatus();
         return;
     }
     if (s.kind === 'chat') {
-        const hit = await detectChatProtocolForCreate(base, s.key, s.model.trim());
+        // 探测只查模型列表，不需要模型名 —— 填完地址就能识别，用户不必先想好用哪个模型。
+        const hit = await detectChatProtocolForCreate(base, s.key);
+        if (runId !== modelAddDetectSeq || modelAddState !== s) return;   // 已有更新的输入在探测：这轮结果作废
         if (hit) {
-            s.detected = { id: hit.id, label: hit.label, keyOk: hit.keyOk };
+            s.detected = { id: hit.id, label: hit.label, keyOk: hit.keyOk, reason: hit.reason };
+            // 探测命中的就是 /models 的返回：直接拿来当候选，用户不必先保存再点一次「获取模型」。
+            if (Array.isArray(hit.models) && hit.models.length) {
+                s.models = hit.models.slice();
+                refreshModelAddChips();
+            }
         } else if (s.presetProtocol && CHAT_API_FORMATS[s.presetProtocol]) {
             s.detected = { id: s.presetProtocol, label: CHAT_API_FORMATS[s.presetProtocol].label, keyOk: false };
         } else {
             s.detected = null;
         }
+        updateModelAddProtocolStatus();
     } else if (s.kind === 'tts') {
         const id = detectTtsProtocolByHost(base);
         const hit = TTS_PROTOCOL_PRESETS.find((p) => p.id === id);
@@ -1976,7 +2084,13 @@ async function createModelFromAdd() {
         showToast('还没有识别出协议，请检查地址或模型名', { kind: 'warn' });
         return;
     }
-    const initial = { name: s.name.trim(), baseUrl: s.url.trim(), apiKey: s.key.trim(), model: s.model.trim() };
+    const initial = {
+        name: s.name.trim(),
+        baseUrl: s.url.trim(),
+        apiKey: s.key.trim(),
+        model: s.model.trim(),
+        models: Array.isArray(s.models) ? s.models.slice() : []
+    };
     if (s.kind === 'chat') addChatProvider(protocol, initial);
     else if (s.kind === 'tts') addTtsProviderFromPreset(protocol, initial);
     else if (s.kind === 'asr') addAsrProviderFromPreset(protocol, initial);
@@ -2007,6 +2121,52 @@ async function createModelFromAdd() {
     const content = document.getElementById('settingsContent');
     if (content) content.scrollTop = 0;
     showToast('已添加「' + initial.name + '」', { kind: 'ok' });
+}
+
+/** 拉取模型列表失败的统一文案：保留上游原因，网络失败再说明中转这一层。 */
+function modelFetchFailureText(err) {
+    const detail = String(err?.message || err);
+    const isNetwork = /Failed to fetch|NetworkError|Load failed/i.test(detail);
+    return '获取模型列表失败：' + detail
+        + (isNetwork ? '\n\n（浏览器直连被跨域拦截且本机中转不可用）' : '')
+        + '\n\n拉不到列表也可以手动输入模型名。';
+}
+
+/** 添加供应商页的「获取模型」：不必先保存，拉到候选直接点选。 */
+async function fetchModelAddModels() {
+    const s = modelAddState;
+    if (!s) return;
+    const urlEl = document.querySelector('#modelAddBody [data-ma-url]');
+    const keyEl = document.querySelector('#modelAddBody [data-ma-key]');
+    const url = String((urlEl && urlEl.value) || s.url || '').trim();
+    const key = String((keyEl && keyEl.value) || s.key || '').trim();
+    s.url = url;
+    s.key = key;
+    const btn = document.querySelector('#modelAddBody [data-ma-fetch]');
+    const old = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 获取中…'; }
+    try {
+        if (!url) throw new Error('请先填写接口地址');
+        // 对话类沿用探测出的协议（Anthropic 要换认证头）；嵌入/重排序只有 OpenAI 兼容一种。
+        const protocol = s.kind === 'chat'
+            ? ((s.detected && s.detected.id) || s.presetProtocol || 'openai-compatible')
+            : 'openai-compatible';
+        const models = await fetchModelList(url, key, protocol);
+        if (modelAddState !== s) return;   // 用户已离开添加页：结果作废，别写到空状态上
+        if (!models.length) throw new Error('接口未返回模型列表（data 为空），可能该服务不支持 /models');
+        s.models = models;
+        if (!String(s.model || '').trim()) {
+            s.model = models[0];
+            const modelEl = document.querySelector('#modelAddBody [data-ma-model-input]');
+            if (modelEl) modelEl.value = s.model;
+        }
+        refreshModelAddChips();
+        showToast('已获取 ' + models.length + ' 个模型', { kind: 'ok' });
+    } catch (err) {
+        if (modelAddState === s) showCustomAlert(modelFetchFailureText(err), '获取模型');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = old; }
+    }
 }
 
 // ---------- 设置二级页：整块替换分栏内容 ----------
@@ -2105,11 +2265,8 @@ function commitChatProviderDetail() {
     prov.name = block.querySelector('.cpc-name')?.value.trim() || '未命名';
     prov.apiFormat = block.querySelector('.cpc-format')?.value || prov.apiFormat || 'openai-compatible';
     prov.baseUrl = block.querySelector('.cpc-baseurl')?.value.trim() || '';
-    // 已配置模型由每行的加入/移除按钮直接写 state；这里只保证候选清单包含它们。
-    prov.models = Array.from(new Set([
-        ...(Array.isArray(prov.models) ? prov.models : []),
-        ...(Array.isArray(prov.selectedModels) ? prov.selectedModels : [])
-    ]));
+    // 候选清单只由「获取模型」和预设写入。把已配置模型反向并进来，会让手工输入、
+    // 又从未被服务商返回过的模型在被移除后永远留在可选列表里。
     if (!state.settings.chatProviderKeys || typeof state.settings.chatProviderKeys !== 'object') {
         state.settings.chatProviderKeys = {};
     }
@@ -2148,12 +2305,15 @@ function addChatProvider(formatId, initial = {}) {
     const preset = CHAT_API_FORMATS[formatId];
     const id = 'prov_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
     const model = String(initial.model || '').trim();
+    const knownModels = Array.isArray(initial.models)
+        ? Array.from(new Set(initial.models.map((m) => String(m || '').trim()).filter(Boolean)))
+        : [];
     s.chatProviders.push({
         id,
         name: String(initial.name || '').trim() || ('新供应商 ' + (s.chatProviders.length + 1)),
         apiFormat: formatId,
         baseUrl: String(initial.baseUrl || '').trim() || preset.defaultBaseUrl,
-        models: model ? [model] : [],
+        models: knownModels,
         selectedModels: model ? [model] : []
     });
     if (String(initial.apiKey || '').trim()) setProviderSecret(id, initial.apiKey);
@@ -2186,6 +2346,7 @@ function readProviderSettingsForm() {
     const chat = readChatProvidersFromDom();
     const visionPairSelect = document.getElementById('settingVisionModelPair');
     const visionPair = visionPairSelect ? parseChatModelKey(visionPairSelect.value) : { providerId: '', model: '' };
+    const isLegacyVision = Boolean(visionPairSelect && visionPair.providerId === LEGACY_VISION_PROVIDER);
     const memoryModelSelect = document.getElementById('settingMemoryModel');
     // 默认/回退的 DOM 现在在「模型」顶层页里：元素在就以 DOM 为准（比 state 新），
     // 元素不在（模型页没进出过）保留 state。
@@ -2208,15 +2369,18 @@ function readProviderSettingsForm() {
                 .filter((p) => p.providerId && p.model)
             : (Array.isArray(state.settings.fallbackChatModels) ? state.settings.fallbackChatModels : []),
         // 不再是开关：下拉选了模型 = 开，选「不使用」= 关（显式清绑定）；下拉不在 DOM 里时保留 state。
+        // 「独立地址」是下拉里的保留项：它没有 providerId，不能按"空 = 不使用"处理，否则升级后第一次保存就把它静默关掉。
         visionEnabled: visionPairSelect
-            ? Boolean(visionPair.providerId && visionPair.model)
+            ? (isLegacyVision || Boolean(visionPair.providerId && visionPair.model))
             : (state.settings.visionEnabled === true),
-        visionProviderId: visionPairSelect
-            ? visionPair.providerId
-            : String(state.settings.visionProviderId || ''),
-        visionModel: visionPairSelect
-            ? visionPair.model
-            : String(state.settings.visionModel || ''),
+        visionProviderId: isLegacyVision
+            ? ''
+            : (visionPairSelect ? visionPair.providerId : String(state.settings.visionProviderId || '')),
+        visionModel: isLegacyVision
+            ? String(state.settings.visionModel || '')
+            : (visionPairSelect
+                ? visionPair.model
+                : String(state.settings.visionModel || '')),
         visionBaseUrl: String(state.settings.visionBaseUrl || ''),
         visionApiKey: String(state.settings.visionApiKey || ''),
         // 记忆整理三态：off = 关闭；'' = 沿用当前对话模型；具体键 = 单独指定的整理模型。控件缺失时保留 state，不误关记忆。
@@ -2259,9 +2423,29 @@ function fillTavilySettings() {
     updateTavilyHint();
 }
 
+/** 直接填「独立地址 + Key」的视觉配置在提供商池里没有对应项（visionProviderId 为空），
+    下拉里用一个保留键代表它，否则升级后它既显示不出来、又会在保存时被当成"不使用"关掉。 */
+const LEGACY_VISION_PROVIDER = '__legacy_vision__';
+
+function legacyVisionModel() {
+    const s = state.settings;
+    if (!String(s.visionBaseUrl || '').trim() || !String(s.visionApiKey || '').trim()) return '';
+    return String(s.visionModel || '').trim();
+}
+
 /** 视觉模型下拉：候选与一级「默认模型」同一份（提供商 × 已勾选模型），不另配一套模型名。 */
 function visionModelPairOptions() {
-    return chatModelPairOptions(Array.isArray(state.settings.chatProviders) ? state.settings.chatProviders : []);
+    const out = chatModelPairOptions(Array.isArray(state.settings.chatProviders) ? state.settings.chatProviders : []);
+    const legacy = legacyVisionModel();
+    if (legacy) {
+        out.push({
+            key: chatModelKey({ providerId: LEGACY_VISION_PROVIDER, model: '' }),
+            providerId: LEGACY_VISION_PROVIDER,
+            model: '',
+            label: '独立地址 · ' + legacy
+        });
+    }
+    return out;
 }
 
 /** 当前视觉配置对应的下拉键；只存了模型名（旧数据）时按模型名在库里反查一家。 */
@@ -2271,6 +2455,10 @@ function currentVisionPairKey() {
     if (!model) return '';
     const providerId = String(s.visionProviderId || '');
     if (providerId) return chatModelKey({ providerId, model });
+    // 没有 providerId 但独立地址可用：只有开关确实开着才算"选中旧配置"，关着时仍显示「不使用」。
+    if (legacyVisionModel() && s.visionEnabled === true) {
+        return chatModelKey({ providerId: LEGACY_VISION_PROVIDER, model: '' });
+    }
     const hit = visionModelPairOptions().find((o) => o.model === model);
     return hit ? hit.key : '';
 }
@@ -2333,11 +2521,19 @@ function fillMemoryBindingSelects() {
         const chatPairs = chatModelPairOptions(Array.isArray(s.chatProviders) ? s.chatProviders : []);
         if (chatPairs.length) add(chatCurrentBindingValue(), '沿用当前对话使用的模型');
         const current = String(s[keyName] || '');
+        // 旧配置里的 chat:<provider>:<model> 钉死绑定不再出现在下拉里，但不能因此把它重置成空：
+        // 那会在下次保存设置时静默丢掉用户原来的选择。
+        if (isChatModelBinding(current) && !Array.from(select.options).some((o) => o.value === current)) {
+            const parsed = typeof parseChatModelBinding === 'function' ? parseChatModelBinding(current) : null;
+            add(current, parsed ? '沿用 ' + parsed.providerId + ' · ' + parsed.model : '沿用旧对话模型绑定');
+        }
         select.value = Array.from(select.options).some((o) => o.value === current) ? current : '';
         const hint = document.getElementById(hintId);
         if (hint) {
             hint.textContent = isChatModelBinding(current)
-                ? '当前用对话模型代替，效果与成本都不如专用模型。'
+                ? (kind === 'embedding'
+                    ? '当前用对话模型做关键词兜底（本地哈希，不逐条发请求）；效果不如专用嵌入模型。'
+                    : '当前用对话模型代替重排序，效果与成本都不如专用重排序模型。')
                 : (list.length
                     ? ''
                     : '还没有' + (kind === 'embedding' ? '嵌入' : '重排序') + '提供商 → 去「模型 → '
@@ -2549,12 +2745,15 @@ async function testChatProviderBlock(block, btn, model) {
     });
 }
 
-/** 从这家提供商里移除一个模型：默认指向 / 回退链 / 视觉与记忆绑定都要同步让位。 */
+/** 从这家提供商里移除一个模型：候选清单、默认指向 / 回退链 / 视觉与记忆绑定都要同步让位。 */
 function removeChatProviderModelById(id, model) {
     const s = state.settings;
     const prov = (s.chatProviders || []).find((p) => p.id === id);
     if (!prov) return;
     prov.selectedModels = (Array.isArray(prov.selectedModels) ? prov.selectedModels : []).filter((m) => m !== model);
+    // 「移除」必须同时离开候选清单：手工输入、服务商从未返回过的模型若只删勾选，
+    // 它会以“可选模型”的身份留在卡片里，看起来永远删不掉。
+    prov.models = (Array.isArray(prov.models) ? prov.models : []).filter((m) => m !== model);
     if (s.defaultChatModel && s.defaultChatModel.providerId === id && s.defaultChatModel.model === model) {
         const next = prov.selectedModels[0] || '';
         s.defaultChatModel = next ? { providerId: id, model: next } : { providerId: '', model: '' };
@@ -2655,13 +2854,7 @@ function bindChatProviderSettingsUI() {
                     if (prov) prov.models = Array.from(new Set([...(prov.models || []), ...models]));
                     renderChatProviderSettings();
                 } catch (err) {
-                    const detail = String(err?.message || err);
-                    const isNetwork = /Failed to fetch|NetworkError|Load failed/i.test(detail);
-                    showCustomAlert(
-                        '获取模型列表失败：' + detail
-                        + (isNetwork ? '\n\n（浏览器直连被跨域拦截且本机中转不可用）' : '')
-                        + '\n\n拉不到列表也可以在下方手动输入模型名添加。',
-                        '获取模型');
+                    showCustomAlert(modelFetchFailureText(err), '获取模型');
                 } finally {
                     btn.disabled = false;
                     btn.textContent = old;
@@ -2675,9 +2868,11 @@ function bindChatProviderSettingsUI() {
                 applyChatProviderEditorToState();
                 const prov = s.chatProviders.find((p) => p.id === id);
                 if (prov) {
-                    prov.models = Array.from(new Set([...(prov.models || []), model]));
+                    // 手工模型只进「已配置」：它不在服务商返回的候选清单里，
+                    // 移除时才会彻底消失，而不是退回「可选模型」继续占位。
                     prov.selectedModels = Array.from(new Set([...(prov.selectedModels || []), model]));
                 }
+                if (input) input.value = '';
                 renderChatProviderSettings();
                 void saveSettings({ silent: true });
                 return;
@@ -2688,8 +2883,19 @@ function bindChatProviderSettingsUI() {
                 applyChatProviderEditorToState();
                 const prov = s.chatProviders.find((p) => p.id === id);
                 if (prov) {
-                    prov.models = Array.from(new Set([...(prov.models || []), model]));
                     prov.selectedModels = Array.from(new Set([...(prov.selectedModels || []), model]));
+                }
+                renderChatProviderSettings();
+                await saveSettings({ silent: true });
+                return;
+            }
+            if (ev.target.closest('.cpc-forget-model')) {
+                const model = ev.target.closest('.cpc-forget-model').getAttribute('data-cpc-model');
+                if (!model) return;
+                applyChatProviderEditorToState();
+                const prov = s.chatProviders.find((p) => p.id === id);
+                if (prov) {
+                    prov.models = (Array.isArray(prov.models) ? prov.models : []).filter((m) => m !== model);
                 }
                 renderChatProviderSettings();
                 await saveSettings({ silent: true });
@@ -2787,6 +2993,7 @@ function bindChatProviderSettingsUI() {
             return;
         }
         if (ev.target.closest('[data-ma-submit]')) { void createModelFromAdd(); return; }
+        if (ev.target.closest('[data-ma-fetch]')) { void fetchModelAddModels(); return; }
         const chip = ev.target.closest('[data-ma-model]');
         if (chip && modelAddState) {
             modelAddState.model = chip.getAttribute('data-ma-model');
@@ -2797,9 +3004,11 @@ function bindChatProviderSettingsUI() {
         const t = ev.target;
         if (!t || !t.matches || !modelAddState) return;
         if (t.matches('[data-ma-name]')) modelAddInput('name', t.value, false);
-        else if (t.matches('[data-ma-model-input]')) modelAddInput('model', t.value, true);
+        // 模型名不触发探测：协议靠 GET /models 判定，与模型名无关。
+        else if (t.matches('[data-ma-model-input]')) modelAddInput('model', t.value, false);
         else if (t.matches('[data-ma-url]')) modelAddInput('url', t.value, true);
-        else if (t.matches('[data-ma-key]')) modelAddInput('key', t.value, false);
+        // Key 变了要重探测：鉴权失败与成功的结果不同。
+        else if (t.matches('[data-ma-key]')) modelAddInput('key', t.value, true);
     });
     document.getElementById('modelAddBody')?.addEventListener('change', (ev) => {
         if (ev.target && ev.target.matches && ev.target.matches('[data-ma-default]') && modelAddState) {

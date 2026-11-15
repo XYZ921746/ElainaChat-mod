@@ -53,11 +53,11 @@
 
 ### 电脑版（WebView2 外壳，推荐）
 
-下载 `ElainaChat-Setup.exe` 安装，或直接解压便携版 zip。安装包会创建开始菜单与桌面快捷方式，卸载时可以选择保留聊天数据；**不需要**安装 Node.js 或 Go，也**不需要**构建。包内结构：
+下载 `ElainaChatMod-Setup.exe` 安装，或直接解压便携版 zip。安装包会创建开始菜单与桌面快捷方式，卸载时可以选择保留聊天数据；**不需要**安装 Node.js 或 Go，也**不需要**构建。包内结构：
 
 ```text
-ElainaChat/
-├─ ElainaChat.exe        # WebView2 外壳：自动拉起服务端并打开界面，托盘常驻
+ElainaChat Mod/
+├─ ElainaChat Mod.exe    # WebView2 外壳：自动拉起服务端并打开界面，托盘常驻
 ├─ server/elaina-server.exe  # 静态编译的 Go 服务端（单文件，无运行时依赖）
 ├─ shell.json            # 外壳配置（入口 server\elaina-server.exe、端口）
 ├─ app/                  # 前端本体（web/、skills/ …）与 app\data\
@@ -65,12 +65,14 @@ ElainaChat/
 ```
 
 - 数据在 `app\data\`，与服务日志 `app\logs\server.log` 一起随目录移动。
-- 关闭窗口 = 最小化到托盘，托盘右键「退出」才是真正退出；任务管理器只需结束 `ElainaChat.exe` 一个，后台服务随之退出。
+- 关闭窗口 = 最小化到托盘，托盘右键「退出」才是真正退出；任务管理器只需结束 `ElainaChat Mod.exe` 一个，后台服务随之退出。
 - **桌面版系统要求**：需要 .NET Framework 4.8 与 WebView2 运行时的支持，Windows 10 1903 以后的版本一般自带（缺失时外壳会提示初始化失败）。**不建议 Windows 10 1903 以前的系统运行桌面打包版本**——网页版与安卓版没有这些要求。
 
 ### 安卓版
 
-下载 `ElainaChat-mod-x.y.z.apk`（仅 arm64-v8a；debug 构建另带 x86_64 供模拟器用），在手机上允许「安装未知来源应用」后安装。APK 把 `web/` 打进 WebView，服务端是**同一个 Go 单文件**，在 `:node` 独立进程里从原生库目录直接执行 —— 不再内嵌 Node 运行时。Go 侧在 service mode 暴露完整的 `/api/store`、`/api/data/*`、`/api/data/lan/*`、`/api/memory/*`、`/api/agent/*` 等接口；页面只按 `NODE_FIXED_PREFIXES` 转发一部分（日志 / 记忆 / 鉴权 / 插件路由），store/data/LAN 由各适配层用绝对 `__nodeBase` 直连。构建开关 `ELAINA_LOCAL_SERVER`（默认开）决定是否打包服务端；关掉时聊天数据只能读 `store.cache.json`（只读），备份 / 局域网共享也不可用 —— 需要保存数据的设备不要关闭，只在纯展示/瘦身构建里用。
+下载 `ElainaChat-mod-x.y.z-arm64-v8a.apk`（仅 arm64-v8a；debug 构建另带 x86_64 供模拟器用），在手机上允许「安装未知来源应用」后安装。APK 把 `web/` 打进 WebView，服务端是**同一个 Go 单文件**，在 `:node` 独立进程里从原生库目录直接执行 —— 不再内嵌 Node 运行时。Go 侧在 service mode 暴露完整的 `/api/store`、`/api/data/*`、`/api/data/lan/*`、`/api/memory/*`、`/api/agent/*` 等接口；页面只按 `NODE_FIXED_PREFIXES` 转发一部分（日志 / 记忆 / 鉴权 / 插件路由），store/data/LAN 由各适配层用绝对 `__nodeBase` 直连。构建开关 `ELAINA_LOCAL_SERVER`（默认开）决定是否打包服务端；关掉时聊天数据只能读 `store.cache.json`（只读），备份 / 局域网共享也不可用 —— 需要保存数据的设备不要关闭，只在纯展示/瘦身构建里用。
+
+包名为 `com.elainachat.mod`，与更早的 `com.elainachat.opensource` 包**不兼容**（无法覆盖安装，需卸载重装；卸载会清空数据，请先在旧版导出备份）。
 
 > 包名与发布文件名可能随版本调整，**以 Releases 页面实际列出的文件为准**。
 

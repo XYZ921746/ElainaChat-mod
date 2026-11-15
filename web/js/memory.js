@@ -34,28 +34,243 @@ function emptyMemoryCore() {
     return { diary: [], promise: [], preference: [], plan: [], motivation: [], pivotal_memory: [] };
 }
 
+/* 记忆正文的唯一权威是服务端 /api/memory/core；这里只初始化空结构，
+   真正的数据由 refreshMemoryCore() 异步拉取。类目 JSON 只在服务端启动时一次性搬进库。 */
 function loadMemoryCore() {
-    const raw = Store.getItem('elaina_open_memory_core');
-    if (raw) {
-        try {
-            const parsed = JSON.parse(raw);
-            const core = { ...emptyMemoryCore(), ...parsed };
-            ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory'].forEach(k => {
-                if (!Array.isArray(core[k])) core[k] = [];
-            });
-            state.memoryCore = core;
-            return;
-        } catch (e) {
-            console.error(e);
-        }
-    }
     state.memoryCore = emptyMemoryCore();
+    memoryCoreSnapshotIds(state.memoryCore);
 }
 
-function saveMemoryCore() {
-    if (state.memoryCore) {
-        Store.setItem('elaina_open_memory_core', JSON.stringify(state.memoryCore));
+/* ── 记忆权威（M2b）────────────────────────────────────────────────────
+   服务端 SQLite（/api/memory/core）是记忆正文的唯一权威：页面从零开始，
+   canonical 数据（条目带 id）由 refreshMemoryCore() 异步拉取；保存走 POST core：
+   整类目替换 + dropIds（前端 diff 上一份 canonical 算出的删除清单），服务端事务内
+   upsert + 删除，并广播 memory-change 让其它设备刷新。服务端不可用（库打开失败 /
+   degraded 503）时改动保留在页面内存，并经 Store.rawStage 暂存进本地（stageMemoryCore）
+   熬过刷新；启动时 recoverStagedMemoryCore 把暂存与权威按条目并集合并后推回，
+   推送成功即清空。暂存只装从未成功推上服务端的改动，是待写队列，不是第二权威。 */
+let memoryCoreRemoteState = 'unknown';
+let memoryCoreSavePromise = null;
+/* 上一份已与权威对齐的 id 集合：保存时 diff 出 dropIds。 */
+let memoryCoreSyncedIds = new Set();
+
+function memoryCoreEntryId(kind, entry) {
+    if (kind === 'diary') {
+        return 'diary:' + String(entry && entry.conversationId || '') + '|' + String(entry && entry.date || '');
     }
+    if (kind === 'plan') {
+        const body = [(entry && entry.date), (entry && entry.content)].filter(Boolean).join(' · ');
+        return 'plan:' + memoryVectorHash(body);
+    }
+    return kind + ':' + memoryVectorHash(String(entry || ''));
+}
+
+/* 记录当前 core 里每一条的 id（条目自带 id 优先；旧数据没有就按规则算，与服务端同口径）。 */
+function memoryCoreCollectIds(core) {
+    const ids = new Set();
+    if (!core) return ids;
+    (Array.isArray(core.diary) ? core.diary : []).forEach(e => { if (e) ids.add(e.id || memoryCoreEntryId('diary', e)); });
+    (Array.isArray(core.plan) ? core.plan : []).forEach(e => { if (e) ids.add(e.id || memoryCoreEntryId('plan', e)); });
+    ['promise', 'preference', 'motivation', 'pivotal_memory'].forEach(kind => {
+        (Array.isArray(core[kind]) ? core[kind] : []).forEach(text => { ids.add(memoryCoreEntryId(kind, text)); });
+    });
+    return ids;
+}
+
+function memoryCoreSnapshotIds(core) {
+    memoryCoreSyncedIds = memoryCoreCollectIds(core);
+}
+
+function normalizeMemoryCoreShape(core) {
+    const out = { ...emptyMemoryCore(), ...(core || {}) };
+    ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory'].forEach(k => {
+        if (!Array.isArray(out[k])) out[k] = [];
+    });
+    return out;
+}
+
+function adoptMemoryCore(core) {
+    state.memoryCore = normalizeMemoryCoreShape(core);
+    memoryCoreSnapshotIds(state.memoryCore);
+    // 记忆变了 → 相关缓存/提示跟着失效（能调就调，缺了不影响）。
+    try { if (typeof updateNotesBadge === 'function') updateNotesBadge(); } catch (e) { /* 忽略 */ }
+}
+
+/* 服务端记忆库是否可用。探测失败（含 404 / 501 / degraded）都归到 unavailable。
+   结果缓存到本次页面生命周期。 */
+async function memoryCoreApiAvailable() {
+    if (memoryCoreRemoteState === 'unavailable' && typeof window !== 'undefined' && window.__nodeBase) {
+        memoryCoreRemoteState = 'unknown';
+    }
+    if (memoryCoreRemoteState === 'unknown') {
+        memoryCoreRemoteState = (typeof memoryItemsProbe === 'function')
+            ? await memoryItemsProbe() : 'unavailable';
+    }
+    return memoryCoreRemoteState === 'available';
+}
+
+/* 服务端权威是否为「六类目全空」。 */
+function memoryCoreIsEmpty(core) {
+    const c = normalizeMemoryCoreShape(core);
+    return ['diary', 'promise', 'preference', 'plan', 'motivation', 'pivotal_memory']
+        .every(k => !Array.isArray(c[k]) || c[k].length === 0);
+}
+
+/* 从服务端拉 canonical 六类目并替换本地。返回是否成功（失败保持本地不动）。 */
+async function refreshMemoryCore() {
+    if (!(await memoryCoreApiAvailable())) return false;
+    try {
+        const payload = await memoryItemsFetch('/core', {}, MEMORY_ITEMS_TIMEOUT_MS);
+        if (payload && payload.core) {
+            // 会话中途权威变空（其它设备删光 / 迁移刚失败）而本地非空：空数据一旦采纳，
+            // 下一次保存就会以空为准把本地覆盖掉 —— 先保本地等用户操作
+            //（真正的库级损坏另有 degraded 拒读兜底）。
+            if (memoryCoreIsEmpty(payload.core) && !memoryCoreIsEmpty(state.memoryCore)) {
+                console.warn('[记忆] 服务端记忆为空而本地非空，暂不采纳（防止空库覆盖本地）');
+                return false;
+            }
+            adoptMemoryCore(payload.core);
+            return true;
+        }
+    } catch (error) {
+        console.warn('[记忆] 读取服务端记忆失败，保留本地数据', error);
+    }
+    return false;
+}
+
+/* diff 出本次保存要删除的 id：上一份已对齐快照里有、现在没有的。 */
+function memoryCoreDroppedIds() {
+    const current = memoryCoreCollectIds(state.memoryCore);
+    const drops = [];
+    memoryCoreSyncedIds.forEach(id => { if (!current.has(id)) drops.push(id); });
+    return drops;
+}
+
+async function saveMemoryCore() {
+    if (!state.memoryCore) return;
+    if (await memoryCoreApiAvailable()) {
+        if (memoryCoreSavePromise) await memoryCoreSavePromise.catch(() => {});
+        memoryCoreSavePromise = (async () => {
+            const body = JSON.stringify({
+                core: state.memoryCore,
+                dropIds: memoryCoreDroppedIds(),
+                client: (typeof Store !== 'undefined' && typeof Store.clientId === 'function')
+                    ? Store.clientId() : ''
+            });
+            const payload = await memoryItemsFetch('/core', { method: 'POST', body });
+            adoptMemoryCore(payload.core);
+            clearStagedMemoryCore();
+        })().catch((error) => {
+            // 服务端在但写入失败：改动留在页面内存并暂存进 localStorage（跨刷新的保险），
+            // 下一次保存成功时会清掉；重置探测状态让下一次保存重新探测服务是否恢复。
+            stageMemoryCore();
+            memoryCoreRemoteState = 'unknown';
+            console.warn('[记忆] 保存到服务端失败，本轮只保留在页面', error);
+        }).finally(() => { memoryCoreSavePromise = null; });
+        await memoryCoreSavePromise;
+        return;
+    }
+    // 记忆库不可用（库打开失败 / 探测 404）：没有可写的权威，改动保留在页面内存，
+    // 暂存让它们熬过刷新；重置探测状态，等记忆库恢复后的下一次保存写入。
+    stageMemoryCore();
+    memoryCoreRemoteState = 'unknown';
+    console.warn('[记忆] 记忆库不可用，本轮改动只保留在页面');
+}
+
+/* ── 记忆暂存：服务端拒收窗口内改动的跨刷新保险 ─────────────────────────
+   Store 此刻同样不可用（权威在同一台服务上），帮不上忙，所以走 Store.rawStage
+   落 localStorage（全库的 localStorage 访问收在存储层内，业务层只经这组方法）。
+   暂存只装「从未成功推上服务端」的改动：保存失败即写入、保存成功即清空，
+   服务端恢复后由启动回放或下一次保存自然消化掉。 */
+const MEMORY_STAGE_KEY = 'elaina_memory_stage';
+
+function stageMemoryCore() {
+    try {
+        if (typeof Store === 'undefined' || !Store.rawStage) return;
+        Store.rawStage.set(MEMORY_STAGE_KEY, JSON.stringify({ at: Date.now(), core: state.memoryCore }));
+    } catch (e) { /* 隐私模式 / 超配额：只能依赖本页内存的重试 */ }
+}
+
+function clearStagedMemoryCore() {
+    try {
+        if (typeof Store === 'undefined' || !Store.rawStage) return;
+        Store.rawStage.remove(MEMORY_STAGE_KEY);
+    } catch (e) { /* 忽略 */ }
+}
+
+function readStagedMemoryCore() {
+    try {
+        if (typeof Store === 'undefined' || !Store.rawStage) return null;
+        const parsed = JSON.parse(Store.rawStage.get(MEMORY_STAGE_KEY) || 'null');
+        return (parsed && parsed.core) ? parsed : null;
+    } catch (e) { return null; }
+}
+
+/* 按条目 id 并集合并：权威条目保持原序，暂存里同 id 的条目覆盖（那次写入没落过盘，
+   暂存就是该条目的最新已知意图），暂存独有的条目追加。 */
+function mergeMemoryCoreStaged(serverCore, stagedCore) {
+    const out = normalizeMemoryCoreShape(serverCore);
+    const staged = normalizeMemoryCoreShape(stagedCore);
+    ['diary', 'plan'].forEach((kind) => {
+        const byId = new Map();
+        (Array.isArray(out[kind]) ? out[kind] : []).forEach((entry) => {
+            if (entry) byId.set(String(entry.id || memoryCoreEntryId(kind, entry)), entry);
+        });
+        (Array.isArray(staged[kind]) ? staged[kind] : []).forEach((entry) => {
+            if (!entry) return;
+            const id = String(entry.id || memoryCoreEntryId(kind, entry));
+            if (byId.has(id)) {
+                const list = out[kind];
+                const at = list.findIndex((item) => item && String(item.id || memoryCoreEntryId(kind, item)) === id);
+                if (at >= 0) list[at] = entry;
+            } else {
+                byId.set(id, entry);
+                out[kind].push(entry);
+            }
+        });
+    });
+    ['promise', 'preference', 'motivation', 'pivotal_memory'].forEach((kind) => {
+        const seen = new Set((Array.isArray(out[kind]) ? out[kind] : []).map((text) => memoryCoreEntryId(kind, text)));
+        (Array.isArray(staged[kind]) ? staged[kind] : []).forEach((text) => {
+            if (!text) return;
+            const id = memoryCoreEntryId(kind, text);
+            if (!seen.has(id)) { seen.add(id); out[kind].push(text); }
+        });
+    });
+    return out;
+}
+
+/* 启动时把暂存改动并回权威：服务可用就合并后推一次，不可用就先采纳暂存、
+   等恢复后的下一次保存推上去。没有暂存时等价于一次普通 refreshMemoryCore。 */
+async function recoverStagedMemoryCore() {
+    const staged = readStagedMemoryCore();
+    if (!(await memoryCoreApiAvailable())) {
+        if (staged) adoptMemoryCore(normalizeMemoryCoreShape(staged.core));
+        return;
+    }
+    let serverCore = null;
+    try {
+        const payload = await memoryItemsFetch('/core', {}, MEMORY_ITEMS_TIMEOUT_MS);
+        if (payload && payload.core) serverCore = normalizeMemoryCoreShape(payload.core);
+    } catch (error) { /* 读取失败按不可用处理：采纳暂存，等下一次保存 */ }
+    if (!serverCore) {
+        if (staged) adoptMemoryCore(normalizeMemoryCoreShape(staged.core));
+        return;
+    }
+    if (!staged) {
+        if (!memoryCoreIsEmpty(serverCore)) adoptMemoryCore(serverCore);
+        return;
+    }
+    if (memoryCoreIsEmpty(serverCore)) {
+        // 权威刚被重建/清空而暂存非空：暂存就是最新改动，整份采纳并推回。
+        if (!memoryCoreIsEmpty(staged.core)) {
+            adoptMemoryCore(normalizeMemoryCoreShape(staged.core));
+            void saveMemoryCore();
+        }
+        return;
+    }
+    adoptMemoryCore(mergeMemoryCoreStaged(serverCore, staged.core));
+    void saveMemoryCore();
 }
 
 function todayDateStr() {
@@ -296,7 +511,24 @@ function getRelatedMemories(userText) {
             matched_essence: '',
             semantic: true
         }));
-    const all = vectorDiary.concat(matchEssencesWithText(userText));
+    // 结构化索引（服务端 FTS5）命中同样映射回 Store 里的日记条目：
+    // 正文与展示日期都以 Store 为准，索引只回答「哪几条相关」。
+    const itemHits = (typeof getPrefetchedMemoryItemHits === 'function') ? getPrefetchedMemoryItemHits(userText) : null;
+    const itemDiary = [];
+    if (Array.isArray(itemHits) && itemHits.length && typeof memoryItemsDiaryLookup === 'function') {
+        const lookup = memoryItemsDiaryLookup();
+        itemHits.forEach(hit => {
+            if (!hit || hit.kind !== 'diary') return;
+            const local = lookup.get(String(hit.id || ''));
+            itemDiary.push({
+                date: (local && local.date) || '',
+                content: (local && local.content) || hit.content || '',
+                matched_essence: '',
+                semantic: true
+            });
+        });
+    }
+    const all = itemDiary.concat(vectorDiary, matchEssencesWithText(userText));
     const unique = [];
     const seenDates = new Set();
     for (const memory of all) {

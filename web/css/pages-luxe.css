@@ -1312,7 +1312,9 @@ html.rd #agentPhoneSection .agent-perm-badge {
     border-color: var(--rd-border) !important;
 }
 
-html.rd #agentPhoneSection .agent-perm-badge.is-actionable:hover {
+html.rd #agentPhoneSection .agent-perm-info-btn:hover,
+html.rd #agentPhoneSection .agent-perm-info-btn[aria-expanded="true"],
+html.rd #agentPhoneSection .agent-perm-act:hover {
     background: var(--rd-hover) !important;
     border-color: var(--rd-accent-border) !important;
 }

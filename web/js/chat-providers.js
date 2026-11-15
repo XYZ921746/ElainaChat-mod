@@ -46,6 +46,23 @@
         console.warn('[Provider] 网关不接受 tools，本次运行内该地址改走文本标签通道 (base=' + baseUrl + ')');
     }
 
+    // 记住该网关点名拒收过哪个思考参数（thinking / reasoning_effort）：只存内存。严格网关对同一个字段的回答永远是同一个 400，不记忆的话每次调用都要白付一轮往返，agent 连续操作时延迟直接翻倍。
+    const thinkingRejectedKeys = new Set();
+    function dropRejectedThinkingFields(baseUrl, fields) {
+        const out = {};
+        for (const key of Object.keys(fields || {})) {
+            if (thinkingRejectedKeys.has(String(baseUrl || '') + '|' + key)) continue;
+            out[key] = fields[key];
+        }
+        return out;
+    }
+    function noteThinkingRejected(baseUrl, param) {
+        const key = String(baseUrl || '') + '|' + String(param || '');
+        if (thinkingRejectedKeys.has(key)) return;
+        thinkingRejectedKeys.add(key);
+        console.warn('[Provider] 网关不接受思考参数 ' + param + '，本次会话内该地址不再发送 (base=' + baseUrl + ')');
+    }
+
     // 工具调用收成统一形状：OpenAI arguments 是字符串、Anthropic input 是对象；
     // 参数不合法标 badArgs 不抛，交上层回灌让模型重试。
     function toToolCall(id, name, rawArgs) {
@@ -100,19 +117,20 @@
     }
 
     async function callOpenAICompatibleChat(messages, opts, settings) {
-        const { ClientApiError, getChatBaseUrl, isDeepSeekOfficial, requestChatJson, buildThinkingParams, normalizeChatReply, throwProviderResponseError } = deps();
+        const { ClientApiError, getChatBaseUrl, stripChatFunctionSuffix, isDeepSeekOfficial, requestChatJson, buildThinkingParams, normalizeChatReply, throwProviderResponseError } = deps();
         const { apiKey, model } = settings;
         if (!apiKey) {
             throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 API Key');
         }
-        const baseUrl = getChatBaseUrl(settings);
-        const endpoint = /\/chat\/completions$/i.test(baseUrl) ? baseUrl : `${baseUrl}/chat/completions`;
+        const baseUrl = stripChatFunctionSuffix(getChatBaseUrl(settings));
+        const endpoint = `${baseUrl}/chat/completions`;
         const rawModel = String(model || 'deepseek-chat').trim();
         const requestModel = isDeepSeekOfficial(baseUrl)
             ? legacyDeepSeekModel(rawModel, opts.thinking === true)
             : rawModel;
         // 显式发 disabled 很重要：DeepSeek 默认开启思考。
-        const thinkingFields = buildThinkingParams(opts.thinking, opts.thinkingEffort, 'openai-compatible', settings);
+        // 已被这个网关点名拒收过的思考参数不再首发（见 noteThinkingRejected），省掉那次注定失败的往返。
+        let thinkingFields = dropRejectedThinkingFields(baseUrl, buildThinkingParams(opts.thinking, opts.thinkingEffort, 'openai-compatible', settings));
         // tools 单独一个容器：被网关拒时能单独剥掉，不牺牲思考参数。
         let toolFields = (opts.tools?.length && toolsAllowedFor(baseUrl, requestModel))
             ? { tools: opts.tools }
@@ -153,6 +171,7 @@
                 delete thinkingFields[param];
                 // thinking 与 reasoning_effort 常被一起拒，点名 thinking 时一并剥掉，省一次往返。
                 if (param === 'thinking' && 'reasoning_effort' in thinkingFields) delete thinkingFields.reasoning_effort;
+                noteThinkingRejected(baseUrl, param);
             }
             result = await requestChatJson(endpoint, buildBody(thinkingFields, toolFields),
                 { Authorization: 'Bearer ' + apiKey }, {
@@ -250,15 +269,15 @@
     }
 
     async function callAnthropicChat(messages, opts, settings) {
-        const { ClientApiError, getChatBaseUrl, requestChatJson, buildThinkingParams, normalizeChatReply, throwProviderResponseError, ANTHROPIC_MIN_MAX_TOKENS } = deps();
+        const { ClientApiError, getChatBaseUrl, stripChatFunctionSuffix, requestChatJson, buildThinkingParams, normalizeChatReply, throwProviderResponseError, ANTHROPIC_MIN_MAX_TOKENS } = deps();
         const { apiKey, model } = settings;
         if (!apiKey) {
             throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 Anthropic API Key');
         }
-        const baseUrl = getChatBaseUrl(settings).replace(/\/+$/, '');
-        const endpoint = /\/messages$/i.test(baseUrl)
-            ? baseUrl
-            : (/\/v\d+$/i.test(baseUrl) ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`);
+        // 用户可能把完整端点整条粘进来（…/v1/messages）：先剥掉功能段再按版本段规则拼，
+        // 否则会拼成 …/v1/messages/messages。版本段不猜 —— base 写 /v4 就按 /v4 拼。
+        const baseUrl = stripChatFunctionSuffix(getChatBaseUrl(settings));
+        const endpoint = /\/v\d+$/i.test(baseUrl) ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`;
         const payload = convertOpenAIToAnthropicMessages(messages);
         const modelName = String(model || '').trim() || 'claude-sonnet-4-20250514';
         const maxTokens = Number.isFinite(opts.maxTokens)
@@ -367,13 +386,13 @@
     }
 
     async function callOpenAIResponsesChat(messages, opts, settings) {
-        const { ClientApiError, getChatBaseUrl, requestChatJson, buildThinkingParams, normalizeChatReply, throwProviderResponseError } = deps();
+        const { ClientApiError, getChatBaseUrl, stripChatFunctionSuffix, requestChatJson, buildThinkingParams, normalizeChatReply, throwProviderResponseError } = deps();
         const { apiKey, model } = settings;
         if (!apiKey) {
             throw new ClientApiError('APP_KEY_MISSING', '请先在设置中填写 OpenAI API Key');
         }
-        const baseUrl = getChatBaseUrl(settings).replace(/\/+$/, '');
-        const endpoint = /\/responses$/i.test(baseUrl) ? baseUrl : `${baseUrl}/responses`;
+        const baseUrl = stripChatFunctionSuffix(getChatBaseUrl(settings));
+        const endpoint = `${baseUrl}/responses`;
         const payload = convertOpenAIToResponsesInput(messages);
         const tools = (opts.tools?.length)
             ? opts.tools

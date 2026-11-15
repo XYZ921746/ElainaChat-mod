@@ -48,9 +48,21 @@ function recallExcerpt(text, query, max) {
     return (start > 0 ? '…' : '') + t.slice(start, start + max) + (start + max < t.length ? '…' : '');
 }
 
-/** 把 [操作:手机…] 的正文解析成 { action, args }；认不出返回 null */
+/** 把 [操作:手机…] 的正文解析成 { action, args }；认不出返回 null。
+ *
+ * 工具通道的 raw 参数按说明书是「手机点击 500 800」这类裸正文，但模型常把整条标签原样塞进来
+ * （[操作:手机点击 500 800]，偶尔双层括号）。解析前剥掉这层包装，能省掉一整轮「失败 → 回灌 →
+ * 模型重写」的往返 —— 手机操作每步隔着一次模型调用，这轮往返在真机上以几十秒计。
+ * 包装判据收得很窄（必须以 [操作: 开头、以 ] 结尾），不带包装的原文一个字符都不动：
+ * 参数本身可能以 ] 结尾（写文件的内容），不能无条件剥尾部。
+ */
 function parsePhoneOperation(text) {
-    const s = String(text || '').trim();
+    let s = String(text || '').trim();
+    for (let i = 0; i < 3; i++) {
+        const m = s.match(/^\[+\s*操作\s*[:：]\s*([\s\S]*?)\]+$/);
+        if (!m) break;
+        s = m[1].trim();
+    }
     for (const action of AGENT_PHONE_OPS) {
         if (s.startsWith(action)) return { action, args: s.slice(action.length).trim() };
     }

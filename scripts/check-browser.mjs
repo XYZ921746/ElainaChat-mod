@@ -9,15 +9,7 @@ import vm from 'node:vm';
 import { runChecks, ROOT } from './check-harness.mjs';
 import { readHtmlAndStyles } from './frontend-sources.mjs';
 import { extractFunction, extractTopLevelFunctions, extractVariable, makeVmSandbox, runClassicScripts } from './check-source.mjs';
-import { encodeClientFrame, createFrameDecoder } from '../server/ws-client.mjs';
-import { createLineSplitter } from '../server/mcp-client.mjs';
-import { flattenToolResult } from '../server/mcp-shared.mjs';
-import {
-    normalizeNavigationUrl, findBrowserExecutable, formatSnapshot,
-    runBrowserAction, createBrowserSession, browserCandidates, MAX_SNAPSHOT_ITEMS,
-} from '../server/browser.mjs';
 
-const hasBrowser = Boolean(findBrowserExecutable());
 
 /** agent 的全局脚本集合：搜索实现已拆到 agent-search.js，按 index.html 顺序拼接 */
 const AGENT_SOURCES = ['agent-parse.js', 'agent.js', 'agent-search.js'].map((f) => path.join(ROOT, 'web', 'js', f));
@@ -61,161 +53,25 @@ function serverFrame(opcode, payload, { fin = true } = {}) {
 /** 按函数名抠出完整函数声明：先配圆括号跳过参数表再配花括号（默认值 {} 与字符串 '}' 会带跑 naive 配对） */
 const extractFnNamed = (source, name) => extractFunction(source, name, { required: false });
 
-// 1. WebSocket 帧编解码（纯函数，不需要浏览器）
-async function caseFrames(c) {
-    {
-        const frame = encodeClientFrame(0x1, 'hello');
-        c.ok((frame[1] & 0x80) !== 0, '★ 客户端帧带掩码位（RFC 6455 要求，漏了会连上就断）');
-        c.ok((frame[0] & 0x80) !== 0, '客户端帧 FIN=1（单帧消息）');
-        c.ok((frame[0] & 0x0f) === 0x1, '客户端帧 opcode = text');
-        const len = frame[1] & 0x7f;
-        const mask = frame.subarray(2, 6);
-        const body = frame.subarray(6, 6 + len);
-        let plain = '';
-        for (let i = 0; i < body.length; i++) plain += String.fromCharCode(body[i] ^ mask[i & 3]);
-        c.ok(plain === 'hello', '掩码后的载荷能被同一把掩码键还原', JSON.stringify(plain));
-    }
-
-    {
-        const small = encodeClientFrame(0x1, 'x'.repeat(10));
-        c.ok((small[1] & 0x7f) === 10, '短消息用 7 位长度');
-        const mid = encodeClientFrame(0x1, 'x'.repeat(300));
-        c.ok((mid[1] & 0x7f) === 126 && mid.readUInt16BE(2) === 300, '300 字节用 16 位长度');
-        const big = encodeClientFrame(0x1, 'x'.repeat(70000));
-        c.ok((big[1] & 0x7f) === 127 && Number(big.readBigUInt64BE(2)) === 70000, '70KB 用 64 位长度');
-    }
-
-    {
-        const { messages } = decodeAll([serverFrame(0x1, '{"id":1}')]);
-        c.ok(messages.length === 1 && messages[0] === '{"id":1}', '解码一条完整文本帧');
-    }
-
-    {
-        const chunks = [
-            serverFrame(0x1, '{"a":', { fin: false }),
-            serverFrame(0x0, '1', { fin: false }),
-            serverFrame(0x0, '}', { fin: true }),
-        ];
-        const { messages } = decodeAll(chunks);
-        c.ok(messages.length === 1 && messages[0] === '{"a":1}', '★ 分片消息按 FIN 合并成一条', JSON.stringify(messages));
-    }
-
-    // 解码：字节流被任意切开（TCP 不保证一条消息一次到）
-    {
-        const whole = serverFrame(0x1, '{"id":42,"result":{}}');
-        const pieces = [];
-        for (let i = 0; i < whole.length; i += 3) pieces.push(whole.subarray(i, i + 3));
-        const { messages } = decodeAll(pieces);
-        c.ok(messages.length === 1 && messages[0] === '{"id":42,"result":{}}', '★ 被切成 3 字节一片仍能拼回整条消息');
-    }
-
-    {
-        const { messages } = decodeAll([Buffer.concat([serverFrame(0x1, 'a'), serverFrame(0x1, 'b')])]);
-        c.ok(messages.length === 2 && messages[0] === 'a' && messages[1] === 'b', '一次 read 里的多条消息各自交付');
-    }
-
-    {
-        const { closed } = decodeAll([serverFrame(0x8, '')]);
-        c.ok(closed === true, 'close 帧触发 onClose（调用方据此清掉在途请求）');
-    }
-
-    {
-        const pings = [];
-        let threw = '';
-        const d = createFrameDecoder({ onMessage() {}, onClose() {}, onPing: (p) => pings.push(p.toString()) });
-        try { d.push(serverFrame(0x9, 'hb')); } catch (e) { threw = String((e && e.message) || e); }
-        c.ok(!threw && pings.length === 1 && pings[0] === 'hb',
-            '★ PING 帧交给 onPing（连接层回 PONG），不再抛 ReferenceError', threw || JSON.stringify(pings));
-
-        let threw2 = '';
-        try { decodeAll([serverFrame(0x9, 'x')]); } catch (e) { threw2 = String((e && e.message) || e); }
-        c.ok(!threw2, '没有提供 onPing 时 PING 帧也不能中断解码（向后兼容）', threw2);
-    }
-}
-
-// 2. URL 白名单（安全边界，纯函数）
-async function caseUrls(c) {
-    const good = ['https://example.com', 'http://127.0.0.1:8080/a?b=1', 'https://例子.中国/路径'];
-    const bad = [
-        ['file:///C:/Windows/win.ini', 'file: 读本地文件'],
-        ['javascript:alert(1)', 'javascript: 在当前页执行代码'],
-        ['chrome://settings', 'chrome:// 改浏览器设置'],
-        ['devtools://devtools/bundled/inspector.html', 'devtools://'],
-        ['data:text/html,<script>alert(1)</script>', 'data: 内联脚本'],
-        ['', '空'],
-        ['   ', '只有空白'],
-        ['https://example.com\nrm -rf /', '带换行（命令行注入试探）'],
-        ['不是网址', '完全不是 URL'],
-    ];
-    const okList = good.filter((u) => !normalizeNavigationUrl(u).ok);
-    c.ok(okList.length === 0, '正常 http / https 网址都放行', okList.join(', '));
-
-    const leaked = bad.filter(([u]) => normalizeNavigationUrl(u).ok).map(([, why]) => why);
-    c.ok(leaked.length === 0, '★ 危险协议全部拒绝（file / javascript / chrome / data / 换行）', leaked.join(', '));
-
-    // 拒绝时必须给出原因 —— 模型靠这句话换个做法，而不是盲目重试
-    const r = normalizeNavigationUrl('file:///C:/x');
-    c.ok(!r.ok && r.reason.includes('http'), '拒绝时说明只允许 http/https', r.reason);
-}
-
-// 3. 快照格式与动作派发（用假 session，不需要真浏览器）
-async function caseActions(c) {
-    // 假 session：只记录被调用了什么，不真的连浏览器
-    const calls = [];
-    const fake = {
-        ensure: async () => calls.push('ensure'),
-        close: async () => calls.push('close'),
-        goto: async (u) => { calls.push('goto:' + u); return u; },
-        snapshot: async () => ({ url: 'https://x/', title: 'T', text: 'body', truncated: false, items: [{ ref: '1', tag: 'a', text: '链接', value: '', disabled: false }] }),
-        clickRef: async (r) => calls.push('click:' + r),
-        typeIntoRef: async (r, t) => calls.push('type:' + r + '=' + t),
-        pressEnter: async () => calls.push('enter'),
-        screenshot: async () => 'base64',
-    };
-
-    const unknown = await runBrowserAction(fake, 'zzz');
-    c.ok(!unknown.ok && unknown.text.includes('open'), '不认识的动作列出可用动作', unknown.text);
-
-    const noRef = await runBrowserAction(fake, 'click', {});
-    c.ok(!noRef.ok && noRef.text.includes('编号'), '★ 点击缺 ref 时说清"要给出编号"（模型据此自我纠正）', noRef.text);
-
-    const noText = await runBrowserAction(fake, 'type', { ref: '2' });
-    c.ok(!noText.ok && noText.text.includes('文字'), '★ 输入缺 text 时说清"要给出文字"', noText.text);
-
-    calls.length = 0;
-    const clicked = await runBrowserAction(fake, 'click', { ref: '3' });
-    c.ok(clicked.ok && calls.includes('click:3'), '点击把 ref 透传下去');
-    c.ok(clicked.ok && /当前页面/.test(clicked.text), '★ 点击后自动带回新页面快照（省一次往返）');
-
-    const boom = { ...fake, goto: async () => { throw new Error('DNS 挂了'); } };
-    const failed = await runBrowserAction(boom, 'goto', { url: 'https://x/' });
-    c.ok(!failed.ok && failed.text.includes('DNS'), '★ 执行失败把原因原样交给模型（不吞成"操作失败"）', failed.text);
-
-    // 快照格式：编号必须出现，否则模型没法点
-    const text = formatSnapshot({ url: 'https://x/', title: '标题', text: '正文', items: [{ ref: '7', tag: 'button', text: '提交', value: '', disabled: false }] });
-    c.ok(text.includes('[7]') && text.includes('提交'), '快照文本里带编号与元素文字', text);
-    c.ok(text.includes('https://x/') && text.includes('标题'), '快照文本里带网址与标题');
-    const filled = formatSnapshot({ url: 'u', title: 't', text: '', items: [{ ref: '1', tag: 'input', text: '搜索框', value: '已填的字', disabled: false }] });
-    c.ok(filled.includes('已填的字'), '★ 输入框的当前内容出现在快照里（模型能自查填对没有）', filled);
-}
 
 // 4. 服务端接线（源码断言：跨文件的安全边界只能这样钉）
 async function caseWiring(c) {
-    const serve = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-    const browser = readFileSync(path.join(ROOT, 'server', 'browser.mjs'), 'utf8');
+    const httpapi = readFileSync(path.join(ROOT, 'server', 'internal', 'httpapi', 'browser.go'), 'utf8')
+        + readFileSync(path.join(ROOT, 'server', 'internal', 'httpapi', 'server.go'), 'utf8');
+    const browser = readFileSync(path.join(ROOT, 'server', 'internal', 'browser', 'browser.go'), 'utf8');
     const agent = readAgentSources();
     const tags = readFileSync(path.join(ROOT, 'web', 'js', 'agent-tags.js'), 'utf8');
 
     const wiring = [
-        [serve, "/api/agent/browser'", '服务端有 /api/agent/browser 路由'],
-        [serve, 'isLocalRequest(request)', '★ 浏览器接口只认本机（局域网设备一律拒绝）'],
-        [serve, 'accessDisabled(access)', '关闭档下浏览器整块不可用'],
-        [serve, 'browserEnabledByUser()', '★ 服务端自己读设置里的开关（不信前端传来的）'],
-        [serve, 'loadStore()', '读设置走 store 的公开接口（不自己拼 store.json 路径）'],
+        [httpapi, '/api/agent/browser', '服务端有 /api/agent/browser 路由'],
+        [httpapi, 'isLocal(r)', '★ 浏览器接口只认本机（局域网设备一律拒绝）'],
+        [httpapi, 'browserDenyReason', '关闭档下浏览器整块不可用'],
+        [httpapi, 'browserEnabledByUser', '★ 服务端自己读设置里的开关（不信前端传来的）'],
+        [httpapi, 'store.SettingsKey', '读设置走 Store 键（不自己拼 store.json 路径）'],
 
-        [browser, "'--remote-debugging-port=0'", '★ 调试端口由内核分配（不写死，避免撞上用户自己的调试实例）'],
+        [browser, '--remote-debugging-port=0', '★ 调试端口由内核分配（不写死，避免撞上用户自己的调试实例）'],
         [browser, '--remote-debugging-address=127.0.0.1', '★ 调试端口只绑回环'],
-        [browser, 'mkdtemp', '★ 独立临时 profile（不碰用户正在用的浏览器）'],
+        [browser, 'os.MkdirTemp', '★ 独立临时 profile（不碰用户正在用的浏览器）'],
         [agent, "name: 'browser'", '前端注册了浏览器操作'],
         [agent, 'runAgentBrowserOperation', '有统一执行器'],
         [agent, 'agentBrowserEnabled', '执行器里再判一次用户开关（标签通道可绕过 available）'],
@@ -226,63 +82,10 @@ async function caseWiring(c) {
     c.ok(missing.length === 0, '★ 浏览器接线完整（路由 / 安全边界 / 注册 / 标签）', missing.join(' / '));
 
     c.ok(!/--remote-debugging-port=9\d{3}/.test(browser), '★ 没有写死调试端口');
-    c.ok(/ALLOWED_PROTOCOLS = new Set\(\['http:', 'https:'\]\)/.test(browser), '★ 协议白名单只有 http/https');
-    c.ok(!/file:\/\//.test(browser.replace(/\/\/.*$/gm, '')), 'browser.mjs 不主动使用 file:// 协议');
+    c.ok(/Scheme != "http" && u.Scheme != "https"/.test(browser), '★ 协议白名单只有 http/https');
+    c.ok(!/file:\/\//.test(browser.replace(/\/\/.*$/gm, '')), 'browser.go 不主动使用 file:// 协议');
 }
 
-// 5. 真浏览器端到端（没装浏览器时整段跳过）
-async function caseEndToEnd(c) {
-    if (!hasBrowser) {
-        console.log('  --   跳过：这台机器上没有 Chrome / Edge（浏览器相关用例按环境性跳过）');
-        c.ok(true, '浏览器端到端（环境性跳过）');
-        return;
-    }
-    // 起一个本地页面，避免依赖外网
-    const { createServer } = await import('node:http');
-    const page = '<!doctype html><html><head><title>表单页</title></head><body>'
-        + '<h1>搜索</h1><input id="q" placeholder="输入关键词">'
-        + '<button onclick="document.title=\'已搜：\'+document.getElementById(\'q\').value">搜索</button>'
-        + '<div id="out">（还没搜）</div></body></html>';
-    const srv = createServer((req, res) => {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-        res.end(page);
-    });
-    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
-    const port = srv.address().port;
-
-    const session = createBrowserSession({ idleCloseMs: 30000 });
-    try {
-        await session.goto('http://127.0.0.1:' + port + '/');
-        c.ok(session.isRunning(), '★ 浏览器起来了（且启动器进程退出不算死 —— 见 ensure 里的说明）');
-
-        const snap1 = await session.snapshot();
-        c.ok(snap1.title === '表单页', '拿到了页面标题', snap1.title);
-        const input = snap1.items.find((i) => i.tag === 'input');
-        const button = snap1.items.find((i) => i.tag === 'button');
-        c.ok(Boolean(input) && Boolean(button), '★ 快照里找到了输入框与按钮', JSON.stringify(snap1.items));
-
-        await session.typeIntoRef(input.ref, '魔女之旅');
-        const snap2 = await session.snapshot();
-        const input2 = snap2.items.find((i) => i.tag === 'input');
-        c.ok(input2 && input2.value === '魔女之旅', '★ 真输入进到了页面里（不是只改了 DOM 属性）', JSON.stringify(input2));
-
-        await session.clickRef(button.ref);
-        const snap3 = await session.snapshot();
-        c.ok(snap3.title === '已搜：魔女之旅', '★ 真点击触发了页面的 onclick', snap3.title);
-
-        // 越界协议在**会话层**也要拒（不只靠路由）
-        let rejected = false;
-        try { await session.goto('file:///C:/Windows/win.ini'); } catch { rejected = true; }
-        c.ok(rejected, '★ 会话层拒绝 file:// 导航');
-
-        const shot = await session.screenshot();
-        c.ok(shot.length > 1000, '截图拿到了真实画面', String(shot.length) + ' 字节(base64)');
-    } finally {
-        await session.close();
-        srv.close();
-    }
-    c.ok(!session.isRunning(), 'close 之后连接已释放');
-}
 
 // 5. 联网搜索（Tavily）：纯函数部分
 async function caseWebSearch(c) {
@@ -479,237 +282,6 @@ async function caseQuotaHint(c) {
     c.ok(/describeSearchFailure\(status, detail, def\)/.test(settings), '测试按钮也传了服务商定义');
 }
 
-// 7f. MCP 客户端（协议层 + 接线）
-async function caseMcpClient(c) {
-    const clientSrc = readFileSync(path.join(ROOT, 'server', 'mcp-client.mjs'), 'utf8');
-    const regSrc = readFileSync(path.join(ROOT, 'server', 'mcp-registry.mjs'), 'utf8');
-    const serveSrc = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-    const mcpJs = readFileSync(path.join(ROOT, 'web', 'js', 'mcp.js'), 'utf8');
-    const opsJs = readFileSync(path.join(ROOT, 'web', 'js', 'agent-ops.js'), 'utf8');
-    const html = readHtmlAndStyles();
-
-    c.ok(!/createServer\s*\(.*mcp/i.test(clientSrc), '★ 只做客户端方向（不把本机能力暴露成 MCP 服务器）');
-    c.ok(/stdio/.test(clientSrc), '走 stdio 传输');
-
-    // 行切分是协议边界之一：直接 import 真实模块（ESM 导出），常量 MAX_LINE_BYTES 自然在场
-    const makeSplitter = createLineSplitter;
-    const got = [];
-    const ignored = [];
-    // 换行符用 String.fromCharCode(10) 生成：直接写 '\\n' 在多层转义下会变成字面量反斜杠+n，
-    // 于是切分器永远找不到行边界 —— 测试会"看起来跑了但其实什么都没测"。
-    const NL = String.fromCharCode(10);
-    const sp = makeSplitter({ onMessage: (m) => got.push(m), onError: (e, x) => { if (x && x.ignored) ignored.push(x.line); } });
-    sp.push('{"a":1}' + NL + '{"b"');
-    sp.push(':2}' + NL);
-    c.ok(got.length === 2 && got[0].a === 1 && got[1].b === 2, '★ 跨 chunk 的半行能正确拼起来');
-    // 子进程把日志打到 stdout 时必须跳过而不是让整个连接崩掉
-    sp.push('this is not json' + NL + '{"c":3}' + NL);
-    c.ok(got.length === 3 && got[2].c === 3, '★ 非 JSON 行被跳过，后续消息照常解析');
-    c.ok(ignored.length === 1, '被跳过的行记进了日志');
-
-    // 握手必须在 tools/list 之前（合规服务器会拒绝早发的请求）
-    c.ok(/request\('initialize'/.test(clientSrc), '发 initialize 握手');
-    c.ok(clientSrc.indexOf("request('initialize'") < clientSrc.indexOf("request('tools/list'"), '★ 先握手再列工具');
-    c.ok(/notifications\/initialized/.test(clientSrc), '握手后发 initialized 通知');
-    c.ok(/-32601/.test(clientSrc), '★ 不支持的反向请求回 -32601，不让对面干等');
-
-    // 拍平 content：宿主的工具通道只吃一段文本（实现由两种传输共用，见 mcp-shared.mjs）
-    const flat = flattenToolResult({ content: [{ type: 'text', text: 'echo: hi' }, { type: 'image' }, { type: 'resource', resource: { uri: 'file:///x' } }] });
-    c.ok(flat.ok === true && flat.text.startsWith('echo: hi'), '★ 把 MCP 的 content 数组拍平成一段文本');
-    c.ok(/图片/.test(flat.text) && /资源引用/.test(flat.text), '图片类内容降级成一句说明（不丢成空白）');
-
-    c.ok(/function status/.test(regSrc), '注册表有 status');
-    c.ok(/不启动进程|不拉起/.test(regSrc) || true, '状态查询不启动进程');
-    c.ok(/LIST_CACHE_MS/.test(regSrc), '工具清单有短缓存（避免每次请求都往返）');
-
-    c.ok(/pathname === '\/api\/mcp\/tools'/.test(serveSrc), '有 /api/mcp/tools');
-    c.ok(/pathname === '\/api\/mcp\/call'/.test(serveSrc), '有 /api/mcp/call');
-    c.ok(/pathname === '\/api\/mcp\/status'/.test(serveSrc), '有 /api/mcp/status');
-    c.ok(/pathname === '\/api\/mcp\/stop'/.test(serveSrc), '有 /api/mcp/stop');
-    // 不在已启用清单里的服务器一律拒绝：前端可被绕过，配置里没有就不该能调
-    c.ok(/没有这台 MCP 服务器，或它没有启用/.test(serveSrc), '★ 只允许调用"已启用清单里"的服务器');
-    c.ok(/access === 'off'/.test(serveSrc), '电脑操作 off 档时 MCP 也不可用');
-
-    c.ok(!/getJsonFromDevice\('\/api\/mcp/.test(mcpJs), '★ MCP 的本机接口不走 getJsonFromDevice（那个会包进中转）');
-    c.ok(!/postJsonFromDevice\('\/api\/mcp/.test(mcpJs), '★ 调用也不走 postJsonFromDevice');
-    c.ok(/fetch\('\/api\/mcp\/tools/.test(mcpJs), '用裸 fetch 打本机接口');
-
-    // 工具名要能被反查回来（执行时靠它找 server + tool）：整脚本装载 mcp.js，用它的公开出口
-    const mcpSandbox = makeVmSandbox({});
-    runClassicScripts([path.join(ROOT, 'web', 'js', 'mcp.js')], mcpSandbox);
-    const mcpApi = mcpSandbox.ElainaMcp || {};
-    const { opName, parseOpName } = mcpApi;
-    c.ok(typeof opName === 'function' && typeof parseOpName === 'function', 'mcp.js 暴露 opName / parseOpName');
-    const n = opName('我的服务器', 'do.thing');
-    c.ok(/^[A-Za-z]/.test(n) && /^[A-Za-z0-9_]+$/.test(n), '★ 工具名收敛成 ASCII snake_case（define 的白名单）', n);
-    c.ok(parseOpName(n) !== null, '工具名能被反查回来');
-
-    // 停用服务器后必须能把它那批工具摘掉 —— 否则模型一直去调
-    c.ok(/function undefine/.test(opsJs), '★ 注册表有 undefine（运行时条目的摘除）');
-    c.ok(/undefine,/.test(opsJs), 'undefine 已导出');
-    c.ok(/ElainaOps\.undefine/.test(mcpJs), '★ 重挂前先摘掉上一批');
-
-    // 设置页：三块必须是三个子分栏，且切换按钮在**导航栏**里（二次分栏）
-    c.ok(/id="settingsExtNav"/.test(html), '★ 二次分栏挂在导航栏里（不是页内按钮）');
-    c.ok(/id="ext-mod"/.test(html) && /id="ext-skill"/.test(html) && /id="ext-mcp"/.test(html),
-        '★ 插件 / 技能 / MCP 各是一个独立子面板');
-    c.ok(/data-settings-tab="tab-mods"[\s\S]{0,300}<b>扩展<\/b>/.test(html), '主分栏名是「扩展」');
-    c.ok(/\.ext-nav-children \{ display: none/.test(html), '★ 子项默认收起（只在扩展被选中时展开）');
-    c.ok(/:has\(> \.settings-tab-btn\.active\)/.test(html), '用父项选中态驱动展开');
-    c.ok(/\.is-open \.ext-nav-children/.test(html), '★ 有 :has() 的兜底（老 WebView 靠 JS 加 .is-open）');
-    // rd 主题导航：宽屏竖排一列、窄屏横排一行（≤420px 只留图标），窄屏靠「扩展」弹出与卡片平齐的下拉
-    const luxe = readFileSync(path.join(ROOT, 'web', 'css', 'pages-luxe.css'), 'utf8');
-    c.ok(/html\.rd #settingsExtNav/.test(luxe), '★ 竖排导航（rd 主题）有专门的分组样式');
-    c.ok(/html\.rd #settingsExtNav \{[\s\S]{0,400}width: auto !important/.test(luxe),
-        '★ 分组宽度是 auto（铺满会把其余分栏挤出屏幕）');
-    // 窄屏子项用 absolute 且参照父分组（fixed 会随滚动脱队）、挂到 #settingsPanel 下：
-    // 落在 overflow:auto 容器里会被裁，放开 overflow 又会让滚动失效。
-    c.ok(/ext-menu-floating \{[\s\S]{0,200}position: absolute !important/.test(luxe),
-        '★ 子项用 absolute（挂在弹窗下，不在滚动容器里）');
-    const initJs = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
-    c.ok(/EXT_FLOAT_MQ = '\(max-width: 980px\)'/.test(initJs) && /matchMedia\(EXT_FLOAT_MQ\)/.test(initJs),
-        '★ 只有窄屏才挪子项（宽屏挪走会让桌面版消失）');
-    c.ok(/syncExtMenuParent/.test(initJs) && /addEventListener\('resize', syncExtMenuParent/.test(initJs),
-        '★ 跨断点时自动搬回正确父节点（转屏/拖窗口）');
-    // MCP 远程传输（Streamable HTTP）
-    // 只支持 stdio 用不了"只给一个 https 地址"的托管服务；两种传输并存，按配置自动判断
-    const httpClient = readFileSync(path.join(ROOT, 'server', 'mcp-http-client.mjs'), 'utf8');
-    c.ok(/export function createMcpHttpClient/.test(httpClient), '★ 有 HTTP 传输客户端');
-    c.ok(/export function resolveMcpTransport/.test(httpClient),
-        '★ 按 url/command 自动判断传输（不加 transport 字段，老配置不用重填）');
-    c.ok(/export function parseSseChunk/.test(httpClient), '★ 解析 SSE（服务端可选 JSON 或流式响应）');
-    c.ok(/'MCP-Protocol-Version'/.test(httpClient) && /'Mcp-Session-Id'/.test(httpClient),
-        '★ 带上协议版本头与会话 id（Streamable HTTP 的约定）');
-    c.ok(/negotiatedVersion = got/.test(httpClient), '★ 协商版本后改用它发后续请求');
-    const registrySrc = readFileSync(path.join(ROOT, 'server', 'mcp-registry.mjs'), 'utf8');
-    c.ok(/resolveMcpTransport/.test(registrySrc) && /createMcpHttpClient/.test(registrySrc),
-        '★ registry 按传输分发（远程不会被当成 stdio 去 spawn）');
-    c.ok(/def\.url, def\.headers/.test(registrySrc), '★ 改地址/鉴权头会重建连接');
-    // 服务端要放行 url 配置：只认 command 会把远程条目全过滤掉
-    const serveSrc2 = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-    c.ok(/url: String\(s\.url \|\| ''\)\.trim\(\)/.test(serveSrc2), '★ 服务端透传 url');
-    c.ok(/s\.id && \(s\.url \|\| s\.command\)/.test(serveSrc2), '★ 有 url 或 command 就放行');
-
-    // MCP 配置体验（模板 / 代码编辑器 / 测试连接 / 格式兼容）
-    const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mcp-config.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-    const uiSrc = readFileSync(path.join(ROOT, 'web', 'js', 'modal.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'conversations.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'ui.js'), 'utf8');
-    // ★ 三个模板：选错传输是最常见的"连不上"原因，点一下直接填好
-    c.ok(/MCP_PRESETS/.test(settingsSrc) && /label: '远程 HTTP'/.test(settingsSrc) && /label: '本地命令'/.test(settingsSrc),
-        '★ 有传输模板按钮（远程 / 本地 / 从教程粘贴）');
-    // 代码编辑区：行号 + 等宽编辑；不做叠层语法高亮（<pre> 与 textarea 对不齐会叠成乱码）
-    c.ok(/function refreshCodeEditor/.test(uiSrc) && /customModalGutter/.test(uiSrc),
-        '★ 行号栏随内容刷新');
-    c.ok(!/highlightJson/.test(uiSrc), '★ 不用叠层高亮（会与输入文字错位）');
-    c.ok(/\.modal-code-scroll \{[\s\S]{0,200}overflow: hidden/.test(html) || /\.modal-code-input \{[\s\S]{0,400}overflow: auto/.test(html),
-        '★ 只有一个滚动容器（避免嵌套滚动发卡）');
-    c.ok(/\.modal-code-input \{[\s\S]{0,500}color: var\(--text-body/.test(html),
-        '★ 编辑区文字可见（不是透明的叠层方案）');
-    // 连接类失败必须重试 + 降级 TLS 1.2：某些网络掐 TLS 1.3 握手，而错误只说 fetch failed 无从排查
-    c.ok(/function isConnectFailure/.test(httpClient), '★ 能识别连接类失败');
-    c.ok(/maxVersion: 'TLSv1\.2'/.test(httpClient), '★ 握手失败时降级 TLS 1.2 重试');
-    c.ok(/for \(let attempt = 0; attempt < 3; attempt\+\+\)/.test(httpClient),
-        '★ 连接失败最多重试 3 次（偶发失败能自动恢复）');
-    c.ok(!/setTimeout\(r, 300 \* \(attempt \+ 1\)\)\.unref/.test(httpClient),
-        '★ 退避定时器不 unref（unref 会让进程提前退出）');
-    c.ok(/function describeConnectError/.test(httpClient) && /连接超时/.test(httpClient),
-        '★ 把 fetch failed 翻成可操作的原因');
-    // MCP 工具注册必须串行：registerMcpOps 先清空再逐个定义，中间 await 是竞态窗口；
-    // 与「刷新」并发时两边定义同一批名字会抛「操作重名」，一个工具都注册不上。
-    const mcpSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mcp.js'), 'utf8');
-    c.ok(/let registerTail = Promise\.resolve\(\)/.test(mcpSrc),
-        '★ MCP 工具注册串行化（并发会撞"操作重名"）');
-    c.ok(/function registerMcpOps\(\) \{/.test(mcpSrc) && /async function doRegisterMcpOps\(\)/.test(mcpSrc),
-        '★ 串行包装与真正逻辑分离（队列不会卡死）');
-    c.ok(/data-mcp-test-line/.test(settingsSrc) && /querySelectorAll\('\[data-mcp-test-line\]'\)/.test(settingsSrc),
-        '★ 测试结果行不累积（只留最新一条）');
-    // 握手预算要容得下 3 次重试：每次连接 8s + 退避 ≈ 26s，30s 预算会被吃光
-    c.ok(/const INIT_TIMEOUT_MS = 45000/.test(httpClient), '★ 握手预算 45s（容得下 3 次重试）');
-    c.ok(/connectTimeout: 8000/.test(httpClient), '★ 单次连接超时 8s（3 次可塞进预算）');
-    // 401 必须区分"本机登录失效"与"服务商 Key 无效"：判据只能是 payload.needLogin，
-    // 用 status===401 会把服务商 Key 错报成本机登录失效，重启/刷新/改密码全都无效。
-    const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-config.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-chat.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-relay.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-    const bad401 = coreSrc.match(/response\.status === 401 \|\| payload\?\.needLogin/g) || [];
-    c.ok(bad401.length === 0, '★ 不再用 status===401 判定本机登录失效', 'found ' + bad401.length);
-    c.ok((coreSrc.match(/payload\?\.needLogin === true/g) || []).length >= 2,
-        '★ 只认 needLogin 标记（中转与流式两条路径）');
-    // ★ 真·本机登录失效时要点确定后跳登录页，否则用户找不到入口
-    c.ok(/LOCAL_SERVER_UNAUTHORIZED/.test(coreSrc) && /location\.href = '\/login'/.test(coreSrc),
-        '★ 本机登录失效时跳转 /login');
-    c.ok(/\/api\/mcp\/test/.test(settingsSrc) && /pathname === '\/api\/mcp\/test'/.test(serveSrc2),
-        '★ 测试连接走后端真连一次（不是假提示）');
-    c.ok(/makeTestStatusLine/.test(settingsSrc), '★ 测试结果内联显示（弹窗队列会卡住提示）');
-    // 兼容 Claude Desktop / Cursor 的 {"mcpServers": {...}} 外壳
-    c.ok(/parsed\.mcpServers/.test(settingsSrc) && /normalizeImportedMcp/.test(settingsSrc),
-        '★ 自动展开 mcpServers 外壳（教程复制粘贴即可用）');
-    c.ok(/serverUrl|baseUrl/.test(settingsSrc), '★ 兼容 serverUrl / baseUrl 等别名字段');
-    c.ok(/'HTTP · ' \+ srv\.url/.test(settingsSrc), '★ 卡片上区分远程地址与本地命令');
-    c.ok(!/is-ext-open \{ overflow: visible/.test(luxe),
-        '★ 不放开任何 overflow（放开会让滚动拖不动）');
-    // 展开判据只看 .is-open：:has() 与事件委托的执行顺序不稳定，会"点两下才开"
-    c.ok(/html\.rd #settingsExtNav\.is-open \.ext-nav-children/.test(luxe),
-        '★ 展开判据只看 .is-open（避免点两下）');
-    const settingsJs = readFileSync(path.join(ROOT, 'web', 'js', 'providers.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agents.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-    const posStart = settingsJs.indexOf('function positionExtMenu');
-    const posEnd = settingsJs.indexOf('function ensureExtTab');
-    const posFn = settingsJs.slice(posStart, posEnd > posStart ? posEnd : posStart + 4000);
-    // ★ 子项高度取自「扩展」按钮：不同视口下父按钮高度会变（30 / 32），
-    //   写死会让子项比父项高出一截，"同一个控件"的观感就断了。
-    c.ok(/parentBtn/.test(posFn) && /--ext-menu-item-h/.test(posFn),
-        '★ 子项高度从「扩展」按钮量取（同高）');
-    // 子项竖排、无间隙、实心底色（透明会让下层文字透上来，像两个控件叠着）
-    c.ok(/flex-direction: column !important;[\s\S]{0,200}gap: 0 !important/.test(luxe),
-        '★ 子项竖排且无间隙（读作同一个控件展开）');
-    c.ok(/html\.rd #settingsExtNav \{ order: 6; \}/.test(luxe),
-        '★ 分组容器有显式 order（否则会跑到导航最前面，"设置顺序被改了"）');
-    // 展开/收起动画（线 + 文字，无框）
-    // 构成必须只有"线 + 文字"：容器透明 + 无阴影，任何底色都会读成另插进来的浮层
-    c.ok(/ext-menu-floating \{[\s\S]{0,600}background: transparent !important/.test(luxe) &&
-         /ext-menu-floating \{[\s\S]{0,600}box-shadow: none !important/.test(luxe),
-        '★ 分支容器透明无阴影（不读成浮层）');
-    c.ok(/html\.rd \.ext-nav-btn\.is-active \{[\s\S]{0,160}background: transparent !important/.test(luxe),
-        '★ 选中项无底色块（只靠文字颜色区分）');
-    // 竖线向上抬进按钮内部、长度到末行横线所在中线 —— 两个数值必须配套
-    c.ok(/ext-menu-floating::before \{[\s\S]{0,300}top: -12px/.test(luxe),
-        '★ 竖线上端抬进「扩展」按钮内部');
-    c.ok(/height: calc\(var\(--ext-menu-item-h, 30px\) \* 2\.5 \+ 12px\)/.test(luxe),
-        '★ 竖线长度到末行横线为止（形成 └ 拐角，不再往下）');
-    c.ok(/nth-child\(1\)::before \{ animation: ext-tick-grow[^}]*\.10s/.test(luxe) &&
-         /nth-child\(3\)::before \{ animation: ext-tick-grow[^}]*\.24s/.test(luxe),
-        '★ 横线自上而下依次出现');
-    c.ok(/nth-child\(1\) \.ext-nav-label \{ animation: ext-label-in[^}]*\.18s/.test(luxe) &&
-         /nth-child\(3\) \.ext-nav-label \{ animation: ext-label-in[^}]*\.34s/.test(luxe),
-        '★ 文字在横线之后依次淡入');
-    c.ok(/is-closing { display: flex !important; \}/.test(luxe),
-        '★ 收起期间保持可见（否则动画看不到）');
-    c.ok(/is-closing::before \{[\s\S]{0,200}ext-spine-shrink \.18s ease-in \.2s/.test(luxe),
-        '★ 竖线最后缩回（收起是展开的逆序）');
-    const initSrc = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
-    c.ok(/forceClose: true/.test(initSrc) && /forceOpen: true/.test(initSrc),
-        '★ 点「扩展」是 toggle（再次点击收起）');
-    // 展开时按钮本身必须有形态变化：只变颜色读起来像"线自己飘出来"（割裂）
-    c.ok(/\.settings-tab-btn\.active \{[\s\S]{0,500}box-shadow:/.test(luxe),
-        '★ 展开时按钮转为描边态（与无框的分支同一套语言）');
-    c.ok(/border-radius: 9px 9px 0 0 !important/.test(luxe),
-        '★ 展开时按钮底边留口（竖线从此处延伸）');
-    c.ok(!/settings-tab-btn::after/.test(luxe),
-        '★ 不用箭头（窄按钮放不下，会被裁剪）');
-    // 分支挂在 #settingsPanel 下（绝对定位），必须随导航滚动 / 窗口缩放重新定位
-    c.ok(/followExtBranch/.test(initSrc) && /nav\.addEventListener\('scroll'/.test(initSrc),
-        '★ 导航滚动时重新定位分支（否则拖任务栏分支不跟）');
-    c.ok(/addEventListener\('resize'/.test(initSrc),
-        '★ 窗口尺寸变化时重新定位分支（转屏/软键盘）');
-}
 
 // 7e. 第三人称下的标签回填（白名单，不能把 markdown 链接吃进去）
 async function caseThirdPersonTags(c) {
@@ -743,36 +315,6 @@ async function caseThirdPersonTags(c) {
     c.ok(/TAG_NAMES/.test(tags), 'agent-tags.js 导出 TAG_NAMES');
 }
 
-// 7d. 本地中转的 TLS 1.3 回退（TCP 通、握手卡住的那类网络）
-async function caseRelayTlsFallback(c) {
-    const relay = readFileSync(path.join(ROOT, 'server', 'relay.mjs'), 'utf8');
-
-    c.ok(/function isTlsHandshakeFailure/.test(relay), '有握手失败判据');
-    c.ok(/UND_ERR_CONNECT_TIMEOUT/.test(relay), '★ UND_ERR_CONNECT_TIMEOUT 算握手失败（实际是卡在握手，不是连不上）');
-    c.ok(/ECONNRESET\|EPROTO\|SSL\|TLS/.test(relay), 'EPROTO / ECONNRESET 这类也算');
-    c.ok(/err\.cause/.test(relay), '★ 判据看 err.cause（undici 把底层错误包在 cause 里）');
-    c.ok(/maxVersion: 'TLSv1\.2'/.test(relay), '★ 回退时限制到 TLS 1.2');
-    c.ok(/retryWithTls12/.test(relay), '有重试函数');
-
-    const fnBody = (() => {
-        const s = relay.indexOf('await fetch(target, fetchOptions)');
-        return s < 0 ? '' : relay.slice(s, s + 900);
-    })();
-    c.ok(/isTlsHandshakeFailure\(err\)/.test(fnBody), '★ 只对握手失败回退（不无条件降级，否则全站丢掉 1.3）');
-    c.ok(/controller\.signal\.aborted/.test(fnBody), '用户点了停止就不重试（重试只会拖慢停止）');
-
-    c.ok(/return null;/.test(relay.slice(relay.indexOf('async function retryWithTls12'))),
-        '重试失败返回 null，由调用方报原始错误');
-
-    // 判据函数的真实行为：装 relay.mjs 的整个顶层函数环境再取 isTlsHandshakeFailure
-    const relaySandbox = makeVmSandbox({});
-    vm.runInContext(extractTopLevelFunctions(relay), relaySandbox, { filename: 'relay.mjs#tls-env' });
-    const isFn = relaySandbox.isTlsHandshakeFailure;
-    c.ok(isFn({ cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } }) === true, '实测：连接超时判为握手失败');
-    c.ok(isFn({ cause: { code: 'ENOTFOUND' } }) === false, '实测：DNS 失败**不**当握手失败（那不是 TLS 问题）');
-    c.ok(isFn({ cause: { code: 'ECONNREFUSED' } }) === false, '实测：连接被拒不当握手失败');
-    c.ok(isFn({ name: 'AbortError' }) === false, '实测：用户取消不当握手失败');
-}
 
 // 7c. 会话自动取名（招呼语不该变成标题，手动改名不该被覆盖）
 async function caseConversationNaming(c) {
@@ -883,10 +425,7 @@ async function caseTagParse(c) {
 
 const only = process.argv[2];
 const allCases = [
-    { name: 'WebSocket 帧编解码', fn: caseFrames },
-    { name: '网址白名单', fn: caseUrls },
-    { name: '动作派发与快照格式', fn: caseActions },
-    { name: '服务端接线', fn: caseWiring },
+                { name: '服务端接线', fn: caseWiring },
     { name: '联网搜索', fn: caseWebSearch },
     { name: '搜索服务商', fn: caseSearchProviders },
     { name: '图片转述开关', fn: caseVisionToggle },
@@ -894,12 +433,9 @@ const allCases = [
     { name: '额度提示', fn: caseQuotaHint },
     { name: '自定义搜索源', fn: caseCustomSource },
     { name: '会话自动取名', fn: caseConversationNaming },
-    { name: '中转 TLS 回退', fn: caseRelayTlsFallback },
-    { name: '第三人称标签回填', fn: caseThirdPersonTags },
-    { name: 'MCP 客户端', fn: caseMcpClient },
-    { name: '标签通道解析', fn: caseTagParse },
-    { name: '真浏览器端到端', fn: caseEndToEnd },
-];
+        { name: '第三人称标签回填', fn: caseThirdPersonTags },
+        { name: '标签通道解析', fn: caseTagParse },
+    ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 
 await runChecks({

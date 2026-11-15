@@ -3,7 +3,7 @@
 // 表现为与产品无关的假失败；屏蔽外网同时让结果不受 CDN 可用性影响。
 
 // playwright-core 按顺序解析（本仓库零依赖、不装 npm 包）：
-// ELAINACHAT_PLAYWRIGHT 环境变量 → 同级 ../android-app → 本仓库 node_modules；
+// ELAINACHAT_PLAYWRIGHT 环境变量 → dist/Android/node_modules → 本仓库 node_modules；
 // 都找不到时抛一条说清楚怎么办的错误，而不是把 ENOTFOUND 甩给读者。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -13,7 +13,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 
 const PLAYWRIGHT_CANDIDATES = [
     process.env.ELAINACHAT_PLAYWRIGHT || '',
-    path.join(REPO_ROOT, '..', 'android-app', 'node_modules', 'playwright-core', 'index.mjs'),
+    path.join(REPO_ROOT, 'dist', 'Android', 'node_modules', 'playwright-core', 'index.mjs'),
     path.join(REPO_ROOT, 'node_modules', 'playwright-core', 'index.mjs'),
 ].filter(Boolean);
 
@@ -54,7 +54,7 @@ export async function launchTestBrowser(extra = {}) {
     const pw = resolvePlaywrightPath();
     if (!pw) {
         throw new Error('找不到 playwright-core：请设置 ELAINACHAT_PLAYWRIGHT 指向 .../node_modules/playwright-core/index.mjs，'
-            + '或把 android-app 放在本仓库的上一级（本仓库自身零依赖，不装 npm 包）');
+            + '或在 dist/Android 下 npm install（本仓库自身零依赖，不装 npm 包）');
     }
     const chrome = CHROME_PATH;
     if (!chrome) {

@@ -5,7 +5,7 @@ const AGENT_FAILURE_MAX_RETRY = 1;
 
 async function explainAgentFailure(reason) {
     const conv = getCurrentConversation();
-    // 失败原因里可能带着「这台电脑的真实位置」那段提示（serve.mjs 的 shellFolderHint），截短会切掉路径。
+    // 失败原因里可能带着「这台电脑的真实位置」那段提示（服务端 agent 包的 hint()），截短会切掉路径。
     const shortReason = String(reason).slice(0, 600);
     if (!conv) { showCustomAlert('操作失败：' + shortReason, 'AI 操作结果'); return; }
     const canRetry = agentConsecutiveFailures <= AGENT_FAILURE_MAX_RETRY;

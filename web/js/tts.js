@@ -240,7 +240,9 @@ async function playCachedPcm(record, onStart, onEnd, session) {
 async function generateMimoTtsAudio(text, settings = state.settings) {
     const mimoApiKey = String(settings.mimoTtsApiKey || '').trim();
     if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 文字转语音 里给这家 MiMo 填好 API Key');
-    const baseUrl = String(settings.mimoTtsBaseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
+    // 版本段由用户/服务商决定（可能是 /v4）：已有就原样用，缺才补 /v1（与对话运行时同一条规则）。
+    const strippedTtsBase = stripChatFunctionSuffix(settings.mimoTtsBaseUrl || 'https://api.xiaomimimo.com');
+    const baseUrl = /\/v\d+$/i.test(strippedTtsBase) ? strippedTtsBase : strippedTtsBase + '/v1';
     const model = String(settings.mimoTtsModel || 'mimo-v2.5-tts').trim() || 'mimo-v2.5-tts';
     // voiceclone 但还没有样本时，先补上软件自带的伊蕾娜日语样本；settings 可能是详情页的**草稿视图**（见 testTtsProviderDraft），补完要同步过去，否则本次请求读到的仍是空样本。
     if (model === 'mimo-v2.5-tts-voiceclone' && !String(settings.mimoTtsCloneSample || '').trim()) {
@@ -267,7 +269,7 @@ async function generateMimoTtsAudio(text, settings = state.settings) {
         audio.voice = String(settings.mimoTtsVoice || 'mimo_default').trim() || 'mimo_default';
         messages = [assistantMessage];
     }
-    const result = await postJsonFromDevice(baseUrl + '/v1/chat/completions', {
+    const result = await postJsonFromDevice(baseUrl + '/chat/completions', {
         model,
         messages,
         audio

@@ -134,7 +134,7 @@ function bindAppEvents() {
         if (typeof Store._flush === 'function') Store._flush();
         void refreshModsList();
     });
-    // 应用内上传是手机 / 平板用户的唯一入口（APK 连服务端都没有）；请求体直接是 zip 原始字节，服务端不用写 multipart 解析。
+    // 应用内上传是手机 / 平板用户的唯一入口（APK 碰不到 mods/ 目录）；请求体直接是 zip 原始字节，服务端不用写 multipart 解析。
     document.getElementById('modsInstallBtn')?.addEventListener('click', () => {
         document.getElementById('modsFileInput')?.click();
     });
@@ -289,6 +289,11 @@ document.querySelector('#settingsExtNav .settings-tab-btn')?.addEventListener('c
     document.getElementById('overlayEnableBtn')?.addEventListener('click', enableOverlay);
     document.getElementById('overlayCheckBtn')?.addEventListener('click', () => { void refreshOverlayStatus(); });
     document.getElementById('agentWatchBtn')?.addEventListener('click', () => { openScreenWatch(); });
+    // 悬浮条在用时应用内状态条会收起，「看画面」不能只挂在状态条上；
+    // 设置里的这个入口让后台运行时随时能打开副屏监视。
+    document.getElementById('settingScreenWatchBtn')?.addEventListener('click', () => {
+        if (typeof openScreenWatch === 'function') openScreenWatch();
+    });
     (function bindModReadmeModal() {
         const overlay = document.getElementById('modReadmeOverlay');
         if (!overlay) return;
@@ -494,7 +499,13 @@ document.getElementById('ccPresetDelete')?.addEventListener('click', () => { voi
         if (state.notesMode) exitNotesMode();
         else if (state.diaryMode) exitDiaryMode();
         else if (state.memoryPageMode) exitMemoryPage();
-        else syncRailActive();
+        else {
+            syncRailActive();
+            // 宽屏对话页默认把侧栏收成竖栏；点「对话」应把列表展开出来，否则看起来像点了没反应。
+            if (window.innerWidth > 980 && document.documentElement.classList.contains('rd-sidebar-collapsed')) {
+                expandSidebarPanel();
+            }
+        }
     });
     // 侧栏这三个入口是「去哪一页」而不是开关：已经在该页时再点保持原页与滚动位置，
     // 回对话只走左侧「对话」或页面自己的返回键。

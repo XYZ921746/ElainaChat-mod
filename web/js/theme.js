@@ -234,6 +234,14 @@
             }
             const body = Object.keys(vars).map((k) => '  ' + k + ': ' + vars[k] + ';').join('\n');
             el.textContent = 'html[data-theme-template="' + id + '"]:not([data-theme="dark"]) {\n' + body + '\n}\n';
+            // 插件注册一定晚于启动时的 applyStored：那一刻这个 id 还不在清单里，属性已被当成"下线模板"摘掉。
+            // 用户存的选择仍然是它，模板一可用就得把属性补回去，否则刷新后一直停在默认配色。
+            try {
+                if (Store.getItem(TPL_KEY) === id) {
+                    document.documentElement.setAttribute('data-theme-template', id);
+                    saveBootSnapshot();
+                }
+            } catch (e) { /* 存储不可用：模板仍进选择器，选中后由 setTemplate 落属性 */ }
             refreshPicker();
             return true;
         } catch (e) { return false; }
@@ -373,20 +381,32 @@
         if (canvas) meta.setAttribute('content', canvas);
     }
 
-    // 启动快照：把算好的呈现结果（属性 + 自定义变量文本）存进 sessionStorage，供 index.html 的内联脚本在首帧渲染前回放。
+    // 启动快照：把算好的呈现结果（属性 + 自定义变量文本）存起来，供 index.html 的内联脚本在首帧渲染前回放。
     // 快照只在这里维护，内联脚本机械回放、不含主题逻辑 —— 避免主题推导逻辑出现两份。
-    const BOOT_KEY = 'elaina_theme_boot';
+    //
+    // 落盘走 Store.bootThemeSnapshot（store.js）：localStorage 的访问统一收在存储层，
+    // 业务代码不直接碰。用 localStorage 而不是 sessionStorage，是因为后者在进程被杀后清空 ——
+    // 而 APK 每次冷启动都是新进程，那样手机端每次启动都会先闪一帧默认浅色再切回用户主题。
+    // 快照只含呈现结果、不含任何业务数据（设置正文仍在 data/）；删掉 data/ 后 applyStored 会重算并覆盖它。
     function saveBootSnapshot() {
         try {
             const root = document.documentElement;
             const custom = document.getElementById('elainaCustomTheme');
-            sessionStorage.setItem(BOOT_KEY, JSON.stringify({
+            // bg 必须一起存：base.css 在 <head> 里最先加载，它的 body 背景取 var(--pixso-canvas)，
+            // 而这个变量由 themes.css 定义（晚 1700 行才到）。中间这段 --pixso-canvas 尚未定义，
+            // background 计算失败、页面透出白底 —— 表现为"布局已出来但底色是浅的"那一帧。
+            // 把算好的背景色随快照带走，首帧直接内联写到 <html> 上，压过尚未加载完的 CSS。
+            const bg = getComputedStyle(root).getPropertyValue('--rd-bg').trim()
+                || getComputedStyle(document.body).backgroundColor;
+            const text = JSON.stringify({
                 template: root.getAttribute('data-theme-template') || null,
                 dark: root.getAttribute('data-theme') || null,
                 colorScheme: root.style.colorScheme || null,
+                bg: bg || null,
                 css: custom ? custom.textContent : '',
-            }));
-        } catch (e) { /* sessionStorage 不可用（隐私模式等）只损失首帧回放，不影响正常使用 */ }
+            });
+            if (window.Store && Store.bootThemeSnapshot) Store.bootThemeSnapshot.set(text);
+        } catch (e) { /* 快照写不进（隐私模式等）只损失首帧回放，不影响正常使用 */ }
     }
 
     // 两个触发源（用户改设置、系统主题变化）必须走同一段逻辑。
@@ -403,12 +423,25 @@
             document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
                 syncThemeColorMeta();
                 saveBootSnapshot();
+                forceRepaintAfterThemeChange();
             };
             if (wasDark !== dark) radialTransition(mutate);
             else mutate();
         } catch (e) { /* 忽略 */ }
         // 不要在这里同步 #themeDarkMode / #themeDarkHint：深色切换在顶栏，这两个元素不存在，顶栏开关由 init.js 的 markThemeSeg 同步。
         return dark;
+    }
+
+    /** WebView 的合成器对"根属性变化引发的 CSS 变量换值"有重绘失效：computed 已是新主题，
+        屏幕上部分区域（设置页头等）仍显示旧主题帧 —— 表现为深转浅"像没切成功"、浅色下
+        一片旧底旧字（真机 WebView 110 实测：CDP computed 全对、截屏像素仍是旧帧；
+        translateZ 与强制 reflow 都唤不回，只有把 body 移出布局再放回才触发整棵树重新光栅化）。
+        none 与恢复之间只隔一次 offsetHeight 读取，同一任务内完成，渲染帧在任务结束后才产生 ——
+        用户看不到中间态，桌面端也不闪。body 无内联 display，恢复空串即交还样式表。 */
+    function forceRepaintAfterThemeChange() {
+        document.body.style.display = 'none';
+        void document.body.offsetHeight;
+        document.body.style.display = '';
     }
 
     /** 设置深色模式（三态）。on 为布尔时按旧语义映射为 dark/light */
@@ -428,9 +461,59 @@
         else if (darkMedia.addListener) darkMedia.addListener(onSystemChange);
     }
 
+    /** 首帧回放为深色用户把一批 --rd-* 变量**内联钉在 html.style 上**（优先级高于任何样式表，
+        见 index.html 的回放脚本）——那只在 themes.css 尚未加载时是必要的。样式表就绪后必须
+        全部摘掉交还给样式表：内联值只对应"majo 深色"一套，一旦留着，浅色模式下文字 / 强调色 /
+        控件表面永远是深色值（背景恢复了浅色、文字还是米白 = "切换不成功 / 字看不清"）。
+        只摘 --rd- 前缀，backgroundColor 与 colorScheme 不动（它们由 applyDarkMode / varsReady 各自管理）。 */
+    function clearBootInlineVars() {
+        const st = document.documentElement.style;
+        const names = [];
+        for (let i = 0; i < st.length; i++) {
+            const name = st.item(i);
+            if (name && name.startsWith('--rd-')) names.push(name);
+        }
+        for (const name of names) st.removeProperty(name);
+    }
+
     /** 启动时尽早应用（避免闪一下默认色再切换） */
     function applyStored() {
         try {
+            // 首帧兜底样式的清理必须**等到主题变量真的可用**再做。
+            // applyStored 由 init.js 在 Store.bootstrap() 之后调用，但 bootstrap 只保证 data/
+            // 读完了，不保证 themes.css 已经加载完（它挂在 <head> 里靠后，慢网络/冷启动时更晚）。
+            // 提前清掉的话，--rd-* 仍未定义，body / #mainContent / #chatHeader 的 background
+            // 全部算成透明 —— 比兜底更糟（实测：themes.css 被阻断时 bodyBg 与 headerBg 都是
+            // rgba(0,0,0,0)，整页露白）。
+            const varsReady = () => {
+                const v = getComputedStyle(document.documentElement).getPropertyValue('--rd-bg').trim();
+                return v !== '';
+            };
+            if (varsReady()) {
+                const bootBg = document.getElementById('elainaBootBg');
+                if (bootBg) bootBg.remove();
+                document.documentElement.style.backgroundColor = '';
+                // 兜底规则用的 `html.rd[data-elaina-boot]` 前缀（为了压过 redesign.css 的
+                // `html.rd body`），清理时必须一并摘掉，否则它会一直以高特异性盖住主题背景。
+                document.documentElement.removeAttribute('data-elaina-boot');
+                // styles 就绪 = 首帧回放内联钉住的那批变量到了交还的时刻（见 clearBootInlineVars）。
+                // 清理与下面的 applyDarkMode 同步连续执行，中间没有渲染帧，不会闪。
+                clearBootInlineVars();
+            } else {
+                // 变量还没到：留兜底，等样式表就绪后自己收尾（只挂一次）。
+                if (!applyStored._pendingCleanup) {
+                    applyStored._pendingCleanup = true;
+                    const waitVars = () => {
+                        if (varsReady()) {
+                            applyStored._pendingCleanup = false;
+                            applyStored();
+                        } else {
+                            setTimeout(waitVars, 100);
+                        }
+                    };
+                    setTimeout(waitVars, 100);
+                }
+            }
             applyDarkMode(darkMode());
             const tpl = Store.getItem(TPL_KEY);
             if (tpl && tpl !== 'majo' && allTemplates().some((t) => t.id === tpl)) {

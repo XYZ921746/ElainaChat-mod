@@ -56,16 +56,65 @@ function toggleQuoteFavorite() {
 }
 
 
+// API Key 可能只存在于设置包字段里；后面 loadSettings 会立刻 delete 它们。
+// 先补进密钥通道（已有值优先），再删字段，否则只在设置包里的 Key 会永久丢失。
+function migrateEmbeddedLegacySecrets(parsed) {
+    if (!parsed || typeof parsed !== 'object') return true;
+    const names = (typeof API_SECRET_NAMES !== 'undefined' && Array.isArray(API_SECRET_NAMES))
+        ? API_SECRET_NAMES
+        : ['apiKey', 'minimaxApiKey', 'dashscopeApiKey', 'asrApiKey', 'mimoApiKey', 'mimoTtsApiKey', 'openaiTtsApiKey', 'searchApiKey_tavily', 'searchApiKey_custom', 'chatProviderKeys'];
+    let stored = {};
+    try { stored = JSON.parse(Store.getItem('elainachat_open_api_secrets') || '{}') || {}; } catch (e) { stored = {}; }
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) stored = {};
+    let changed = false;
+    for (const name of names) {
+        if (name === 'chatProviderKeys') continue;
+        if (stored[name] !== undefined && stored[name] !== '') continue;
+        if (parsed[name] !== undefined && parsed[name] !== null && String(parsed[name]).trim() !== '') {
+            stored[name] = String(parsed[name]);
+            changed = true;
+        }
+    }
+    let legacyChatKeys = parsed.chatProviderKeys;
+    if (typeof legacyChatKeys === 'string') {
+        try { legacyChatKeys = JSON.parse(legacyChatKeys); } catch (e) { legacyChatKeys = null; }
+    }
+    if (legacyChatKeys && typeof legacyChatKeys === 'object' && !Array.isArray(legacyChatKeys)) {
+        let existing = {};
+        try { existing = JSON.parse(stored.chatProviderKeys || '{}') || {}; } catch (e) { existing = {}; }
+        if (!existing || typeof existing !== 'object' || Array.isArray(existing)) existing = {};
+        for (const [id, key] of Object.entries(legacyChatKeys)) {
+            if (!id || key === undefined || key === null) continue;
+            if (existing[id] !== undefined && existing[id] !== '') continue;
+            existing[id] = String(key);
+            changed = true;
+        }
+        if (changed) stored.chatProviderKeys = JSON.stringify(existing);
+    }
+    if (!changed) return true;
+    try {
+        Store.setItem('elainachat_open_api_secrets', JSON.stringify(stored));
+        return true;
+    } catch (e) {
+        console.warn('[BYOK] 旧设置包里的 Key 转存失败，继续保留原字段以免丢失', e);
+        return false;
+    }
+}
+
 function loadSettings() {
     const saved = Store.getItem('elaina_open_settings');
     if (saved) {
         try {
             const parsed = JSON.parse(saved);
-            delete parsed.apiKey;
-            delete parsed.minimaxApiKey;
-            delete parsed.dashscopeApiKey;
-            // 多提供商 Key 只走密钥通道（API_SECRET_NAMES），设置包里即使残留也不读
-            delete parsed.chatProviderKeys;
+            const secretsMigrated = migrateEmbeddedLegacySecrets(parsed);
+            // 转存失败时保留原字段，下次启动再试；成功或本来就没有旧 Key 才删。
+            if (secretsMigrated) {
+                delete parsed.apiKey;
+                delete parsed.minimaxApiKey;
+                delete parsed.dashscopeApiKey;
+                // 多提供商 Key 只走密钥通道（API_SECRET_NAMES），设置包里即使残留也不读
+                delete parsed.chatProviderKeys;
+            }
             state.settings = {
                 ...DEFAULT_SETTINGS,
                 ...parsed
@@ -74,8 +123,6 @@ function loadSettings() {
             console.error(e);
         }
     }
-    // 隐私开关强制关一次；必须在合并默认值之后，否则会被已存值覆盖。
-    migrateAgentReadDefaultsToOff();
     state.settings.apiProvider = DEFAULT_SETTINGS.apiProvider;
     // 格式别名（LEGACY_API_FORMAT_ALIASES）归一必须排在合法性校验之前，否则会被重置成默认。
     const legacyFormat = String(state.settings.apiFormat || '');
@@ -121,6 +168,20 @@ function loadSettings() {
     delete state.settings.agentApproval;
     if (state.settings.settingsVersion === undefined) state.settings.settingsVersion = 2;
     if (typeof state.settings.agentPhoneEnabled !== 'boolean') state.settings.agentPhoneEnabled = true;
+    // 对话提供商的协议纠正：早期自动识别有缺陷（OpenAI 网关的 /messages 回 401 会把判定抢成 Anthropic），
+    // 误存的 apiFormat 会让请求永远打到 /v1/messages 并 404，而用户不知道该去哪改。
+    // 这里只纠正**地址形态与所存协议明显矛盾**的条目：地址里带 OpenAI 风格的兼容段就不是 Anthropic。
+    // 幂等、只改这一种矛盾，用户手选的其它组合一律不动（探测与用户选择可能有正当理由）。
+    if (Array.isArray(state.settings.chatProviders)) {
+        for (const p of state.settings.chatProviders) {
+            if (!p || typeof p !== 'object') continue;
+            if (p.apiFormat !== 'anthropic') continue;
+            const base = String(p.baseUrl || '').toLowerCase();
+            if (/compatible-mode|\/chat\/completions|\/responses|v1beta\/openai|openrouter/.test(base)) {
+                p.apiFormat = 'openai-compatible';
+            }
+        }
+    }
     // MCP 清单逐项校验：坏一项不能丢整张表。
     if (!Array.isArray(state.settings.mcpServers)) state.settings.mcpServers = [];
     state.settings.mcpServers = state.settings.mcpServers

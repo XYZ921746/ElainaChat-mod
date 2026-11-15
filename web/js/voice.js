@@ -132,6 +132,11 @@ async function handleUserInput(message, conversation) {
             if (stripped !== response) aiMessage.text = stripped;
             if (!repliedToolCalls.length) window.ElainaTags.drive(response);
         }
+        // 只说不做：用户让动手操作手机、模型却只回了叙述 —— 整条链根本没启动。系统侧催一次，
+        // 不动提示词结构（完整角色设定与思维链照旧）。
+        if (!repliedToolCalls.length && typeof maybeNudgeSilentAgentTurn === 'function') {
+            try { maybeNudgeSilentAgentTurn(message, response); } catch (e) { /* 催办失败不该影响这一轮 */ }
+        }
         if (!repliedToolCalls.length) finishTurnTrace();
         extractAndCreateTasks(response);
 

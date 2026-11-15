@@ -85,19 +85,29 @@ async function renameConversation(convId) {
 // 抽成一处后，将来再加依附数据（比如某段对话的定时任务）只需改这里。
 // @param {Set<string>|Array<string>} ids 被删除的对话 id
 // @returns {{diary:number, favorites:number}} 各清掉多少条（供提示/调试）
-function purgeConversationDependents(ids) {
+async function purgeConversationDependents(ids) {
     const set = ids instanceof Set ? ids : new Set(ids || []);
     if (!set.size) return { diary: 0, favorites: 0 };
 
     let diaryRemoved = 0;
     try {
+        // 记忆权威在服务端，canonical 是启动后异步拉回的：删得太快时这里还是空结构，
+        // 过滤在空列表上跑等于没跑，而对话已删、之后再也没人清这些日记 —— 孤儿就此固化。
+        // 所以只在本地还是空结构时先对齐一次权威；本地已有数据就直接过滤（那份数据
+        // 本来就来自权威或暂存回放，saveMemoryCore 会把删除推上去）。
+        // 对齐失败（服务不可用）保留本地，saveMemoryCore 的暂存会在服务恢复后补推。
+        const mcNow = state.memoryCore;
+        const localEmpty = !mcNow || !Array.isArray(mcNow.diary) || !mcNow.diary.length;
+        if (localEmpty && typeof refreshMemoryCore === 'function') {
+            await refreshMemoryCore();
+        }
         const mc = state.memoryCore;
         if (mc && Array.isArray(mc.diary)) {
             const before = mc.diary.length;
             mc.diary = mc.diary.filter(e => !set.has(e.conversationId));
             diaryRemoved = before - mc.diary.length;
             if (diaryRemoved) {
-                if (typeof saveMemoryCore === 'function') saveMemoryCore();
+                if (typeof saveMemoryCore === 'function') await saveMemoryCore();
                 // 记忆变了 → 相关缓存/提示也要跟着失效（能调就调，缺了不影响）
                 try { if (typeof updateNotesBadge === 'function') updateNotesBadge(); } catch (e) { /* 忽略 */ }
             }
@@ -124,7 +134,7 @@ async function deleteConversation(convId) {
     if (idx < 0) return;
     state.conversations.splice(idx, 1);
     // 日记 + 收藏一起清（见 purgeConversationDependents 的说明）
-    purgeConversationDependents([convId]);
+    await purgeConversationDependents([convId]);
     saveConversations();
     updateNotesBadge();
     if (state.currentConversationId === convId) {

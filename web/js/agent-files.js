@@ -205,21 +205,23 @@ async function doAgentCommand(command, access, traceItem) {
     }
 
     if (IS_NATIVE_APP) {
-        const msg = '当前是安卓 App，没有本机服务端，无法执行电脑命令。'
-            + '请在电脑上运行本应用（node web/serve.mjs）后用浏览器打开。';
+        const msg = '当前是安卓 App，电脑命令只支持电脑侧；手机文件请走手机操作。'
+            + '请在电脑上运行本应用（双击 启动.bat）后用浏览器打开。';
         updateTurnTool(traceItem, { state: 'stopped', result: msg });
         insertAgentResult(msg);
         return { ok: false, text: msg };
     }
 
     try {
-        const send = (approved) => fetch('/api/agent/exec', {
+        // 批准凭据是服务端签发的一次性令牌（绑定命令全文），不是请求体里的布尔：
+        // 布尔等于任何持会话的脚本都能替用户点头。首拍不带令牌，确认后带 403 里的 approvalToken 重试。
+        const send = (approvalToken) => fetch('/api/agent/exec', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ access, command, approved })
+            body: JSON.stringify(approvalToken ? { access, command, approvalToken } : { access, command })
         }).then(r => r.json());
 
-        let result = await send(false);
+        let result = await send(null);
 
         if (result && result.needApproval) {
             updateTurnTool(traceItem, { state: 'running', result: '⚠️ 这条命令被判定为危险操作，正在等用户确认…' });
@@ -229,7 +231,7 @@ async function doAgentCommand(command, access, traceItem) {
                 return { ok: false, text: '用户没有允许执行这条命令' };
             }
             updateTurnTool(traceItem, { state: 'running', result: '用户已允许，正在执行…', resetTimer: true });
-            result = await send(true);
+            result = await send(result.approvalToken);
         }
 
         if (result && result.ok) {

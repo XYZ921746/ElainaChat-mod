@@ -47,7 +47,7 @@ async function initNativeLive2dStorage() {
     }
 }
 
-// 内置模型：随 APK 一起打包的只读副本（www/live2d/models/）。APK 里没有服务端，模型只能从本地取，
+// 内置模型：随 APK 一起打包的只读副本（www/live2d/models/）。APK 的模型是只读副本，只能从本地取，
 // 这里启动时按 manifest.json 把内置模型复制进应用数据目录，之后列表扫描与资源寻址跟用户上传的模型完全同路。
 // 只补"缺的 / 大小对不上的"文件，已完整的模型一律不动 —— 既不覆盖用户自己传的同名模型，又能在播种中途失败时自愈。
 async function seedBundledLive2dModels() {

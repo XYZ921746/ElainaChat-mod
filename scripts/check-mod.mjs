@@ -1,23 +1,20 @@
 // 插件（mod）系统的回归检查：扫描 / 安装解压 / 清单生成 / 安全防护 / 身份与依赖解析 / 宿主能力（插槽）/ 端到端。
-// 每个用例自建临时目录与端口并在 try/finally 里自清（部分用例起真实服务，写死端口/MODS_DIR 会互相争用，往仓库 mods/ 写东西会留痕）。
+// 服务端唯一实现是 Go（server/）：原锚在已删除 Node 服务端模块（server/*.mjs、web/serve.mjs）的用例改锚
+// Go HTTP 行为与磁盘事实；zip 字节层安全由 server/internal/zipx 的 go test 钉住（check-go.mjs 编排）。
+// 每个用例自建临时目录与端口并在 try/finally 里自清（部分用例起真实服务，写死端口/MODS_DIR 会互相争用）。
 // 用法：node scripts/check-mod.mjs [用例名子串]，缺省跑全部。
-// 本机环境性失败（缺 mods/ 实物）属已知基线：不是代码坏了，逐条比对 PASS/FAIL 条数即可。
+// 环境性跳过（缺 mods/ 实物或没有 Go 工具链）计 PASS：不是代码坏了，逐条比对跳过说明即可。
 
-import { spawn } from 'node:child_process';
 import {
     mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, readdirSync, mkdirSync,
-    openSync, closeSync, cpSync,
+    openSync, closeSync, cpSync, utimesSync, renameSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
-import { readFrontend, readHtmlAndStyles } from './frontend-sources.mjs';
+import { readFrontend } from './frontend-sources.mjs';
 import { launchTestBrowser } from './test-browser.mjs';
-import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
-import { createModManager } from '../server/mods.mjs';
-import { createModServer } from '../server/mod-server.mjs';
-import { createSkillManager } from '../server/skills.mjs';
-import { readZip, createZip, effectiveExt } from '../server/zip.mjs';
+import { runChecks, ROOT, wait, waitServerUp, freePort, startGoServer, makeZip } from './check-harness.mjs';
 import { extractFunction as extractFn } from './check-source.mjs';
 
 const MODS = path.join(ROOT, 'mods');
@@ -36,59 +33,6 @@ function modDirById(id, modsRoot = MODS) {
     }
     return existsSync(path.join(modsRoot, id, 'index.js')) ? id : null;
 }
-
-function modPath(id, ...rest) {
-    const dir = modDirById(id);
-    return dir ? path.join(MODS, dir, ...rest) : null;
-}
-
-// 手工构造 store 模式（不压缩）ZIP：测试不依赖外部打包工具，安卓链也要同一套字节布局
-function makeZip(entries) {
-    const crcTable = (() => {
-        const t = new Int32Array(256);
-        for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[i] = c; }
-        return t;
-    })();
-    const crc32 = (buf) => { let c = -1; for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xFF] ^ (c >>> 8); return (c ^ -1) >>> 0; };
-    const chunks = [], central = [];
-    let offset = 0;
-    for (const [name, content] of entries) {
-        const nameBuf = Buffer.from(name, 'utf8');
-        const data = Buffer.from(content, 'utf8');
-        const crc = crc32(data);
-        const local = Buffer.alloc(30);
-        local.writeUInt32LE(0x04034b50, 0);
-        local.writeUInt16LE(20, 4);
-        local.writeUInt32LE(crc, 14);
-        local.writeUInt32LE(data.length, 18); local.writeUInt32LE(data.length, 22);
-        local.writeUInt16LE(nameBuf.length, 26);
-        chunks.push(local, nameBuf, data);
-        const cd = Buffer.alloc(46);
-        cd.writeUInt32LE(0x02014b50, 0);
-        cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6);
-        cd.writeUInt32LE(crc, 16);
-        cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(data.length, 24);
-        cd.writeUInt16LE(nameBuf.length, 28);
-        cd.writeUInt32LE(offset, 42);
-        central.push(cd, nameBuf);
-        offset += local.length + nameBuf.length + data.length;
-    }
-    const cdBuf = Buffer.concat(central);
-    const eocd = Buffer.alloc(22);
-    eocd.writeUInt32LE(0x06054b50, 0);
-    eocd.writeUInt16LE(entries.length, 8); eocd.writeUInt16LE(entries.length, 10);
-    eocd.writeUInt32LE(cdBuf.length, 12); eocd.writeUInt32LE(offset, 16);
-    return Buffer.concat([...chunks, cdBuf, eocd]);
-}
-
-// 用真实 createModManager 造指向指定目录的管理器：参数与 web/serve.mjs 给真实服务的一致，各用例共用这一份
-const mkMgr = (modsDir) => createModManager({
-    modsDir,
-    unzip: (buf, opts = {}) => readZip(buf, { ...opts, returnBlocked: true }),
-    isUnsafeEntryName: (n) => n.startsWith('/') || /^[A-Za-z]:/.test(n) || n.split('/').includes('..'),
-    effectiveExt,
-    log: () => {},
-});
 
 // 登记制临时目录，用例结束统一删；前缀按用例区分，残留时能看出漏清理的是哪一段
 function tempDirFactory(prefix) {
@@ -113,771 +57,405 @@ const stripComments = (src) => String(src)
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^[ \t]*\/\/.*$/gm, '');
 
-// 1. 插件系统：服务端扫描 / 自动解压 / 清单生成 / 安全防护
-// 为什么常驻：mod 是同源执行第三方 JS 的入口，路径穿越、卸载不彻底、allowScripts 忘传都极易回归
+// 起一个指向临时夹具的 Go 服务：DATA_DIR/LOG_DIR 走登记制临时目录，可选 MODS_DIR/SKILLS_DIR/
+// 插件启用状态（写入 ELAINA_PLUGIN_STATE_FILE，Go 服务端只从这一个文件读启用键值表）。
+// 返回 null 表示本机没有 Go 工具链：环境性跳过，不判红。
+async function startFixtureServer(tmp, { modsDir, skillsDir, state } = {}) {
+    const env = { DATA_DIR: tmp.dir(), LOG_DIR: tmp.dir() };
+    if (modsDir) env.MODS_DIR = modsDir;
+    if (skillsDir) env.SKILLS_DIR = skillsDir;
+    if (state) {
+        const stateFile = path.join(env.DATA_DIR, 'plugin-state.json');
+        writeFileSync(stateFile, JSON.stringify(state));
+        env.ELAINA_PLUGIN_STATE_FILE = stateFile;
+    }
+    const srv = await startGoServer({ env });
+    if (!srv) console.log('  --   跳过：本机没有 Go 工具链，无法编译服务端（环境性跳过）');
+    return srv;
+}
+
+/** 轮询 /api/plugins 直到扫描完成（自动装 zip / 清单生成有窗口），返回解析后的应答 */
+async function fetchPluginList(base) {
+    let body = null;
+    for (let i = 0; i < 20; i++) {
+        body = await fetch(base + '/api/plugins').then((r) => r.json()).catch(() => null);
+        if (body && body.ok === true) break;
+        await wait(300);
+    }
+    return body;
+}
+
+// 1. 插件系统核心：扫描 / 安装（mods/ 丢 zip 自动装 + POST 上传安装）/ 清单生成 / 安全防护。
+// 原来白盒读 server/mods.mjs、web/serve.mjs 源码的断言改锚 Go HTTP 行为与磁盘事实
+// （server/internal/httpapi/packages.go + server/internal/packages）。
+// zip 字节层安全（路径穿越 / 危险扩展名 / 体积上限）唯一实现在 server/internal/zipx，有 go test 守护；
+// 这里断言安装接口的对外结论（安装成功但只有合法文件落盘），两层合起来覆盖同一道防线。
 async function caseModsCore(c) {
-    {
-        const mods = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
-        const serve = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-        const loader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-load.js'), 'utf8')
-            + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-        // 解压实现要看 server/zip.mjs 那份：serve.mjs 只保留薄包装，不再自带完整实现
-        const zip = readFileSync(path.join(ROOT, 'server', 'zip.mjs'), 'utf8');
-
-        c.ok(/export function createModManager/.test(mods), 'server/mods.mjs 导出 createModManager');
-        c.ok(/function scanAndSync/.test(mods), '有 scanAndSync（扫描目录 + 解压 + 生成清单）');
-        c.ok(/function uninstall/.test(mods), '有 uninstall');
-        c.ok(/MOD_ID_RE/.test(mods), '插件名有白名单校验（挡 .. 与绝对路径）');
-
-        // allowScripts：mod 的本质是 JS，但解压默认黑名单含 .js
-        c.ok(/allowScripts:\s*true/.test(mods), '★ 解压 mod 时传 allowScripts:true（否则 .js 会被拦掉）');
-        c.ok(/allowScripts/.test(zip), '★ server/zip.mjs 的 readZip 支持 allowScripts 选项');
-        c.ok(/PLUGIN_EXTS/.test(zip), '插件类扩展名（脚本 + HTML 面板）被单独识别');
-
-        // 服务端能力声明（AGENTS.md D19 / 表 A23）
-        const modServer = readFileSync(path.join(ROOT, 'server', 'mod-server.mjs'), 'utf8');
-        c.ok(/CAPABILITY_NAMES\s*=\s*new Set\(/.test(modServer), 'mod-server.mjs 有 CAPABILITY_NAMES 能力名清单');
-        for (const cap of ['route-register', 'upload-write', 'static-read', 'host-utils', 'net-outbound']) {
-            c.ok(modServer.includes("'" + cap + "'"), '能力名清单含 ' + cap);
-        }
-        c.ok(/function readCapabilities/.test(modServer), '有 readCapabilities（manifest.server.capabilities 校验）');
-        // 每个有副作用的 ctx 成员都必须带能力守卫 —— 逐个点名，漏一个就红
-        c.ok(/need\('host-utils', 'ctx\.utils/.test(modServer) || /need\('host-utils'[^)]*\)\s*;\s*\n\s*return hostUtils/.test(modServer),
-            'ctx.utils 有 host-utils 能力守卫');
-        c.ok(/need\('route-register'/.test(modServer), 'ctx.route 有 route-register 能力守卫');
-        c.ok(/need\('upload-write'/.test(modServer), 'ctx.uploadDir 有 upload-write 能力守卫');
-        c.ok(/need\('static-read'/.test(modServer), 'ctx.staticDir 有 static-read 能力守卫');
-        c.ok(/function withTimeout/.test(modServer), '有 withTimeout（第三方代码装载超时）');
-        c.ok(/MOD_IMPORT_TIMEOUT_MS/.test(modServer), 'import(server.entry) 有超时常量');
-        c.ok(/MOD_REGISTER_TIMEOUT_MS/.test(modServer), 'register(ctx) 有超时常量');
-        c.ok(/withTimeout\(\s*import\(|withTimeout\(\s*\n?\s*import\(/.test(modServer),
-            'import(server.entry) 经 withTimeout 包裹');
-        c.ok(/withTimeout\(\s*\n?\s*Promise\.resolve\(register\(ctx\)\)/.test(modServer),
-            'register(ctx) 经 withTimeout 包裹');
-
-        // 前端 host API 能力组（AGENTS.md D18 / 表 A22）
-        const modsJs = readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8')
-            + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
-        c.ok(/HOST_API_GROUPS\s*=\s*\{/.test(modsJs), 'mods.js 有 HOST_API_GROUPS 能力组表');
-        for (const g of ['core', 'theme', 'achievements', 'dragSort', 'openFolder']) {
-            c.ok(new RegExp('HOST_API_GROUPS|' + g + ':').test(modsJs), '能力组表含 ' + g);
-        }
-        c.ok(/function declaredApiGroups/.test(modsJs), '有 declaredApiGroups（解析 manifest.capabilities）');
-        c.ok(/hasGroup\('theme'\)/.test(modsJs), 'host.theme 按 theme 组下发');
-        c.ok(/hasGroup\('achievements'\)/.test(modsJs), 'host.unlock 按 achievements 组下发');
-        c.ok(/hasGroup\('dragSort'\)/.test(modsJs), 'host.dragSort 按 dragSort 组下发');
-        c.ok(/hasGroup\('openFolder'\)/.test(modsJs), 'host.openFolder 按 openFolder 组下发');
-        // 合并后的单一实现：serve.mjs 不该再有自己那份 unzip
-        c.ok(!/^function unzip\(/m.test(serve) || /readZip\(buf, \{ \.\.\.opts, returnBlocked: true \}\)/.test(serve),
-            '★ 解压实现只有一份（serve.mjs 只保留薄包装，不再自带完整实现）');
-        c.ok(/from '\.\.\/server\/zip\.mjs'/.test(serve), 'serve.mjs 从 zip.mjs 引入解压实现');
-
-        c.ok(/id \+ ext/.test(mods) || /\.zip/.test(mods.split('function uninstall')[1] || ''),
-            '★ 卸载时连安装包一起删（否则 scanAndSync 会把它装回来）');
-
-        // 卸载必须按真实目录删：id 来自 manifest、目录名是安装时的包名，两者可不一致（表 A9），
-        // 用 id 拼的路径不存在而 rm(force:true) 静默成功，表现为"卸载不掉却提示已删除"
-        c.ok(/function findModDirById/.test(mods),
-            '★ 有 findModDirById（按 id 反查真实目录，因为目录名 ≠ id）');
-        const uninstallFn = mods.split('function uninstall')[1] || '';
-        // 只取 uninstall 本体：紧随其后的 findModDirById 会合法地用同名目录拼一次路径，算进来会误红
-        const uninstallBody = uninstallFn.split('async function findModDirById')[0];
-        c.ok(/await\s+findModDirById\(id\)/.test(uninstallBody),
-            '★ 卸载经 findModDirById 解析真实目录（不是 path.join(modsDir, id)）');
-        c.ok(!/path\.join\(modsDir,\s*id\)/.test(uninstallBody),
-            '★ 卸载不得用 id 直接拼目录路径（拼出来的目录名可能不存在）');
-        c.ok(/if\s*\(!dir\)\s*throw/.test(uninstallBody) || /!dir\)\s*\{?\s*throw/.test(uninstallBody),
-            '★ 找不到目录时明确抛错（不假装卸载成功）');
-        // 删完要确认真的没了：Windows 上文件被占用会留下半删目录
-        c.ok(/await\s+stat\(resolved\)/.test(uninstallBody),
-            '★ 删完复查目录确已消失（文件被占用时不留"假成功"）');
-        c.ok(/function findModDirById/.test(mods) && /manifest\.json/.test(mods.split('function findModDirById')[1] || ''),
-            '★ findModDirById 读各目录 manifest.json 比对 id（目录名不可靠）');
-
-        // README 与卸载是同一个身份问题：带版本号的安装目录用 id 拼 README 路径永远读不到
-        const readmeBody = (mods.split('function readReadme')[1] || '').split('async function uninstall')[0];
-        c.ok(/await\s+findModDirById\(id\)/.test(readmeBody),
-            '★ README 经 findModDirById 解析真实目录（不是 path.join(modsDir, id)）');
-        c.ok(!/path\.join\(modsDir,\s*id\)/.test(readmeBody),
-            '★ README 不得用 id 直接拼目录路径（目录名可能带版本号）');
-
-        c.ok(/ElainaMods/.test(loader), '加载器挂在 window.ElainaMods');
-        c.ok(/function discover/.test(loader), '有 discover（读 index.json 清单）');
-        c.ok(/sortByDependency/.test(loader), '有依赖排序（manifest.after）');
-        c.ok(/依赖成环/.test(loader), '检测环形依赖（不死循环）');
-        c.ok(/失败隔离|已隔离/.test(loader), '加载失败会隔离（不拖垮整个应用）');
-        c.ok(/register\(/.test(loader), '提供 register（mod 脚本注册初始化函数）');
-        c.ok(/setPromptHint|promptHints/.test(loader), '提供 system 提示词注入入口（Galgame 场景切换要用）');
-
-        // 插件市场：依赖必须自动补齐 —— 只提示"缺依赖"不够，主体装完会因前置缺失拒绝加载，看起来像插件坏了
-        const market = readFileSync(path.join(WEB, 'js', 'market-utils.js'), 'utf8')
-            + '\n' + readFileSync(path.join(WEB, 'js', 'download.js'), 'utf8')
-            + '\n' + readFileSync(path.join(WEB, 'js', 'mod-market.js'), 'utf8');
-        c.ok(/function resolveInstallOrder/.test(market),
-            '★ 有 resolveInstallOrder（把依赖摊平成安装顺序）');
-        c.ok(/resolveInstallOrder\(dep,\s*byId,\s*installed,\s*visiting\)/.test(market),
-            '★ 递归解析依赖（依赖的依赖也要装）');
-        c.ok(/visiting/.test(market) && /visiting\.has\(/.test(market),
-            '★ 依赖环检测（相互依赖不死循环）');
-        c.ok(/out\.push\(\{\s*plugin:\s*p1/.test(market),
-            '★ 本体排在依赖之后（深度优先后序）');
-        // 断言必须锚定 installed.has 前提：只匹配 out.push 的话，去掉判断也会通过，等于没检查
-        c.ok(/if\s*\(!installed\.has\(p1\.id\)\)\s*out\.push\(\{\s*plugin:\s*p1/.test(market),
-            '★ 已安装的依赖不重复下载（push 必须在 installed.has 判断之内）');
-        const installBody = market.split('function installFromMarket')[1] || '';
-        c.ok(/for\s*\(var\s+i\s*=\s*0;\s*i\s*<\s*queue\.length/.test(installBody),
-            '★ 按队列依次安装（依赖先于本体落盘）');
-        c.ok(/done\.length\s*>\s*1/.test(installBody),
-            '★ 装完把一起装上的依赖告知用户（否则用户不知道多了什么）');
-        // 依赖解析必须用整份索引：改用某个分区的话前置扩展不会跟着装，主体装完照样拒绝加载
-        c.ok(/lastIndex\.plugins/.test(installBody),
-            '★ 依赖解析读整份索引（前置扩展照样会被一起装）');
-        // 纯底座类前置默认不收进列表：无独立界面，单列等于请用户手装不认识的包；判定看依赖关系而非 id
-        c.ok(/function isPrerequisiteOnly/.test(market) && /kind === 'resource'/.test(market)
-            && /o\.depends\.indexOf\(p\.id\) >= 0/.test(market),
-            '★ 纯底座前置按「resource 或只被别人依赖」认定（不点名 id）');
-        // 商店端显式声明优先于推断：true 收起、false 强制单列，只认 true 的话带独立界面的资源包回不了列表
-        c.ok(/p\.prerequisite === true/.test(market) && /p\.prerequisite === false/.test(market),
-            '★ 索引可用 prerequisite 显式声明（true 进前置区 / false 强制进普通列表）');
-        c.ok(/p\.hidden === true/.test(market),
-            '★ 兼容索引沿用 manifest.hidden 的商店源（只认 true，false 不参与判定）');
-        c.ok(/function splitMarketPlugins/.test(market) && /marketSectionHead/.test(market),
-            '★ 前置扩展单列一个区（不隐藏、不与普通扩展混排）');
-        c.ok(/marketPrereqOpen/.test(market) && /marketPrereqBody/.test(market)
-            && /classList\.toggle\('hidden', !marketPrereqOpen\)/.test(market),
-            '★ 市场的前置区默认收起（点标题展开，收起只是折叠）');
-
-        // 平台分类：索引可选 platform 字段，缺省归 universal；手机端「全部」不放电脑插件，点「电脑」分类才可见
-        c.ok(/function platformOf/.test(market) && /v === 'mobile' \|\| v === 'desktop'/.test(market)
-            && /: 'universal'/.test(market),
-            '★ 平台归一化只认 mobile / desktop，缺省与非法值归 universal（第三方源不写这字段行为不变）');
-        c.ok(/function matchesPlatform/.test(market)
-            && /return !\(isMobileDevice && plat === 'desktop'\)/.test(market),
-            '★ 「全部」只在手机设备上排除电脑插件（电脑端不排除）');
-        c.ok(/plat === sel \|\| plat === 'universal'/.test(market),
-            '★ 手机 / 电脑分类各自带上通用插件（通用没有独立分类，两边都显示）');
-        c.ok(/var marketPlatform = 'all'/.test(market)
-            && /marketEntrancePending = true;\s*marketPlatform = 'all';/.test(market),
-            '★ 分类默认「全部」且每次打开市场重置（不跨次记忆）');
-        c.ok(/matchesPlatform\(p, marketPlatform, isMobile\)/.test(market)
-            && /matchesQuery\(p, q\)/.test(market),
-            '★ 列表条目同时过平台分类与搜索词两道过滤');
-        c.ok(/marketPlatformPills/.test(market) && /closest\('button\[data-platform\]'\)/.test(market)
-            && /syncMarketPlatformPills\(\)/.test(market),
-            '★ 分类 chips 走事件委托且 aria-pressed 单独同步（静态 HTML 不随列表重渲）');
-        c.ok(/plat === 'universal'/.test(market) && /plat === 'desktop' \? '电脑' : '手机'/.test(market),
-            '★ 手机 / 电脑插件打平台角标（通用不打，全打等于没打）');
-
-        // 插件页自动检查更新：比对与排序必须是纯函数，批量更新必须复用安装管线（进度/停用/续装不另起一套）
-        c.ok(/function updateCandidatesOf/.test(market) && /function sortUpdateFirstDeps/.test(market),
-            '★ 更新比对与依赖先行排序是纯函数（落 market-utils，不碰 DOM）');
-        c.ok(/function checkModUpdates/.test(market) && /updateCandidatesOf\(installedList, lastIndex\.plugins\)/.test(market),
-            '★ 更新检查拉整份索引并按已装版本比对（自定义商店源同样生效）');
-        c.ok(/function updateModsBatch/.test(market) && /await installFromMarket\(list\[i\]\.plugin, null\)/.test(market),
-            '★ 批量更新逐个走安装管线（进度与失败原因落在下载悬浮窗，不另起一套）');
-
-        // 大包分片并发下载：单条 TCP 流限速严重而浏览器默认多连接；钉住"并发是默认路径"与"退回单流"退路
-        c.ok(/function downloadZipSegmented/.test(market),
-            '★ 有分片并发下载（downloadZipSegmented）');
-        c.ok(/headers:\s*\{\s*Range:\s*'bytes='\s*\+\s*start/.test(market),
-            '★ 分片请求带 Range 头（并发靠它切段）');
-        c.ok(/function segmentCountFor/.test(market) && /MAX_SEGMENTS/.test(market),
-            '★ 片数按体积计算且有上限（segmentCountFor + MAX_SEGMENTS）');
-        c.ok(/IS_MOBILE_DEVICE/.test(market),
-            '★ 手机端降低并发片数（复用 core.js 的设备判定，不另嗅探 UA）');
-        // 退路一：服务端回了 200（忽略 Range）不能当分片用，否则 16 个 200 会被拼成一个 16 倍大的坏 zip
-        c.ok(/!\s*===\s*206|status\s*!==\s*206/.test(market),
-            '★ 非 206 判定（服务端忽略 Range 时不当分片用）');
-        const segBody = market.split('function downloadZipSegmented')[1] || '';
-        c.ok(/SEGMENT_RETRIES/.test(segBody) && /attempt\s*<=\s*SEGMENT_RETRIES/.test(segBody),
-            '★ 分片失败会重试（单连接在这条链路上常中途卡死）');
-        const fromBody = market.split('function downloadZipFrom')[1] || '';
-        c.ok(/catch\s*\(e\)[\s\S]{0,400}单流/.test(fromBody),
-            '★ 分片整体失败后回退单流（分片不是唯一路径）');
-        // 退路二：镜像只有在原地址整条路失败后才用，正常情况不能白打一次网络
-        c.ok(/function packageMirrorUrls/.test(market),
-            '★ 有包下载镜像候选（packageMirrorUrls）');
-        const dlBody = market.split('async function downloadZip\(')[1] || '';
-        c.ok(/packageMirrorUrls\(url\)/.test(dlBody) && /for\s*\([^)]*urls\.length/.test(dlBody),
-            '★ 镜像按顺序回退（原地址排第一）');
-        // 镜像只对官方索引下的包生效：自建源的托管路径猜不出来；断言认提前返回行为而非具体写法
-        c.ok(/store\\\/packages|store\/packages/.test(market) && /if\s*\(!m\)\s*return\s*(?:\[url\]|out)\s*;/.test(market),
-            '★ 镜像只作用于官方源的包地址（自建源不被硬套）');
-        c.ok(/cache:\s*'no-cache'/.test(market),
-            '★ 索引用 no-cache（可存但回源验证，不是 no-store 全量重下）');
-
-        const html = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
-        c.ok(/<script[^>]*src="\/js\/mods\.js"[^>]*><\/script>/.test(html), 'index.html 引入了 mods.js');
-        const iMods = html.indexOf('/js/mods.js');
-        const iInit = html.indexOf('/js/init.js');
-        c.ok(iMods > 0 && iInit > 0 && iMods < iInit, '★ mods.js 排在 init.js 之前（初始化要读清单）');
-
-        const data = readFileSync(path.join(ROOT, 'web', 'js', 'roleplay.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'chat.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'data.js'), 'utf8');
-        c.ok(/ElainaMods/.test(data) && /collectPromptHints/.test(data),
-            '★ 宿主在构造提示词时消费 mod 注入的 system 片段');
-
-        c.ok(/api\/plugins\/install/.test(serve), '服务端有 POST /api/plugins/install（上传安装）');
-        c.ok(/installFromBuffer/.test(mods), 'mods.mjs 提供 installFromBuffer（从内存 zip 安装）');
-        c.ok(/writePluginFiles/.test(mods),
-            '★ 两条安装路径（丢文件进目录 / 上传）共用同一段安全逻辑');
-        c.ok(/插件名不能包含路径成分/.test(serve), '★ 含路径成分的插件名被明确拒绝（不静默改名）');
-        c.ok(/id="modsInstallBtn"/.test(html), '设置里有「上传安装」按钮');
-        c.ok(/id="modsFileInput"/.test(html), '有隐藏的 file input');
-        // 应用内删除按钮：服务端早有 DELETE /api/plugins/:id，界面没暴露时用户只能删目录、又会被 zip 装回来
-        const settingsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-        const modsLoader = readFileSync(path.join(ROOT, 'web', 'js', 'mods-host-core.js'), 'utf8')
-    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods-api.js'), 'utf8')
-    + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-        c.ok(/mod-del-btn/.test(settingsSrc), '★ 设置里渲染「删除」按钮');
-        c.ok(/method: 'DELETE'/.test(settingsSrc), '★ 删除走 DELETE /api/plugins/:id');
-        c.ok(/showCustomConfirm[\s\S]{0,400}删除插件/.test(settingsSrc), '★ 删除前二次确认（防误删）');
-        c.ok(/forget: forgetMod/.test(modsLoader), '★ ElainaMods 导出 forget（清启用状态，避免重装自动启用）');
-        // 插件页自动检查更新：入口只在插件卡片与更新条上（与 D20 同一呈现原则），批量入口要绑一次不随列表重建
-        c.ok(/mod-update-btn/.test(settingsSrc) && /modsUpdateList/.test(settingsSrc),
-            '★ 插件卡片有「更新」按钮与待更清单（自动检查命中才出现）');
-        c.ok(/id="modsUpdateAllBtn"/.test(html), '★ 插件页有「全部更新」入口');
-
-        c.ok(/data-settings-tab="tab-mods"/.test(html), '设置里有「插件」Tab');
-        c.ok(/id="tab-mods"/.test(html), '有 #tab-mods 面板');
-        c.ok(/id="modsList"/.test(html), '有 mod 列表容器');
-        c.ok(!/id="modsGlobalToggle"/.test(html), '★ 全局开关已删除（默认开启，不再有一键全关）');
-        c.ok(/id="modsInstallBtn"/.test(html), '有 上传安装 入口');
-        // 清单在每次打开设置时都会重扫（openSettings → refreshModsList），标题栏重扫/卡片 ⟳/悬浮钮都不该回来
-        c.ok(!/id="modsRefreshBtn"/.test(html), '★ 没有「⟳ 重新扫描」按钮');
-        c.ok(!/modsFab/.test(html), '★ 没有右下角悬浮刷新钮');
-        const settingsForCard = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-        c.ok(!/mod-refresh-one/.test(settingsForCard), '★ 卡片上没有单独的 ⟳');
-        c.ok(/id="modsAddGroupBtn"/.test(html), '★ 有「添加分栏」按钮（插件分组）');
-        // 「浏览目录」必须带 id（init.js 按 id 绑一次）：挂在 refreshModsList 里按 class 绑会被整块 innerHTML 重建冲掉
-        c.ok(/id="modsBrowseBtn"/.test(html), '★ 有「浏览目录」按钮（id 形式，供 init 绑一次）');
-        c.ok(/id="modsBrowseResult"/.test(html), '★ 「浏览目录」有独立结果面板（长路径不会被挤没）');
-        c.ok(/mod-group-toggle/.test(readHtmlAndStyles()), '★ 分栏折叠三角（disclosure triangle）');
-        const settings = readFileSync(path.join(ROOT, 'web', 'js', 'plugins.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'settings.js'), 'utf8');
-        c.ok(/async function refreshModsList/.test(settings), '有 refreshModsList');
-        c.ok(/getElementById\('modsBrowseBtn'\)\?\.addEventListener/.test(readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8')),
-            '★ 「浏览目录」在 init.js 绑一次（不随列表重建丢失）');
-        c.ok(!/modsBrowseBtn[\s\S]{0,400}addEventListener/.test(settings),
-            '★ settings.js 里不再重复绑定「浏览目录」');
-        const initSrc2 = readFileSync(path.join(ROOT, 'web', 'js', 'bindings.js'), 'utf8')
-        + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'init.js'), 'utf8');
-        c.ok(/modsBrowseBtn[\s\S]{0,2000}fetch\('\/api\/plugins\/open-folder'/.test(initSrc2),
-            '★ 「浏览目录」先真去打开 mods/，再列内容兜底');
-        c.ok(/modsUpdateAllBtn'\)\?\.addEventListener/.test(initSrc2), '★ 「全部更新」在 init/bindings 绑一次');
-        c.ok(/\/api\/plugins/.test(settings), '列表数据来自服务端 /api/plugins');
-        c.ok(/ElainaMods\.list\(\)/.test(settings), '同时合并前端加载状态（服务端只知道磁盘上有什么）');
-        c.ok(/加载失败/.test(settings), '★ 加载失败的 mod 有显眼标记（否则用户以为"开了没反应"）');
-        c.ok(/公共依赖/.test(settings), '★ hidden 的 mod 显示为「公共依赖」而非开关');
-        c.ok(/前置扩展/.test(settings) && /prereqMods/.test(settings) && /isPrereqMod/.test(settings),
-            '★ 插件页有固定的「前置扩展」区（不隐藏，单独存放）');
-        c.ok(/afterNames/.test(settings),
-            '★ 前置判定同时认 manifest.hidden 与"被别的插件 after 点名"');
-        const gal = readFileSync(modPath('galgame', 'index.js'), 'utf8');
-        c.ok(/enabled = false;\s*\n\s*build\(\);/.test(gal) && !/if \(document\.readyState === 'loading'\) document\.addEventListener\('DOMContentLoaded', \(\) => open\(\)\);/.test(gal),
-            '★ 启用 galgame 不再自动打开剧情界面（由主页按钮进入）');
-        c.ok(/function setEnabled\(on, silent\)/.test(gal) && !/if \(on\) open\(\); else close\(\);/.test(gal),
-            '★ setEnabled(true) 只让功能可用，不打开界面（避免"拨开关就被推进全屏"）');
-        const galReg = readFileSync(modPath('galgame', 'register.js'), 'utf8');
-        c.ok(/id: 'scenario'/.test(galReg) && /settings\.modal/.test(galReg)
-            && /id: 'galgame'/.test(galReg),
-            '★ 主页右上角一个「情景演绎」入口 + 设置窗按插件 id 注册（齿轮能找到它）');
-        const l2dCore = readFileSync(modPath('galgame', 'index-live2d.js'), 'utf8');
-        const l2dPanel = readFileSync(modPath('galgame', 'settings-panel.js'), 'utf8');
-        const l2dHtml = readFileSync(modPath('galgame', 'panel.html'), 'utf8');
-        c.ok(/function setSceneMode/.test(l2dCore) && /sceneMode/.test(l2dCore)
-            && /id="ggL2dPortrait"/.test(l2dCore),
-            '★ 舞台支持双模式（Live2D / 图片立绘）并共用同一个气泡');
-        c.ok(!/挂断|结束通话/.test(l2dCore) && !/live2d-speaking|live2d-mute-hint/.test(l2dCore),
-            '★ 情景演绎界面不再有视频通话控件（挂断 / 正在说话 / 静音提示）');
-        c.ok(!/live2d-model-select|live2d-topbar/.test(l2dCore)
-            && /id="live2d-exit-btn"/.test(l2dCore) && /\.live2d-exit-btn/.test(l2dCore),
-            '★ 舞台右上角只有按钮组（退出 / 朗读 / 语音输入），没有模型下拉与底栏退出');
-        const galManifest = JSON.parse(readFileSync(modPath('galgame', 'manifest.json'), 'utf8'));
-        c.ok(Array.isArray(galManifest.skills) && galManifest.skills.includes('skills/scenario-stage')
-            && existsSync(path.join(path.dirname(modPath('galgame', 'manifest.json')), 'skills/scenario-stage/SKILL.md')),
-            '★ 随附「情景演绎」技能（告诉 AI 怎么调背景与表情）');
-        c.ok(/listBackgrounds\(\)/.test(l2dCore) && /setBackgroundByName\(/.test(l2dCore)
-            && /listEmotions\(\)/.test(l2dCore) && /setEmotion\(name\)/.test(l2dCore),
-            '★ 暴露背景/表情接口（listBackgrounds / setBackgroundByName / listEmotions / setEmotion）');
-        c.ok(/sceneMode === 'portrait'[\s\S]{0,200}resolveEmotionKey\(expName\)/.test(l2dCore),
-            '★ [表情:] 在立绘模式下映射成对应情绪（两种呈现都生效）');
-        // 语音朗读/输入走宿主 host.speak 与 host.dictation（D14：不直接摸宿主内部）
-        const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-        c.ok(/get speech\(\)/.test(coreSrc) && /startVoicePlaybackOnce\(/.test(coreSrc),
-            '★ 宿主提供 ElainaHost.speech（复用同一条 TTS 链路）');
-        c.ok(/speak\(text, opts\) \{/.test(modsLoader) && /speechConfigured\(\)/.test(modsLoader),
-            '★ host API 暴露 speak / speechConfigured / stopSpeech');
-        c.ok(/function speakBubble/.test(l2dCore) && /host\.speak\(/.test(l2dCore)
-            && !/live2d-speech-btn|getSpeechEnabled|setSpeechEnabled/.test(l2dCore),
-            '★ 舞台自动朗读 AI 新回复（默认开，没有朗读开关）');
-        c.ok(/get dictation\(\)/.test(coreSrc) && /canUseCloudFinalAsr/.test(coreSrc),
-            '★ 宿主提供 ElainaHost.dictation（ASR 是否配置、开麦/结束）');
-        c.ok(/dictate\(action\) \{/.test(modsLoader) && /dictationConfigured\(\)/.test(modsLoader),
-            '★ host API 暴露 dictate / dictationConfigured / dictationState');
-        c.ok(/live2d-mic-btn/.test(l2dCore) && /host\.dictate\(/.test(l2dCore)
-            && /dictationConfigured/.test(l2dCore),
-            '★ 舞台语音输入按钮（未配置 ASR 时隐藏，识别完自动发送）');
-        c.ok(/gg-srow[\s\S]{0,400}live2d-mic-btn|live2d-mic-btn[\s\S]{0,400}gg-srow/.test(l2dCore)
-            && /class="gg-mic-btn"/.test(l2dCore),
-            '★ 说话按钮与输入框同一行（发给键左侧）');
-        c.ok(!/data-?[^>]*gsSpeech|id="gsSpeech"|id="gsDictationHint"/.test(l2dHtml)
-            && !/gsSpeech|gsDictationHint/.test(l2dPanel),
-            '★ 设置页不放朗读/语音输入开关（都走宿主「设置 → 语音」）');
-        c.ok(!/const host = document\.createElement/.test(l2dCore),
-            '★ buildUI 不遮蔽 host API（DOM 变量叫 layer）');
-        c.ok(/data-scene-mode="live2d"/.test(l2dHtml) && /data-scene-mode="portrait"/.test(l2dHtml)
-            && /setSceneMode/.test(l2dPanel),
-            '★ 设置页有「角色呈现」切换（立绘 / 模型），改动立即生效');
-        c.ok(/noGrip/.test(settings),
-            '★ 前置区卡片不画拖拽把手（固定分区，不参与用户分栏）');
-        c.ok(/modsPrereqOpen/.test(settings) && /modsPrereqBody/.test(settings),
-            '★ 插件页前置区默认收起（标题可展开，拨开关重渲染后保持展开态）');
-        // 前置卡片挂在 #modsList 之外：事件只绑 #modsList 时卡片上的按钮与开关全都没有监听器
-        c.ok(/getElementById\('modsPrereqBody'\)[\s\S]{0,200}bindModToggle\(root, hint\)[\s\S]{0,120}bindModCardButtons\(root, hint\)/.test(settings),
-            '★ 前置区卡片的按钮与开关也绑事件（它们不在 #modsList 里，只绑 box 会点了没反应）');
-        c.ok(/after: Array\.isArray\(e\.manifest\.after\)/.test(modsLoader),
-            '★ list() 带出 after（APK/手工目录也判得出前置）');
-        c.ok(/elaina_mods_groups/.test(settings), '★ 分栏清单有持久化（与 store.js 的 DATA_KEYS 对应）');
-        c.ok(/elaina_mods_top_order/.test(settings), '★ 顶层混排顺序（分栏与插件同等级）');
-        c.ok(/loose\.push/.test(settings), '★ 没归属的插件平铺在顶层（不再装进"未分类"栏）');
-    }
-
-    {
-        const galPath = modPath('galgame', 'index.js');
-        const petPath = modPath('pet', 'index.js');
-        const avatarIndex = modPath('elaina-avatar', 'index.js');
-        /* 插件不随仓库分发，缺了是正常状态：跳过而不是判红，且逐个实物判断 ——
-           只装了其中几个同样正常，"三个都缺才跳过"会让部分安装误红。 */
-        const wanted = [['galgame', galPath], ['pet', petPath], ['elaina-avatar', avatarIndex]];
-        const missingAssets = wanted.filter(([, p]) => !p || !existsSync(p)).map(([n]) => n);
-        for (const [n, p] of wanted) {
-            if (!p || !existsSync(p)) continue;
-            c.ok(true, n + '/index.js 存在'
-                + (n === 'elaina-avatar' ? '（按 manifest.id 找到真实目录：' + modDirById('elaina-avatar') + '）' : ''));
-        }
-        if (missingAssets.length) {
-            console.log('  --   跳过 1.2：本地没有 ' + missingAssets.join(' / ')
-                + ' 插件（插件不随仓库分发，这是正常状态）');
-        }
-
-        if (galPath && petPath && existsSync(galPath) && existsSync(petPath)) {
-            const gal = readFileSync(galPath, 'utf8');
-            const pet = readFileSync(petPath, 'utf8');
-
-            c.ok(/ElainaMods\.register\(MOD_ID/.test(gal), 'galgame 用 register 注册（id 用 MOD_ID 常量）');
-            c.ok(/ElainaMods\.register\(MOD_ID/.test(pet), 'pet 用 register 注册（id 用 MOD_ID 常量）');
-            c.ok(/const MOD_ID = 'galgame'/.test(gal), 'galgame 的 MOD_ID 与目录名一致');
-            c.ok(/const MOD_ID = 'pet'/.test(pet), 'pet 的 MOD_ID 与目录名一致');
-
-            c.ok(/ElainaAvatar/.test(gal) && !/img\/elaina\/p_/.test(gal),
-                '★ galgame 用公共 ElainaAvatar，不自己拼立绘路径');
-            c.ok(/ElainaAvatar/.test(pet) && !/img\/elaina\/p_/.test(pet),
-                '★ pet 用公共 ElainaAvatar，不自己拼立绘路径');
-
-            c.ok(!/\bstate\.conversations\b/.test(gal), '★ galgame 不直接读 state（走 host API）');
-            c.ok(!/\bstate\.conversations\b/.test(pet), '★ pet 不直接读 state（走 host API）');
-
-            c.ok(/setPromptHint/.test(gal), '★ galgame 用 host.setPromptHint');
-            const galCodeOnly = gal.split('\n').filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l)).join('\n');
-            c.ok(!/__galgameSceneHint/.test(galCodeOnly), '★ 代码里不再往 window 上挂提示词变量');
-
-            c.ok(!/get\('enabled'/.test(gal), '★ galgame 不读自己的 enabled（避免双重开关）');
-            c.ok(!/get\('enabled'/.test(pet), '★ pet 不读自己的 enabled');
-            c.ok(/ElainaMods\.setEnabled\(MOD_ID, false\)/.test(gal), '★ galgame 退出时同步关 mod 开关');
-            c.ok(/ElainaMods\.setEnabled\(MOD_ID, false\)/.test(pet), '★ pet 收起时同步关 mod 开关');
-
-            c.ok(Boolean(modPath('galgame', 'style.css')) && existsSync(modPath('galgame', 'style.css')), 'galgame 有样式');
-            c.ok(Boolean(modPath('pet', 'style.css')) && existsSync(modPath('pet', 'style.css')), 'pet 有样式');
-
-            const imgDir = modPath('elaina-avatar', 'img');
-            let pngs = [];
-            try { pngs = readdirSync(imgDir).filter((f) => f.endsWith('.png')); } catch { /* 忽略 */ }
-            c.ok(pngs.length === 9, '公共立绘恰好 9 张（一套），实得 ' + pngs.length);
-        }
-    }
-
-    // 1.3 端到端：安装/卸载全在临时目录里做（MODS_DIR 指过去）：用户自己的服务每次被请求 /api/plugins
-    // 都会重扫插件目录、抢走测试刚放的 zip，导致时好时坏。不要往仓库 mods/ 写任何东西，会留痕。
-    const TEST_MODS = mkdtempSync(path.join(tmpdir(), 'elaina-mod-mods-'));
-    const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-mod-data-'));
-    const LOG_DIR = mkdtempSync(path.join(tmpdir(), 'elaina-mod-log-'));
-    let child = null;
+    const tmp = tempDirFactory('elaina-modcore-');
+    let srv = null;
     try {
-        const PORT = await freePort();
-
-        writeFileSync(path.join(TEST_MODS, 'demo-mod.zip'), makeZip([
-            ['demo-mod/manifest.json', JSON.stringify({ name: '演示插件', version: '1.0.0', entry: 'index.js', styles: ['style.css'] })],
-            ['demo-mod/index.js', 'window.ElainaMods && window.ElainaMods.register("demo-mod", function(h){ return {}; });'],
-            ['demo-mod/style.css', '.demo{color:red}'],
+        const modsDir = tmp.dir();
+        writeFileSync(path.join(modsDir, 'demo-mod.zip'), makeZip([
+            { name: 'demo-mod/manifest.json', data: JSON.stringify({ name: '演示插件', version: '1.0.0', entry: 'index.js', styles: ['style.css'] }) },
+            { name: 'demo-mod/index.js', data: 'window.ElainaMods && window.ElainaMods.register("demo-mod", function(h){ return {}; });' },
+            { name: 'demo-mod/style.css', data: '.demo{color:red}' },
         ]));
-        writeFileSync(path.join(TEST_MODS, 'evil-mod.zip'), makeZip([
-            ['evil-mod/manifest.json', JSON.stringify({ name: '恶意' })],
-            ['evil-mod/index.js', 'console.log("x")'],
-            ['evil-mod/../../web/serve.mjs', 'HACKED'],
-            ['evil-mod/../../web/index.html', 'HACKED'],
-            ['evil-mod/bad.exe', 'MZ'],
+        writeFileSync(path.join(modsDir, 'evil-mod.zip'), makeZip([
+            { name: 'evil-mod/manifest.json', data: JSON.stringify({ name: '恶意' }) },
+            { name: 'evil-mod/index.js', data: 'console.log("x")' },
+            { name: 'evil-mod/../../web/serve.mjs', data: 'HACKED' },
+            { name: 'evil-mod/bad.exe', data: 'MZ' },
         ]));
-        mkdirSync(path.join(TEST_MODS, 'elaina-avatar', 'img'), { recursive: true });
-        writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'manifest.json'), JSON.stringify({
+        mkdirSync(path.join(modsDir, 'elaina-avatar', 'img'), { recursive: true });
+        writeFileSync(path.join(modsDir, 'elaina-avatar', 'manifest.json'), JSON.stringify({
             id: 'elaina-avatar', name: '伊蕾娜立绘与情绪', version: '1.0.0',
             entry: 'index.js', defaultEnabled: true, hidden: true,
             capabilities: ['theme'],
         }));
-        writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'index.js'), 'void 0;');
+        writeFileSync(path.join(modsDir, 'elaina-avatar', 'index.js'), 'void 0;');
         // 一张 1x1 的合法 PNG（内容不重要，要的是它能被静态服务取到）
-        writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'img', 'p_calm.png'),
+        writeFileSync(path.join(modsDir, 'elaina-avatar', 'img', 'p_calm.png'),
             Buffer.from('89504e470d0a1a0a0000000d494844520000000100000001080600000'
                 + '01f15c4890000000a49444154789c6360000002000100ffff03000006000557bfabd40000000049454e44ae426082', 'hex'));
-
         // 带版本号的安装目录 + README：目录名（birthday-1.1.0）与 manifest.id（birthday）不一致，用 id 拼路径会 404
-        mkdirSync(path.join(TEST_MODS, 'birthday-1.1.0'), { recursive: true });
-        writeFileSync(path.join(TEST_MODS, 'birthday-1.1.0', 'manifest.json'), JSON.stringify({
+        mkdirSync(path.join(modsDir, 'birthday-1.1.0'), { recursive: true });
+        writeFileSync(path.join(modsDir, 'birthday-1.1.0', 'manifest.json'), JSON.stringify({
             id: 'birthday', name: '生日说明测试', version: '1.1.0', entry: 'index.js',
         }));
-        writeFileSync(path.join(TEST_MODS, 'birthday-1.1.0', 'index.js'), 'void 0;');
-        writeFileSync(path.join(TEST_MODS, 'birthday-1.1.0', 'README.md'), '# 生日说明测试\n');
+        writeFileSync(path.join(modsDir, 'birthday-1.1.0', 'index.js'), 'void 0;');
+        writeFileSync(path.join(modsDir, 'birthday-1.1.0', 'README.md'), '# 生日说明测试\n');
 
-        const serveBefore = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-        const htmlBefore = readFileSync(path.join(ROOT, 'web', 'index.html'), 'utf8');
+        srv = await startFixtureServer(tmp, { modsDir });
+        if (!srv) return;
+        c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-500));
+        if (!srv.up) return;
+        const BASE = srv.base;
 
-        child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
-            cwd: ROOT,
-            env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', DATA_DIR, LOG_DIR, MODS_DIR: TEST_MODS },
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-        let out = '';
-        child.stdout.on('data', (d) => { out += d; });
-        child.stderr.on('data', (d) => { out += d; });
+        const body = await fetchPluginList(BASE);
+        c.ok(body && body.ok === true, 'GET /api/plugins 成功');
 
-        let up = false;
-        for (let i = 0; i < 75; i++) {
-            try { const r = await fetch(`http://127.0.0.1:${PORT}/api/server-info`); if (r.status) { up = true; break; } }
-            catch { await wait(200); }
+        const plugins = (body && body.plugins) || [];
+        const ids = plugins.map((p) => p.id);
+        c.ok(ids.includes('demo-mod'), '★ 丢进 mods/ 的 zip 被自动解压成 mod', JSON.stringify(ids));
+        c.ok(ids.includes('elaina-avatar'), '已存在的目录 mod 被识别');
+
+        const demo = plugins.find((p) => p.id === 'demo-mod');
+        c.ok(demo && demo.name === '演示插件', 'manifest.json 被正确读取', demo && demo.name);
+        c.ok(demo && demo.entry === 'index.js', 'entry 字段生效');
+        c.ok(demo && Array.isArray(demo.styles) && demo.styles.includes('style.css'), 'styles 字段生效');
+        c.ok(demo && demo.dir === 'demo-mod', '清单带 dir 字段（资源 URL 按真实目录拼）', demo && demo.dir);
+
+        // README 走接口而不是前端 fetch：目录名带版本号时拿 id 直接拼会 404
+        const rr = await fetch(BASE + '/api/plugins/birthday/readme');
+        const rb = await rr.json().catch(() => null);
+        c.ok(rr.status === 200 && rb && rb.ok === true,
+            '★★ README 按 manifest.id 解析真实目录（目录名可带版本号）', 'HTTP ' + rr.status);
+        c.ok(rb && String(rb.text || '').includes('生日说明测试'), '★ README 正文按真实目录读回');
+
+        // 恶意 zip：穿越与 .exe 条目在 zipx.Read 一层就被拦下（不进安装计数），合法文件照常落盘
+        const evil = ((body && body.installResults) || []).find((r) => r.zip === 'evil-mod.zip');
+        c.ok(evil && typeof evil.ok === 'boolean', '恶意 zip 有安装结果回报', JSON.stringify((body && body.installResults) || []));
+        c.ok(evil && evil.ok === true && evil.files === 2,
+            '★ 恶意 zip：只有 2 个合法文件被写入（穿越与 .exe 被拦）', evil && JSON.stringify(evil));
+        {
+            const evilDir = path.join(modsDir, 'evil-mod');
+            const inside = existsSync(evilDir) ? readdirSync(evilDir) : [];
+            c.ok(!inside.includes('bad.exe'), '★ .exe 未落盘（以磁盘为准）', inside.join(','));
+            c.ok(inside.filter((n) => /^(manifest\.json|index\.js)$/.test(n)).length === 2,
+                '★ 恶意 zip 只落盘 2 个合法文件（以磁盘为准）', inside.join(','));
+            c.ok(!existsSync(path.join(modsDir, '..', 'web')),
+                '★ 穿越条目没有写出 mods/ 之外（staging 的 ../.. 落点没有 web/）');
         }
-        c.ok(up, '服务已启动', up ? '' : out.slice(-400));
+        c.ok(existsSync(path.join(modsDir, 'evil-mod', 'index.js')), '★ mod 的 index.js 允许落盘（mod 本质就是代码）');
 
-        if (up) {
-            // 首个 /api/plugins 带短重试：并发跑全套检查时，"端口已开"到"清单与 installResults 生成完"
-            // 有窗口，退出条件须同时等到 demo-mod（含 styles）与 evil-mod 的安装结果，缺一会在窗口里读到半截
-            let res = null, body = null;
-            for (let i = 0; i < 20; i++) {
-                res = await fetch(`http://127.0.0.1:${PORT}/api/plugins`);
-                body = await res.json().catch(() => null);
-                const demoNow = ((body && body.plugins) || []).find((p) => p.id === 'demo-mod');
-                const results = (body && body.installResults) || [];
-                const evilNow = results.find((r) => r && r.zip === 'evil-mod.zip' && typeof r.ok === 'boolean');
-                if (res.status === 200 && body && body.ok && demoNow
-                    && demoNow.name === '演示插件'
-                    && Array.isArray(demoNow.styles) && demoNow.styles.includes('style.css')
-                    && evilNow) break;
-                await wait(300);
-            }
-            c.ok(res.status === 200 && body && body.ok, 'GET /api/plugins 成功', 'HTTP ' + res.status);
+        const idx = JSON.parse(readFileSync(path.join(modsDir, 'index.json'), 'utf8'));
+        c.ok(Array.isArray(idx.plugins) && idx.plugins.some((p) => p.id === 'demo-mod'),
+            'index.json 被服务端重新生成且含新装的 mod');
 
-            const ids = (body.plugins || []).map((p) => p.id);
-            c.ok(ids.includes('demo-mod'), '★ zip 被自动解压成 mod');
-            c.ok(ids.includes('elaina-avatar'), '已存在的目录 mod 被识别');
+        const del = await fetch(BASE + '/api/plugins/demo-mod', { method: 'DELETE' });
+        c.ok(del.status === 200, 'DELETE 卸载成功', 'HTTP ' + del.status);
+        c.ok(!existsSync(path.join(modsDir, 'demo-mod')), '★ mod 目录已被删除');
+        c.ok(!existsSync(path.join(modsDir, 'demo-mod.zip')), '★ 安装包也被删除（否则会被重新装回来）');
 
-            // README 接口必须按 manifest.id 找目录：目录名带版本号时拿 id 直接拼会 404，说明按钮全失效
-            {
-                const rr = await fetch(`http://127.0.0.1:${PORT}/api/plugins/birthday/readme`);
-                const rb = await rr.json().catch(() => null);
-                c.ok(rr.status === 200 && rb && rb.ok,
-                    '★★ README 按 manifest.id 解析真实目录（目录名可带版本号）', 'HTTP ' + rr.status);
-                c.ok(rb && String(rb.text || '').includes('生日说明测试'),
-                    '★ README 正文按真实目录读回');
-            }
+        // POST 上传安装（zip 原始字节、名字走 query）：与"丢 zip 进目录"同一条 zipx 防线
+        const upBuf = makeZip([
+            { name: 'upload-mod/manifest.json', data: JSON.stringify({ name: '上传安装', version: '1.0.0', entry: 'index.js' }) },
+            { name: 'upload-mod/index.js', data: 'void 0;' },
+        ]);
+        const up = await fetch(BASE + '/api/plugins/install?name=upload-mod.zip', { method: 'POST', body: upBuf });
+        const upBody = await up.json().catch(() => null);
+        c.ok(up.status === 200 && upBody && upBody.ok === true && upBody.id === 'upload-mod',
+            '★ POST /api/plugins/install 上传安装成功', 'HTTP ' + up.status + ' ' + JSON.stringify(upBody));
+        c.ok(existsSync(path.join(modsDir, 'upload-mod', 'index.js')), '上传的插件落盘');
+        const badName = await fetch(BASE + '/api/plugins/install?name=' + encodeURIComponent('../evil.zip'),
+            { method: 'POST', body: upBuf });
+        c.ok(badName.status === 400, '★ 插件名带路径成分被明确拒绝（不静默改名）', 'HTTP ' + badName.status);
 
-            const demo = (body.plugins || []).find((p) => p.id === 'demo-mod');
-            c.ok(demo && demo.name === '演示插件', 'manifest.json 被正确读取', demo && demo.name);
-            c.ok(demo && demo.entry === 'index.js', 'entry 字段生效');
-            c.ok(demo && Array.isArray(demo.styles) && demo.styles.includes('style.css'), 'styles 字段生效');
+        // capabilities / hidden 透传：漏了则 host.theme 等重成员全变 undefined、前置区少一类
+        const av = plugins.find((p) => p.id === 'elaina-avatar');
+        c.ok(Boolean(av), '清单里有 elaina-avatar');
+        if (av) {
+            c.ok(typeof av.dir === 'string' && av.dir.length > 0,
+                '★ 清单带 dir 字段（前端据此拼资源 URL）', av.dir);
+            c.ok(Array.isArray(av.capabilities) && av.capabilities.includes('theme'),
+                '★ 清单透传 manifest.capabilities（AGENTS.md D18 / 表 A22）', JSON.stringify(av.capabilities));
+            c.ok(av.hidden === true, 'hidden 字段透传（前置扩展单列）');
+            const img = await fetch(BASE + '/mods/' + av.dir + '/img/p_calm.png');
+            c.ok(img.status === 200,
+                'mod 立绘可经静态服务访问（按真实目录 ' + av.dir + '）', 'HTTP ' + img.status);
+        }
+        c.ok((await fetch(BASE + '/mods/index.json')).status === 200, 'mod 清单可被前端读取');
+        c.ok((await fetch(BASE + '/js/mods.js')).status === 200, 'mod 加载器脚本可被加载');
 
-            // 恶意 zip 的安装结果要单独重试获取：首个循环只等 plugins 里的 demo-mod，installResults 另算，
-            // 并发跑时会漏读；且装成功后 zip 被删、结果有时间窗 —— 判据用"ok 字段存在"防残缺快照，安全结论以下面磁盘事实为准
-            const evilDone = (r) => r && typeof r.ok === 'boolean';
-            const findEvil = (b) => ((b && b.installResults) || []).find((r) => r.zip === 'evil-mod.zip' && evilDone(r));
-            let evil = findEvil(body);
-            if (!evil) {
-                for (let i = 0; i < 20 && !evil; i++) {
-                    await wait(300);
-                    const again = await fetch(`http://127.0.0.1:${PORT}/api/plugins`)
-                        .then((r) => r.json()).catch(() => null);
-                    evil = findEvil(again);
-                }
-            }
-            c.ok(Boolean(evil), '恶意 zip 有安装结果回报');
+        // /mods/* 显式路由：web/ 静态根够不到项目根 mods/；钉住真实 MIME（nosniff 下 octet-stream
+        // 让插件界面空白）、路径穿越（隔壁 data/ 是密钥明文）、目录不给列表
+        console.log('\n  — /mods/* 显式路由 —');
+        {
+            const js = await fetch(BASE + '/mods/elaina-avatar/index.js');
+            c.ok(js.status === 200, '/mods/<dir>/index.js → 200', 'status=' + js.status);
+            c.ok((js.headers.get('content-type') || '').includes('javascript'),
+                '★ 插件 JS 发 javascript MIME（nosniff 下错了就不执行）', js.headers.get('content-type'));
 
-            // 诊断：失败时把安装结果与服务端输出打出来，否则排查只能自己复现
-            if (!evil) {
-                console.log('      安装结果: ' + JSON.stringify(body.installResults || []));
-                console.log('      清单: ' + JSON.stringify((body.plugins || []).map((p) => p.id)));
-                console.log('      服务端输出尾部:\n' + out.split('\n').slice(-15).map((l) => '        ' + l).join('\n'));
-            }
-            // 装了却拿不到结果时唯一可靠信号是磁盘真实内容：读两次再比，并发跑时偶发"读到半截"会被误判成被覆盖
-            const stillSame = (p) => {
-                for (let i = 0; i < 3; i++) {
-                    try { if (readFileSync(p, 'utf8') === (p.endsWith('serve.mjs') ? serveBefore : htmlBefore)) return true; }
-                    catch { /* 读失败当作不一致 */ }
-                }
-                return false;
-            };
+            writeFileSync(path.join(modsDir, 'elaina-avatar', 'probe.html'), '<p>probe</p>');
+            writeFileSync(path.join(modsDir, 'elaina-avatar', 'probe.css'), '.x{}');
+            const panel = await fetch(BASE + '/mods/elaina-avatar/probe.html');
+            c.ok(panel.status === 200, '/mods/<dir>/*.html → 200', 'status=' + panel.status);
+            c.ok((panel.headers.get('content-type') || '').includes('text/html'),
+                '★ 插件 HTML 发 text/html（否则设置面板插槽拿不到内容）', panel.headers.get('content-type'));
+            const cssRes = await fetch(BASE + '/mods/elaina-avatar/probe.css');
+            c.ok(cssRes.status === 200, '/mods/<dir>/*.css → 200', 'status=' + cssRes.status);
 
-            c.ok(stillSame(path.join(ROOT, 'web', 'serve.mjs')), '★ serve.mjs 未被路径穿越覆盖');
-            c.ok(stillSame(path.join(ROOT, 'web', 'index.html')), '★ index.html 未被路径穿越覆盖');
-            c.ok(!existsSync(path.join(TEST_MODS, 'evil-mod', 'bad.exe')), '★ .exe 被拦下（不落盘）');
-            if (evil && typeof evil.files === 'number') {
-                c.ok(evil.ok && evil.files === 2, '恶意 zip 只装进 2 个合法文件（穿越/可执行被拦）',
-                    'files=' + evil.files);
-            }
-            // 与安装结果时间窗无关的磁盘事实：这几条才是路径穿越防护的可靠回归
-            {
-                const evilDir = path.join(TEST_MODS, 'evil-mod');
-                const inside = existsSync(evilDir) ? readdirSync(evilDir) : [];
-                c.ok(!inside.includes('bad.exe'), '★ .exe 未落盘（以磁盘为准）', inside.join(','));
-                const okFiles = inside.filter((n) => /^(manifest\.json|index\.js)$/.test(n));
-                c.ok(okFiles.length === 2, '★ 恶意 zip 只落盘 2 个合法文件（以磁盘为准）', inside.join(','));
-            }
-            c.ok(existsSync(path.join(TEST_MODS, 'evil-mod', 'index.js')), '★ mod 的 index.js 允许落盘（mod 本质就是代码）');
+            const t1 = await fetch(BASE + '/mods/../data/store.json');
+            c.ok(t1.status === 403 || t1.status === 404,
+                '★★ /mods/../data/store.json 被拒（data/ 就在隔壁，是密钥明文）', 'status=' + t1.status);
+            const t2 = await fetch(BASE + '/mods/%2e%2e/data/store.json');
+            c.ok(t2.status === 403 || t2.status === 404, '★★ 编码后的 .. 也被拒', 'status=' + t2.status);
 
-            const idx = JSON.parse(readFileSync(path.join(TEST_MODS, 'index.json'), 'utf8'));
-            c.ok(Array.isArray(idx.plugins), 'index.json 被重新生成');
-            c.ok(idx.plugins.some((p) => p.id === 'demo-mod'), '清单里含新装的 mod');
-
-            const del = await fetch(`http://127.0.0.1:${PORT}/api/plugins/demo-mod`, { method: 'DELETE' });
-            c.ok(del.status === 200, 'DELETE 卸载成功', 'HTTP ' + del.status);
-            c.ok(!existsSync(path.join(TEST_MODS, 'demo-mod')), '★ mod 目录已被删除');
-            c.ok(!existsSync(path.join(TEST_MODS, 'demo-mod.zip')), '★ 安装包也被删除（否则会被重新装回来）');
-
-            // 静态资源用清单里的真实目录名（dir）拼 URL：用户改了目录名时写死的 URL 必然 404
-            const avEntry = (body.plugins || []).find((p) => p.id === 'elaina-avatar');
-            c.ok(Boolean(avEntry), '清单里有 elaina-avatar');
-            if (avEntry) {
-                const enc = String(avEntry.dir || avEntry.id).split('/').map(encodeURIComponent).join('/');
-                c.ok(typeof avEntry.dir === 'string' && avEntry.dir.length > 0,
-                    '★ 清单带 dir 字段（前端据此拼资源 URL）', avEntry.dir);
-                // 清单必须透传 manifest.capabilities（AGENTS.md D18 / 表 A22）：漏了则 host.theme 等全变 undefined
-                c.ok(Array.isArray(avEntry.capabilities) && avEntry.capabilities.includes('theme'),
-                    '★ 清单透传 manifest.capabilities（否则 host.theme 等重成员全变 undefined）',
-                    JSON.stringify(avEntry.capabilities));
-                const imgUrl = `http://127.0.0.1:${PORT}/mods/${enc}/img/p_calm.png`;
-                c.ok((await fetch(imgUrl)).status === 200,
-                    'mod 立绘可经静态服务访问（按真实目录 ' + avEntry.dir + '）', imgUrl);
-            }
-            c.ok((await fetch(`http://127.0.0.1:${PORT}/mods/index.json`)).status === 200, 'mod 清单可被前端读取');
-            c.ok((await fetch(`http://127.0.0.1:${PORT}/js/mods.js`)).status === 200, 'mod 加载器脚本可被加载');
-
-            // /mods/* 显式路由：web/ 静态根够不到项目根 mods/；钉住真实 MIME（nosniff 下 octet-stream
-            // 让插件界面空白）、路径穿越（隔壁 data/ 是密钥明文）、目录不给列表；只挑 TEST_MODS 里真实存在的文件
-            console.log('\n  — /mods/* 显式路由 —');
-            {
-                const js = await fetch(`http://127.0.0.1:${PORT}/mods/elaina-avatar/index.js`);
-                c.ok(js.status === 200, '/mods/<id>/index.js → 200', 'status=' + js.status);
-                c.ok((js.headers.get('content-type') || '').includes('javascript'),
-                    '★ 插件 JS 发 javascript MIME（nosniff 下错了就不执行）',
-                    js.headers.get('content-type'));
-
-                writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'probe.html'), '<p>probe</p>');
-                writeFileSync(path.join(TEST_MODS, 'elaina-avatar', 'probe.css'), '.x{}');
-                const panel = await fetch(`http://127.0.0.1:${PORT}/mods/elaina-avatar/probe.html`);
-                c.ok(panel.status === 200, '/mods/<id>/*.html → 200', 'status=' + panel.status);
-                c.ok((panel.headers.get('content-type') || '').includes('text/html'),
-                    '★ 插件 HTML 发 text/html（否则设置面板插槽拿不到内容）',
-                    panel.headers.get('content-type'));
-                const cssRes = await fetch(`http://127.0.0.1:${PORT}/mods/elaina-avatar/probe.css`);
-                c.ok(cssRes.status === 200, '/mods/<id>/*.css → 200', 'status=' + cssRes.status);
-
-                const t1 = await fetch(`http://127.0.0.1:${PORT}/mods/../data/store.json`);
-                c.ok(t1.status === 403 || t1.status === 404,
-                    '★★ /mods/../data/store.json 被拒（data/ 就在隔壁，是密钥明文）', 'status=' + t1.status);
-                const t2 = await fetch(`http://127.0.0.1:${PORT}/mods/%2e%2e/data/store.json`);
-                c.ok(t2.status === 403 || t2.status === 404, '★★ 编码后的 .. 也被拒', 'status=' + t2.status);
-
-                const miss = await fetch(`http://127.0.0.1:${PORT}/mods/nope/nope.js`);
-                c.ok(miss.status === 404, '不存在的插件文件 → 404（不是 500）', 'status=' + miss.status);
-                const dir = await fetch(`http://127.0.0.1:${PORT}/mods/`);
-                c.ok(dir.status === 404, '/mods/ 不给目录列表', 'status=' + dir.status);
-            }
+            const miss = await fetch(BASE + '/mods/nope/nope.js');
+            c.ok(miss.status === 404, '不存在的插件文件 → 404（不是 500）', 'status=' + miss.status);
+            const dirList = await fetch(BASE + '/mods/');
+            c.ok(dirList.status === 404, '/mods/ 不给目录列表', 'status=' + dirList.status);
         }
     } finally {
-        if (child) child.kill();
-        await wait(300);
-        for (const d of [DATA_DIR, LOG_DIR, TEST_MODS]) {
-            try { rmSync(d, { recursive: true, force: true }); } catch { /* 忽略 */ }
-        }
+        if (srv) srv.stop();
+        tmp.cleanup();
     }
 }
 
 // 2. 插件 id 归一化 + 依赖可解析性 —— 钉住「资源包装了等于没装」。
-// 成因：安装逻辑直接拿 zip 文件名当 id，装进带版本号的目录，资源 URL 404、after 匹配不上；自造包不依赖被 gitignore 的 dist/。
-
-/** 造一个插件 zip：根目录直接放文件（与 pack-assets 的 mod 格式一致） */
-function makeModZip(entries) {
-    return createZip(entries.map(([name, data]) => ({ name, data: Buffer.from(data, 'utf8') })));
-}
-
-/** 造一个带真实 PNG 字节的立绘条目（验证资源路径时不能只放文本） */
+// 成因：安装逻辑直接拿 zip 文件名当 id，装进带版本号的目录，资源 URL 404、after 匹配不上。
+// 原锚在已删除的 server/mods.mjs（createModManager.scanAndSync 白盒）；改锚 Go 服务端：
+// 同一批夹具目录走 /api/plugins 与磁盘事实。语义差异：归一化（剥 -1.0.0 版本尾）只发生在
+// 「丢 zip 进 mods/ 被扫描装掉」这条链（packages.ScanMods → normalizeModID）；
+// POST /api/plugins/install 的 id 直接取 query 文件名（不剥版本尾），两层都以 Go 实际行为为准。
 function avatarZip(version = '1.0.0', declaredId = 'elaina-avatar') {
-    const manifest = JSON.stringify({
-        id: declaredId, name: '伊蕾娜立绘与情绪', version,
-        entry: 'index.js', defaultEnabled: true, hidden: true,
-    });
-    return makeModZip([
-        ['manifest.json', manifest],
-        ['index.js', 'window.ElainaMods && window.ElainaMods.register("elaina-avatar",function(){return{}});'],
-        ['img/p_calm.png', 'PNGDATA'],
+    return makeZip([
+        { name: 'manifest.json', data: JSON.stringify({
+            id: declaredId, name: '伊蕾娜立绘与情绪', version,
+            entry: 'index.js', defaultEnabled: true, hidden: true,
+        }) },
+        { name: 'index.js', data: 'window.ElainaMods && window.ElainaMods.register("elaina-avatar",function(){return{}});' },
+        { name: 'img/p_calm.png', data: 'PNGDATA' },
     ]);
 }
 
 async function caseModId(c) {
     const tmp = tempDirFactory('elaina-modid-');
-    const newDir = () => tmp.dir();
+    let srv = null;
+    const stopSrv = () => { if (srv) { srv.stop(); srv = null; } };
 
     try {
+        // 2.1 带版本号的 zip 丢进目录 → 清单 id 与磁盘目录都归一化
         {
-            const dir = newDir();
-            writeFileSync(path.join(dir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
-            const r = await mkMgr(dir).scanAndSync();
+            const modsDir = tmp.dir();
+            writeFileSync(path.join(modsDir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const ids = ((body && body.plugins) || []).map((p) => p.id);
+                c.ok(ids.includes('elaina-avatar'), '★ 清单里的 id 归一化为 elaina-avatar', JSON.stringify(ids));
 
-            const ids = r.installed.map((p) => p.id);
-            c.ok(ids.includes('elaina-avatar'), '★ 清单里的 id 归一化为 elaina-avatar', JSON.stringify(ids));
-
-            const dirs = readdirSync(dir).filter((n) => !n.endsWith('.zip') && n !== 'index.json');
-            c.ok(dirs.includes('elaina-avatar'), '★ 磁盘目录也装成 elaina-avatar（不是带版本号的）', JSON.stringify(dirs));
-
-            const p = r.installed.find((x) => x.id === 'elaina-avatar');
-            c.ok(p && p.dir === 'elaina-avatar', '清单里 dir 字段与实际目录一致', p && p.dir);
-
-            c.ok(existsSync(path.join(dir, 'elaina-avatar', 'img', 'p_calm.png')),
-                '★ 立绘落在 /mods/elaina-avatar/img/p_calm.png 能取到的位置');
-            c.ok(!existsSync(path.join(dir, 'elaina-avatar-1.0.0')),
-                '★ 没有留下带版本号的目录（旧 bug 的形态）');
+                const dirs = readdirSync(modsDir).filter((n) => !n.endsWith('.zip') && n !== 'index.json' && !n.startsWith('.'));
+                c.ok(dirs.includes('elaina-avatar'), '★ 磁盘目录也装成 elaina-avatar（不是带版本号的）', JSON.stringify(dirs));
+                const p = ((body && body.plugins) || []).find((x) => x.id === 'elaina-avatar');
+                c.ok(p && p.dir === 'elaina-avatar', '清单里 dir 字段与实际目录一致', p && p.dir);
+                c.ok(existsSync(path.join(modsDir, 'elaina-avatar', 'img', 'p_calm.png')),
+                    '★ 立绘落在 /mods/elaina-avatar/img/p_calm.png 能取到的位置');
+                c.ok(!existsSync(path.join(modsDir, 'elaina-avatar-1.0.0')),
+                    '★ 没有留下带版本号的目录（旧 bug 的形态）');
+            }
+            stopSrv();
         }
 
+        // 2.2 依赖可解析：装好的 elaina-avatar 能被 galgame 的 after 引用
         {
-            const dir = newDir();
-            writeFileSync(path.join(dir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
-            const mgr = mkMgr(dir);
-            await mgr.scanAndSync();
-
-            const gdir = path.join(dir, 'galgame');
-            mkdirSync(gdir, { recursive: true });
-            writeFileSync(path.join(gdir, 'manifest.json'), JSON.stringify({
+            const modsDir = tmp.dir();
+            writeFileSync(path.join(modsDir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
+            mkdirSync(path.join(modsDir, 'galgame'), { recursive: true });
+            writeFileSync(path.join(modsDir, 'galgame', 'manifest.json'), JSON.stringify({
                 id: 'galgame', name: 'Galgame 界面', entry: 'index.js', after: ['elaina-avatar'],
             }));
-            writeFileSync(path.join(gdir, 'index.js'), 'void 0;');
-
-            const r2 = await mgr.scanAndSync();
-            const ids = new Set(r2.installed.map((p) => p.id));
-            c.ok(ids.has('elaina-avatar'), '★ elaina-avatar 在清单里（依赖能被解析到）', JSON.stringify([...ids]));
-            c.ok(ids.has('galgame'), 'galgame 也在清单里');
-            const g = r2.installed.find((p) => p.id === 'galgame');
-            c.ok(g && g.after.every((d) => ids.has(d)),
-                '★ galgame 声明的 after 全部能在清单里找到（依赖解析有效）',
-                g ? JSON.stringify(g.after) : '');
+            writeFileSync(path.join(modsDir, 'galgame', 'index.js'), 'void 0;');
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const plugins = (body && body.plugins) || [];
+                const ids = new Set(plugins.map((p) => p.id));
+                c.ok(ids.has('elaina-avatar'), '★ elaina-avatar 在清单里（依赖能被解析到）', JSON.stringify([...ids]));
+                c.ok(ids.has('galgame'), 'galgame 也在清单里');
+                const g = plugins.find((p) => p.id === 'galgame');
+                c.ok(g && g.after.every((d) => ids.has(d)),
+                    '★ galgame 声明的 after 全部能在清单里找到（依赖解析有效）',
+                    g ? JSON.stringify(g.after) : '');
+            }
+            stopSrv();
         }
 
+        // 2.3 用户自己解压的旧版本目录（目录带版本、manifest.id 不带）→ 身份识别 + 目录保留
         {
-            const dir = newDir();
-            const old = path.join(dir, 'elaina-avatar-1.0.0');
+            const modsDir = tmp.dir();
+            const old = path.join(modsDir, 'elaina-avatar-1.0.0');
             mkdirSync(path.join(old, 'img'), { recursive: true });
             writeFileSync(path.join(old, 'manifest.json'), JSON.stringify({
                 id: 'elaina-avatar', name: '伊蕾娜立绘', entry: 'index.js',
             }));
             writeFileSync(path.join(old, 'index.js'), 'void 0;');
             writeFileSync(path.join(old, 'img', 'p_calm.png'), 'PNGDATA');
-
-            const r = await mkMgr(dir).scanAndSync();
-            const p = r.installed.find((x) => x.id === 'elaina-avatar');
-            c.ok(Boolean(p), '★ 旧目录被识别为 elaina-avatar（id 归一化，用户不用重装）',
-                JSON.stringify(r.installed.map((x) => x.id)));
-            c.ok(p && p.dir === 'elaina-avatar-1.0.0',
-                '★ 同时保留真实目录名（脚本/资源按它加载，不会 404）', p && p.dir);
-            c.ok(existsSync(old), '★ 旧目录没有被删（用户数据/设置在它下面）');
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const p = ((body && body.plugins) || []).find((x) => x.id === 'elaina-avatar');
+                c.ok(Boolean(p), '★ 旧目录被识别为 elaina-avatar（id 归一化，用户不用重装）',
+                    JSON.stringify(((body && body.plugins) || []).map((x) => x.id)));
+                c.ok(p && p.dir === 'elaina-avatar-1.0.0',
+                    '★ 同时保留真实目录名（脚本/资源按它加载，不会 404）', p && p.dir);
+                c.ok(existsSync(old), '★ 旧目录没有被删（用户数据/设置在它下面）');
+            }
+            stopSrv();
         }
 
+        // 2.4 单段数字尾巴不剥（my-mod-2 这类名字很常见，剥了会误伤真实名字）
         {
-            const dir = newDir();
+            const modsDir = tmp.dir();
             for (const name of ['my-mod-2', 'mod2', 'plugin-v2', 'a-1']) {
-                const d = path.join(dir, name);
+                const d = path.join(modsDir, name);
                 mkdirSync(d, { recursive: true });
                 writeFileSync(path.join(d, 'index.js'), 'void 0;');
             }
-            const r = await mkMgr(dir).scanAndSync();
-            const ids = r.installed.map((x) => x.id);
-            for (const name of ['my-mod-2', 'mod2', 'plugin-v2', 'a-1']) {
-                c.ok(ids.includes(name), `★ ${name} 不被误剥（单段数字不是版本号）`, JSON.stringify(ids));
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const ids = ((body && body.plugins) || []).map((x) => x.id);
+                for (const name of ['my-mod-2', 'mod2', 'plugin-v2', 'a-1']) {
+                    c.ok(ids.includes(name), `★ ${name} 不被误剥（单段数字不是版本号）`, JSON.stringify(ids));
+                }
             }
+            stopSrv();
         }
 
+        // 2.5 目录名与 manifest.id 不一致 → 清单 id 取 manifest.id，dir 保留目录名
         {
-            const dir = newDir();
-            const d = path.join(dir, 'wrong-dir-name');
+            const modsDir = tmp.dir();
+            const d = path.join(modsDir, 'wrong-dir-name');
             mkdirSync(d, { recursive: true });
             writeFileSync(path.join(d, 'manifest.json'), JSON.stringify({
                 id: 'real-id', name: '真名', entry: 'index.js',
             }));
             writeFileSync(path.join(d, 'index.js'), 'void 0;');
-            const r = await mkMgr(dir).scanAndSync();
-            const p = r.installed[0];
-            c.ok(p && p.id === 'real-id', '★ 清单 id 取 manifest.id（不是目录名）', p && p.id);
-            c.ok(p && p.dir === 'wrong-dir-name', 'dir 字段仍是真实目录名（供加载脚本用）', p && p.dir);
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const p = ((body && body.plugins) || [])[0];
+                c.ok(p && p.id === 'real-id', '★ 清单 id 取 manifest.id（不是目录名）', p && p.id);
+                c.ok(p && p.dir === 'wrong-dir-name', 'dir 字段仍是真实目录名（供加载脚本用）', p && p.dir);
+            }
+            stopSrv();
         }
 
+        // 2.6 非法 manifest.id 回落到目录名，路径成分不泄漏进 id
         {
-            const dir = newDir();
+            const modsDir = tmp.dir();
             for (const [dirName, badId] of [['safe-dir', '../../etc/passwd'], ['safe-dir2', 'has space'], ['safe-dir3', '']]) {
-                const d = path.join(dir, dirName);
+                const d = path.join(modsDir, dirName);
                 mkdirSync(d, { recursive: true });
                 writeFileSync(path.join(d, 'manifest.json'), JSON.stringify({ id: badId, name: 'x', entry: 'index.js' }));
                 writeFileSync(path.join(d, 'index.js'), 'void 0;');
             }
-            const r = await mkMgr(dir).scanAndSync();
-            const ids = r.installed.map((x) => x.id).sort();
-            c.ok(ids.includes('safe-dir') && ids.includes('safe-dir2') && ids.includes('safe-dir3'),
-                '★ 非法 manifest.id 被拒，回落到目录名', JSON.stringify(ids));
-            c.ok(!ids.some((x) => x.includes('..') || x.includes('/')),
-                '★ 没有路径成分泄漏进 id', JSON.stringify(ids));
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const ids = ((body && body.plugins) || []).map((x) => x.id).sort();
+                c.ok(ids.includes('safe-dir') && ids.includes('safe-dir2') && ids.includes('safe-dir3'),
+                    '★ 非法 manifest.id 被拒，回落到目录名', JSON.stringify(ids));
+                c.ok(!ids.some((x) => x.includes('..') || x.includes('/')),
+                    '★ 没有路径成分泄漏进 id', JSON.stringify(ids));
+            }
+            stopSrv();
         }
 
-        // 2.7 装载只认"完整的一段"：解压逐文件落盘而清单每次请求都重扫，直接往 mods/<id>/ 写会出现
-        // "目录在、index.js 未写完"被扫进清单的中间态（前端取脚本 404 并当场停用）；钉住临时目录不被扫成插件、装完必有完整一份
+        // 2.7 装载只认"完整的一段"：安装中途的 .installing- 临时目录不被扫成插件；
+        // 清理按"陈旧"判定（扫描在插件列表与清单请求上都会跑，删掉新鲜的 staging 等于替并发安装删半成品）
         {
-            const dir = newDir();
-            const staging = path.join(dir, `.installing-elaina-avatar-${process.pid}-1`);
+            const modsDir = tmp.dir();
+            const staging = path.join(modsDir, `.installing-elaina-avatar-${process.pid}-1`);
             mkdirSync(staging, { recursive: true });
             writeFileSync(path.join(staging, 'manifest.json'), JSON.stringify({
                 id: 'elaina-avatar', name: '写了一半的插件', entry: 'index.js',
             }));
-            const r = await mkMgr(dir).scanAndSync();
-            c.ok(!r.installed.some((p) => p.id === 'elaina-avatar'),
-                '★ 安装中途的临时目录不被扫成已装插件（否则脚本会 404 并当场停用）',
-                JSON.stringify(r.installed.map((p) => p.id)));
-            c.ok(!readdirSync(dir).some((n) => n.startsWith('.installing-')),
-                '★ 扫描会清掉安装未完成留下的临时目录（否则白占几十 MB 且用户看不见）',
-                JSON.stringify(readdirSync(dir)));
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                c.ok(!((body && body.plugins) || []).some((p) => p.id === 'elaina-avatar'),
+                    '★ 安装中途的临时目录不被扫成已装插件（否则脚本会 404 并当场停用）',
+                    JSON.stringify(((body && body.plugins) || []).map((p) => p.id)));
+                c.ok(existsSync(staging),
+                    '★ 还在安装中的临时目录不被删除（否则并发安装会丢掉自己正在写的文件）');
+                srv.stop(); srv = null;
 
-            writeFileSync(path.join(dir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
-            const r2 = await mkMgr(dir).scanAndSync();
-            const p = r2.installed.find((x) => x.id === 'elaina-avatar');
-            c.ok(Boolean(p), '★ zip 装完后清单里有它', JSON.stringify(r2.installed.map((x) => x.id)));
-            c.ok(p && existsSync(path.join(dir, p.dir, 'index.js')),
-                '★ 装完 entry 脚本确实落盘（不存在"清单有、脚本没有"的中间态）', p && p.dir);
-            c.ok(readdirSync(dir).every((n) => !n.startsWith('.installing-')),
-                '★ 安装成功/失败都不留临时目录残骸', JSON.stringify(readdirSync(dir)));
+                // 改成"进程被杀后留下的那类"（超过 stale 阈值），下一次扫描才该清掉。
+                const stale = new Date(Date.now() - 11 * 60 * 1000);
+                utimesSync(staging, stale, stale);
+                srv = await startFixtureServer(tmp, { modsDir });
+                c.ok(srv && srv.up, '服务已重启', srv && srv.up ? '' : srv.bootLog.slice(-400));
+                if (srv && srv.up) {
+                    await fetchPluginList(srv.base);
+                    c.ok(!readdirSync(modsDir).some((n) => n.startsWith('.installing-')),
+                        '★ 陈旧的安装残留会被清掉（否则白占几十 MB 且用户看不见）',
+                        JSON.stringify(readdirSync(modsDir)));
+
+                    writeFileSync(path.join(modsDir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
+                    const body = await fetchPluginList(srv.base);
+                    const p = ((body && body.plugins) || []).find((x) => x.id === 'elaina-avatar');
+                    c.ok(Boolean(p), '★ zip 装完后清单里有它', JSON.stringify(((body && body.plugins) || []).map((x) => x.id)));
+                    c.ok(p && existsSync(path.join(modsDir, p.dir, 'index.js')),
+                        '★ 装完 entry 脚本确实落盘（不存在"清单有、脚本没有"的中间态）', p && p.dir);
+                    c.ok(readdirSync(modsDir).every((n) => !n.startsWith('.installing-')),
+                        '★ 安装成功/失败都不留临时目录残骸', JSON.stringify(readdirSync(modsDir)));
+                }
+            }
+            stopSrv();
         }
 
         // 2.8 默认关闭只认显式 true：判据写成 !== false 就是"漏写即默认打开"，与文档相反；
-        // 三处（server 扫描 / 前端 isModEnabled / 原生清单）必须同语义，任何一处不同都两端口径不一
+        // 服务端（Go）与前端（mods.js / core-native-mod.js 原生清单）必须同语义
         {
-            const dir = newDir();
+            const modsDir = tmp.dir();
             const mk = (id, mf) => {
-                const d = path.join(dir, id);
+                const d = path.join(modsDir, id);
                 mkdirSync(d, { recursive: true });
                 writeFileSync(path.join(d, 'manifest.json'), JSON.stringify(mf));
                 writeFileSync(path.join(d, 'index.js'), 'void 0;');
@@ -886,180 +464,176 @@ async function caseModId(c) {
             mk('explicit-off', { id: 'explicit-off', name: 'B', entry: 'index.js', defaultEnabled: false });
             mk('no-field', { id: 'no-field', name: 'C', entry: 'index.js' });
             mk('bogus-value', { id: 'bogus-value', name: 'D', entry: 'index.js', defaultEnabled: 'yes' });
-            const r = await mkMgr(dir).scanAndSync();
-            const byId = new Map(r.installed.map((p) => [p.id, p]));
-            const flag = (id) => byId.get(id) && byId.get(id).defaultEnabled;
-            c.ok(flag('explicit-on') === true, '★ 显式 defaultEnabled:true 才算默认启用', String(flag('explicit-on')));
-            c.ok(flag('explicit-off') === false, '显式 false 是默认关闭', String(flag('explicit-off')));
-            c.ok(flag('no-field') === false,
-                '★ 漏写 defaultEnabled 算默认关闭（写成 !== false 就是默认打开，与文档相反）',
-                String(flag('no-field')));
-            c.ok(flag('bogus-value') === false, '非 true 的取值一律算关闭', String(flag('bogus-value')));
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const byId = new Map(((body && body.plugins) || []).map((p) => [p.id, p]));
+                const flag = (id) => byId.get(id) && byId.get(id).defaultEnabled;
+                c.ok(flag('explicit-on') === true, '★ 显式 defaultEnabled:true 才算默认启用', String(flag('explicit-on')));
+                c.ok(flag('explicit-off') === false, '显式 false 是默认关闭', String(flag('explicit-off')));
+                c.ok(flag('no-field') === false,
+                    '★ 漏写 defaultEnabled 算默认关闭（写成 !== false 就是默认打开，与文档相反）',
+                    String(flag('no-field')));
+                c.ok(flag('bogus-value') === false, '非 true 的取值一律算关闭', String(flag('bogus-value')));
 
-            const modsSrc = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
-            const coreSrc = readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
-                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-            const serverSrc = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
-            for (const [name, src] of [['web/js/mods.js', modsSrc], ['web/js/core.js', coreSrc], ['server/mods.mjs', serverSrc]]) {
-                c.ok(!/defaultEnabled\s*!==\s*false/.test(src),
-                    `★ ${name} 的默认关闭判据不是 !== false（那是"默认打开"）`);
-                c.ok(/defaultEnabled\s*===\s*true/.test(src),
-                    `★ ${name} 只把显式 true 当默认启用`);
+                const modsSrc = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+                const nativeSrc = readFileSync(path.join(WEB, 'js', 'core-native-mod.js'), 'utf8');
+                for (const [name, src] of [['web/js/mods.js', modsSrc], ['web/js/core-native-mod.js', nativeSrc]]) {
+                    c.ok(!/defaultEnabled\s*!==\s*false/.test(src),
+                        `★ ${name} 的默认关闭判据不是 !== false（那是"默认打开"）`);
+                    c.ok(/defaultEnabled\s*===\s*true/.test(src),
+                        `★ ${name} 只把显式 true 当默认启用`);
+                }
             }
+            stopSrv();
         }
     } finally {
+        stopSrv();
         tmp.cleanup();
     }
 }
 
 // 3. 插件身份与路径解析：目录改名后依然能识别、初始化、取到资源。
-// 身份有三个来源（目录名 / manifest.id / register 名），注册名是权威；只测这一层纯逻辑，假 DOM 桩薄会误报。
-/** 造一个插件目录 */
-function putMod(root, dirName, manifest, script) {
-    const d = path.join(root, dirName);
-    mkdirSync(d, { recursive: true });
-    if (manifest) writeFileSync(path.join(d, 'manifest.json'), JSON.stringify(manifest));
-    writeFileSync(path.join(d, 'index.js'), script || 'void 0;');
-    return d;
-}
-
-// 在沙箱里跑 mods.js 并手动喂"某目录注册了某名字"（模拟 register 效果），只验证身份解析层，不起 DOM
-function makeModsSandbox(modsJs) {
-    const sandbox = {
-        console: { log() {}, warn() {}, error() {} },
-        Map, Set, Promise, Date, Number, String, Boolean, Error, JSON, Object, Array, RegExp,
-        encodeURIComponent, decodeURIComponent, setTimeout, clearTimeout,
-        fetch: async () => ({ ok: false, status: 404, json: async () => ({}), text: async () => '' }),
-        localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
-        document: {
-            readyState: 'complete', addEventListener() {},
-            head: { appendChild() {} },
-            getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
-            createElement: () => ({ tag: 'div', style: {}, dataset: {}, setAttribute() {}, classList: { add() {}, remove() {}, toggle() {}, contains: () => false } }),
-            body: { appendChild() {} },
-        },
-    };
-    sandbox.window = sandbox;
-    sandbox.globalThis = sandbox;
-    const ctx = vm.createContext(sandbox);
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-paths.js'), 'utf8'), ctx, { filename: 'mods-paths.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-graph.js'), 'utf8'), ctx, { filename: 'mods-graph.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-drag-sort.js'), 'utf8'), ctx, { filename: 'mods-drag-sort.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-storage.js'), 'utf8'), ctx, { filename: 'mods-storage.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8'), ctx, { filename: 'mods-host-core.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-loader.js'), 'utf8'), ctx, { filename: 'mods-loader.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-contributions.js'), 'utf8'), ctx, { filename: 'mods-contributions.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-services.js'), 'utf8'), ctx, { filename: 'mods-services.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-slots.js'), 'utf8'), ctx, { filename: 'mods-slots.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-summary.js'), 'utf8'), ctx, { filename: 'mods-summary.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8'), ctx, { filename: 'mods-deps.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-capabilities.js'), 'utf8'), ctx, { filename: 'mods-capabilities.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8'), ctx, { filename: 'mods-load.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-enable.js'), 'utf8'), ctx, { filename: 'mods-enable.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8'), ctx, { filename: 'mods-load-one.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8'), ctx, { filename: 'mods-faults.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-host.js'), 'utf8'), ctx, { filename: 'mods-host.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-forget.js'), 'utf8'), ctx, { filename: 'mods-forget.js' });
-    vm.runInContext(readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8'), ctx, { filename: 'mods-api.js' });
-    vm.runInContext(modsJs, ctx, { filename: 'mods.js' });
-    return sandbox;
-}
-
+// 目录扫描与身份解析的语义在 Go（server/internal/plugin/manifest.go）：改锚 Go HTTP ——
+// 改名夹具目录后重启服务重扫，断言 id 不变、资源 URL 用真实目录名。
+// 前端半边（目录 → 注册名映射、依赖索引认三种身份）保留源码锚（模块化后按文件合并读取）。
 async function caseModIdentity(c) {
-    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
-       本地没有这些插件是**正常状态**，跳过而不是判红。 */
-    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => existsSync(path.join(ROOT, 'mods', n)))) {
-        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
-        return;
-    }
-    const MODS_JS = readFileSync(path.join(ROOT, 'web', 'js', 'mods.js'), 'utf8');
     const tmp = tempDirFactory('elaina-ident-');
-    const newDir = () => tmp.dir();
+    let srv = null;
+    const stopSrv = () => { if (srv) { srv.stop(); srv = null; } };
 
     try {
+        // 3.1 目录名与身份无关：目录 1111 里装 elaina-avatar，身份仍认 manifest.id；资源按真实目录名取
         {
-            const dir = newDir();
-            putMod(dir, '1111', { id: 'elaina-avatar', name: '立绘', entry: 'index.js' });
-            putMod(dir, 'galgame', { id: 'galgame', name: 'GG', entry: 'index.js', after: ['elaina-avatar'] });
-
-            const r = await mkMgr(dir).scanAndSync();
-            const av = r.installed.find((p) => p.id === 'elaina-avatar');
-            c.ok(Boolean(av), '★ 目录名 1111 被识别为 elaina-avatar（manifest.id 权威）',
-                JSON.stringify(r.installed.map((p) => p.id)));
-            c.ok(av && av.dir === '1111', '★ dir 保留真实目录名 1111（资源按它取）', av && av.dir);
-
-            const ids = new Set(r.installed.map((p) => p.id));
-            const g = r.installed.find((p) => p.id === 'galgame');
-            c.ok(g && g.after.every((d) => ids.has(d)),
-                '★ galgame 的 after 仍能解析（改名不影响依赖）', g ? JSON.stringify(g.after) : '');
+            const modsDir = tmp.dir();
+            const put = (dirName, manifest) => {
+                const d = path.join(modsDir, dirName);
+                mkdirSync(d, { recursive: true });
+                if (manifest) writeFileSync(path.join(d, 'manifest.json'), JSON.stringify(manifest));
+                writeFileSync(path.join(d, 'index.js'), 'void 0;');
+            };
+            put('1111', { id: 'elaina-avatar', name: '立绘', entry: 'index.js' });
+            put('galgame', { id: 'galgame', name: 'GG', entry: 'index.js', after: ['elaina-avatar'] });
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const plugins = (body && body.plugins) || [];
+                const av = plugins.find((p) => p.id === 'elaina-avatar');
+                c.ok(Boolean(av), '★ 目录名 1111 被识别为 elaina-avatar（manifest.id 权威）',
+                    JSON.stringify(plugins.map((p) => p.id)));
+                c.ok(av && av.dir === '1111', '★ dir 保留真实目录名 1111（资源按它取）', av && av.dir);
+                const ids = new Set(plugins.map((p) => p.id));
+                const g = plugins.find((p) => p.id === 'galgame');
+                c.ok(g && g.after.every((d) => ids.has(d)),
+                    '★ galgame 的 after 仍能解析（改名不影响依赖）', g ? JSON.stringify(g.after) : '');
+                const script = await fetch(srv.base + '/mods/' + av.dir + '/index.js');
+                c.ok(script.status === 200, '★ 脚本按真实目录名可达（不是按 id 拼 URL）', 'HTTP ' + script.status);
+            }
+            stopSrv();
         }
 
+        // 3.2 目录改名 + 重启重扫：id 不变、dir 跟着新目录、资源从新目录取到
         {
-            const dir = newDir();
-            putMod(dir, 'pet-renamed', { name: '桌宠', entry: 'index.js' });
-            const r = await mkMgr(dir).scanAndSync();
-            const p = r.installed[0];
-            c.ok(p && p.id === 'pet-renamed', 'id 回落到目录名（并剥版本号尾）', p && p.id);
-            c.ok(p && p.dir === 'pet-renamed', 'dir 是真实目录名', p && p.dir);
+            const modsDir = tmp.dir();
+            const v1 = path.join(modsDir, 'avatar-v1');
+            mkdirSync(v1, { recursive: true });
+            writeFileSync(path.join(v1, 'manifest.json'), JSON.stringify({
+                id: 'elaina-avatar', name: '立绘', entry: 'index.js',
+            }));
+            writeFileSync(path.join(v1, 'index.js'), 'void 0;');
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const before = await fetchPluginList(srv.base);
+                const b = ((before && before.plugins) || []).find((p) => p.id === 'elaina-avatar');
+                c.ok(b && b.dir === 'avatar-v1', '改名前按当前目录识别', b && b.dir);
+                stopSrv();
+
+                renameSync(v1, path.join(modsDir, 'avatar-renamed'));
+                srv = await startFixtureServer(tmp, { modsDir });
+                c.ok(srv && srv.up, '改名后服务已重启', srv && srv.up ? '' : srv.bootLog.slice(-400));
+                if (srv && srv.up) {
+                    const after = await fetchPluginList(srv.base);
+                    const a = ((after && after.plugins) || []).find((p) => p.id === 'elaina-avatar');
+                    c.ok(Boolean(a), '★ 目录改名后身份不变（id 仍解析到 elaina-avatar）',
+                        JSON.stringify(((after && after.plugins) || []).map((p) => p.id)));
+                    c.ok(a && a.dir === 'avatar-renamed', '★ dir 跟着真实目录名走（资源 URL 用它拼）', a && a.dir);
+                    const script = await fetch(srv.base + '/mods/avatar-renamed/index.js');
+                    c.ok(script.status === 200, '★ 脚本从改名后的目录取到', 'HTTP ' + script.status);
+                }
+            }
+            stopSrv();
         }
 
+        // 3.3 缺 manifest → id 回落到目录名
         {
-            const s = makeModsSandbox(MODS_JS);
-            const Mods = s.window.ElainaMods;
-            c.ok(Boolean(Mods && typeof Mods.find === 'function'), 'ElainaMods.find 存在');
-            c.ok(Boolean(Mods && typeof Mods.assetUrl === 'function'), 'ElainaMods.assetUrl 存在');
+            const modsDir = tmp.dir();
+            const d = path.join(modsDir, 'pet-renamed');
+            mkdirSync(d, { recursive: true });
+            writeFileSync(path.join(d, 'index.js'), 'void 0;');
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const p = ((body && body.plugins) || [])[0];
+                c.ok(p && p.id === 'pet-renamed', 'id 回落到目录名（并剥版本号尾）', p && p.id);
+                c.ok(p && p.dir === 'pet-renamed', 'dir 是真实目录名', p && p.dir);
+                c.ok(p && p.hasManifest === false, '清单如实标注缺 manifest（hasManifest=false）', p && String(p.hasManifest));
+            }
+            stopSrv();
         }
 
+        // 3.4 前端半边：目录 → 注册名映射（模块化后的 mods.js 家族）
         {
+            const MODS_JS = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8')
+                + '\n' + readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8')
+                + '\n' + readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8')
+                + '\n' + readFileSync(path.join(WEB, 'js', 'mods-deps.js'), 'utf8')
+                + '\n' + readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8')
+                + '\n' + readFileSync(path.join(WEB, 'js', 'mods-host-core.js'), 'utf8');
             c.ok(/const regByDir = new Map\(\)/.test(MODS_JS), '有 regByDir（目录 → 注册名）');
             c.ok(/const dirByReg = new Map\(\)/.test(MODS_JS), '有 dirByReg（注册名 → 目录）');
             c.ok(/let loadingDir = null;/.test(MODS_JS), '有 loadingDir（注入时标记来源目录）');
-            c.ok(/if \(loadingDir\) \{[\s\S]{0,120}regByDir\.set\(loadingDir, name\)/.test(MODS_JS),
+            c.ok(/getRegByDir\(\)\.set\(getLoadingDir\(\), name\)/.test(MODS_JS),
                 '★ register() 会记下"这个注册名来自哪个目录"');
-            c.ok(/regByDir\.get\(manifest\.dir \|\| manifest\.id\)/.test(MODS_JS),
+            c.ok(/getRegByDir\(\)\.get\(manifest\.dir \|\| manifest\.id\)/.test(MODS_JS),
                 '★ loadOne 会按目录反查注册名（目录改名也能初始化）');
             c.ok(/entry\.state = 'blocked'/.test(MODS_JS),
                 '★ 缺前置插件时状态标为 blocked（拒绝加载，不是警告后照跑）');
-            c.ok(/已拒绝加载：/.test(MODS_JS), '★ 报错文案说明了缺什么');
-            c.ok(/未启用|未安装/.test(MODS_JS), '★ 区分「未启用」与「未安装」两种原因');
+            c.ok(/前置插件不可用/.test(MODS_JS), '★ 报错文案说明了缺什么');
+            c.ok(/reason: '未安装'/.test(MODS_JS) && /reason: '未启用'/.test(MODS_JS),
+                '★ 区分「未安装」与「未启用」两种原因');
             c.ok(/require\(key\) \{/.test(MODS_JS), 'host API 提供 require()（由系统解析依赖）');
-            c.ok(/if \(m\.dir && !byKey\.has\(m\.dir\)\) byKey\.set\(m\.dir, m\)/.test(MODS_JS)
-                || /byKey\.set\(m\.dir, m\)/.test(MODS_JS),
+            c.ok(/byKey\.set\(m\.dir, m\)/.test(MODS_JS),
                 '★ 缺依赖判定同时认目录名（避免改名后误报）');
-            c.ok(/regByDir\.get\(m\.dir\)/.test(MODS_JS),
+            c.ok(/getRegByDir\(\)\.get\(m\.dir\)/.test(MODS_JS),
                 '★ 缺依赖判定也认注册名（三种身份都收进索引）');
         }
 
+        // 3.5 真实立绘插件：资源解析不写死目录名（本地没有该插件时跳过这段，不判红）
         {
-            // 不能写死 'elaina-avatar' 目录名：用户可能已改名，按 manifest.id 找真实目录
-            const modsRoot = path.join(ROOT, 'mods');
-            let avDir = null;
-            for (const n of readdirSync(modsRoot)) {
-                const mf = path.join(modsRoot, n, 'manifest.json');
-                if (!existsSync(mf)) continue;
-                try {
-                    const m = JSON.parse(readFileSync(mf, 'utf8'));
-                    if (m.id === 'elaina-avatar') { avDir = path.join(modsRoot, n); break; }
-                } catch { /* 忽略 */ }
-            }
-            c.ok(Boolean(avDir), '能找到 elaina-avatar 的真实目录（按 manifest.id 而非写死名字）',
-                avDir ? path.basename(avDir) : '(没找到)');
-            if (avDir) {
-                const av = readFileSync(path.join(avDir, 'index.js'), 'utf8');
+            const avDirName = modDirById('elaina-avatar');
+            if (!avDirName) {
+                console.log('  --   跳过 3.5：本地没有 elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
+            } else {
+                const av = readFileSync(path.join(MODS, avDirName, 'index.js'), 'utf8');
                 c.ok(/host\.assetBase|assetUrl/.test(av),
                     '★ elaina-avatar 用宿主给的 assetBase 解析资源（不写死目录名）');
                 c.ok(/window\.ElainaAvatar/.test(av), 'elaina-avatar 仍暴露 ElainaAvatar 接口给依赖方');
             }
         }
     } finally {
+        stopSrv();
         tmp.cleanup();
     }
 }
 
-// 3b. 插件隔离与统一接口：钉住边界（工厂/插槽/事件回调/清单外链脚本的异常只停在自己身上）与
-// 统一（设置入口、资源路径、错误出口只有一个，不靠 window 私有全局名）。全部用临时目录自造插件。
-
-/** 在临时目录写一个自造插件，返回可直接喂给 loadModsInSandbox 的清单条目 */
 function writeIsolationMod(root, id, indexJs, extra = {}) {
     const dir = path.join(root, id);
     mkdirSync(dir, { recursive: true });
@@ -1428,15 +1002,17 @@ async function loadModsInSandbox(store, opts = {}) {
 }
 
 async function caseModDeps(c) {
-    /* 插件源码不随仓库分发，本地没有是正常状态：跳过而不是判红。
-       判定用 modDirById 按 manifest.id 找目录（目录名常带版本号，拿 id 拼目录会把"装了"误判成"没装"）。 */
-    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => Boolean(modDirById(n)))) {
-        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
-        return;
-    }
-    // 失败隔离：坏插件不影响好插件且会被自动停用；静态+结构断言，这几条删一行也照样跑得通、最易悄悄回归
+    // 失败隔离：坏插件不影响好插件且会被自动停用；静态+结构断言，这几条删一行也照样跑得通、最易悄悄回归。
+    // 前端已按领域拆成 mods-*.js 模块：断言按模块合并读取（loadAll 循环在 mods-load.js，自动停用在
+    // mods-faults.js，重新启用门禁在 mods-enable.js，失败记录读取在 mods-load-one.js，list 字段在 mods-api.js）。
+    // 这一段是纯源码检查，不依赖本机装了哪些插件，始终跑。
     {
-        const modsJs = readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
+        const modsJs = readFileSync(path.join(WEB, 'js', 'mods-load.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods-faults.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods-enable.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods-load-one.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods-api.js'), 'utf8')
+            + '\n' + readFileSync(path.join(WEB, 'js', 'mods.js'), 'utf8');
 
         const loopAt = modsJs.indexOf('const results = [];');
         const loopSeg = loopAt >= 0 ? modsJs.slice(loopAt, loopAt + 900) : '';
@@ -1455,8 +1031,6 @@ async function caseModDeps(c) {
         c.ok(/MOD_FAILED_KEY_PREFIX/.test(modsJs), '失败记录有独立的存储键前缀');
         c.ok(/const fail = readModFailure\(manifest\.id\)/.test(modsJs),
             '重新加载时从存储读失败记录（不只依赖内存 prev）');
-        c.ok(/START_MARK[\s\S]{0,10}clearModFailure/.test('START_MARK' + (modsJs.slice(modsJs.indexOf('function clearModFailure')))),
-            '手动重新启用时清掉旧失败记录');
         c.ok(/autoDisabled: e\.autoDisabled === true/.test(modsJs),
             'list() 暴露 autoDisabled（设置界面据此区分"用户关的"与"坏了自己关的"）');
 
@@ -1470,12 +1044,20 @@ async function caseModDeps(c) {
         c.ok(/wasFailed/.test(setSeg), 'setEnabled 区分「上次失败」与「正常停用后重启」');
         c.ok(/neverLoaded \|\| wasFailed/.test(setSeg),
             '上次失败的插件必须重新走加载流程（不能只 activateContributions 挂回去）');
-        c.ok(/if \(wasFailed\) loadedScripts\.delete\(src\)/.test(setSeg),
+        c.ok(/clearModFailure\(id\)/.test(setSeg), '重新启用时清掉旧失败记录');
+        c.ok(/if \(wasFailed && src\) loadedScripts\.delete\(src\)/.test(setSeg),
             '失败重试时清掉"已注入"记录（否则 loadOne 认定脚本已在、跳过注入）');
         c.ok(!/\.state\s*!==\s*'error'\s*\)\s*\w+\.state\s*=\s*'ready'/.test(modsCode),
             '不把加载失败强行改写成 ready（旧写法会让坏插件"点几次就启动"）');
         c.ok(/fresh\.state === 'pending'[\s\S]{0,300}autoDisableBroken/.test(setSeg),
             '没有明确加载结果时保守当成失败并停用');
+    }
+
+    /* 插件源码不随仓库分发，本地没有是正常状态：跳过而不是判红。
+       判定用 modDirById 按 manifest.id 找目录（目录名常带版本号，拿 id 拼目录会把"装了"误判成"没装"）。 */
+    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => Boolean(modDirById(n)))) {
+        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
+        return;
     }
 
     // 已启用的依赖方 + 前置停关 → 加载时自动把前置带上：由 pullUpPrerequisites / ensurePrerequisites 接管；"拉不起来才拒绝"的用例在 4b
@@ -1858,68 +1440,6 @@ function findStarterDir() {
     throw new Error('找不到插件骨架目录：skills/*/assets/mod-starter');
 }
 
-// 服务端半边门禁：停用的插件不装载、总开关关闭时全部不装载、已装载成功不误报需重启（signature 同形状比较）
-async function caseModServerGate(c) {
-    const ok = (cond, label, detail) => c.ok(cond, label, detail);
-    const tmp = mkdtempSync(path.join(tmpdir(), 'elaina-modgate-'));
-    const modsDir = path.join(tmp, 'mods');
-    const writeMod = (id, { server = null, defaultEnabled = false } = {}) => {
-        const dir = path.join(modsDir, id);
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
-            id, name: id, entry: 'index.js', defaultEnabled, ...(server ? { server } : {}),
-        }, null, 2));
-        writeFileSync(path.join(dir, 'index.js'), 'void 0;');
-        if (server) {
-            writeFileSync(path.join(dir, 'server.mjs'),
-                `export function register(ctx) { ctx.route('GET', '/api/${id}/ping', (req, res) => ctx.json(res, 200, { ok: true })); }`);
-        }
-    };
-    try {
-        writeMod('zz-gate-enabled', { server: { entry: 'server.mjs', routes: ['/api/zz-gate-enabled'], capabilities: ['route-register'] } });
-        writeMod('zz-gate-disabled', { server: { entry: 'server.mjs', routes: ['/api/zz-gate-disabled'], capabilities: ['route-register'] } });
-        writeMod('zz-gate-default', { defaultEnabled: true, server: { entry: 'server.mjs', routes: ['/api/zz-gate-default'], capabilities: ['route-register'] } });
-        // 与 scanAndSync/buildPluginList 给出的条目同形：顶层必须带 server / defaultEnabled，否则 loadAll 读不到
-        const installed = ['zz-gate-enabled', 'zz-gate-disabled', 'zz-gate-default'].map((id) => ({
-            id, dir: id, ...JSON.parse(readFileSync(path.join(modsDir, id, 'manifest.json'), 'utf8')),
-        }));
-        const hostRoutePrefixes = ['/api/store', '/api/plugins'];
-
-        const ms = createModServer({ modsDir, hostRoutePrefixes, jsonResponse() {}, readJsonBody() {}, log() {} });
-        const isEnabled = (id, entry) => (id === 'zz-gate-enabled' ? true
-            : id === 'zz-gate-disabled' ? false
-                : Boolean(entry && entry.defaultEnabled === true));
-        await ms.loadAll(installed, isEnabled);
-        const byId = Object.fromEntries(ms.status(installed).mods.map((m) => [m.id, m]));
-        ok(byId['zz-gate-enabled'] && byId['zz-gate-enabled'].ok === true,
-            '启用插件装载服务端半边', JSON.stringify(byId['zz-gate-enabled']));
-        ok(byId['zz-gate-default'] && byId['zz-gate-default'].ok === true,
-            '未写开关时 defaultEnabled=true 照常装载', JSON.stringify(byId['zz-gate-default']));
-        ok(byId['zz-gate-disabled'] && byId['zz-gate-disabled'].ok === false && byId['zz-gate-disabled'].enabled === false,
-            '★ 停用的插件不装载服务端半边（停用要真的停用）', JSON.stringify(byId['zz-gate-disabled']));
-        const restart = ms.status(installed).needsRestart || [];
-        ok(restart.length === 0, '★ 已装载成功的插件不被误报“需重启”（signature 同形状比较）', JSON.stringify(restart));
-        const routes = ms._routes().map((r) => r.prefix);
-        ok(routes.includes('/api/zz-gate-enabled/ping') && routes.includes('/api/zz-gate-default/ping')
-            && !routes.includes('/api/zz-gate-disabled/ping'),
-            '★ 启用/默认的接口注册了，停用的没注册', JSON.stringify(routes));
-
-        const ms2 = createModServer({ modsDir, hostRoutePrefixes, jsonResponse() {}, readJsonBody() {}, log() {} });
-        await ms2.loadAll(installed, () => false);
-        ok(ms2._routes().length === 0, '★ 总开关关闭时任何插件服务端路由都不装载', JSON.stringify(ms2._routes()));
-
-        const serveSrc = readFileSync(path.join(ROOT, 'web', 'serve.mjs'), 'utf8');
-        ok(/modServer\.loadAll\(r\.installed,\s*isEnabled\)/.test(serveSrc),
-            '★ serve.mjs 把启用状态传给 loadAll（不是只停前端）');
-
-        const modsSrc = readFileSync(path.join(ROOT, 'server', 'mods.mjs'), 'utf8');
-        ok(!/async\s+function\s+writeIndexFile\s*\(/.test(modsSrc),
-            'mods.mjs 不再保留自递归的 writeIndexFile 空壳');
-    } finally {
-        rmSync(tmp, { recursive: true, force: true });
-    }
-}
-
 async function caseModHostApi(c) {
     /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
        本地没有这些插件是**正常状态**，跳过而不是判红。 */
@@ -2046,7 +1566,8 @@ async function caseModHostApi(c) {
     // 服务端输出落文件（见下面 spawn 的说明：受限环境里不能开命名管道）
     const serverLogPath = path.join(LOG_DIR, 'server-output.log');
     const outFd = openSync(serverLogPath, 'a');
-    const serverOut = () => { try { return readFileSync(serverLogPath, 'utf8'); } catch { return ''; } };
+    let srvProc = null;
+    const serverOut = () => (srvProc ? srvProc.bootLog : '');
 
     let child = null;
     let browser = null;
@@ -2075,8 +1596,10 @@ async function caseModHostApi(c) {
     }
 
     try {
+        // Go 服务端按 AGENTS.md D19 强制能力声明：ctx.route / ctx.uploadDir 在装载期校验
+        // manifest.server.capabilities，未声明直接装载失败 —— 夹具必须如实声明。
         writeServerMod('zz-check-api',
-            { entry: 'server.mjs', routes: ['/api/apicheck'], uploads: ['uploads'] },
+            { entry: 'server.mjs', routes: ['/api/apicheck'], uploads: ['uploads'], capabilities: ['route-register', 'upload-write'] },
             `export function register(ctx) {
         ctx.route('GET', '/api/apicheck/ping', (req, res, info) => {
             ctx.json(res, 200, { ok: true, mod: ctx.modId, rest: info.rest });
@@ -2088,13 +1611,13 @@ async function caseModHostApi(c) {
     }`);
         // 试图注册未声明前缀的 mod → 装载必须失败并隔离
         writeServerMod('zz-check-badapi',
-            { entry: 'server.mjs', routes: ['/api/apicheckbad'] },
+            { entry: 'server.mjs', routes: ['/api/apicheckbad'], capabilities: ['route-register'] },
             `export function register(ctx) {
         ctx.route('GET', '/api/evil', (req, res) => { ctx.json(res, 200, { ok: true, hacked: true }); });
     }`);
         // 想占宿主已有前缀的 mod → 必须被拒绝（否则永远收不到请求却不报错）
         writeServerMod('zz-check-collide',
-            { entry: 'server.mjs', routes: ['/api/store'] },
+            { entry: 'server.mjs', routes: ['/api/store'], capabilities: ['route-register'] },
             `export function register(ctx) {
         ctx.route('GET', '/api/store', (req, res) => { ctx.json(res, 200, { ok: true, hijacked: true }); });
     }`);
@@ -2169,16 +1692,9 @@ async function caseModHostApi(c) {
     })();`);
         writeFileSync(path.join(MODS, 'zz-check-prereq', 'README.md'), '# 前置自检\n\nPREREQ-README-OK\n');
 
-        child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
-            cwd: ROOT,
-            env: {
-                ...process.env, PORT: String(PORT), HTTPS_PORT: String(HTTPS_PORT),
-                HOST: '127.0.0.1', DATA_DIR, LOG_DIR, LOG_TO_FILE: '0',
-            },
-            // 子进程输出走文件描述符，不用 stdio:'pipe'：受限环境不允许打开命名管道，会直接 EPERM；
-            // 写文件没有这个限制，失败时服务端输出也留得下来（比 stdio:'ignore' 强）
-            stdio: ['ignore', outFd, outFd],
-        });
+        const srv = await startGoServer({ env: { PORT: String(PORT), DATA_DIR, LOG_DIR } });
+        srvProc = srv;
+        child = srv.child;
 
         const up = await waitServerUp(BASE);
         c.ok(up, '服务已启动', up ? '' : serverOut().slice(-500));
@@ -2242,7 +1758,7 @@ async function caseModHostApi(c) {
 
             // 服务启动后新装的带 server 的插件 → 必须报"需重启"，不能静默不生效
             writeServerMod('zz-check-late',
-                { entry: 'server.mjs', routes: ['/api/apiclate'] },
+                { entry: 'server.mjs', routes: ['/api/apiclate'], capabilities: ['route-register'] },
                 `export function register(ctx) {
                 ctx.route('GET', '/api/apiclate/ping', (req, res) => { ctx.json(res, 200, { ok: true }); });
             }`);
@@ -2567,7 +2083,9 @@ function makeMemFs() {
         async readFile({ path: p, encoding }) {
             const d = norm(p);
             if (!files.has(d)) throw new Error('ENOENT ' + d);
-            return encoding === 'utf8' ? files.get(d).toString('utf8') : files.get(d).toString('base64');
+            // 真实 Capacitor Filesystem 回 { data }，不是裸字符串 —— 生产代码读的是 r.data，
+            // 桩返回裸串会让「manifest 读不到」这类 bug 在测试里隐身。
+            return { data: encoding === 'utf8' ? files.get(d).toString('utf8') : files.get(d).toString('base64') };
         },
         async readdir({ path: p }) {
             const d = norm(p); const out = [];
@@ -2591,203 +2109,143 @@ function makeMemFs() {
     };
 }
 
-async function caseModE2E(c) {
-    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
-       本地没有这些插件是**正常状态**，跳过而不是判红。 */
-    if (!['live2d', 'galgame', 'pet', 'elaina-avatar'].every((n) => existsSync(path.join(ROOT, 'mods', n)))) {
-        console.log('  --   跳过：本地没有 live2d/galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
-        return;
-    }
-    const tmp = tempDirFactory('e2e-');
-    const newDir = () => tmp.dir();
-    let child = null;
+/**
+ * 旧插件 localStorage → host.storage 的一次性迁移。
+ * 只搬已知插件前缀；宿主设置/密钥键绝不能跟着进插件存储。
+ */
+async function caseLegacyStorageMigration(c) {
+    const r = await loadModsInSandbox({
+        'elaina_pet_pos': '12px,34px',
+        'elaina_pet_proactive': '1',
+        'elaina_galgame_bg': 'snow',
+        'galgame.live2d.resize': '{"w":1}',
+        'live2d.scale': '1.2',
+        'elainachat_open_api_secrets': '{"k":"v"}',
+    }, { indexPlugins: [] });
+    r.Mods.migrateLegacyStorage();
+    const raw = r.storeGet('elaina_mod_storage');
+    const all = raw ? JSON.parse(raw) : {};
+    c.ok(all.pet && all.pet.pos === '12px,34px', '★ pet 的旧 localStorage 键迁进 host.storage（短键）');
+    c.ok(all.pet && all.pet.proactive === '1', 'pet 的开关值原样保留');
+    c.ok(all.galgame && all.galgame.bg === 'snow', 'galgame 的旧前缀键迁进 host.storage（短键）');
+    c.ok(all.galgame && all.galgame['galgame.live2d.resize'] === '{"w":1}',
+        'galgame.live2d.* 全键迁移（舞台读的是全键）');
+    c.ok(all.galgame && all.galgame['live2d.scale'] === '1.2', '更早的 live2d.* 键也迁（交给插件自身再迁移）');
+    c.ok(!JSON.stringify(all).includes('open_api_secrets'),
+        '★ 宿主设置/密钥键不会被误搬进插件存储');
+}
 
+// 7. 服务端半边启用门禁：停用的插件不装载、总开关关闭时全部不装载、已装载成功不误报需重启。
+// 原锚在已删除的 server/mod-server.mjs（createModServer 白盒 loadAll/status/_routes）；改锚 Go 服务端：
+// 启用状态经 ELAINA_PLUGIN_STATE_FILE 下发（Go 只在启动时装载一次路由，"需重启"语义因此成立），
+// 门禁结论从 /api/plugins 的 serverRoutes（装载状态）与路由是否真的可达（404/200）两侧断言。
+async function caseModServerGate(c) {
+    const tmp = tempDirFactory('elaina-modgate-');
+    let srv = null;
+    const stopSrv = () => { if (srv) { srv.stop(); srv = null; } };
     try {
-        // 6.1 安装链 —— 模拟用户从 Releases 下载带版本号的 zip 丢进 mods/
-        const modsDir = newDir();
-        const zip = createZip([
-            { name: 'manifest.json', data: Buffer.from(JSON.stringify({
-                id: 'elaina-avatar', name: '伊蕾娜立绘与情绪', version: '1.0.0',
-                entry: 'index.js', defaultEnabled: true, hidden: true,
-            }), 'utf8') },
-            { name: 'index.js', data: Buffer.from(
-                'window.ElainaMods&&window.ElainaMods.register("elaina-avatar",function(host){'
-                + 'if(host&&host.assetBase)window.__base=host.assetBase();return{};});', 'utf8') },
-            { name: 'img/p_calm.png', data: Buffer.from('PNGDATA') },
-        ]);
-        writeFileSync(path.join(modsDir, 'elaina-avatar-1.0.0.zip'), zip);
+        const modsDir = tmp.dir();
+        const writeMod = (id, { defaultEnabled = false } = {}) => {
+            const dir = path.join(modsDir, id);
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+                id, name: id, entry: 'index.js', defaultEnabled,
+                server: {
+                    entry: 'server.mjs',
+                    routes: ['/api/' + id],
+                    capabilities: ['route-register'],
+                },
+            }, null, 2));
+            writeFileSync(path.join(dir, 'index.js'), 'void 0;');
+            writeFileSync(path.join(dir, 'server.mjs'),
+                `export function register(ctx) { ctx.route('GET', '/api/${id}/ping', (req, res) => ctx.json(res, 200, { ok: true })); }`);
+        };
+        writeMod('zz-gate-enabled');
+        writeMod('zz-gate-disabled');
+        writeMod('zz-gate-default', { defaultEnabled: true });
 
-        const mgr = mkMgr(modsDir);
-        const r1 = await mgr.scanAndSync();
-
-        const dirs = readdirSync(modsDir).filter((n) => !n.endsWith('.zip') && n !== 'index.json');
-        c.ok(dirs.includes('elaina-avatar'), '★ 装成 elaina-avatar/（不是 elaina-avatar-1.0.0/）', JSON.stringify(dirs));
-        c.ok(!dirs.includes('elaina-avatar-1.0.0'), '★ 没有留下带版本号的目录');
-        const av = r1.installed.find((p) => p.id === 'elaina-avatar');
-        c.ok(Boolean(av), '清单里 id 是 elaina-avatar');
-        c.ok(av && av.dir === 'elaina-avatar', 'dir 与实际目录一致', av && av.dir);
-
-        c.ok(existsSync(path.join(modsDir, 'elaina-avatar', 'img', 'p_calm.png')),
-            '★ 立绘落在 /mods/elaina-avatar/img/p_calm.png 对应位置（不再 404）');
-
-        const gdir = path.join(modsDir, 'galgame');
-        mkdirSync(gdir, { recursive: true });
-        writeFileSync(path.join(gdir, 'manifest.json'), JSON.stringify({
-            id: 'galgame', name: 'Galgame 界面', version: '1.0.0', entry: 'index.js',
-            styles: ['style.css'], defaultEnabled: false, after: ['elaina-avatar'],
-        }));
-        writeFileSync(path.join(gdir, 'index.js'), 'void 0;');
-        writeFileSync(path.join(gdir, 'style.css'), '/* x */');
-
-        const r2 = await mgr.scanAndSync();
-        const ids = new Set(r2.installed.map((p) => p.id));
-        const g = r2.installed.find((p) => p.id === 'galgame');
-        c.ok(ids.has('elaina-avatar'), '★ 依赖目标 elaina-avatar 在清单里');
-        c.ok(g && g.after.every((d) => ids.has(d)),
-            '★ galgame 的 after 能解析（依赖不再失效）', g ? JSON.stringify(g.after) : '');
-
-        const DATA_DIR = newDir();
-        const LOG_DIR = newDir();
-        const PORT = await freePort();
-        const HTTPS_PORT = await freePort();
-        const BASE = `http://127.0.0.1:${PORT}`;
-
-        child = spawn(process.execPath, [path.join(ROOT, 'web', 'serve.mjs')], {
-            cwd: ROOT,
-            env: {
-                ...process.env, PORT: String(PORT), HTTPS_PORT: String(HTTPS_PORT),
-                HOST: '127.0.0.1', DATA_DIR, LOG_DIR, LOG_TO_FILE: '0',
+        // 逐插件开关：enabled=1 / disabled=0 / default 不写键（按 manifest.defaultEnabled）。
+        // 启用状态经 ELAINA_PLUGIN_STATE_FILE 注入（Go 服务端只认这一个键值表文件）。
+        srv = await startFixtureServer(tmp, {
+            modsDir,
+            state: {
+                elaina_plugins_enabled: '1',
+                'elaina_plugin_zz-gate-enabled': '1',
+                'elaina_plugin_zz-gate-disabled': '0',
             },
-            stdio: ['ignore', 'pipe', 'pipe'],
         });
-        let out = '';
-        child.stdout.on('data', (d) => { out += d; });
-        child.stderr.on('data', (d) => { out += d; });
-
-        try {
-            const up = await waitServerUp(BASE);
-            c.ok(up, '服务已启动', up ? '' : out.slice(-300));
-
-            if (up) {
-                const api = await (await fetch(BASE + '/api/plugins')).json();
-                c.ok(api.ok === true, '/api/plugins 可用');
-                const plugins = api.plugins || [];
-                for (const p of plugins) {
-                    console.log(`      id=${String(p.id).padEnd(16)} dir=${String(p.dir).padEnd(16)} after=${JSON.stringify(p.after)}`);
-                }
-
-                const avP = plugins.find((p) => p.id === 'elaina-avatar');
-                c.ok(avP && typeof avP.dir === 'string' && avP.dir.length > 0,
-                    '★ 清单带 dir 字段（前端按它加载脚本）', avP && avP.dir);
-
-                const ids = new Set(plugins.map((p) => p.id));
-                for (const dep of ['galgame', 'pet']) {
-                    const m = plugins.find((p) => p.id === dep);
-                    if (!m) { c.ok(false, `${dep} 在清单里`); continue; }
-                    c.ok(m.after.every((d) => ids.has(d)), `★ ${dep} 的 after 可解析`, JSON.stringify(m.after));
-                }
-
-                // 按 dir 拼 URL 能取到脚本（这是前端 loadOne 的真实路径）
-                for (const p of plugins) {
-                    const url = `/mods/${p.dir}/${p.entry || 'index.js'}`;
-                    const r = await fetch(BASE + url);
-                    c.ok(r.status === 200, `★ ${url} → 200`, 'status=' + r.status);
-                }
-
-                // 立绘图片可达 —— 按清单里的真实目录名拼 URL（写死 'elaina-avatar' 在改名后必然 404）
-                const avEntry = plugins.find((p) => p.id === 'elaina-avatar');
-                if (avEntry) {
-                    const enc = String(avEntry.dir || avEntry.id).split('/').map(encodeURIComponent).join('/');
-                    const img = await fetch(BASE + `/mods/${enc}/img/p_calm.png`);
-                    c.ok(img.status === 200,
-                        `★ 立绘 /mods/${enc}/img/p_calm.png → 200（按真实目录）`, 'status=' + img.status);
-                    c.ok((img.headers.get('content-type') || '').startsWith('image/'),
-                        '返回图片类型', img.headers.get('content-type'));
-                } else {
-                    c.ok(false, '清单里有 elaina-avatar（才能验立绘）');
-                }
-            }
-        } finally {
-            child.kill();
-            await wait(300);
-        }
-
-        // 6.3 安卓侧插件可拆装：安卓没有服务端，core.js 的 nativePluginsFetch 在页内用 Capacitor
-        // Filesystem 实现同一套接口；这条原生链断了不会有任何报错，只表现为"点了没反应"或"删了还在"
-        {
-            const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-native.js'), 'utf8')
-                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
-                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
-
-            const memFs = makeMemFs();
-            const sandbox = {
-                console, TextDecoder, TextEncoder, Response, Blob, Uint8Array, Promise, Error,
-                JSON, Object, Array, String, Number, Boolean, Date, Math, RegExp, Set, Map,
-                DecompressionStream,
-                atob: (s) => Buffer.from(s, 'base64').toString('binary'),
-                btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+        if (!srv) return;
+        c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+        if (srv.up) {
+            const ping = async (path) => {
+                const r = await fetch(srv.base + path);
+                let b = null;
+                try { b = await r.json(); } catch { /* 404 时无 body 结构要求 */ }
+                return { status: r.status, body: b };
             };
-            sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox;
-            vm.createContext(sandbox);
+            const on = await ping('/api/zz-gate-enabled/ping');
+            c.ok(on.status === 200 && on.body && on.body.ok === true,
+                '★ 启用插件的接口真的注册上了（200）', 'HTTP ' + on.status);
+            const def = await ping('/api/zz-gate-default/ping');
+            c.ok(def.status === 200 && def.body && def.body.ok === true,
+                '★ 未写开关时 defaultEnabled=true 照常装载', 'HTTP ' + def.status);
+            const off = await ping('/api/zz-gate-disabled/ping');
+            c.ok(off.status === 404,
+                '★ 停用的插件不装载服务端半边（路由 404，停用要真的停用）', 'HTTP ' + off.status);
 
-            const pieces = [];
-            for (const n of ['NATIVE_MOD_ID_RE', 'NATIVE_MODS_DIR', 'NATIVE_MOD_MAX_BYTES']) {
-                const m = core.match(new RegExp('const ' + n + ' = [^\\n]+'));
-                if (m) pieces.push(m[0]);
+            const body = await fetch(srv.base + '/api/plugins').then((r) => r.json()).catch(() => null);
+            const view = (body && body.serverRoutes) || {};
+            const byId = Object.fromEntries((view.mods || []).map((m) => [m.id, m]));
+            c.ok(byId['zz-gate-enabled'] && byId['zz-gate-enabled'].ok === true,
+                '装载状态里报告了启用插件', JSON.stringify(byId['zz-gate-enabled']));
+            c.ok(byId['zz-gate-disabled'] && byId['zz-gate-disabled'].ok === false
+                && byId['zz-gate-disabled'].enabled === false,
+                '★ 停用插件在装载状态里如实标记（ok=false / enabled=false）',
+                JSON.stringify(byId['zz-gate-disabled']));
+            c.ok(/未启用/.test((byId['zz-gate-disabled'] || {}).error || ''),
+                '★ 停用原因可读并指到操作路径（到「设置 → 插件」打开开关，然后重启服务）',
+                (byId['zz-gate-disabled'] || {}).error);
+            c.ok((view.needsRestart || []).length === 0,
+                '★ 已装载成功的插件不被误报“需重启”（signature 同形状比较）',
+                JSON.stringify(view.needsRestart || []));
+        }
+        stopSrv();
+
+        // 总开关关闭：任何插件的服务端路由都不装载
+        srv = await startFixtureServer(tmp, {
+            modsDir,
+            state: {
+                elaina_plugins_enabled: '0',
+                'elaina_plugin_zz-gate-enabled': '1',
+            },
+        });
+        c.ok(srv && srv.up, '总开关轮次服务已启动', srv && srv.up ? '' : srv.bootLog.slice(-400));
+        if (srv && srv.up) {
+            for (const id of ['zz-gate-enabled', 'zz-gate-disabled', 'zz-gate-default']) {
+                const r = await fetch(srv.base + '/api/' + id + '/ping');
+                c.ok(r.status === 404, `★ 总开关关闭：${id} 的接口也不装载`, 'HTTP ' + r.status);
             }
-            {
-                const s = core.indexOf('const NATIVE_MOD_BLOCKED_EXT = new Set([');
-                if (s >= 0) pieces.push(core.slice(s, core.indexOf(']);', s) + 3));
-            }
-            for (const fn of ['nativeFs', 'bytesToBase64', 'nativeWriteFile', 'nativeNormalizeModId',
-                'nativeEffectiveExt', 'nativeReadModManifest', 'nativeListModFiles', 'nativeListPlugins',
-                'nativeDeletePlugin', 'nativeInstallPlugin', 'nativePluginsFetch', 'unzipBrowser']) {
-                try { pieces.push(extractFn(core, fn)); } catch (e) { c.ok(false, '抠出原生函数 ' + fn, e.message); }
-            }
-            vm.runInContext(pieces.join('\n\n'), sandbox);
-            sandbox.nativeFs = () => memFs;
-
-            const zipBuf = makeZip([
-                ['manifest.json', JSON.stringify({ id: 'e2etest', name: 'E2E 测试插件', version: '1.0.0', entry: 'index.js', defaultEnabled: false })],
-                ['index.js', 'window.__e2e = true;'],
-            ]);
-
-            try {
-                const installRes = await sandbox.nativePluginsFetch('/api/plugins/install?name=e2etest-1.0.0.zip', { method: 'POST', body: new Blob([zipBuf]) });
-                const installJson = await installRes.json();
-                c.ok(installJson.ok === true, '★ 安卓：上传安装成功', JSON.stringify(installJson));
-                c.ok(installJson.id === 'e2etest', '★ 安卓：安装得到正确 id', String(installJson.id));
-
-                const listJson = await (await sandbox.nativePluginsFetch('/api/plugins', { method: 'GET' })).json();
-                const ids = (listJson.plugins || []).map((p) => p.id);
-                c.ok(ids.includes('e2etest'), '★ 安卓：列表里能看到刚装的插件', JSON.stringify(ids));
-
-                const delJson = await (await sandbox.nativePluginsFetch('/api/plugins/e2etest', { method: 'DELETE' })).json();
-                c.ok(delJson.ok === true, '★ 安卓：卸载成功', JSON.stringify(delJson));
-
-                const ids2 = ((await (await sandbox.nativePluginsFetch('/api/plugins', { method: 'GET' })).json()).plugins || []).map((p) => p.id);
-                c.ok(!ids2.includes('e2etest'), '★ 安卓：卸载后列表里没有它了（真拆掉了）', JSON.stringify(ids2));
-
-                // 路径穿越必须被挡：这是"可拆装"带来的新攻击面
-                const evil = await (await sandbox.nativePluginsFetch('/api/plugins/..%2F..%2Fdata', { method: 'DELETE' })).json();
-                c.ok(evil.ok !== true, '★ 安卓：非法 id 的删除被拒绝（防目录穿越）', JSON.stringify(evil));
-            } catch (e) {
-                c.ok(false, '安卓侧安装链路跑通', String(e && e.message || e));
-            }
+            const body = await fetch(srv.base + '/api/plugins').then((r) => r.json()).catch(() => null);
+            const view = (body && body.serverRoutes) || {};
+            const mods = view.mods || [];
+            c.ok(mods.length > 0 && mods.every((m) => m.ok === false && m.enabled === false),
+                '★ 总开关关闭时装载状态全部如实标记为未启用', JSON.stringify(mods));
         }
     } finally {
-        if (child) { try { child.kill(); } catch { /* 忽略 */ } }
+        stopSrv();
         tmp.cleanup();
     }
 }
 
-// 技能（skills）：与插件平行的一套，扫描结果必须永远是"资料"。
-// 技能是给 AI 的文本资料、插件是扩展应用的代码，混同则"装一个 zip"=给自己发执行能力；scan() 每项必须 kind:'knowledge'。
+// 8. 技能（skills）：与插件平行的一套，扫描结果必须永远是"资料"。
+// 技能是给 AI 的文本资料、插件是扩展应用的代码，混同则"装一个 zip"=给自己发执行能力。
+// 原锚在已删除的 Node SkillManager；改锚 Go /api/skills（server/internal/packages 的 ScanSkills/Install/Uninstall）。
 async function caseSkills(c) {
-    const root = mkdtempSync(path.join(tmpdir(), 'elaina-skills-'));
-    const skillsDir = path.join(root, 'skills');
-    const modsDir = path.join(root, 'mods');
+    const tmp = tempDirFactory('elaina-skills-');
+    let srv = null;
     try {
+        const skillsDir = tmp.dir();
+        const modsDir = tmp.dir();
         // ① 本地技能：含 SKILL.md 的目录才算技能（不含的是用户随手放的杂物）
         mkdirSync(path.join(skillsDir, '写作助手'), { recursive: true });
         writeFileSync(path.join(skillsDir, '写作助手', 'SKILL.md'),
@@ -2795,30 +2253,33 @@ async function caseSkills(c) {
         mkdirSync(path.join(skillsDir, '杂物'), { recursive: true });
         writeFileSync(path.join(skillsDir, '杂物', 'note.txt'), 'x');
 
-        // ② 插件随附技能：manifest 的 skills 声明，文件住在插件目录内
+        // ② 插件随附技能：manifest 的 skills 声明，文件住在插件目录内（后一条是恶意的路径穿越声明）
         mkdirSync(path.join(modsDir, 'demo-plugin', 'skills', 'guide'), { recursive: true });
         writeFileSync(path.join(modsDir, 'demo-plugin', 'manifest.json'), JSON.stringify({
             id: 'demo-plugin', name: '演示插件', version: '1.0.0', entry: 'index.js',
-            skills: ['skills/guide', '../../../web'],   // 后一条是恶意的路径穿越声明
+            skills: ['skills/guide', '../../../web'],
         }));
         writeFileSync(path.join(modsDir, 'demo-plugin', 'skills', 'guide', 'SKILL.md'),
             '---\nname: 插件指南\ndescription: 这个插件怎么用\n---\n');
 
-        const logs = [];
-        const mgr = createSkillManager({
-            skillsDir, modsDir,
-            unzip: () => ({ files: [] }),        // 扫描不碰解压，给个占位
-            isUnsafeEntryName: () => false,
-            effectiveExt,
-            log: (m) => logs.push(String(m)),
-        });
-        const { skills } = await mgr.scan();
+        srv = await startFixtureServer(tmp, { modsDir, skillsDir });
+        if (!srv) return;
+        c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+        if (!srv.up) return;
+        const list = () => fetch(srv.base + '/api/skills').then((r) => r.json()).catch(() => null);
+
+        const body = await list();
+        c.ok(body && body.ok === true, 'GET /api/skills 成功');
+        const skills = (body && body.skills) || [];
         const byId = (id) => skills.find((s) => s.id === id);
 
         c.ok(Boolean(byId('写作助手')), '本地技能（含 SKILL.md）被扫出来');
-        c.ok(byId('写作助手')?.description === '帮我把草稿写得更好', 'description 取 frontmatter');
+        c.ok(byId('写作助手') && byId('写作助手').description === '帮我把草稿写得更好', 'description 取 frontmatter');
         c.ok(!byId('杂物'), '没有 SKILL.md 的目录不被当成技能');
-        c.ok(Boolean(byId('demo-plugin/skills/guide')), '插件随附技能以 owner/相对路径 进清单');
+        const owned = byId('demo-plugin/skills/guide');
+        c.ok(Boolean(owned), '插件随附技能以 owner/相对路径 进清单');
+        c.ok(owned && owned.owner === 'demo-plugin' && owned.source === 'mod',
+            '随附技能带 owner 与 source=mod（卸载时指回插件本体）');
         c.ok(skills.length === 2, '清单里正好是那两项（无多余项）', skills.map((s) => s.id).join(' / '));
 
         // 边界：每一项都必须带 kind:'knowledge' —— 前端据此只注册成纯知识条目
@@ -2829,15 +2290,51 @@ async function caseSkills(c) {
             skills.filter((s) => s.kind === 'tool').map((s) => s.id).join(' / '));
 
         // 恶意的 skills 声明（含 ..）必须被跳过，不得读到插件目录之外
-        c.ok(logs.some((m) => m.includes('不安全')), '不安全的 skills 声明被跳过并记日志', logs.join(' | '));
-        c.ok(!skills.some((s) => s.id.includes('..')), '清单里没有越界的随附技能');
+        c.ok(!skills.some((s) => s.id.includes('..')), '★ 清单里没有越界的随附技能');
+        c.ok(/不安全/.test(srv.bootLog), '不安全的 skills 声明被跳过并记日志', srv.bootLog.slice(-300));
+
+        const rd = await fetch(srv.base + '/api/skills/demo-plugin/skills/guide/content');
+        const rdBody = await rd.json().catch(() => null);
+        c.ok(rd.status === 200 && rdBody && rdBody.ok === true && /插件指南/.test(rdBody.text || ''),
+            '随附技能正文可经 /api/skills/<id>/content 读回', 'HTTP ' + rd.status);
+
+        const delOwned = await fetch(srv.base + '/api/skills/demo-plugin/skills/guide', { method: 'DELETE' });
+        const delOwnedBody = await delOwned.json().catch(() => null);
+        c.ok(delOwned.status === 400 && delOwnedBody && delOwnedBody.ok === false
+            && /一起卸载|插件/.test(delOwnedBody.message || ''),
+            '★ 插件随附的技能不能单独卸载（指回插件本体）',
+            'HTTP ' + delOwned.status + ' ' + JSON.stringify(delOwnedBody));
+
+        // 上传安装：必须含 SKILL.md（否则用户会看到"安装成功，但列表里没有"）；装完可见、可卸载
+        const up = await fetch(srv.base + '/api/skills/install?name=zz-skill.zip', {
+            method: 'POST',
+            body: makeZip([{ name: 'zz-skill/SKILL.md', data: '---\nname: 上传技能\ndescription: 检查用\n---\n\n正文\n' }]),
+        });
+        const upBody = await up.json().catch(() => null);
+        c.ok(up.status === 200 && upBody && upBody.ok === true && upBody.id === 'zz-skill',
+            '★ POST /api/skills/install 上传安装成功', 'HTTP ' + up.status + ' ' + JSON.stringify(upBody));
+        const after = await list();
+        c.ok(after && (after.skills || []).some((s) => s.id === 'zz-skill' && s.kind === 'knowledge'),
+            '★ 上传的技能进列表且仍是 knowledge');
+        const noSkill = await fetch(srv.base + '/api/skills/install?name=zz-noskill.zip', {
+            method: 'POST',
+            body: makeZip([{ name: 'zz-noskill/readme.txt', data: 'x' }]),
+        });
+        c.ok(noSkill.status === 400, '★ 没有 SKILL.md 的 zip 被拒绝（不出现「装成功但列表里没有」）',
+            'HTTP ' + noSkill.status);
+        const del = await fetch(srv.base + '/api/skills/zz-skill', { method: 'DELETE' });
+        c.ok(del.status === 200, 'DELETE 卸载技能成功', 'HTTP ' + del.status);
+        const final = await list();
+        c.ok(final && !(final.skills || []).some((s) => s.id === 'zz-skill'), '★ 卸载后列表里没有它');
     } finally {
-        rmSync(root, { recursive: true, force: true });
+        if (srv) srv.stop();
+        tmp.cleanup();
     }
 }
 
-// 仓库自带的「制作插件」技能：入口必须短（技能随每轮对话进能力索引，全写入口则每轮都付这份上下文），
+// 9. 仓库自带的「制作插件」技能：入口必须短（技能随每轮对话进能力索引，全写入口则每轮都付这份上下文），
 // 细则按需加载。钉住：入口存在且 frontmatter 完整、体积有上限、入口引用的分节文件都真实存在。
+// 末段原本用已删除的 Node SkillManager 现场扫一遍，改锚真实 Go 服务（SKILLS_DIR 指仓库 skills/，MODS_DIR 指临时空目录）。
 async function caseModAuthoringSkill(c) {
     const SKILL_DIR = path.join(ROOT, 'skills', 'mod-authoring-guide');
     const ENTRY = path.join(SKILL_DIR, 'SKILL.md');
@@ -2871,472 +2368,225 @@ async function caseModAuthoringSkill(c) {
         c.ok(text.includes(f), '★ 存在的分节文件都在入口索引里（否则 AI 找不到它）：' + f);
     }
 
-    // 用真实的管理器扫一遍：必须作为本地技能被发现且仍是纯知识；modsDir 指临时空目录，不受本机插件影响
-    const emptyMods = mkdtempSync(path.join(tmpdir(), 'elaina-skill-mods-'));
-    const mgr = createSkillManager({
-        skillsDir: path.join(ROOT, 'skills'),
-        modsDir: emptyMods,
-        unzip: () => ({ files: [] }),
-        isUnsafeEntryName: () => false,
-        effectiveExt,
-        log: () => {},
-    });
-    const { skills } = await mgr.scan();
-    const found = skills.find((s) => s.id === 'mod-authoring-guide');
-    c.ok(Boolean(found), '★ 被服务端扫成本地技能（id = 目录名）');
-    c.ok(found && found.kind === 'knowledge', '★★ 仍是 kind:knowledge（资料，不可执行）');
-    c.ok(found && Boolean(found.description), '★ description 进清单（AI 据此判断要不要读）');
-    const body = await mgr.readSkill('mod-authoring-guide');
-    c.ok(body.ok && body.text.includes('制作插件'), '★ 正文可经 readSkill 读回');
-    rmSync(emptyMods, { recursive: true, force: true });
+    // 用真实服务扫一遍：必须作为本地技能被发现且仍是纯知识；MODS_DIR 指临时空目录，不受本机插件影响
+    const tmp = tempDirFactory('elaina-skill-scan-');
+    let srv = null;
+    try {
+        srv = await startFixtureServer(tmp, { modsDir: tmp.dir(), skillsDir: path.join(ROOT, 'skills') });
+        if (!srv) return;
+        c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-400));
+        if (!srv.up) return;
+        const body = await fetch(srv.base + '/api/skills').then((r) => r.json()).catch(() => null);
+        const skills = (body && body.skills) || [];
+        const found = skills.find((s) => s.id === 'mod-authoring-guide');
+        c.ok(Boolean(found), '★ 被服务端扫成本地技能（id = 目录名）');
+        c.ok(found && found.kind === 'knowledge', '★★ 仍是 kind:knowledge（资料，不可执行）');
+        c.ok(found && Boolean(found.description), '★ description 进清单（AI 据此判断要不要读）');
+        const rd = await fetch(srv.base + '/api/skills/mod-authoring-guide/content').then((r) => r.json()).catch(() => null);
+        c.ok(rd && rd.ok === true && rd.text.includes('制作插件'), '★ 正文可经 /api/skills/<id>/content 读回');
+    } finally {
+        if (srv) srv.stop();
+        tmp.cleanup();
+    }
 }
 
-// 手机端 bootstrap 的 mod 服务端半边（与 serve.mjs 同构的那一半）：布局照 sync-web 产物形态，
-// 数据目录与插件根共用一个 <tmp>（插件根是 dataDir 的同级 mods，放错会"装载 0 个插件"假绿）；夹具现场生成。
-
-// 组装并拉起一个临时 bootstrap；waitMods 等 /api/ping 的 modsLoaded 有结论
-async function startBootstrapMods(c, TMP) {
-    const NODE_ROOT = path.join(TMP, 'nodejs');
-    const DATA_DIR = path.join(TMP, 'elaina-data');
-
-    // 共享模块清单从 sync-web.mjs 提取（单一事实源；打包工具住在 dist/Android/scripts/）
-    const syncSrc = readFileSync(path.join(ROOT, 'dist', 'Android', 'scripts', 'sync-web.mjs'), 'utf8');
-    const listMatch = syncSrc.match(/SHARED_SERVER_MODULES\s*=\s*\[([^\]]*)\]/);
-    if (!listMatch) throw new Error('无法从 sync-web.mjs 提取 SHARED_SERVER_MODULES');
-    const shared = listMatch[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-
-    mkdirSync(path.join(NODE_ROOT, 'server'), { recursive: true });
-    cpSync(path.join(ROOT, 'web', 'nodejs', 'bootstrap.mjs'), path.join(NODE_ROOT, 'bootstrap.mjs'));
-    for (const name of shared) {
-        cpSync(path.join(ROOT, 'server', name), path.join(NODE_ROOT, 'server', name));
+// 10. 端到端：真实服务 + 真实 zip。三段：临时目录里走"装带版本号的 zip"链；真实服务对真实 mods/
+// 断言清单与资源可达（不能隔离）；第三段安卓侧原生实现（页内用 Capacitor Filesystem 跑同一套接口）。
+// 原来第二段 spawn web/serve.mjs，现改锚 Go 服务（MODS_DIR 指项目根 mods/）。
+async function caseModE2E(c) {
+    /* 插件源码不随仓库分发（仓库只推软件本体，插件走应用内安装）——
+       6.2 需要真实插件，本地没有这些插件是**正常状态**，只跳过那一段而不是判红。 */
+    const REAL_MODS = ['galgame', 'pet', 'elaina-avatar'].every((n) => Boolean(modDirById(n)));
+    if (!REAL_MODS) {
+        console.log('  --   跳过 6.2（真实 mods/ 段）：本地没有 galgame/pet/elaina-avatar 插件源码（插件走应用内安装，这是正常状态）');
     }
+    const tmp = tempDirFactory('e2e-');
+    let srv = null;
+    const stopSrv = () => { if (srv) { try { srv.stop(); } catch { /* 已退出 */ } srv = null; } };
 
-    const child = spawn(process.execPath, [path.join(NODE_ROOT, 'bootstrap.mjs'), `--data-dir=${DATA_DIR}`], {
-        cwd: NODE_ROOT,
-        stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let out = '';
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { out += d; });
-    // 等"进程真的退了"而不只是发 kill 信号：连续起停多个 bootstrap 时，上一个活着会拖慢下一个启动
-    const stop = async () => {
-        const exited = new Promise((resolve) => {
-            if (child.exitCode !== null) return resolve();
-            const t = setTimeout(resolve, 4000);
-            child.once('exit', () => { clearTimeout(t); resolve(); });
-        });
-        try { child.kill(); } catch { /* 已退出 */ }
-        await exited;
-    };
+    try {
+        // 6.1 安装链 —— 模拟用户从 Releases 下载带版本号的 zip 丢进 mods/（服务端扫描时自动装掉）
+        {
+            const modsDir = tmp.dir();
+            writeFileSync(path.join(modsDir, 'elaina-avatar-1.0.0.zip'), avatarZip('1.0.0'));
+            srv = await startFixtureServer(tmp, { modsDir });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-300));
+            if (srv.up) {
+                const body = await fetchPluginList(srv.base);
+                const plugins = (body && body.plugins) || [];
+                const dirs = readdirSync(modsDir).filter((n) => !n.endsWith('.zip') && n !== 'index.json' && !n.startsWith('.'));
+                c.ok(dirs.includes('elaina-avatar'), '★ 装成 elaina-avatar/（不是 elaina-avatar-1.0.0/）', JSON.stringify(dirs));
+                c.ok(!dirs.includes('elaina-avatar-1.0.0'), '★ 没有留下带版本号的目录');
+                const av = plugins.find((p) => p.id === 'elaina-avatar');
+                c.ok(Boolean(av), '清单里 id 是 elaina-avatar');
+                c.ok(av && av.dir === 'elaina-avatar', 'dir 与实际目录一致', av && av.dir);
+                c.ok(existsSync(path.join(modsDir, 'elaina-avatar', 'img', 'p_calm.png')),
+                    '★ 立绘落在 /mods/elaina-avatar/img/p_calm.png 对应位置（不再 404）');
 
-    // 等 bootstrap 打出 __ELAINA_READY__（它自己挑端口后报出来）。
-    // 上限 60s：并发跑整套检查时冷启动 + 扫 mods/ 可达 20s 以上，窗口窄了会"单独跑绿、并发跑红"
-    async function waitReady(timeoutMs = 60000) {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() < deadline) {
-            const m = out.match(/__ELAINA_READY__(\{[^\n]*\})/);
-            if (m) {
-                try { return JSON.parse(m[1]); } catch { /* 行不完整 */ }
+                mkdirSync(path.join(modsDir, 'galgame'), { recursive: true });
+                writeFileSync(path.join(modsDir, 'galgame', 'manifest.json'), JSON.stringify({
+                    id: 'galgame', name: 'Galgame 界面', version: '1.0.0', entry: 'index.js',
+                    styles: ['style.css'], defaultEnabled: false, after: ['elaina-avatar'],
+                }));
+                writeFileSync(path.join(modsDir, 'galgame', 'index.js'), 'void 0;');
+                writeFileSync(path.join(modsDir, 'galgame', 'style.css'), '/* x */');
+
+                const body2 = await fetch(srv.base + '/api/plugins').then((r) => r.json()).catch(() => null);
+                const plugins2 = (body2 && body2.plugins) || [];
+                const ids = new Set(plugins2.map((p) => p.id));
+                const g = plugins2.find((p) => p.id === 'galgame');
+                c.ok(ids.has('elaina-avatar'), '★ 依赖目标 elaina-avatar 在清单里');
+                c.ok(g && g.after.every((d) => ids.has(d)),
+                    '★ galgame 的 after 能解析（依赖不再失效）', g ? JSON.stringify(g.after) : '');
             }
-            await wait(120);
+            stopSrv();
         }
-        return null;
-    }
-    // 轮询 /api/ping 直到 modsLoaded 有结论（阶段一协议：字段缺失 = 本版无装载能力）。
-    // 超时给宽（连续起停多个 bootstrap 时冷启动慢）；每次探测带单次超时，否则裸 fetch 可能挂到连接超时
-    async function waitMods(timeoutMs = 60000) {
-        const ready = await waitReady();
-        if (!ready) return null;
-        const deadline = Date.now() + timeoutMs;
-        const base = `http://127.0.0.1:${ready.port}`;
-        while (Date.now() < deadline) {
+
+        // 6.2 真实服务对真实 mods/：清单、依赖、脚本与立绘可达（不能隔离）
+        if (REAL_MODS) {
+            srv = await startFixtureServer(tmp, { modsDir: path.join(ROOT, 'mods') });
+            if (!srv) return;
+            c.ok(srv.up, '服务已启动', srv.up ? '' : srv.bootLog.slice(-300));
+            if (srv.up) {
+                const api = await fetch(srv.base + '/api/plugins').then((r) => r.json()).catch(() => null);
+                c.ok(api && api.ok === true, '/api/plugins 可用');
+                const plugins = (api && api.plugins) || [];
+                for (const p of plugins) {
+                    console.log(`      id=${String(p.id).padEnd(18)} dir=${String(p.dir).padEnd(22)} after=${JSON.stringify(p.after)}`);
+                }
+
+                const ids = new Set(plugins.map((p) => p.id));
+                for (const dep of ['galgame', 'pet']) {
+                    const m = plugins.find((p) => p.id === dep);
+                    if (!m) { c.ok(false, `${dep} 在清单里`); continue; }
+                    c.ok(m.after.every((d) => ids.has(d)), `★ ${dep} 的 after 可解析`, JSON.stringify(m.after));
+                }
+
+                // 按 dir 拼 URL 能取到脚本（这是前端 loadOne 的真实路径）
+                for (const p of plugins) {
+                    const url = '/mods/' + p.dir + '/' + (p.entry || 'index.js');
+                    const r = await fetch(srv.base + url);
+                    c.ok(r.status === 200, `★ ${url} → 200`, 'status=' + r.status);
+                }
+
+                // 立绘图片可达 —— 按清单里的真实目录名拼 URL（写死 'elaina-avatar' 在改名后必然 404）
+                const avEntry = plugins.find((p) => p.id === 'elaina-avatar');
+                if (avEntry) {
+                    const enc = String(avEntry.dir || avEntry.id).split('/').map(encodeURIComponent).join('/');
+                    const img = await fetch(srv.base + '/mods/' + enc + '/img/p_calm.png');
+                    c.ok(img.status === 200,
+                        `★ 立绘 /mods/${enc}/img/p_calm.png → 200（按真实目录）`, 'status=' + img.status);
+                    c.ok((img.headers.get('content-type') || '').startsWith('image/'),
+                        '返回图片类型', img.headers.get('content-type'));
+                } else {
+                    c.ok(false, '清单里有 elaina-avatar（才能验立绘）');
+                }
+            }
+            stopSrv();
+        }
+
+        // 6.3 安卓侧插件可拆装：安卓没有服务端，core.js 的 nativePluginsFetch 在页内用 Capacitor
+        // Filesystem 实现同一套接口；这条原生链断了不会有任何报错，只表现为"点了没反应"或"删了还在"
+        {
+            const core = readFileSync(path.join(ROOT, 'web', 'js', 'core-native.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core-native-mod.js'), 'utf8')
+                + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'core.js'), 'utf8');
+
+            const memFs = makeMemFs();
+            const sandbox = {
+                console, TextDecoder, TextEncoder, Response, Blob, Uint8Array, Promise, Error,
+                JSON, Object, Array, String, Number, Boolean, Date, Math, RegExp, Set, Map,
+                DecompressionStream,
+                atob: (s) => Buffer.from(s, 'base64').toString('binary'),
+                btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+            };
+            sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox;
+            vm.createContext(sandbox);
+
+            const pieces = [];
+            for (const n of ['NATIVE_MOD_ID_RE', 'NATIVE_MODS_DIR', 'NATIVE_MOD_MAX_BYTES']) {
+                const m = core.match(new RegExp('const ' + n + ' = [^\\n]+'));
+                if (m) pieces.push(m[0]);
+            }
+            {
+                const s = core.indexOf('const NATIVE_MOD_BLOCKED_EXT = new Set([');
+                if (s >= 0) pieces.push(core.slice(s, core.indexOf(']);', s) + 3));
+            }
+            {
+                const s = core.indexOf('const NATIVE_README_NAMES = [');
+                if (s >= 0) pieces.push(core.slice(s, core.indexOf('];', s) + 2));
+            }
+            for (const fn of ['nativeFs', 'bytesToBase64', 'nativeWriteFile', 'nativeNormalizeModId',
+                'nativeEffectiveExt', 'nativeReadModManifest', 'nativeListModFiles', 'nativeListPlugins',
+                'nativeResolveModDir', 'nativeReadModReadme', 'nativeDeletePlugin', 'nativeInstallPlugin',
+                'nativePluginsFetch', 'unzipBrowser']) {
+                try { pieces.push(extractFn(core, fn)); } catch (e) { c.ok(false, '抠出原生函数 ' + fn, e.message); }
+            }
+            vm.runInContext(pieces.join('\n\n'), sandbox);
+            sandbox.nativeFs = () => memFs;
+
+            const zipBuf = makeZip([
+                { name: 'manifest.json', data: JSON.stringify({ id: 'e2etest', name: 'E2E 测试插件', version: '1.0.0', entry: 'index.js', defaultEnabled: false }) },
+                { name: 'index.js', data: 'window.__e2e = true;' },
+            ]);
+
             try {
-                const res = await fetch(base + '/api/ping', {
-                    headers: { Origin: 'https://localhost' },
-                    signal: AbortSignal.timeout(2000),
+                const installRes = await sandbox.nativePluginsFetch('/api/plugins/install?name=e2etest-1.0.0.zip', { method: 'POST', body: new Blob([zipBuf]) });
+                const installJson = await installRes.json();
+                c.ok(installJson.ok === true, '★ 安卓：上传安装成功', JSON.stringify(installJson));
+                c.ok(installJson.id === 'e2etest', '★ 安卓：安装得到正确 id', String(installJson.id));
+
+                const listJson = await (await sandbox.nativePluginsFetch('/api/plugins', { method: 'GET' })).json();
+                const ids = (listJson.plugins || []).map((p) => p.id);
+                c.ok(ids.includes('e2etest'), '★ 安卓：列表里能看到刚装的插件', JSON.stringify(ids));
+
+                // 目录名带版本号（手工拷贝 / 备份恢复的常见形态）时，前端传的是 manifest.id，
+                // 手机端必须解析成真实目录才能读到 README、删掉插件（电脑版靠 FindModDirByID）。
+                // 直接经 memFs 落文件：nativeWriteFile 收字节数组，这里写的是 UTF-8 文本。
+                // makeMemFs 的 writeFile 只登记直接父目录，先显式建出 mods 这层；
+                // encoding 必须写 'utf8'，否则 makeMemFs 按 base64 解码，manifest 内容会乱掉。
+                // 路径写死 'mods'：vm 里的 const 不会挂到 sandbox 对象上，读不到 sandbox.NATIVE_MODS_DIR。
+                await memFs.mkdir({ path: 'mods', recursive: true });
+                await memFs.writeFile({
+                    path: 'mods/versioned-2.0.0/manifest.json', directory: 'DATA', encoding: 'utf8',
+                    data: JSON.stringify({ id: 'versioned', name: '带版本号的插件', version: '2.0.0', entry: 'index.js' }),
                 });
-                if (res.ok) {
-                    const info = await res.json();
-                    if (info.modsLoaded === true) return { base, info };
-                    // 字段在但还没置 true = 已监听、装载还在跑，继续等；真正"无装载能力"由超时返回表达
-                }
-            } catch { /* 继续轮询 */ }
-            await wait(150);
-        }
-        return { base, info: null };
-    }
-    return { out: () => out, stop, waitReady, waitMods, DATA_DIR };
-}
+                await memFs.writeFile({
+                    path: 'mods/versioned-2.0.0/README.md', directory: 'DATA', encoding: 'utf8',
+                    data: '# 版本号目录里的说明\n\nVERSIONED-README-OK\n',
+                });
+                const readmeVersioned = await (await sandbox.nativePluginsFetch('/api/plugins/versioned/readme', { method: 'GET' })).json();
+                c.ok(readmeVersioned.ok === true && /VERSIONED-README-OK/.test(String(readmeVersioned.text || '')),
+                    '★★ 安卓：目录名带版本号时仍能按 manifest.id 读到 README', JSON.stringify(readmeVersioned).slice(0, 200));
 
-/** 生成一个最小夹具插件（声明 server 半边），root 是它的目录 */
-function writeFixtureMod(root, { id, serverEntry, manifest }) {
-    mkdirSync(root, { recursive: true });
-    writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2));
-    writeFileSync(path.join(root, 'index.js'), '// 检查夹具：前端半边不参与本用例\n');
-    writeFileSync(path.join(root, 'server.mjs'), serverEntry);
-}
+                const delVersioned = await (await sandbox.nativePluginsFetch('/api/plugins/versioned', { method: 'DELETE' })).json();
+                c.ok(delVersioned.ok === true, '★★ 安卓：目录名带版本号时按 manifest.id 也能卸载', JSON.stringify(delVersioned));
+                const idsVersioned = ((await (await sandbox.nativePluginsFetch('/api/plugins', { method: 'GET' })).json()).plugins || []).map((p) => p.id);
+                c.ok(!idsVersioned.includes('versioned'), '★ 安卓：带版本号目录的插件真被删掉了', JSON.stringify(idsVersioned));
 
-async function caseBootstrapMods(c) {
-    const TMP = mkdtempSync(path.join(tmpdir(), 'elaina-bootstrap-mod-'));
-    const ORIGIN = { Origin: 'https://localhost' };
-    try {
-        // 夹具①：正常，声明 routes + host-utils，一个 GET 一个 POST(JSON)
-        writeFixtureMod(path.join(TMP, 'mods', 'demo-fixture'), {
-            id: 'demo-fixture',
-            serverEntry: [
-                "export function register(ctx) {",
-                "    ctx.route('GET', '/api/demo/echo', (req, res) => ctx.json(res, 200, { ok: true, echo: 'demo', caps: ctx.capabilities() }));",
-                "    ctx.route('POST', '/api/demo/rename', async (req, res) => {",
-                "        const body = await ctx.readJson(req);",
-                "        return ctx.json(res, 200, { ok: true, renamed: body && body.name });",
-                "    });",
-                "    ctx.log('demo fixture ready');",
-                "}",
-            ].join('\n'),
-            manifest: {
-                id: 'demo-fixture', name: '演示插件（检查夹具）', version: '1.0.0', entry: 'index.js',
-                defaultEnabled: true,
-                server: {
-                    entry: 'server.mjs',
-                    capabilities: ['route-register', 'host-utils'],
-                    routes: ['/api/demo'],
-                },
-            },
-        });
-        // 夹具②：撞宿主前缀（/api/ping 是 bootstrap 自己的地址）→ 必须被拒绝装载
-        writeFixtureMod(path.join(TMP, 'mods', 'collide-fixture'), {
-            id: 'collide-fixture',
-            serverEntry: "export function register(ctx) { ctx.route('GET', '/api/ping/x', () => {}); }",
-            manifest: {
-                id: 'collide-fixture', name: '撞名夹具', version: '1.0.0', entry: 'index.js',
-                defaultEnabled: true,
-                server: { entry: 'server.mjs', capabilities: ['route-register'], routes: ['/api/ping'] },
-            },
-        });
-        // 夹具③：未声明 host-utils 却用 ctx.utils → need() 必须当场报错（D19）
-        writeFixtureMod(path.join(TMP, 'mods', 'no-cap-fixture'), {
-            id: 'no-cap-fixture',
-            serverEntry: "export function register(ctx) { const u = ctx.utils; }",
-            manifest: {
-                id: 'no-cap-fixture', name: '无能力夹具', version: '1.0.0', entry: 'index.js',
-                defaultEnabled: true,
-                server: { entry: 'server.mjs', capabilities: ['route-register'], routes: ['/api/demo2'] },
-            },
-        });
+                const delJson = await (await sandbox.nativePluginsFetch('/api/plugins/e2etest', { method: 'DELETE' })).json();
+                c.ok(delJson.ok === true, '★ 安卓：卸载成功', JSON.stringify(delJson));
 
-        const srv = await startBootstrapMods(c, TMP);
-        try {
-            const got = await srv.waitMods();
-            c.ok(Boolean(got && got.info), '★ bootstrap 起来且 ping 带 modsLoaded=true（装载有结论）', srv.out().slice(-300));
-            // 起不来时不能直接 return：那会跳过 srv.stop()，子进程带 pipe 活着、检查进程永不退出
-            if (!got || !got.info) return;
-            const BASE = got.base;
+                const ids2 = ((await (await sandbox.nativePluginsFetch('/api/plugins', { method: 'GET' })).json()).plugins || []).map((p) => p.id);
+                c.ok(!ids2.includes('e2etest'), '★ 安卓：卸载后列表里没有它了（真拆掉了）', JSON.stringify(ids2));
 
-        const echo = await (await fetch(BASE + '/api/demo/echo', { headers: ORIGIN })).json();
-        c.ok(echo.ok === true && echo.echo === 'demo', '★ 夹具的 /api/demo/* 路由可分发', JSON.stringify(echo).slice(0, 120));
-        c.ok(Array.isArray(echo.caps) && echo.caps.includes('host-utils'), 'ctx.capabilities() 报告已声明能力');
-        const rename = await (await fetch(BASE + '/api/demo/rename', {
-            method: 'POST',
-            headers: { ...ORIGIN, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: '新名字' }),
-        })).json();
-        c.ok(rename.ok === true && rename.renamed === '新名字', '夹具经 ctx.readJson 收到 JSON 请求体');
-
-        c.ok(Array.isArray(got.info.modRoutes) && got.info.modRoutes.includes('/api/demo'),
-            '★ ping.modRoutes 含夹具前缀 /api/demo', JSON.stringify(got.info.modRoutes));
-        c.ok(!got.info.modRoutes.includes('/api/ping'), '撞宿主前缀的夹具不在 modRoutes 里');
-
-        // /api/mods/status 形状（D-7）
-        const status = await (await fetch(BASE + '/api/mods/status', { headers: ORIGIN })).json();
-        c.ok(status.ok === true && status.modsLoaded === true, 'GET /api/mods/status 返回 ok 且 modsLoaded=true');
-        const failedIds = (status.failed || []).map((f) => f.id);
-        c.ok(failedIds.includes('collide-fixture'), '★ 撞宿主前缀的夹具被拒绝装载并进 failed',
-            JSON.stringify(status.failed));
-        c.ok(failedIds.includes('no-cap-fixture'), '★ 未声明 host-utils 的夹具装载失败（need() 生效）');
-        const collideErr = (status.failed || []).find((f) => f.id === 'collide-fixture');
-        c.ok(collideErr && /宿主/.test(collideErr.error), '撞名报错点名「宿主」');
-        const noCapErr = (status.failed || []).find((f) => f.id === 'no-cap-fixture');
-        c.ok(noCapErr && /host-utils/.test(noCapErr.error), '无能力报错点名缺的能力（host-utils）');
-        c.ok((status.mods || []).some((m) => m.id === 'demo-fixture' && m.ok === true), '正常夹具在 status.mods 里为 ok');
-
-        const pingStill = await (await fetch(BASE + '/api/ping', { headers: ORIGIN })).json();
-        c.ok(pingStill.ok === true && pingStill.uptimeSeconds !== undefined, '宿主 /api/ping 不被插件吃掉');
-        } finally {
-            await srv.stop();
-        }
-
-        // 启用判定：总开关关 → 任何插件不装载（F-13 两段都要复刻）
-        writeFileSync(path.join(TMP, 'store.json'), JSON.stringify({ elaina_plugins_enabled: '0' }));
-        const srv2 = await startBootstrapMods(c, TMP);
-        try {
-            const got2 = await srv2.waitMods();
-            c.ok(Boolean(got2 && got2.info), '总开关关闭时 bootstrap 仍给出装载结论');
-            if (got2 && got2.info) {
-                c.ok(!got2.info.modRoutes.includes('/api/demo'),
-                    '★ 总开关关（elaina_plugins_enabled=0）→ 夹具路由不装载（服务端半边真的停用）');
-                const echo2 = await fetch(got2.base + '/api/demo/echo', { headers: ORIGIN });
-                c.ok(echo2.status === 404, '总开关关时夹具接口 404', String(echo2.status));
+                // 路径穿越必须被挡：这是"可拆装"带来的新攻击面
+                const evil = await (await sandbox.nativePluginsFetch('/api/plugins/..%2F..%2Fdata', { method: 'DELETE' })).json();
+                c.ok(evil.ok !== true, '★ 安卓：非法 id 的删除被拒绝（防目录穿越）', JSON.stringify(evil));
+            } catch (e) {
+                c.ok(false, '安卓侧安装链路跑通', String(e && e.message || e));
             }
-        } finally {
-            await srv2.stop();
-        }
-
-        // 启用判定：per-id 关 → 该插件不装载，其它不受影响
-        writeFileSync(path.join(TMP, 'store.json'), JSON.stringify({
-            'elaina_plugin_demo-fixture': '0',
-            'elaina_plugin_collide-fixture': '0',
-            'elaina_plugin_no-cap-fixture': '0',
-        }));
-        const srv3 = await startBootstrapMods(c, TMP);
-        try {
-            const got3 = await srv3.waitMods();
-            c.ok(Boolean(got3 && got3.info), 'per-id 停用时 bootstrap 仍给出装载结论');
-            if (got3 && got3.info) {
-                c.ok(!got3.info.modRoutes.includes('/api/demo'),
-                    '★ per-id 开关（elaina_plugin_<id>=0）→ 该插件不装载');
-            }
-        } finally {
-            await srv3.stop();
         }
     } finally {
-        try { rmSync(TMP, { recursive: true, force: true }); } catch { /* Windows 句柄残留不阻塞结论 */ }
+        stopSrv();
+        tmp.cleanup();
     }
-}
-
-async function caseBootstrapMigrate(c) {
-    const TMP = mkdtempSync(path.join(tmpdir(), 'elaina-bootstrap-mig-'));
-    const ORIGIN = { Origin: 'https://localhost' };
-    try {
-        // 夹具：声明 static /live2d/models → models（迁移目标由这份声明决定，不点名插件 id）
-        writeFixtureMod(path.join(TMP, 'mods', 'demo-fixture'), {
-            id: 'demo-fixture',
-            serverEntry: [
-                "export function register(ctx) {",
-                "    const dir = ctx.staticDir('/live2d/models');",
-                "    ctx.route('GET', '/api/demo/echo', (req, res) => ctx.json(res, 200, { ok: true }));",
-                "    ctx.log('models at ' + dir);",
-                "}",
-            ].join('\n'),
-            manifest: {
-                id: 'demo-fixture', name: '迁移夹具', version: '1.0.0', entry: 'index.js',
-                defaultEnabled: true,
-                server: {
-                    entry: 'server.mjs',
-                    capabilities: ['route-register', 'static-read'],
-                    routes: ['/api/demo'],
-                    static: [{ url: '/live2d/models', dir: 'models' }],
-                },
-            },
-        });
-
-        mkdirSync(path.join(TMP, 'live2d', 'models', '旧模型A'), { recursive: true });
-        writeFileSync(path.join(TMP, 'live2d', 'models', '旧模型A', 'model3.json'), '{}');
-        mkdirSync(path.join(TMP, 'live2d', 'models', '冲突模型'), { recursive: true });
-        writeFileSync(path.join(TMP, 'live2d', 'models', '冲突模型', 'old.txt'), 'old');
-        // 目标已存在同名目录：用户后装的同名模型优先，迁移应跳过不覆盖
-        mkdirSync(path.join(TMP, 'mods', 'demo-fixture', 'models', '冲突模型'), { recursive: true });
-        writeFileSync(path.join(TMP, 'mods', 'demo-fixture', 'models', '冲突模型', 'new.txt'), 'new');
-
-        const srv = await startBootstrapMods(c, TMP);
-        try {
-            const got = await srv.waitMods();
-            c.ok(Boolean(got && got.info), 'bootstrap（含 static 夹具）已就绪', srv.out().slice(-400));
-            // 起不来时直接 return 会跳过 srv.stop()，子进程带 pipe 活着、检查进程永不退出
-            if (!got || !got.info) return;
-
-            const movedRoot = path.join(TMP, 'mods', 'demo-fixture', 'models');
-            c.ok(existsSync(path.join(movedRoot, '旧模型A', 'model3.json')),
-                '★ 旧布局模型被迁移到插件目录（static 声明决定目标，不点名插件 id）');
-            c.ok(!existsSync(path.join(TMP, 'live2d', 'models', '旧模型A')), '迁移完成后旧位置不再有该模型');
-            c.ok(existsSync(path.join(movedRoot, '冲突模型', 'new.txt'))
-                && !existsSync(path.join(movedRoot, '冲突模型', 'old.txt')),
-                '★ 目标已存在的同名模型跳过不覆盖（用户后装的优先）');
-            // modStatic 的 relPath 相对 filesDir（TMP），前端 Filesystem 直接可用
-            const st = (got.info.modStatic || []).find((s) => s.url === '/live2d/models');
-            c.ok(Boolean(st) && st.relPath === 'mods/demo-fixture/models',
-                '★ ping.modStatic 报相对 filesDir 的 relPath', JSON.stringify(got.info.modStatic));
-        } finally {
-            await srv.stop();
-        }
-
-        // 幂等：第二次启动不再动任何东西
-        const marker = path.join(TMP, 'mods', 'demo-fixture', 'models', '旧模型A', 'model3.json');
-        const before = readFileSync(marker, 'utf8');
-        const srv2 = await startBootstrapMods(c, TMP);
-        try {
-            const got2 = await srv2.waitMods();
-            c.ok(Boolean(got2 && got2.info), '第二次启动正常就绪', srv2.out().slice(-300));
-            if (got2) {
-                c.ok(existsSync(marker) && readFileSync(marker, 'utf8') === before,
-                    '★ 第二次启动不重复迁移（幂等）');
-                c.ok(!existsSync(path.join(TMP, 'live2d', 'models', '旧模型A')), '旧位置保持为空');
-            }
-        } finally {
-            await srv2.stop();
-        }
-
-        // 插件停用 → 不迁移（复刻兜底只认旧位置，模型必须留在原地）
-        const TMP2 = mkdtempSync(path.join(tmpdir(), 'elaina-bootstrap-mig2-'));
-        try {
-            cpSync(path.join(TMP, 'mods', 'demo-fixture'), path.join(TMP2, 'mods', 'demo-fixture'), { recursive: true });
-            mkdirSync(path.join(TMP2, 'live2d', 'models', '留在原地'), { recursive: true });
-            writeFileSync(path.join(TMP2, 'live2d', 'models', '留在原地', 'model3.json'), '{}');
-            writeFileSync(path.join(TMP2, 'store.json'), JSON.stringify({ 'elaina_plugin_demo-fixture': '0' }));
-
-            const srv3 = await startBootstrapMods(c, TMP2);
-            try {
-                // 插件停用时 bootstrap 不装载服务端半边，modsLoaded 可能永不出现（阶段一协议：
-                // 字段缺失 = 无装载能力）；这段"起来了"就是结论，不把装载结论当前提，否则并发跑偶发红
-                const ready3 = await srv3.waitReady();
-                c.ok(Boolean(ready3 && ready3.port), '停用插件的 bootstrap 正常就绪', srv3.out().slice(-300));
-                const got3 = ready3 ? await srv3.waitMods() : null;
-                c.ok(Boolean(got3 && got3.info), '停用插件的 bootstrap 正常就绪', srv3.out().slice(-300));
-                if (got3) {
-                    c.ok(existsSync(path.join(TMP2, 'live2d', 'models', '留在原地', 'model3.json')),
-                        '★ 插件停用时旧布局不迁移（原生兜底复刻只认旧位置）');
-                    c.ok(!existsSync(path.join(TMP2, 'mods', 'demo-fixture', 'models', '留在原地')),
-                        '停用时插件目录里没有迁移产物');
-                }
-            } finally {
-                await srv3.stop();
-            }
-        } finally {
-            try { rmSync(TMP2, { recursive: true, force: true }); } catch { /* ignore */ }
-        }
-    } finally {
-        try { rmSync(TMP, { recursive: true, force: true }); } catch { /* ignore */ }
-    }
-}
-
-// 共享模块闭包检查：加一行共享模块"跑不起来"要到真机才发现（ERR_MODULE_NOT_FOUND 或静默不装载）。
-// 钉住：相对 import 落在清单内、无裸包 import、bootstrap 的 ./server/* import 也在清单内、不用 Node 18 后的 API。
-async function caseSharedClosure(c) {
-    const syncSrc = readFileSync(path.join(ROOT, 'dist', 'Android', 'scripts', 'sync-web.mjs'), 'utf8');
-    const listMatch = syncSrc.match(/SHARED_SERVER_MODULES\s*=\s*\[([^\]]*)\]/);
-    c.ok(Boolean(listMatch), '能提取 SHARED_SERVER_MODULES');
-    const shared = new Set(listMatch
-        ? listMatch[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
-        : []);
-
-    // Node 18 之后的 API 黑名单（nodejs-mobile 是 v18.20.4，F-29）；从 node: 模块解构出不存在的新 API 也拦：
-    // 如 zlib.crc32（Node 20.15+）本地能跑、子进程里 bootstrap 静默起不来，只有静态扫描抓得住
-    const NODE18_BLACKLIST = /\bObject\.groupBy\b|\bMap\.groupBy\b|\bArray\.fromAsync\b|\bPromise\.withResolvers\b|\.toSorted\(|\.toReversed\(/;
-    /** Node 18 的 node: 内置模块里**没有**的具名导出（按模块名分组） */
-    const NODE18_MISSING_EXPORTS = {
-        'node:zlib': ['crc32'],
-        'node:fs': ['glob', 'globSync'],
-        'node:util': ['parseArgs'],
-        'node:test': ['mock'],
-        'node:module': ['registerHooks'],
-        'node:process': ['getBuiltinModule'],
-    };
-    /** 找出"从某个 node: 模块 import 了解构里不存在的名字" */
-    function findMissingBuiltinExports(name, src) {
-        const problems = [];
-        const re = /import\s*\{([^}]*)\}\s*from\s*['"](node:[^'"]+)['"]/g;
-        let m;
-        while ((m = re.exec(src)) !== null) {
-            const names = m[1].split(',').map((s) => s.trim().split(/\s+as\s+/)[0].trim()).filter(Boolean);
-            const missing = NODE18_MISSING_EXPORTS[m[2]];
-            if (!missing) continue;
-            for (const n of names) {
-                if (missing.includes(n)) {
-                    problems.push(`${name} 从 ${m[2]} import 了 Node 18 没有的导出「${n}」（nodejs-mobile 是 v18.20.4）`);
-                }
-            }
-        }
-        return problems;
-    }
-
-    /** 检查一个 .mjs 源文件的全部 import，违规返回描述数组 */
-    function checkImports(name, src) {
-        const problems = [];
-        const importRe = /import\s+[^'"]*from\s*['"]([^'"]+)['"]|import\s*['"]([^'"]+)['"]/g;
-        let m;
-        while ((m = importRe.exec(src)) !== null) {
-            const spec = m[1] || m[2];
-            if (spec.startsWith('node:')) continue;                       // 内置模块：可用
-            if (spec.startsWith('./')) {
-                const base = spec.slice(2).split('?')[0];
-                // ③ 不许 import 回 serve.mjs / web/（那会把桌面启动链拖进手机）
-                if (base.startsWith('../') || base.includes('serve.mjs')) {
-                    problems.push(`${name} import 了桌面专属路径：${spec}`);
-                    continue;
-                }
-                if (!shared.has(base)) {
-                    problems.push(`${name} 的相对 import ${spec} 不在 SHARED_SERVER_MODULES 里（复制出去少文件）`);
-                }
-            } else {
-                problems.push(`${name} 有裸包 import：${spec}（APK 里没有 node_modules）`);
-            }
-        }
-        // 这两项与 import 形态无关，必须无条件检查整个文件（挂进上面循环会漏掉无相对 import 的文件）
-        if (NODE18_BLACKLIST.test(src)) {
-            problems.push(`${name} 用了 Node 18 之后才有的 API（nodejs-mobile 是 v18.20.4）`);
-        }
-        problems.push(...findMissingBuiltinExports(name, src));
-        return problems;
-    }
-
-    const problems = [];
-    for (const name of shared) {
-        const src = readFileSync(path.join(ROOT, 'server', name), 'utf8');
-        problems.push(...checkImports(name, src));
-    }
-    // bootstrap.mjs 自己 import 的 ./server/* 也必须在清单内
-    const bootSrc = readFileSync(path.join(ROOT, 'web', 'nodejs', 'bootstrap.mjs'), 'utf8');
-    {
-        const importRe = /import\s+[^'"]*from\s*['"](\.\/server\/[^'"]+)['"]/g;
-        let m;
-        while ((m = importRe.exec(bootSrc)) !== null) {
-            const base = m[1].slice('./server/'.length);
-            if (!shared.has(base)) {
-                problems.push(`bootstrap.mjs import 的 ./server/${base} 不在 SHARED_SERVER_MODULES 里`);
-            }
-        }
-        if (NODE18_BLACKLIST.test(bootSrc)) {
-            problems.push('bootstrap.mjs 用了 Node 18 之后才有的 API');
-        }
-        problems.push(...findMissingBuiltinExports('bootstrap.mjs', bootSrc));
-    }
-    c.ok(problems.length === 0, '★ 共享模块闭包完整（相对 import 全在清单 / 无裸包 / 无 Node18+ API）',
-        problems.join('；'));
-
-    // 清单里的每个文件都真实存在（copyFile 缺源会当场抛，这里提前点破）
-    for (const name of shared) {
-        c.ok(existsSync(path.join(ROOT, 'server', name)), `共享模块存在：${name}`);
-    }
-}
-
-/**
- * 旧插件 localStorage → host.storage 的一次性迁移。
- * 只搬已知插件前缀；宿主设置/密钥键绝不能跟着进插件存储。
- */
-async function caseLegacyStorageMigration(c) {
-    const r = await loadModsInSandbox({
-        'elaina_pet_pos': '12px,34px',
-        'elaina_pet_proactive': '1',
-        'elaina_galgame_bg': 'snow',
-        'galgame.live2d.resize': '{"w":1}',
-        'live2d.scale': '1.2',
-        'elainachat_open_api_secrets': '{"k":"v"}',
-    }, { indexPlugins: [] });
-    r.Mods.migrateLegacyStorage();
-    const raw = r.storeGet('elaina_mod_storage');
-    const all = raw ? JSON.parse(raw) : {};
-    c.ok(all.pet && all.pet.pos === '12px,34px', '★ pet 的旧 localStorage 键迁进 host.storage（短键）');
-    c.ok(all.pet && all.pet.proactive === '1', 'pet 的开关值原样保留');
-    c.ok(all.galgame && all.galgame.bg === 'snow', 'galgame 的旧前缀键迁进 host.storage（短键）');
-    c.ok(all.galgame && all.galgame['galgame.live2d.resize'] === '{"w":1}',
-        'galgame.live2d.* 全键迁移（舞台读的是全键）');
-    c.ok(all.galgame && all.galgame['live2d.scale'] === '1.2', '更早的 live2d.* 键也迁（交给插件自身再迁移）');
-    c.ok(!JSON.stringify(all).includes('open_api_secrets'),
-        '★ 宿主设置/密钥键不会被误搬进插件存储');
 }
 
 const only = process.argv[2];
 const allCases = [
-    { name: '插件系统核心（扫描 / 解压 / 清单 / 安全）', fn: caseModsCore },
+    { name: '插件系统核心（扫描 / 安装 / 清单 / 安全）', fn: caseModsCore },
     { name: '插件 id 归一化与依赖可解析', fn: caseModId },
     { name: '插件身份与路径解析', fn: caseModIdentity },
     { name: '插件隔离与统一接口', fn: caseModIsolation },
@@ -3349,14 +2599,11 @@ const allCases = [
     { name: '技能扫描与清单（kind 永远是 knowledge）', fn: caseSkills },
     { name: '制作插件技能（入口短、细则按需加载）', fn: caseModAuthoringSkill },
     { name: '端到端（真实服务 + 真实 zip）', fn: caseModE2E },
-    { name: 'bootstrap 装载 mod 服务端', fn: caseBootstrapMods },
-    { name: 'bootstrap 模型目录迁移', fn: caseBootstrapMigrate },
-    { name: '共享模块闭包检查', fn: caseSharedClosure },
 ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 
 await runChecks({
-    title: '插件系统（扫描 / 身份 / 依赖 / 宿主能力 / 端到端）',
+    title: '插件系统（扫描 / 安装 / 身份 / 依赖 / 宿主能力 / 门禁 / 技能 / 端到端）',
     usage: 'node scripts/check-mod.mjs [用例名子串]',
     cases,
 });

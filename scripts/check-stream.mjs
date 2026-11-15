@@ -39,8 +39,6 @@ async function caseStreamAndCot(c) {
     // 6h 用例要看 doAgentCommand / doAgentFile 的确认分支（等待提示与计时重置）
     const agentSrc = readFileSync(path.join(ROOT, 'web', 'js', 'agent-files.js'), 'utf8')
         + '\n' + readFileSync(path.join(ROOT, 'web', 'js', 'agent.js'), 'utf8');
-    // 本地中继在 server/relay.mjs（两端共用），第 6c 节要在那里找而不是 serve.mjs。
-    const relaySrc = readFileSync(path.join(ROOT, 'server', 'relay.mjs'), 'utf8');
 
     /** 去掉 JS 注释后的源码：注释里常引用被修掉的坏代码，全文断言会被注释反咬成假失败。 */
     function stripComments(src) {
@@ -126,6 +124,9 @@ async function caseStreamAndCot(c) {
                 constructor(code, message, extra) { super(message); this.code = code; Object.assign(this, extra || {}); }
             },
             getChatBaseUrl: (s) => String(s.baseUrl || '').replace(/\/$/, ''),
+            // 真实实现住在 core-chat.js：这里按同一语义镜像，保证"粘完整端点"的地址在假环境里也走同一条规则。
+            stripChatFunctionSuffix: (url) => String(url || '').trim().replace(/\/+$/, '')
+                .replace(/\/(?:chat\/completions|completions|responses|messages)$/i, ''),
             isDeepSeekOfficial: (u) => /deepseek\.com/.test(u || ''),
             requestChatJson: async (endpoint, body) => {
                 sentBody = body;
@@ -522,12 +523,12 @@ async function caseStreamAndCot(c) {
                 dataCode.indexOf('async function callAI'));
             c.ok(/THIRD_PERSON_GM_PROMPT/.test(legacySeg),
                 '★★ legacy 路径也会因 thirdPerson 注入 GM 提示词（原为永不生效的真 bug）');
-            c.ok(/if \(options\.thirdPerson\) systemParts\.push\(THIRD_PERSON_GM_PROMPT\)/.test(legacySeg),
+            c.ok(/if \(options\.thirdPerson\) addPart\(1, THIRD_PERSON_GM_PROMPT\)/.test(legacySeg),
                 '★ legacy 的注入是条件式的（非 thirdPerson 时不得误注入）');
             c.ok(/THINKING_LANGUAGE_PROMPT/.test(legacySeg),
                 '★★ legacy 路径也注入思考语言要求（原为缺口：切回 legacy 思维链变英文）');
-            const gmAt = legacySeg.indexOf('systemParts.push(THIRD_PERSON_GM_PROMPT)');
-            const cardAt = legacySeg.indexOf('systemParts.push(legacyCharacterPrompt)');
+            const gmAt = legacySeg.indexOf('addPart(1, THIRD_PERSON_GM_PROMPT)');
+            const cardAt = legacySeg.indexOf('addPart(2, legacyCharacterPrompt)');
             c.ok(gmAt >= 0 && cardAt > gmAt,
                 '★★ legacy 里 GM 提示词排在角色卡**之前**（否则优先级语义就反了）');
         }
@@ -576,16 +577,7 @@ async function caseStreamAndCot(c) {
     //    总时长计时会在等待期掐断请求，前端只能退回非流式。
     console.log('\n=== 6c. 中转超时语义（空闲续期，不是总时长）===');
     {
-        // 这几条判的是中继实现 server/relay.mjs（两端共用），不是 serve.mjs。
-        c.ok(/const armIdleTimer = \(ms\) =>/.test(relaySrc),
-            '★ 中转用 armIdleTimer 续期（每收到一块就重置计时）');
-        c.ok(/armIdleTimer\(timeoutMs\)/.test(relaySrc), '转发循环里对每块数据续期');
-        c.ok(/hardDeadline/.test(relaySrc),
-            '★ 空闲续期之外还有总时长硬顶（防"一直发心跳不说正文"占住连接）');
-        c.ok(/flushHeaders/.test(relaySrc),
-            '★ 响应头立刻 flush（否则前端要等第一块数据才知道流已经开始）');
-        c.ok(/X-Accel-Buffering/.test(relaySrc),
-            '★ SSE 关闭中间层缓冲（X-Accel-Buffering: no）');
+        // 服务端侧的空闲续期 / TLS 回退语义由 go test 钉住（internal/relay 的 relay_tls_test.go）。
         c.ok(/CHAT_TIMEOUT_THINKING_MS/.test(core) && /CHAT_TIMEOUT_DEFAULT_MS/.test(core),
             '★ 客户端区分普通/思考两档超时（思考模式首字延迟常超 2 分钟）');
         c.ok(/opts\.thinking \? CHAT_TIMEOUT_THINKING_MS : CHAT_TIMEOUT_DEFAULT_MS/.test(core),

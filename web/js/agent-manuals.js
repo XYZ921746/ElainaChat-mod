@@ -149,7 +149,7 @@ ElainaOps.setExec('agent_help', async (args) => {
 // "装一个 zip"不可能变成"给自己发执行能力"；内置能力只由代码注册、不落盘到 skills/。
 const registeredSkillIds = new Set();   // 已进过表的技能 id —— 免得每次刷新重复注册
 
-// 把当前扫描到的技能同步进注册表（幂等）。取不到（APK 没有 /api/skills）就直接返回：
+// 把当前扫描到的技能同步进注册表（幂等）。取不到（APK 不转发 /api/skills）就直接返回：
 // 技能是可选资料，不该影响任何其它流程。
 async function syncSkillKnowledge() {
     if (typeof ElainaOps === 'undefined' || typeof ElainaOps.registerKnowledge !== 'function') return;

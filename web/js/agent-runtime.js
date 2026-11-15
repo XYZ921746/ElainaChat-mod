@@ -15,6 +15,11 @@ const agentRuntime = (function () {
     // 系统悬浮窗（APK 独有）：常驻「停止」，需确认时出现「允许 / 拒绝」；AI 操作的是别的 App，用户切回来会把目标 App 切到后台。
     let overlayListenerReady = false;
     let overlayApprovalPending = null;   // 等待浮层回应的 resolve 函数
+    // 系统悬浮条正在用：应用内状态条让位。两条进度同时挂在屏幕上，用户会以为有两个任务在跑；
+    // 悬浮条浮在所有应用之上（包括本应用），只留它一条就够。没权限 / 网页版时回落应用内状态条。
+    let overlayActive = false;
+    const stopWaiters = new Set();       // 等待"被停止"的在途请求（模型调用靠它提前醒）
+    let generation = 0;                  // 运行代号：停止 / 新一批会递增，迟到的旧请求据此作废
 
     const barEl = () => document.getElementById('agentRunBar');
     const textEl = () => document.getElementById('agentRunText');
@@ -24,8 +29,9 @@ const agentRuntime = (function () {
     function render() {
         const b = barEl();
         if (!b) return;
-        b.classList.toggle('hidden', !running);
-        b.classList.toggle('flex', running);
+        const showBar = running && !overlayActive;
+        b.classList.toggle('hidden', !showBar);
+        b.classList.toggle('flex', showBar);
         b.classList.toggle('is-stopping', stopRequested);
         const t = textEl();
         if (t) t.textContent = stopRequested ? '正在停止' : (currentAction ? 'AI 正在操作' : 'AI 正在思考');
@@ -47,11 +53,16 @@ const agentRuntime = (function () {
 
     function beginBatch() {
         halted = false;
+        stopRequested = false;      // 新的用户请求 = 新的一批：停止状态到这里才解除
+        // 新一批也可能和上一轮迟到的请求重叠：递增代号，让那些旧回复自己作废。
+        generation += 1;
     }
 
     function beginRun() {
         running = true;
-        stopRequested = false;
+        // 停止是整批粘性的：在同一批里重新拉起运行态（迟到的步骤）不能把停止标志清掉，
+        // 否则「刚点完停止又自己跑起来」。
+        if (!halted) stopRequested = false;
         stopReason = '';
         step = 0;
         currentAction = '';
@@ -60,7 +71,8 @@ const agentRuntime = (function () {
 
     function endRun() {
         running = false;
-        stopRequested = false;
+        // 同理：已停止的批次里，收尾不能顺带解禁后续步骤（stopRequested 留给 beginBatch 清）。
+        if (!halted) stopRequested = false;
         aborters.clear();
         currentAction = '';
         render();
@@ -71,8 +83,14 @@ const agentRuntime = (function () {
         stopRequested = true;
         halted = true;              // 粘性：本批次后续动作一律拒绝，避免停止后又自己重启
         stopReason = String(reason || '用户停止');
+        generation += 1;            // 在途请求回来时不再被当成本轮的下一步
         for (const c of aborters) { try { c.abort(); } catch (e) { /* 忽略 */ } }
         aborters.clear();
+        // 唤醒还在等模型 / 等设备的步骤：光置标志时，它们要等请求自己返回（最长三分钟）才醒 ——
+        // 用户看到的就是「点了停止，界面一直停在停止中」。
+        const waiters = Array.from(stopWaiters);
+        stopWaiters.clear();
+        for (const wake of waiters) { try { wake('stopped'); } catch (e) { /* 忽略 */ } }
         // 关掉正在等待的确认弹窗（按「拒绝」处理）：两条路都要关，只关应用内弹窗会让悬浮窗那条 await 永远挂住。
         if (approvalOpen) {
             try { elements.customModalCancelBtn?.click(); } catch (e) { /* 忽略 */ }
@@ -80,8 +98,28 @@ const agentRuntime = (function () {
             overlayApprovalPending = null;
             if (pending) pending(false);
         }
-        render();
+        settleStoppedRun();
         return true;
+    }
+
+    /** 停止的界面收尾：状态条与悬浮条立刻收起，但 stopRequested / halted 保持为真 ——
+     *  在途步骤回来时 assertNotStopped() 仍要拦住它们，等下一批 beginBatch 才解除。 */
+    function settleStoppedRun() {
+        running = false;
+        currentAction = '';
+        hideOverlay();
+        render();
+    }
+
+    /** 等"用户按停止"的 Promise：模型调用可以和它赛跑，先醒的那个说了算。 */
+    function waitStopped() {
+        let settle = null;
+        const promise = new Promise((resolve) => { settle = resolve; stopWaiters.add(resolve); });
+        return {
+            promise,
+            isStopped: () => stopRequested || halted,
+            cancel: () => { if (settle) stopWaiters.delete(settle); },
+        };
     }
 
     function assertNotStopped() {
@@ -103,7 +141,7 @@ const agentRuntime = (function () {
     async function requestApproval(action, detail, opts = {}) {
         const risk = riskOf(action);
         if (risk === 'safe') return true;
-        if (stopRequested) return false;
+        if (stopRequested || halted) return false;
 
         const access = currentAgentAccess();
         const mustAsk = opts.forceAsk === true;
@@ -195,11 +233,16 @@ const agentRuntime = (function () {
         overlayListenerReady = true;
 
         plugin.addListener('overlayStop', () => {
-            requestStop('用户在悬浮窗上点了停止');
+            const stopped = requestStop('用户在悬浮窗上点了停止');
             // 必须把"正在等确认"的 Promise 也了结掉，否则用户点停止时 requestApproval 会永远 await 下去。
             const pending = overlayApprovalPending;
             overlayApprovalPending = null;
             if (pending) pending(false);
+            // 悬浮条上的停止是用户唯一能看到的反馈：停止后回到应用要有记录，
+            // 否则这次中止在对话里毫无痕迹，用户会以为任务还在跑。
+            if (stopped && typeof insertAgentResult === 'function') {
+                insertAgentResult('已停止：你在悬浮窗上点了停止，后续动作没有执行。如需继续，请重新告诉 AI 要做什么，或让它先说明刚才做到哪一步。');
+            }
         });
 
         plugin.addListener('overlayApproval', (data) => {
@@ -214,12 +257,53 @@ const agentRuntime = (function () {
         const plugin = nativeBridge();
         if (!plugin || typeof plugin.showOverlay !== 'function') return false;
         ensureOverlayListener();
+        // show 是异步的：先按"浮层会用"收起应用内状态条，等它回来再收会闪一下两条同时在场。
+        // 拿不到权限 / 加窗失败时下面会把它收回 false，应用内状态条成为唯一入口。
+        overlayActive = true;
+        render();
         try {
             const res = await plugin.showOverlay({ text: text || 'AI 正在操作手机' });
-            if (res && res.needPermission) return 'need-permission';
-            return Boolean(res && res.ok);
+            if (res && res.needPermission) {
+                overlayActive = false;
+                render();
+                return 'need-permission';
+            }
+            overlayActive = Boolean(res && res.ok);
+            render();
+            return overlayActive;
         } catch (e) {
+            overlayActive = false;
+            render();
             return false;
+        }
+    }
+
+    /** 查悬浮窗权限：'ok' | 'need-permission' | 'unavailable'（网页版没有原生层）。
+     *  只查不显示 —— 权限提示要趁用户还在应用里时弹，悬浮条则等他真切走才出现。 */
+    async function checkOverlayPermission() {
+        const plugin = nativeBridge();
+        if (!plugin || typeof plugin.overlayStatus !== 'function') return 'unavailable';
+        try {
+            const res = await plugin.overlayStatus();
+            return (res && res.canDraw) ? 'ok' : 'need-permission';
+        } catch (e) {
+            return 'unavailable';
+        }
+    }
+
+    /** 悬浮条只在 AI 把界面切走时出现：应用内已经有状态条和停止按钮，
+     *  再浮一条只是重复；切到别的应用时状态条看不见了，才需要它兜住"随时能停"。
+     *  应用回到前台就收起浮层、把应用内状态条还回去。 */
+    function syncOverlayWithVisibility() {
+        if (!running) {
+            hideOverlay();
+            return;
+        }
+        const hidden = (typeof document !== 'undefined' && document.visibilityState === 'hidden');
+        if (hidden) {
+            void showOverlay(stopRequested ? '正在停止…' : 'AI 正在操作手机');
+        } else {
+            hideOverlay();
         }
     }
 
@@ -234,13 +318,16 @@ const agentRuntime = (function () {
 
     // 浮层副标题统一由 setStep → updateOverlayStep 驱动，不另开"直接写文案"的入口（两处写同一行只会互相覆盖）。
     function hideOverlay() {
+        overlayActive = false;
         const plugin = nativeBridge();
-        if (!plugin || typeof plugin.hideOverlay !== 'function') return;
-        try { void plugin.hideOverlay(); } catch (e) { /* 忽略 */ }
+        if (plugin && typeof plugin.hideOverlay === 'function') {
+            try { void plugin.hideOverlay(); } catch (e) { /* 忽略 */ }
+        }
+        render();
     }
 
     return {
-        beginBatch, beginRun, endRun, requestStop, assertNotStopped, track, requestApproval, setStep, render,
+        beginBatch, beginRun, endRun, requestStop, settleStoppedRun, assertNotStopped, track, requestApproval, setStep, render,
         isRunning: () => running,
         isStopRequested: () => stopRequested,
         isHalted: () => halted,
@@ -248,11 +335,24 @@ const agentRuntime = (function () {
         riskOf,
         showOverlay,
         hideOverlay,
-        ensureOverlayListener
+        ensureOverlayListener,
+        checkOverlayPermission,
+        syncOverlayWithVisibility,
+        waitStopped,
+        getGeneration: () => generation,
+        bumpGeneration: () => { generation += 1; }
     };
 })();
 
 window.agentRuntime = agentRuntime;
+
+// 应用切到后台 / 回到前台时切换「应用内状态条 ↔ 系统悬浮条」：
+// 在应用里用状态条（离停止按钮最近），AI 操作别的应用时才浮一条出来。
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', () => {
+        try { agentRuntime.syncOverlayWithVisibility(); } catch (e) { /* 忽略 */ }
+    });
+}
 
 document.getElementById('agentStopBtn')?.addEventListener('click', () => {
     if (agentRuntime.requestStop('用户点了停止')) {

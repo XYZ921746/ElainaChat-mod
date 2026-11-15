@@ -5,7 +5,7 @@ function setHintText(el, text, cls) {
     if (el) { el.textContent = text; el.className = 'text-[11px] ' + (cls || 'text-dim'); }
 }
 
-// 多设备实时同步：订阅服务端 store 变更广播（SSE），按类型重渲染 —— 聊天记录重载会话列表（保留滚动位置与当前选中会话）、人设卡 / 记忆 / 收藏 / 定时任务重载对应 state、设置只更新内存值、主题立即应用、插件开关重载列表；任何一步出错只记日志，绝不影响本地使用。
+// 多设备实时同步：订阅服务端 store 变更广播（SSE），按类型重渲染 —— 聊天记录重载会话列表（保留滚动位置与当前选中会话）、人设卡 / 收藏 / 定时任务重载对应 state、设置只更新内存值、主题立即应用、插件开关重载列表；记忆变更走独立的 memory-change 事件（权威在服务端，store 键不承载记忆）。任何一步出错只记日志，绝不影响本地使用。
 function startMultiDeviceSync() {
     if (!window.Store || typeof window.Store.subscribeRemote !== 'function') return;
     try {
@@ -31,12 +31,16 @@ function startMultiDeviceSync() {
                     if (typeof loadCharacterCard === 'function') loadCharacterCard();
                     if (typeof renderCardSelect === 'function') renderCardSelect();
                 }
-                if (has('elaina_open_memory_core') && typeof loadMemoryCore === 'function') loadMemoryCore();
                 if (has('elaina_open_favorites') && typeof loadFavorites === 'function') loadFavorites();
                 // 用户资料（称呼/头像/AI 印象）：名称变了消息行的称呼才对，其它设备也要跟着变。
                 if (has('elaina_user_profile') && typeof loadUserProfile === 'function') loadUserProfile();
                 if (has('elaina_open_tasks') && typeof renderScheduledTaskList === 'function') renderScheduledTaskList();
-                if (has('elaina_open_settings')) loadSettings();
+                if (has('elaina_open_settings') || has('elainachat_open_api_secrets')) {
+                    if (has('elaina_open_settings')) loadSettings();
+                    // 设置包里不含密钥（loadSettings 会剔掉它们）：只重载设置会把内存里的 Key 清空，
+                    // 之后任何一次保存（含自动保存）都会把空值写回密钥库。密钥必须跟着重新读一遍。
+                    if (typeof reloadApiSecretsFromStore === 'function') reloadApiSecretsFromStore();
+                }
                 if ((has('elaina_theme_template') || has('elaina_theme') || has('elaina_theme_custom'))
                     && window.ElainaTheme && typeof window.ElainaTheme.applyStored === 'function') {
                     window.ElainaTheme.applyStored();
@@ -103,10 +107,14 @@ async function init() {
     loadConversations();
     loadFavorites();
     loadMemoryCore();
+    // 记忆权威在服务端 SQLite（M2b）：页面从零开始，canonical 由 recoverStagedMemoryCore 拉取，
+    // 顺带把上次记忆库不可用期间暂存的改动并回权威。失败静默保留本地（空）数据；
+    // 其它设备的记忆变更走 store SSE 的 memory-change 事件。
+    if (typeof recoverStagedMemoryCore === 'function') recoverStagedMemoryCore().catch(() => {});
     loadUserProfile();
     // 成就系统与「星屑之日」生日模式：必须排在 Store.bootstrap() 之后 refresh（见 ready 闸门）—— 其脚本在 bootstrap 之前求值，那时 Store 缓存为空，读到的成就表必空、生日状态必丢；生日模式住在 birthday 插件里，收到 app-ready 广播后自己读盘并启动看门狗。
     try { if (window.ElainaAchievements) window.ElainaAchievements.refresh(); } catch (e) { /* 忽略 */ }
-    // 多设备实时同步。只在 Web 生效：APK 没有服务端，单设备不存在"别的设备改了"。
+    // 多设备实时同步。只在 Web 生效：APK 单设备且 Store 走本机服务，不存在"别的设备改了"。
     startMultiDeviceSync();
     elements.textInput.value = '';
     document.getElementById('initialTextInput').value = '';
@@ -137,6 +145,8 @@ async function init() {
         // 提前 return 不能漏掉与电脑路径共用的启动收尾：定时任务轮询（漏了手机的定时任务永不触发）与 app-ready（漏了插件永远等不到启动信号）。
         setInterval(checkScheduledTasks, 30000);
         try { window.ElainaMods?.markAppReady?.({ announcementPending }); } catch (e) { /* 插件系统异常不影响启动 */ }
+        // 首屏已定（showInitialState 已把首页状态与顶栏模式切好），可以放行首帧门。
+        try { window.ElainaUiGate?.ready?.(); } catch (e) { /* 门不存在时按无门处理 */ }
         return;
     }
     const hasConversation = Boolean(state.currentConversationId);
@@ -151,6 +161,8 @@ async function init() {
     setInterval(checkScheduledTasks, 30000);
     // 通知插件系统：应用初始化完成（Store 已读完、界面已就绪）。mod 在 DOMContentLoaded 就加载、早于本函数，拿不到信号就只能自己猜时机；announcementPending 一并带过去，晚注册的生日插件据此把开场彩蛋推迟到首次公告之后。
     try { window.ElainaMods?.markAppReady?.({ announcementPending }); } catch (e) { /* 插件系统异常不影响启动 */ }
+    // 首屏已定，可以放行首帧门（见 index.html 的门探针）。
+    try { window.ElainaUiGate?.ready?.(); } catch (e) { /* 门不存在时按无门处理 */ }
 }
 
 // 公告与生日彩蛋的先后经广播协调（announcement-pending / announcement-closed），宿主不直接引用生日插件（AGENTS.md D3）。

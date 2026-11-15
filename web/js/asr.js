@@ -299,14 +299,17 @@ async function transcribeRecordedAudioWithMimo() {
     if (!provider) throw new ClientApiError('APP_KEY_MISSING', '还没有语音转文字服务：先在 设置 → 模型 → 语音转文字 里添加');
     const mimoApiKey = String(getProviderSecret(provider.id) || '').trim();
     if (!mimoApiKey) throw new ClientApiError('APP_KEY_MISSING', '请先在 设置 → 模型 → 语音转文字 里给这家 MiMo 填好 API Key');
-    const baseUrl = String(provider.baseUrl || 'https://api.xiaomimimo.com').trim().replace(/\/+$/, '');
+    // 地址里的版本段由用户/服务商决定（可能是 /v4）：已有版本段就原样用，只有缺版本段时才补 /v1
+    // （与对话运行时同一条规则）。用户把整条端点粘进来时先剥掉，避免拼成 …/chat/completions/chat/completions。
+    const strippedBase = stripChatFunctionSuffix(provider.baseUrl || 'https://api.xiaomimimo.com');
+    const baseUrl = /\/v\d+$/i.test(strippedBase) ? strippedBase : strippedBase + '/v1';
     const model = String(provider.model || 'mimo-v2.5-asr').trim();
     const startedAt = performance.now();
     const wavBase64 = float32ToWavBase64(audio, ASR_TARGET_SAMPLE_RATE);
     console.log(`[ASR] 小米 MiMo 识别开始: 音频 ${(audio.length / ASR_TARGET_SAMPLE_RATE).toFixed(1)}s, wav ${Math.round(wavBase64.length / 1024)}KB, 模型 ${model}`);
     let result;
     try {
-        result = await postJsonFromDevice(baseUrl + '/v1/chat/completions', {
+        result = await postJsonFromDevice(baseUrl + '/chat/completions', {
             model,
             messages: [{
                 role: 'user',

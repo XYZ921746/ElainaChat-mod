@@ -11,6 +11,25 @@ function chatSamplingOpts() {
     return opts;
 }
 
+// 一次对话请求的硬性死线（分钟级）：定时器在这个环境里是可靠的，而 AbortSignal 在 APK 的原生 HTTP 通道上
+// 打不断一个已经挂住的 promise（实测一次续跑调用挂住八分钟，浮层停在「正在思考」，什么都没发生）。
+// 到点就按超时失败，让上层如实报错并重试 —— 无限等待比报错糟得多。
+const CHAT_CALL_HARD_DEADLINE_MS = 8 * 60 * 1000;
+
+function withChatDeadline(promise, ms) {
+    let timer = null;
+    const guard = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            const err = new Error('对话请求超过 ' + Math.round(ms / 60000) + ' 分钟没有返回，已停止等待。');
+            err.code = 'REQUEST_TIMEOUT_HARD';
+            reject(err);
+        }, ms);
+    });
+    return Promise.race([promise, guard]).finally(() => {
+        if (timer) clearTimeout(timer);
+    });
+}
+
 async function callAI(text, options = {}, settings = null) {
     // callAI 是对话的唯一出口：调用方没点名 settings（即非回退链）时优先用「当前会话设定」里给这段对话指定的模型；
     //   没绑或对失效则保持 null 落到默认模型。记忆摘要 / 翻译走 callChatAPI，不经过这里，继续跟随默认。
@@ -81,19 +100,22 @@ async function callAI(text, options = {}, settings = null) {
         : buildLayeredRoleplayMessages(text, options);
     let reply;
     try {
-        reply = await callChatAPI(messages, {
+        reply = await withChatDeadline(callChatAPI(messages, {
             thinking: Boolean(state.settings.thinkingMode),
             thinkingEffort: state.settings.thinkingEffort || 'off',
             ...chatSamplingOpts(),
-            maxTokens: options.includeVoiceJp
-                ? ROLEPLAY_OUTPUT_TOKEN_LIMITS.withVoice
-                : ROLEPLAY_OUTPUT_TOKEN_LIMITS.text,
+            // 调用方显式给过预算就用调用方的（agent 续跑通道需要比闲聊大得多的上限，见 agent-continue.js）；闲聊仍按角色扮演上限裁剪。
+            maxTokens: options.maxTokens
+                || (options.includeVoiceJp
+                    ? ROLEPLAY_OUTPUT_TOKEN_LIMITS.withVoice
+                    : ROLEPLAY_OUTPUT_TOKEN_LIMITS.text),
             signal: options.signal,
             onDelta: options.onDelta || null,
             onPhase: options.onPhase || null,
             tools: options.tools || null,
             replyInfo: options.replyInfo || null
-        }, settings || undefined);
+        }, settings || undefined),
+        Number.isFinite(options.deadlineMs) ? options.deadlineMs : CHAT_CALL_HARD_DEADLINE_MS);
     } catch (err) {
         const visionUnsupported = /not a multimodal|not multimodal|does not support (image|vision)|vision.*not supported|multimodal model|image.*not supported|不支持.{0,4}图片|无法.{0,4}图片/i
             .test(String((err && err.message) || err));
@@ -113,6 +135,17 @@ async function callAI(text, options = {}, settings = null) {
                     + '（如 Qwen-VL / GLM-4V / GPT-4o），或在「视觉模型」里配一个。', '主模型不支持图片');
             }
             return callAI(text, Object.assign({}, options, { imageDataUrl: '', directImage: false, imageRetried: true }));
+        }
+        // 只有思考没有正文：网关强制开思考、且不允许关（thinking 字段被 400 拒掉）时，思考会在正文开始前
+        // 就把闲聊的输出上限耗尽。这不是「供应商挂了」，是预算不够 —— 用更大的上限重试一次即可；
+        // 只对这一个错误码重试，其它失败照旧原样抛（真正失败的请求重试只是白付一次）。
+        if (err instanceof ClientApiError && err.code === 'EMPTY_MODEL_OUTPUT'
+            && !options.maxTokens && options._emptyOutputRetried !== true) {
+            console.warn('[Chat] 模型只返回思考内容，用更大输出预算重试一次');
+            return callAI(text, Object.assign({}, options, {
+                maxTokens: EMPTY_OUTPUT_RETRY_TOKEN_LIMIT,
+                _emptyOutputRetried: true,
+            }), settings);
         }
         if (hasImage && err instanceof ClientApiError) err.imageHint = true;
         throw err;
@@ -266,11 +299,16 @@ async function describeImageWithVision(prompt, imageDataUrl) {
             ]
         }
     ];
+    // 画面转述的超时要比普通请求宽松：网关强制开思考时，模型要先想再答，看图尤其慢；
+// 用默认的 120 秒实测会稳定撞「Direct provider request failed: timeout」，这一格整个白截。
+const VISION_DESCRIBE_TIMEOUT_MS = 200000;
     const result = await postJsonFromDevice(endpoint, {
         model: cfg.model,
         messages,
-        max_tokens: 512
-    }, { Authorization: 'Bearer ' + (cfg.apiKey || 'sk-no-key') });
+        // 画面转述要列元素与建议坐标，512 在「网关强制开思考」的模型上会先被思考吃光、正文被截成半句
+        // （实测只剩「1) 这是什么应用、什么页面」）。2048 是上限不是定额，短回答不会因此变长。
+        max_tokens: 2048
+    }, { Authorization: 'Bearer ' + (cfg.apiKey || 'sk-no-key') }, { timeoutMs: VISION_DESCRIBE_TIMEOUT_MS });
     if (!result.ok) await throwProviderResponseError(result, '视觉模型请求失败');
     const text = result.payload?.choices?.[0]?.message?.content;
     return typeof text === 'string' ? text : '';

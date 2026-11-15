@@ -1079,7 +1079,113 @@ html.rd #settingsOverlay #settingsContent .agent-perm-badge {
 }
 html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-ok,
 html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-granted { border-color: var(--rd-ok); color: var(--rd-ok); background: var(--rd-ok-soft); }
-html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-actionable { cursor: pointer; border-color: var(--rd-accent-border); color: var(--rd-accent); background: var(--rd-accent-soft); }
+html.rd #settingsOverlay #settingsContent .agent-perm-badge.is-no { border-color: var(--rd-warn); color: var(--rd-warn); background: var(--rd-warn-bg); }
+
+/* 权限摘要行与「!」明细入口 */
+html.rd #settingsOverlay #settingsContent .agent-perm-head { display: flex; align-items: center; gap: 8px; }
+html.rd #settingsOverlay #settingsContent .agent-perm-info-btn {
+    flex: none;
+    margin-left: auto;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--rd-border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--rd-text-3);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-info-btn:hover,
+html.rd #settingsOverlay #settingsContent .agent-perm-info-btn[aria-expanded="true"] {
+    border-color: var(--rd-accent-border);
+    color: var(--rd-accent);
+    background: var(--rd-accent-soft);
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-detail {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--rd-border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-detail.hidden { display: none; }
+html.rd #settingsOverlay #settingsContent .agent-perm-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
+html.rd #settingsOverlay #settingsContent .agent-perm-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--rd-text);
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-act {
+    flex: none;
+    padding: 2px 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: nowrap;
+    cursor: pointer;
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-act:hover {
+    border-color: var(--rd-accent-border);
+    color: var(--rd-accent);
+    background: var(--rd-accent-soft);
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+/* 「一键授权」是主按钮，不能跟着上面那条"透明底"走：它是卡片里唯一该被一眼看到的按钮。
+   优先级要压过 html.rd #settingsOverlay #settingsContent .agent-perm-act。 */
+html.rd #settingsOverlay #settingsContent .agent-perm-act.is-primary {
+    border-color: var(--rd-accent);
+    background: var(--rd-accent);
+    color: var(--rd-accent-contrast, #fff);
+    font-weight: 600;
+    padding: 4px 12px;
+}
+html.rd #settingsOverlay #settingsContent .agent-perm-act.is-primary:hover {
+    border-color: var(--rd-accent-strong, var(--rd-accent));
+    background: var(--rd-accent-strong, var(--rd-accent));
+    color: var(--rd-accent-contrast, #fff);
+}
+
+/* 权限明细浮层（#agentPermSheet 在设置面板之外，选择器不能带 #settingsContent）。 */
+html.rd #agentPermSheet .modal-panel { border: 1px solid var(--rd-border); background: var(--rd-surface); }
+html.rd #agentPermSheet .agent-perm-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 0; }
+html.rd #agentPermSheet .agent-perm-row + .agent-perm-row { border-top: 1px solid var(--rd-border); }
+html.rd #agentPermSheet .agent-perm-name { flex: 1 1 auto; min-width: 0; font-size: 12px; line-height: 1.5; color: var(--rd-text); }
+html.rd #agentPermSheet .agent-perm-act {
+    flex: none;
+    padding: 2px 8px;
+    border: 1px solid var(--rd-border);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: nowrap;
+    cursor: pointer;
+}
+html.rd #agentPermSheet .agent-perm-act:hover { border-color: var(--rd-accent-border); color: var(--rd-accent); background: var(--rd-accent-soft); }
+html.rd #agentPermSheet .agent-perm-act.is-primary {
+    border-color: var(--rd-accent);
+    background: var(--rd-accent);
+    color: var(--rd-accent-contrast, #fff);
+    font-weight: 600;
+    padding: 4px 12px;
+}
+html.rd #agentPermSheet .agent-perm-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+html.rd #agentPermSheet .agent-perm-dot { flex: none; width: 9px; height: 9px; border-radius: 50%; background: var(--rd-border); }
+html.rd #agentPermSheet .agent-perm-dot.is-ok { background: var(--rd-ok); }
+html.rd #agentPermSheet .agent-perm-dot.is-no { background: var(--rd-danger); }
+html.rd #agentPermSheet .agent-perm-dot.is-unknown { background: var(--rd-text-3); opacity: .45; }
 
 /* 分区内的分隔线不要再画一遍 */
 html.rd #settingsOverlay #settingsContent section > .mt-6.pt-4,
@@ -1279,6 +1385,15 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
     }
     /* 分类胶囊的滑块与回忆分段条同一套：底色由滑块画，选中项文字换对比色。 */
     html.rd #settingsOverlay .ext-mobile-tabs .mm-seg-thumb { top: 3px; border-radius: 8px; }
+    /* label 的显隐动画只配了侧栏分支（#settingsPanel > .ext-nav-children.is-open 的
+       nth-child 选择器），这里复用同一个 label 类却不在那个作用域 —— 不显式放开，
+       三段文字永久停在 pages-luxe 的初始 opacity:0，金色滑块上就是一条无字胶囊。 */
+    html.rd #settingsOverlay .ext-mobile-tabs .ext-nav-label {
+        display: inline !important;
+        opacity: 1 !important;
+        transform: none !important;
+        animation: none !important;
+    }
     /* 页内这排是三分胶囊，不是导航下拉的分支子项：等分三格、文字居中，
        否则 .ext-nav-btn 的 width:100% + flex:0 0 auto 会把后两格挤出胶囊外。 */
     html.rd #settingsOverlay .ext-mobile-tabs .ext-nav-btn {
@@ -1925,6 +2040,8 @@ html.rd #settingsOverlay .model-add-form-grid { display: grid; grid-template-col
 html.rd #settingsOverlay .model-add-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 html.rd #settingsOverlay .model-add-field.is-full { grid-column: 1 / -1; }
 html.rd #settingsOverlay .model-add-field > label { color: var(--rd-text-2); font-size: 11px; font-weight: 600; }
+html.rd #settingsOverlay .model-add-field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+html.rd #settingsOverlay .model-add-field-head > label { color: var(--rd-text-2); font-size: 11px; font-weight: 600; }
 html.rd #settingsOverlay .model-add-hint { color: var(--rd-text-3); font-size: 11px; line-height: 1.55; }
 html.rd #settingsOverlay .model-add-chip-row { display: flex; flex-wrap: wrap; gap: 5px; }
 html.rd #settingsOverlay .model-add-chip {
@@ -2075,7 +2192,8 @@ html.rd #settingsOverlay #settingsContent .cpc-available-name {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-html.rd #settingsOverlay #settingsContent .cpc-enable-model {
+html.rd #settingsOverlay #settingsContent .cpc-enable-model,
+html.rd #settingsOverlay #settingsContent .cpc-forget-model {
     flex: none;
     display: grid;
     place-items: center;
@@ -2092,6 +2210,8 @@ html.rd #settingsOverlay #settingsContent .cpc-enable-model {
     cursor: pointer;
 }
 html.rd #settingsOverlay #settingsContent .cpc-enable-model:hover { border-color: var(--rd-accent-border); background: var(--rd-accent-soft); }
+html.rd #settingsOverlay #settingsContent .cpc-forget-model { color: var(--rd-text-3); font-size: 11px; }
+html.rd #settingsOverlay #settingsContent .cpc-forget-model:hover { border-color: var(--rd-danger); color: var(--rd-danger); }
 html.rd #settingsOverlay #settingsContent .cpc-danger-zone { margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--rd-border); }
 html.rd #settingsOverlay #settingsContent .cpc-danger-zone .cpc-delete { color: var(--rd-danger) !important; }
 

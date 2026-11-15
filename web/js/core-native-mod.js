@@ -1,21 +1,21 @@
-// 原生（Capacitor APK）插件接口：mod 的安装 / 列表 / 删除在 APK 上没有 Node 服务端，用 Capacitor Filesystem 复刻同一套接口语义；依赖 core-native.js 的 nativeFs / 字节工具。
+// 原生（Capacitor APK）插件接口：mod 的安装 / 列表 / 删除走 Capacitor Filesystem，保证服务未就绪时也能管理插件；依赖 core-native.js 的 nativeFs / 字节工具。
 'use strict';
 
-// 插件管理接口在电脑版由 serve.mjs + server/mods.mjs 提供；APK 没有 Node 进程，请求打过去只会 404。存放位置是应用数据目录下的 mods/<id>/；安全规则（路径穿越 / 绝对路径 / 危险扩展名 / 体积上限）两端各写实现，判定标准必须一致。
+// 插件管理接口在电脑版由 Go 服务端（server/internal/httpapi/packages.go）提供；APK 页面走这里的原生实现（离线可用），服务端同一套接口也在，只是不在转发清单里。存放位置是应用数据目录下的 mods/<id>/；安全规则（路径穿越 / 绝对路径 / 危险扩展名 / 体积上限）两端各写实现，判定标准必须一致。
 
-/** 插件 id 白名单（与 server/mods.mjs 的 MOD_ID_RE 同一形状） */
+/** 插件 id 白名单（与 server/internal/plugin 的 modIDRe 同一形状） */
 const NATIVE_MOD_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-/** 危险扩展名（对齐 server/mods.mjs 的 MOD_BLOCKED_EXT 核心集：本机可执行 / 服务端脚本）。mod 允许 .js —— 它本来就是代码，与电脑版 unzip({ allowScripts: true }) 的取舍一致。 */
+/** 危险扩展名（对齐 server/internal/zipx/zipx.go 的 blockedExt 核心集：本机可执行 / 服务端脚本）。mod 允许 .js —— 它本来就是代码，与电脑版 unzip({ allowScripts: true }) 的取舍一致。 */
 const NATIVE_MOD_BLOCKED_EXT = new Set([
     '.exe', '.dll', '.bat', '.cmd', '.com', '.scr', '.msi', '.sh', '.ps1',
     '.html', '.htm', '.xhtml', '.hta', '.svg',
 ]);
-/** 插件安装路径上允许落盘的危险扩展名（白名单语义，与 server/zip.mjs 的 PLUGIN_EXTS 同一张表：插件确实要带自己的面板页，如 galgame 的 panel.html）。缺了这条豁免，手机端会静默跳过这些文件：插件照常加载、唯独面板 404。落盘位置是 app 私有目录，比电脑版静态目录更封闭。 */
+/** 插件安装路径上允许落盘的危险扩展名（白名单语义，与 server/internal/zipx/zipx.go 的 pluginExt 同一张表：插件确实要带自己的面板页，如 galgame 的 panel.html）。缺了这条豁免，手机端会静默跳过这些文件：插件照常加载、唯独面板 404。落盘位置是 app 私有目录，比电脑版静态目录更封闭。 */
 const NATIVE_MOD_PLUGIN_EXTS = new Set(['.html', '.htm']);
-/** 单个插件解压后的体积上限（与 server/mods.mjs 的 MOD_MAX_BYTES 一致：64MB）。两端数值必须同源，否则同一个 30MB 的包电脑能装、手机装不上，用户无从理解。 */
+/** 单个插件解压后的体积上限（与 server/internal/packages/packages.go 的 maxPackageBytes 一致：64MB）。两端数值必须同源，否则同一个 30MB 的包电脑能装、手机装不上，用户无从理解。 */
 const NATIVE_MOD_MAX_BYTES = 64 * 1024 * 1024;
 
-/** 归一化插件 id：剥掉 zip 文件名里常见的版本尾巴（与 server/mods.mjs 的 normalizeModId 同一形状：只剥至少两段的版本号 -1.2.3 / -1.2.3.4）。刻意不剥 -2 —— my-mod-2.zip 的「2」可能是作者编号而不是版本号，剥了两端会不一致；server/mods.mjs 有完整论证。 */
+/** 归一化插件 id：剥掉 zip 文件名里常见的版本尾巴（与 server/internal/packages/packages.go 的 normalizeModID 同一形状：只剥至少两段的版本号 -1.2.3 / -1.2.3.4）。刻意不剥 -2 —— my-mod-2.zip 的「2」可能是作者编号而不是版本号，剥了两端会不一致；packages.go 的 normalizeModID 有完整论证。 */
 function nativeNormalizeModId(raw) {
     let s = String(raw || '').trim().replace(/\.zip$/i, '');
     const m = s.match(/^(.+?)-\d+(?:\.\d+)+$/);
@@ -23,7 +23,7 @@ function nativeNormalizeModId(raw) {
     return s;
 }
 
-/** 有效扩展名判定（原样移植 server/zip.mjs 的 effectiveExt —— 安全规则两端必须同语义）。不能直接 lastIndexOf('.')：
+/** 有效扩展名判定（原样移植 server/internal/zipx/zipx.go 的 EffectiveExt —— 安全规则两端必须同语义）。不能直接 lastIndexOf('.')：
  * NTFS ADS 与尾点 / 尾空格能把 .html 伪装成看不出来（shell.html::$DATA / shell.html. / shell.html␠ 都会放行）；先截掉第一个 : 之后的部分、再剥尾部 [. ] 就能拦下。 */
 function nativeEffectiveExt(name) {
     let s = String(name || '');
@@ -37,7 +37,7 @@ function nativeEffectiveExt(name) {
 /** 取插件数据目录（Directory.Data）下的 mods/ 相对路径前缀 */
 const NATIVE_MODS_DIR = 'mods';
 
-/** 读插件目录里的 manifest.json，返回归一化后的清单条目（字段对齐 server/mods.mjs） */
+/** 读插件目录里的 manifest.json，返回归一化后的清单条目（字段对齐 server/internal/plugin 的 Module） */
 async function nativeReadModManifest(fs, dir, modId) {
     let m = null;
     try {
@@ -79,7 +79,7 @@ async function nativeListModFiles(fs, dir, modId, relPath = '', depth = 0) {
     return out;
 }
 
-/** 扫描数据目录的 mods/，生成清单（形状对齐 server/mods.mjs 的 scanAndSync 输出） */
+/** 扫描数据目录的 mods/，生成清单（形状对齐 server/internal/packages 的 ScanMods 输出） */
 async function nativeListPlugins(fs, dir) {
     let entries;
     try { entries = await fs.readdir({ path: NATIVE_MODS_DIR, directory: dir }); }
@@ -105,18 +105,36 @@ async function nativeListPlugins(fs, dir) {
 /** 把插件目录递归删掉（卸载） */
 async function nativeDeletePlugin(fs, dir, modId) {
     if (!NATIVE_MOD_ID_RE.test(modId)) throw new Error('插件名不合法：' + modId);
-    await fs.rmdir({ path: `${NATIVE_MODS_DIR}/${modId}`, directory: dir, recursive: true });
+    const dirName = await nativeResolveModDir(fs, dir, modId);
+    if (!dirName) throw new Error('没有找到插件「' + modId + '」的目录（可能已经被删掉了）');
+    await fs.rmdir({ path: `${NATIVE_MODS_DIR}/${dirName}`, directory: dir, recursive: true });
 }
 
-/** 读插件自带的说明文件（对应电脑版 GET /api/plugins/:id/readme）。白名单与 server/mods.mjs 的 readReadme 是同一张表 —— 两端行为分叉（「电脑上读得到、手机上读不到」）是最难排查的一类问题。Capacitor FS 没有便宜的「先 stat 再读」，读出来再查长度效果相同。 */
+/** 把 manifest 里声明的 id 解析成磁盘上的真实目录名（对应电脑版 FindModDirByID）。
+    两者可以不一致：安装包目录常带版本号（birthday-1.1.0 里 manifest.id 是 birthday），
+    用 id 直接拼路径会读不到 README、也删不掉插件。先试同名目录，再扫清单按 id 比对。 */
+async function nativeResolveModDir(fs, dir, modId) {
+    try {
+        const st = await fs.stat({ path: `${NATIVE_MODS_DIR}/${modId}`, directory: dir });
+        if (st && st.type === 'directory') return modId;
+    } catch (e) { /* 没有同名目录，继续按 id 扫 */ }
+    const list = await nativeListPlugins(fs, dir);
+    const hit = list.find((m) => m && m.id === modId);
+    return hit ? String(hit.dir || '') : '';
+}
+
+/** 读插件自带的说明文件（对应电脑版 GET /api/plugins/:id/readme）。白名单与 server/internal/packages/packages.go 的 readmeNames 是同一张表 —— 两端行为分叉（「电脑上读得到、手机上读不到」）是最难排查的一类问题。Capacitor FS 没有便宜的「先 stat 再读」，读出来再查长度效果相同。 */
 const NATIVE_README_NAMES = ['README.md', 'readme.md', 'README.txt', 'readme.txt', 'README', '说明.md'];
 
 async function nativeReadModReadme(fs, dir, modId) {
     if (!NATIVE_MOD_ID_RE.test(modId)) return { ok: false, message: '插件名不合法' };
+    // 前端传的是 manifest.id，磁盘目录可能带版本号，必须先解析成真实目录。
+    const dirName = await nativeResolveModDir(fs, dir, modId);
+    if (!dirName) return { ok: false, message: '没有找到插件「' + modId + '」的目录（可能已经被删掉了）' };
     for (const name of NATIVE_README_NAMES) {
         let text;
         try {
-            const r = await fs.readFile({ path: `${NATIVE_MODS_DIR}/${modId}/${name}`, directory: dir, encoding: 'utf8' });
+            const r = await fs.readFile({ path: `${NATIVE_MODS_DIR}/${dirName}/${name}`, directory: dir, encoding: 'utf8' });
             text = String(r && r.data || '');   // Capacitor readFile 回 {data}，不是裸字符串
         } catch (e) { continue; }   // 这个名字不存在 → 试下一个
         if (text.length > 256 * 1024) {
@@ -128,7 +146,7 @@ async function nativeReadModReadme(fs, dir, modId) {
     return { ok: false, message: '该插件没有 README 文件' };
 }
 
-/** 从内存里的 zip 安装插件到数据目录（对应电脑版 installFromBuffer）。unzipBrowser 只管「解开」，这里管全部安全判定与落盘，逐条对齐 server/mods.mjs 的 writePluginFiles：id 白名单、先清空旧目录、剥单层顶层目录、不安全名 + 危险扩展名、解压总体积封顶。 */
+/** 从内存里的 zip 安装插件到数据目录（对应电脑版 installFromBuffer）。unzipBrowser 只管「解开」，这里管全部安全判定与落盘，逐条对齐 server/internal/packages/packages.go 的 InstallMod：id 白名单、先清空旧目录、剥单层顶层目录、不安全名 + 危险扩展名、解压总体积封顶。 */
 async function nativeInstallPlugin(buf, rawName) {
     const fs = nativeFs();
     if (!fs) throw new Error('文件系统插件不可用');
@@ -254,12 +272,17 @@ async function nativePluginsFetch(url, options) {
     }
 }
 
-// 原生模式下拦截 /api/live2d/ 与 /api/plugins/ 请求；内嵌 Node 就绪后按前缀清单转发一部分接口，转发不了的回落本地实现（「node 不可用」是默认形态）。
+// 原生模式下拦截 /api/live2d/ 与 /api/plugins/ 请求；本地服务就绪后按前缀清单转发一部分接口，
+// 未进清单的走各原生实现（store/data 等由各自用绝对 __nodeBase 直连，不经过这里）。
 if (IS_NATIVE_APP) {
     const nativeOrigFetch = window.fetch.bind(window);
 
-    // 内嵌 Node 转发。转发清单 = 固定清单（日志接口，bootstrap 自己实现）+ 动态清单（已装载插件的路由前缀，来自 /api/ping 的 modRoutes）；固定清单可以写死，插件路由不能，只能按 node 报告的清单转发。
-    const NODE_FIXED_PREFIXES = ['/api/logs/', '/api/client-log', '/api/mods/status'];
+    // 本地服务转发。转发清单 = 固定清单（日志 / 鉴权接口，bootstrap 自己实现）+ 动态清单（已装载插件的路由前缀，来自 /api/ping 的 modRoutes）；固定清单可以写死，插件路由不能，只能按服务报告的清单转发。
+    // store / data / LAN 由各自用绝对 __nodeBase 直连（见 store.js / backup.js），不进这张表。
+    // /api/auth/ 必须在表里：页面在 https://localhost，相对路径会打到 WebView 自己的静态服务上，
+    // 拿回来的是 index.html（表现为 JSON 解析报 Unexpected token '<'）。手机上访问密码同时是
+    // 局域网共享的凭据，这条转发断了，「设置访问密码」整块就是死的。
+    const NODE_FIXED_PREFIXES = ['/api/logs/', '/api/client-log', '/api/mods/status', '/api/memory/', '/api/auth/'];
     // 转发超时：普通请求 30s，上传放宽到 5 分钟（200MB 上限按慢网络也要走得完）；调用方自带 AbortSignal 时透传。
     const NODE_TIMEOUT_MS = 30000;
     const NODE_UPLOAD_TIMEOUT_MS = 300000;
@@ -400,7 +423,7 @@ if (IS_NATIVE_APP) {
 
     window.fetch = async (input, options) => {
         const u = typeof input === 'string' ? input : String((input && input.url) || input);
-        // 内嵌 Node 转发：命中清单（固定清单 + 插件路由）且 node 就绪。只对绝对路径匹配 —— http(s):// 与 _capacitor_file_ 的完整 URL 一律放行，别劫持引擎 / 图片请求。
+        // 本地服务转发：命中清单（固定清单 + 插件路由）且服务就绪。只对绝对路径匹配 —— http(s):// 与 _capacitor_file_ 的完整 URL 一律放行，别劫持引擎 / 图片请求。
         if (window.__nodeBase && !nodeDown && u.startsWith('/api/') && nodeRouteHit(u)) {
             try {
                 const res = await forwardToNode(u, options);
@@ -426,14 +449,15 @@ if (IS_NATIVE_APP) {
         return nativeOrigFetch(input, options);
     };
 
-    // 内嵌 Node 就绪链（独立链，不复用播种 / 插件根那两条）：start() → 轮询 status 到 ready → 轮询 /api/ping 到 modsLoaded 有结论 → 才缓存路由清单。
-    // 必须等结论：HTTP listen 返回后就能 accept，而 loadAll 在它之后，先到的 ping 必然看到空清单，当终态缓存就永远是空的。
+    // 本地服务就绪链（独立链，不复用播种 / 插件根那两条）：start() → 轮询 status 到 ready → 缓存 base → 再探插件路由清单。
+    // 两段必须分开：base 一到手就赋值，数据面（/api/store 等）立刻可用；路由清单只影响「哪些 /api 前缀转发给插件」，
+    // 等它会把首屏卡在一个与首屏无关的探针后面（探针上限 10s，插件装载慢时首屏白等）。
     window.__nodeReadyPromise = (async () => {
         try {
             // Capacitor 插件是异步注入到 window.Capacitor.Plugins 的，页面脚本执行时常常还没注册完；一上来就取会拿到 undefined，于是「插件不可用」被吞掉、只剩 status 轮询 —— 先等它出现（最多 5 秒）。
             const node = await waitForNodePlugin(5000);
             if (!node || typeof node.start !== 'function' || typeof node.status !== 'function') {
-                throw new Error('ElainaNode 插件不可用（构建未启用内嵌 Node）');
+                throw new Error('ElainaNode 插件不可用（构建未启用本地服务）');
             }
             await node.start();   // 幂等；只调一次，不依赖停止后重启（行为未验证）
             const startedAt = Date.now();
@@ -450,12 +474,18 @@ if (IS_NATIVE_APP) {
                 throw new Error('等内嵌服务就绪超时（20s）');
             }
             const base = 'http://127.0.0.1:' + Number(state.port);
-            const routes = await waitForNodeRoutes(base);
+            // 先放行数据面：这一步之后 store.js 的 waitNodeBase 立刻拿到 base，首屏不再等插件。
             window.__nodeBase = base;
+            window.__nodeRoutePrefixes = [];
+            window.__nodeModStatic = [];
+            console.log('[Native] 内嵌服务已就绪 ' + base + '（插件路由探测中）');
+            // 路由清单必须等结论：HTTP listen 返回后就能 accept，而 loadAll 在它之后，先到的 ping 必然看到空清单，
+            // 当终态缓存就永远是空的。探到之后原地替换数组（引用不变，已转发过的请求不受影响）。
+            const routes = await waitForNodeRoutes(base);
             window.__nodeRoutePrefixes = routes.modRoutes;
             window.__nodeModStatic = routes.modStatic;
-            console.log('[Native] 内嵌服务就绪 ' + base
-                + (routes.modRoutes.length ? '（插件路由：' + routes.modRoutes.join(' ') + '）' : ''));
+            console.log('[Native] 插件路由清单就绪'
+                + (routes.modRoutes.length ? '：' + routes.modRoutes.join(' ') : '（无插件路由）'));
         } catch (e) {
             console.warn('[Native] 内嵌服务不可用（已回落本地实现）', (e && e.message) || e);
         }
