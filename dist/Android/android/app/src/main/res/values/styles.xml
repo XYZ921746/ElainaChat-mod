@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:windowBackground">@color/splashBackground</item>
+    </style>
+
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:background">@null</item>
+        <item name="android:windowBackground">@color/splashBackground</item>
+    </style>
+
+    <!--
+      启动窗口：纯黑底，不画图标。
+
+      为什么纯黑：启动图由系统在 Activity.onCreate 之前绘制，主题只能按 values-night
+      （系统深浅色）解析，读不到应用内的主题设置。固定纯黑后深色用户完全无感，
+      浅色用户看到的是一次"黑→亮"过渡，比"白→黑"的强反差温和，不会出现白色闪屏。
+
+      为什么不能把启动窗口删掉：Android 12+ 由系统强制为每个 Activity 画一个 starting
+      window，只能改它的内容，没法让它不存在（`windowDisablePreview` 对已适配
+      SplashScreen API 的应用无效，且会让系统在首帧就绪前显示桌面壁纸，冷启动反而更花）。
+
+      图标用透明 drawable 而不是 @null：@null 不会去掉图标，系统会退回应用自己的
+      launcher 图标（实测：开屏仍能看到图标居中显示）。指向透明 drawable 才是真的不画。
+    -->
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/splashBackground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon_transparent</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+    </style>
+</resources>

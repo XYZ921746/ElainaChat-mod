@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机操作「无障碍」后端的服务声明。
+
+  canPerformGestures="true" 是关键——没有它 dispatchGesture() 会直接失败，
+  点击/滑动就只能靠 input 命令（那又回到 root/Shizuku 那条路了）。
+
+  canTakeScreenshot="true" 同样关键——没有它 AccessibilityService.takeScreenshot()
+  会直接回调失败（ERROR_TAKE_SCREENSHOT_NO_ACCESSIBILITY_ACCESS），
+  AI 就拿不到画面、只能读控件树。
+
+  ⚠️ 截图能力需要 Android 11（API 30）及以上：
+     · Android 11+：可读取界面、点击、滑动、输入，也能截图；
+     · Android 10 及以下：没有 takeScreenshot() 这个 API，本服务**无法截图** ——
+       只能读控件树 + 点击/滑动/输入。该属性在这些系统上会被忽略。
+    见 ElainaAccessibilityService.screenshot() 的版本判据。
+
+  这里只申请"读窗口内容 + 执行手势 + 截图"，不申请过滤按键、不申请控制安全设置，
+  权限面尽量小。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewFocused|typeViewSelected"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity="com.elainachat.mod.MainActivity"
+    android:summary="@string/accessibility_service_label" />

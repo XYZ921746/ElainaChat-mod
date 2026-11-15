@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动图背景：纯黑。
+
+         为什么不用深浅两套：启动图由系统在 Activity.onCreate 之前绘制，主题只能按
+         values-night（系统深浅色）解析，读不到应用内的主题设置。固定纯黑后，
+         深色模式用户完全无感；浅色模式用户看到的是一次"黑→亮"过渡，
+         比"白→黑"的强反差温和，也不会出现白色闪屏。
+         真正的主题底色由页面首帧的兜底样式接管（index.html 的内联脚本）。 -->
+    <color name="splashBackground">#000000</color>
+</resources>

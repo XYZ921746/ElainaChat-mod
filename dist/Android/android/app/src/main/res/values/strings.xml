@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ElainaChat Mod</string>
+    <string name="title_activity_main">ElainaChat Mod</string>
+    <string name="package_name">com.elainachat.mod</string>
+    <string name="custom_url_scheme">com.elainachat.mod</string>
+    <!-- 无障碍服务在系统「设置 → 无障碍」列表里显示给用户看的说明 -->
+    <string name="accessibility_service_label">ElainaChat Mod 手机操作</string>
+    <string name="accessibility_service_description">让 AI 读取当前界面并执行点击、滑动、输入。开启后 AI 才能替你操作手机；随时可以在系统设置里关闭。截图能力需要 Android 11 及以上；Android 10 及以下只能读界面与点击、滑动、输入，无法截图。</string>
+</resources>

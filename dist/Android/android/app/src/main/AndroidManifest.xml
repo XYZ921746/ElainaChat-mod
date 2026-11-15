@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+         手机操作（AI 设备层）相关的声明。两类后端：
+           无障碍 → accessibility-service（本文件下方）
+           模块   → 不需要声明权限，靠本机回环 HTTP（见 network_security_config）
+
+         ★ 2026-10：Shizuku 与 Root 后端已删除，所以下面这些声明一并移除了：
+           · moe.shizuku.manager.permission.API_V23（Shizuku 授权）
+           · rikka.shizuku.ShizukuProvider（Shizuku 授权通道）
+           · 查询 Shizuku 管理器的 <queries>
+           它们只服务于那两条已删的路，留着会让"应用能做什么"看起来比实际大。
+    -->
+    <application
+        android:allowBackup="true"
+        android:extractNativeLibs="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme">
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:windowSoftInputMode="adjustResize"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+        </activity>
+
+        <!-- 手机操作：无障碍后端。用户必须在系统「设置 → 无障碍」里手动开启 -->
+        <service
+            android:name=".ElainaAccessibilityService"
+            android:exported="true"
+            android:label="@string/accessibility_service_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/elaina_accessibility" />
+        </service>
+
+        <!-- 手机操作：Shizuku 后端的授权通道（★ 2026-10 已随 Shizuku 后端一起删除） -->
+
+        <!-- ★ 2026-10 新增：通知读取。
+             它不是运行时权限，而是"通知使用权"（系统设置里的开关），
+             所以必须以 NotificationListenerService 的形式声明 —— 系统只在
+             用户授权后才把通知投递进来，应用无法自行索取。
+             缓存只在内存、最多 40 条，见 ElainaNotificationListener。 -->
+        <service
+            android:name=".ElainaNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- ★★ 2026-10：内嵌 Node 运行时，跑在 :node **独立进程**。
+             为什么必须独立进程：libnode.so 用 sigaction 接管的是进程级信号处理器，
+             与 Android WebView（Trichrome）的 GL 渲染保护冲突 —— 同进程时 WebView
+             一渲染就踩到被改过的 handler，libsigchain 无法回退，内核直接杀进程
+             （实测崩溃栈：#02 libnode.so TrapWebAssemblyOrContinue / #16 draw_gl）。
+             隔离后 Node 的信号、崩溃、进程级 dup2 都只影响 :node，页面不受影响。
+
+             前台服务类型选 specialUse 而不是 dataSync：Android 15（targetSdk 35）
+             对 dataSync 有"每天累计 6 小时"的强制上限，一个常驻的本地 API 服务
+             会被系统掐断 —— 那会埋成"用几小时后莫名失效"。specialUse 无此限制。
+             ⚠️ PROPERTY_SPECIAL_USE_FGS_SUBTYPE 在 Android 14+ 必须声明，
+                缺失会导致启动即崩（ForegroundServiceTypeNotAllowedException）。 -->
+        <service
+            android:name=".ElainaNodeService"
+            android:process=":node"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="embedded node runtime serving local api over loopback" />
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+    </application>
+
+    <!-- ★★ 2026-10：前台服务所需权限（:node 进程要常驻，防止被系统优先回收）。
+         ⚠️ 刻意**不**声明 POST_NOTIFICATIONS：Android 13+ 上该权限默认拒绝，
+            于是前台服务照常运行而通知**完全不显示**（这正是我们想要的效果 ——
+            用户要求"最好不显示通知"）。Android 8~12 上没有该权限概念，
+            通知会以 IMPORTANCE_MIN 折叠到抽屉最底部、无图标无声。
+         FOREGROUND_SERVICE_SPECIAL_USE 是 Android 14+ 对 specialUse 类型的
+         配套权限，不声明则 startForeground 抛 SecurityException。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!--
+        ★★ 2026-10 新增：AI「读取信息」所需的权限。
+
+        这些全部是 Android 的**危险权限**（短信/通讯录/日历），必须由用户在
+        系统弹框里逐项同意。声明在这里只是"应用有资格申请"，**不会**自动授予，
+        也**不会**在启动时索取 —— 只有用户在「设置 → 能力 → 手机操作 → 读取信息」
+        里点「申请权限」才会弹框（见 ElainaShellPlugin.requestReadPermission）。
+
+        用户也可以在设置里关掉对应的**应用层**开关，那样 AI 连标签都看不到。
+        两道闸互相独立：应用层管"让不让 AI 知道"，系统层管"应用能不能拿到"。
+    -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+
+    <!--
+        Android 11+ 起，列出"已安装应用"需要声明包可见性。
+        AI 的 [操作:手机应用列表] 与"用包名启动应用"都依赖它；
+        不声明的话 getInstalledApplications() 只会返回本应用自己。
+    -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+
+    <!--
+        AI 操作手机时的系统级悬浮窗（「显示在其他应用上层」）。
+
+        为什么需要它：授权确认原本走应用内弹窗，于是 AI 每点一步都要用户切回
+        ElainaChat 点「允许」—— 而"切回来"这一步会把目标 App 切到后台，
+        那次点击就落到错的位置或失败，AI 重试又弹窗，形成死循环。
+        悬浮窗浮在目标 App 之上，用户不用离开当前界面就能确认或点停止。
+
+        这是 Android 的特殊权限：只能由用户在系统设置里手动开启，
+        应用无法直接弹框索取（见 ElainaOverlay.requestPermission）。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
+        电池优化白名单：定时任务靠应用内轮询触发，进程被省电策略掐掉就没人叫醒它。
+
+        声明它是为了让 ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 能弹出系统确认框
+        （见 ElainaShellPlugin.requestBatteryExemption）。本应用走侧载分发、不上架
+        Google Play，所以不受「仅特定类别应用可用该 API」的审核约束；
+        用户拒绝时什么也不会发生，定时任务照旧受系统省电策略约束。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+</manifest>

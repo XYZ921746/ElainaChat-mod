@@ -17,16 +17,38 @@ web/live2d/models/*
 
 # 本机打包产物与工具链（成品走 GitHub Releases，不进仓库）
 #
-# dist/ 只保留 check-log / check-mod / check-ui 读取的 sync-web.mjs 检查夹具，
-# 其余（Windows 打包工具、产物、README）留在本机：夹具缺失会让这三个模块
-# 在干净克隆里直接抛错，所以它必须随仓库走。
+# dist/ 分两块：
+#   dist/Android/   安卓原生工程 —— **入库**。它是应用的一部分（Java/资源/Gradle 脚本），
+#                   不是构建产物；同步进来的前端副本（www/）、SDK/NDK、构建缓存仍排除。
+#   dist/Windows/   桌面壳源码 —— **入库**（壳源码 shell/ 与打包建议 README.md）；
+#                   下载的工具链 tools\ 与产物 out\ 留在本机。打包脚本不入仓库，
+#                   怎么打包由 fork 者自行决定（见各 README 的打包建议）。
 dist/*
-!dist/Android
-dist/Android/*
-!dist/Android/scripts
-dist/Android/scripts/*
-!dist/Android/scripts/sync-web.mjs
-android-app/
+!dist/README.md
+!dist/Android/
+!dist/Windows/
+dist/Windows/*
+!dist/Windows/README.md
+!dist/Windows/shell/
+
+# 安卓工程：入库源码，排除工具链、同步产物、构建中间态与签名材料
+dist/Android/node_modules/
+dist/Android/android-sdk/*
+dist/Android/www/
+dist/Android/android/.gradle/
+dist/Android/android/build/
+dist/Android/android/app/build/
+dist/Android/android/app/.cxx/
+dist/Android/android/capacitor-cordova-android-plugins/
+dist/Android/android/local.properties
+dist/Android/android/app/src/main/assets/public/
+dist/Android/android/app/src/main/assets/capacitor.config.json
+dist/Android/android/app/src/main/assets/capacitor.plugins.json
+dist/Android/android/app/src/main/jniLibsServer/
+dist/Android/android/app/src/main/jniLibsServer.staging/
+# cap 每次 update/sync 重新生成，内容随本机 SDK 与插件版本变化
+dist/Android/android/capacitor.settings.gradle
+dist/Android/android/app/capacitor.build.gradle
 dev-only/
 *.zip
 *.apk
@@ -34,6 +56,7 @@ dev-only/
 *.jks
 *.keystore
 local.properties
+keystore.properties
 .env
 .env.*
 
@@ -49,4 +72,6 @@ demo/
 
 # 软件本体零依赖（见 README），无需锁文件；编辑器配置保留在本地
 package-lock.json
+# 安卓工程是独立的 npm 工程（Capacitor 依赖），锁文件要跟着走才能复现安装
+!dist/Android/package-lock.json
 .editorconfig

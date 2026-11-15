@@ -1,0 +1,198 @@
+apply plugin: 'com.android.application'
+
+// 正式签名：口令与 keystore 都在仓库外（keystore.properties 被 .gitignore 排除），
+// 所以别人拿到源码也签不出签名一致的包 —— 这正是 debug 签名做不到的。
+//
+// 读不到配置时回退 debug 签名而不是让构建失败：本地调试、CI 里没配密钥的机器都要能出包。
+// 但回退必须是**看得见**的（下面 logger.warn），否则"发出去的正式包其实是调试签名"会无声发生。
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+def hasReleaseSigning = keystorePropsFile.exists()
+if (hasReleaseSigning) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+    // 四个字段缺一个都签不了，缺了就当没配（回退 debug），别让构建跑到签名阶段才报错。
+    hasReleaseSigning = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+        .every { keystoreProps.getProperty(it) }
+}
+
+android {
+    namespace "com.elainachat.mod"
+    compileSdk rootProject.ext.compileSdkVersion
+
+    // 本地服务（Go 单文件）的总开关。
+    //
+    //   on（默认）→ 打包 jniLibsServer/<abi>/libelaina_server.so，并注册 ElainaNodePlugin。
+    //   off        → 不打包任何服务二进制、不注册插件；页面走原生兜底实现。
+    //
+    // 二进制单独放 jniLibsServer/：AGP 会无条件收集 jniLibs 目录里的所有 .so，
+    // 而这个目录里每个 ABI 只有一份由 sync-web.mjs 交叉编译出来的 Go 服务端。
+    // 该目录是构建产物、不入库，首次构建前必须先跑 dist/Android/scripts/sync-web.mjs。
+    def buildLocalServer = (System.getenv('ELAINA_LOCAL_SERVER') ?: 'true') == 'true'
+
+    defaultConfig {
+        applicationId "com.elainachat.mod"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // 限制资源语言，减小 APK 体积（应用仅中文界面 + 少量英文）
+        resConfigs "zh-rCN", "en"
+        // 版本号与电脑版同源（package.json 的 version）；改行为必须递增 versionCode，
+        // 否则"装没装上"从系统设置与界面都看不出来。
+        // 12：手机端服务端从内嵌 Node 换成 Go 单文件（行为变化，按约定升 versionCode）。
+        // 13：2.1.1（记忆权威与备份 v4、手机返回逐层关闭、数据检查脚本）。
+        // 14：2.1.2（手机权限改系统权限单闸、协议识别修正、地址版本段不再写死 /v1）。
+        // 15：2.1.3（协议探测只查模型列表、401 不抢判、旧条目协议纠正）。
+        // 16：曾按 2.1.4 打包（手机权限改浮层 + 一键授权；手机端隐藏浏览器区块）。
+        // 17：2.1.2 —— 版本号按用户要求回退；versionCode 不能跟着回退，否则装过 vc16 的设备
+        //     无法覆盖安装（Android 只认 versionCode 单调递增）。本次含手机操作修复。
+        // 18：2.1.2 —— 启动体验修复（冷启动首帧不再闪默认主题、:node 服务与页面加载并行、
+        //     启动图从 Capacitor 默认图换成应用图标 + 中性底色）。行为有变化，按约定递增。
+        // 19：2.1.2 —— 手机端访问密码重启即失效与设完密码全 401 修复（service mode 只认 Origin
+        //     白名单、密码只作局域网共享凭据；config.json 的 password 启动时读回）；
+        //     静态资源改可复验缓存（ETag/304，刷新不再重下整份前端）。
+        // 20：2.1.2 —— 刷新首帧样式错乱、手机首页顶栏错位与金句卡缺失、手机数据体积
+        //     （语音样本缓存去重 + 迁移备份过期回收）；改为正式签名。
+        // 21：2.1.2 —— 导入前可选「合并 / 覆盖」模式；删除对话级联清日记与收藏（补记忆
+        //     未加载竞态）；手机记忆迁移断链修复 + 已升级设备从 .migrated-* 备份回补；
+        //     语音样本字段缺失不再误删音频文件。行为有变化，按约定递增。
+        // 22：2.1.2 —— 主题切换修复：首帧回放钉在内联上的深色变量在样式表就绪后交还样式表，
+        //     浅色模式下文字/强调色/控件表面不再残留深色值（字看不清、分段控件黑底、
+        //     "深转浅像没切成功"三象同源）。行为有变化，按约定递增。
+        // 23：2.1.2 —— WebView 合成器重绘失效绕过：主题切换后强制整树重新光栅化，
+        //     深色模式下扩展页页头等区域不再残留旧主题帧。行为有变化，按约定递增。
+        // 24：2.1.2 —— 窄屏扩展分类胶囊文字可见修复：label 显隐动画未覆盖 ext-mobile-tabs，
+        //     三段分类（插件/技能/MCP）在深浅两模式下都停在 opacity:0（金底无字）。
+        //     行为有变化，按约定递增。
+        //     25：2.2.0 —— 开源正式版。
+        //     26：2.2.0 —— 密钥解密失败不再静默删除（改为报错 + 隔离留底，并排除出系统备份）、
+        //     首屏先读 store.cache.json 不等本机服务就绪。行为有变化，按约定递增。
+        versionCode 26
+        versionName "2.2.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+        // 把开关透给 Java：MainActivity 据此决定要不要注册 ElainaNodePlugin。
+        buildConfigField "boolean", "LOCAL_SERVER", "${buildLocalServer}"
+    }
+    signingConfigs {
+        // 只在配好密钥时注册：字段为空会让 Gradle 在解析阶段就报错，
+        // 那样"没配密钥的机器也要能出 debug 包"这条就断了。
+        if (hasReleaseSigning) {
+            release {
+                // keystore 与 keystore.properties 同在 android/（rootProject）下，
+                // 而这里的 file() 以 app/ 模块目录为基准，所以要显式指到上一级。
+                storeFile file('../' + keystoreProps.getProperty('storeFile'))
+                storePassword keystoreProps.getProperty('storePassword')
+                keyAlias keystoreProps.getProperty('keyAlias')
+                keyPassword keystoreProps.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // ★ 2026-10：开 R8 瘦身。原来 minifyEnabled false，classes.dex 有 8.0 MB ——
+            //   其中绝大部分是 AndroidX / Capacitor 的字节码 + 调试信息，**不是本项目的前端代码**。
+            //   minify 裁掉没被用到的代码并混淆重命名；shrinkResources 去掉没被引用的资源。
+            //   ⚠️ 改这两行**必须做一次装机的功能验证**：Capacitor 插件是按类名反射装配的，
+            //      名字被混淆就会"装得上、点不动"。keep 规则见 app/proguard-rules.pro。
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            // ★★ 2026-10：**仅用于验证 release 包**的临时开关（默认关，正式包不受影响）。
+            //
+            //   为什么需要它：release 默认 debuggable=false → WebView 调试通道关闭 →
+            //   没法用调试协议验证"R8 混淆后插件还调不调得通"。
+            //   而 R8 恰恰是 release 最大的风险点（本项目历史上就被它坑过一次：
+            //   只 keep 子类不够，Capacitor 的权限申请在 release 里直接 NPE 闪退）。
+            //
+            //   用法： $env:ELAINA_RELEASE_DEBUGGABLE=1  再构建 release。
+            //   ⚠️ 出的包**只能拿来验证**，绝不能分发 —— 它开了调试、还带调试签名。
+            //   正常发版不要设这个变量。
+            //
+            //   ⚠️ 为什么同时认 -P 属性：环境变量读的是 **gradle daemon 启动时**的环境，
+            //      daemon 复用旧进程时新设的 $env: 读不到（实测踩到：设了变量、
+            //      构建"成功"，但 manifest 里根本没有 debuggable）。
+            //      所以给一条**必定生效**的路径：加 -P 参数强制 daemon 重新配置。
+            def wantDebuggable = (System.getenv('ELAINA_RELEASE_DEBUGGABLE') ?: 'false') == 'true' \
+                || (project.hasProperty('elainaDebuggable') && project.property('elainaDebuggable') == 'true')
+            if (wantDebuggable) {
+                debuggable true
+            }
+            // 正式签名：keystore 与口令都在仓库外（见文件顶部），所以这个包只有持有密钥的人签得出来。
+            // 没配密钥的机器（本地调试 / CI）回退 debug 签名，但会打一条醒目警告 ——
+            // 那种包**不能分发**：任何人的 debug keystore 都能签出签名者同名的包。
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            } else {
+                logger.warn('[signing] 未找到 keystore.properties，release 包将使用 debug 签名 —— 仅限本地验证，不可分发')
+                signingConfig signingConfigs.debug
+            }
+            // ABI：正式包只带 arm64-v8a；x86_64 只出现在 debug（模拟器验证用）。
+            // 每个 ABI 各一份 Go 二进制（约 18 MB，压缩后更小）。
+            // `-PelainaReleaseAbis=arm64-v8a,x86_64` 只用于在 x86_64 模拟器上验证
+            // release 包（R8 / 服务宿主），默认值不变。
+            def releaseAbis = (project.findProperty('elainaReleaseAbis') ?: 'arm64-v8a')
+                .toString().split(',').collect { it.trim() }.findAll { it }
+            ndk { abiFilters(*releaseAbis) }
+        }
+        debug {
+            // 调试包两个 ABI 都留：模拟器是 x86_64，真机是 arm64-v8a
+            ndk { abiFilters 'arm64-v8a', 'x86_64' }
+        }
+    }
+    // 只收 jniLibsServer/：它每个 ABI 只有一份 Go 服务端二进制，
+    // 不会像 jniLibs/ 那样把目录里所有 .so 无条件收进包。
+    sourceSets {
+        main {
+            jniLibs.srcDirs = buildLocalServer ? ['src/main/jniLibsServer'] : []
+        }
+    }
+    if (buildLocalServer) {
+        packagingOptions {
+            // 必须解压到 nativeLibraryDir 才能执行：Android 10+ 只允许从只读的
+            // 原生库目录 exec，app 数据目录里的可执行文件会被 W^X 拒绝。
+            // 不压缩存放时 libs 直接映射在 APK 里，nativeLibraryDir 里没有真实文件。
+            jniLibs { useLegacyPackaging = true }
+            // 发布要求后端是 UPX 压缩态（AGENTS.md D21）。stripReleaseDebugSymbols 会
+            // 把这个 .so 再"剥"一遍：UPX 的外壳被改写，包内二进制变成"看似 ELF、实际解不开"
+            // 的坏文件（upx -t 报 not packed by UPX），装到手机上服务端起不来。
+            // Go 二进制本身已带 -ldflags "-s -w"，没有调试符号可剥，跳过这一步没有体积损失。
+            jniLibs { doNotStrip '**/libelaina_server.so' }
+        }
+    }
+    // buildConfigField 需要显式打开 buildConfig（AGP 8 起默认关闭）。
+    buildFeatures { buildConfig true }
+    // ★ 2026-10：Shizuku 后端已删除，aidl 也不再需要（它只为 Shizuku 的
+    //   UserService 生成桩代码）。buildFeatures 里不再开 aidl。
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

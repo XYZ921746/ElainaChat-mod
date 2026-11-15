@@ -1,39 +1,84 @@
 // 我的数据：备份导出、文档选择器导入、旧 JSON 兼容、数据位置提示。
 'use strict';
 
-// 后端把数据分类落在 data/ 下；这里只负责让用户看得见、能备份、能恢复。Web 走 /api/data/，
-// APK 没有本地服务，走 chat-backup.js 直接读写 localStorage（数据在私有目录，卸载即丢，最需要备份）。
+// 后端把数据分类落在 data/ 下；这里只负责让用户看得见、能备份、能恢复。
+// Web 与 APK 都走 /api/data/*；APK 的数据服务在内嵌 Go 服务，页面在 https://localhost，
+// 所以用 core-native-mod.js 暴露的绝对 __nodeBase 直连（CORS 在 service mode 放行）。
+function dataApiUrl(path) {
+    if (IS_NATIVE_APP && window.__nodeBase) return window.__nodeBase + path;
+    return path;
+}
+
+/** 导出备份时要随请求带上的密钥表（APK 专用）。
+    手机上 Key 只住在 Android Keystore，不写进 data/ —— 服务端 Load() 里没有它们，
+    导出的备份天然缺 Key，换机或重装后必须逐个重填。这里把 Keystore 现值读出来交给服务端
+    合并进备份（只在内存里合并，不落盘），备份就与电脑版同形：Key 与供应商在、访问密码不在。
+    读不到（旧包 / 白名单漏配）时返回空对象：少几个 Key 的备份仍可用，不能让导出整体失败。 */
+async function exportSecretsHeader() {
+    const nativePlugin = getNativeSecretsPlugin();
+    if (!nativePlugin?.getSecret) return {};
+    const pairs = await Promise.all(API_SECRET_NAMES.map(async (name) => {
+        try {
+            const value = String((await nativePlugin.getSecret({ name }))?.value || '');
+            return value ? [name, value] : null;
+        } catch (error) {
+            console.warn(`[BYOK] 导出备份时读不到 ${name}，本次备份不含它`, error);
+            return null;
+        }
+    }));
+    const secrets = Object.fromEntries(pairs.filter(Boolean));
+    if (!Object.keys(secrets).length) return {};
+    return { 'X-Elaina-Secrets': JSON.stringify(secrets) };
+}
+
+/** 导入备份后把备份里的密钥灌进 Keystore。
+    手机上 Key 只住 Keystore，而备份里的 Key 落在 data/ 的密钥表（Store）里。
+    loadApiSecrets 的回填方向是「Keystore 缺的才从 Store 补」—— 所以 Keystore 里
+    已经有旧 Key 时，备份里的新 Key 永远补不进去，表现为「导入成功但 Key 还是旧的」。
+    这里在重载页面前反向写一次：备份里有的名字一律以备份为准。
+    读不到备份密钥表（Web 形态 / 备份里没带 Key）时什么都不做。 */
+async function applyImportedSecrets() {
+    const nativePlugin = getNativeSecretsPlugin();
+    if (!nativePlugin?.setSecret) return;
+    let stored = {};
+    try { stored = JSON.parse(Store.getItem('elainachat_open_api_secrets') || '{}') || {}; } catch (e) { return; }
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return;
+    const payload = {};
+    API_SECRET_NAMES.forEach((name) => {
+        const value = stored[name];
+        if (value === undefined || value === null) return;
+        const text = String(value).trim();
+        if (!text) return;
+        payload[name] = text;
+    });
+    if (!Object.keys(payload).length) return;
+    try {
+        await saveApiSecrets(payload, { inline: true });
+        console.info('[BYOK] 备份里的 Key 已写入 Keystore（' + Object.keys(payload).length + ' 项）');
+    } catch (error) {
+        // 写不进去不能让导入整体算失败：数据已经落盘，重启后 loadApiSecrets 还会再试一次。
+        console.warn('[BYOK] 备份 Key 写入 Keystore 失败（下次启动重试）', error);
+    }
+}
+
 async function refreshDataSettings() {
     const box = document.getElementById('dataStatusBox');
-    const section = document.getElementById('dataSettingsSection');
     if (!box) return;
 
-    if (IS_NATIVE_APP && window.ChatBackup) {
-        try {
-            let cards = 0;
-            let convs = 0;
-            let mem = 0;
-            try { cards = JSON.parse(Store.getItem('elaina_open_character_cards') || '[]').length; } catch { /* 忽略 */ }
-            try { convs = JSON.parse(Store.getItem('elaina_open_conversations') || '[]').length; } catch { /* 忽略 */ }
-            try { mem = (JSON.parse(Store.getItem('elaina_open_memory_core') || '{}').diary || []).length; } catch { /* 忽略 */ }
-            box.innerHTML = '数据位置：<code class="text-dim">应用私有目录</code>'
-                + '<span class="text-dim">（安卓应用数据，卸载会一并删除）</span><br>'
-                + '人设卡 <b>' + escapeHtml(String(cards)) + '</b> 张'
-                + ' · 对话 <b>' + escapeHtml(String(convs)) + '</b> 个'
-                + ' · 记忆 <b>' + escapeHtml(String(mem)) + '</b> 条';
-        } catch (e) {
-            box.textContent = '无法读取本地数据统计';
-        }
-        // 手机版没有本机服务端，局域网共享接口不存在；直接隐藏，避免点了必然失败。
-        ['lanShareOpenBtn', 'lanShareReceiveBtn', 'lanShareHintLine'].forEach((id) => document.getElementById(id)?.classList.add('hidden'));
-        return;
-    }
-
     try {
-        const res = await fetch('/api/data/info');
-        if (!res.ok) { if (section) section.classList.add('hidden'); return; }
+        const res = await fetch(dataApiUrl('/api/data/info'));
+        if (!res.ok) {
+            // 鉴权失效时保留区块并说明原因：整块隐藏会让用户以为功能被删了。
+            box.textContent = res.status === 401
+                ? '需要重新登录后才能读取数据统计。'
+                : '读取数据统计失败（HTTP ' + res.status + '），请稍后重试。';
+            return;
+        }
         const json = await res.json();
-        if (!json.ok) { if (section) section.classList.add('hidden'); return; }
+        if (!json.ok) {
+            box.textContent = '读取数据统计失败：' + (json.message || '服务端未返回统计');
+            return;
+        }
         const c = json.counts || {};
         box.innerHTML = '数据位置：<code class="text-dim">' + escapeHtml(json.dir || 'data')
             + '</code><br>'
@@ -44,7 +89,7 @@ async function refreshDataSettings() {
             + ' · 技能 <b>' + escapeHtml(String(c.skills || 0)) + '</b> 个';
         ['lanShareOpenBtn', 'lanShareReceiveBtn', 'lanShareHintLine'].forEach((id) => document.getElementById(id)?.classList.remove('hidden'));
     } catch (e) {
-        if (section) section.classList.add('hidden');
+        box.textContent = '读取数据统计失败：' + (e && e.message ? e.message : e);
     }
 }
 
@@ -55,33 +100,92 @@ function setDataHint(text, isError) {
     hint.className = isError ? 'text-[11px] text-danger' : 'text-[11px] text-dim';
 }
 
+// 把整份字节按固定大小切片，逐块交给原生追加。
+// 切的是**原文字节**而不是 base64 串：base64 必须按 3 字节对齐，从编码后的字符串中间切
+// 会解出损坏的数据。每块单独编码，边界天然对齐。
+const BACKUP_CHUNK_BYTES = 512 * 1024;
+
+async function appendInChunks(capExport, handle, bytes, onProgress) {
+    for (let offset = 0; offset < bytes.length; offset += BACKUP_CHUNK_BYTES) {
+        const part = bytes.subarray(offset, Math.min(offset + BACKUP_CHUNK_BYTES, bytes.length));
+        const r = await capExport.appendBinary({ handle, data: bytesToBase64(part) });
+        if (!r || !r.ok) throw new Error((r && r.text) || '写入失败');
+        if (onProgress) onProgress(Math.min(offset + BACKUP_CHUNK_BYTES, bytes.length), bytes.length);
+    }
+}
+
 async function exportDataBackup() {
     setDataHint('导出中…');
 
-    // APK 侧本地生成 zip 并写进应用文档目录（没有后端可用）。不用 <a download> + blob URL：
-    // 安卓 WebView 不处理 blob: 下载，点下去通常毫无反应；走 Capacitor Filesystem 把备份真正写到磁盘。
-    if (IS_NATIVE_APP && window.ChatBackup) {
+    // APK 侧从内嵌 Go 服务导出 v4 备份（含 mods/skills/记忆），再交给用户**自选保存位置**。
+    // 不用 <a download> + blob URL：安卓 WebView 不处理 blob: 下载，点下去通常毫无反应。
+    if (IS_NATIVE_APP) {
         try {
-            const fs = nativeFs();
-            if (!fs) { setDataHint('导出失败：文件系统插件不可用', true); return; }
-            const blob = await window.ChatBackup.buildBackupBlob();
-            if (!blob.size) { setDataHint('导出失败：本地数据为空', true); return; }
+            const res = await fetch(dataApiUrl('/api/data/export'), { headers: await exportSecretsHeader() });
+            if (!res.ok) {
+                let why = '';
+                try {
+                    const j = await res.json();
+                    why = j && j.message ? String(j.message) : '';
+                } catch { /* 不是 JSON 就只报状态码 */ }
+                setDataHint('导出失败：' + (why || ('HTTP ' + res.status)), true);
+                return;
+            }
+            const blob = await res.blob();
+            if (!blob.size) { setDataHint('导出失败：服务端返回空内容', true); return; }
             const bytes = new Uint8Array(await blob.arrayBuffer());
             const t = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
             const fileName = 'elainachat-backup-' + t + '.zip';
-            // Documents 目录：用户能用系统文件管理器找到（比 Data 私有目录友好）
+            const sizeText = Math.round(bytes.length / 1024) + ' KB';
+
+            // 与日志导出同一条路径：原生 SAF「创建文档」选择器，用户自己定存到哪。
+            // 不写死 Documents 的原因：备份动辄 20MB+，用户常常要存到 U 盘 / 网盘目录 / 电脑共享盘，
+            // 固定目录在 scoped storage 下还未必可写。
+            //
+            // 走分块接口而不是一次性传：Capacitor bridge 对单次调用有大小上限，
+            // 20MB 备份序列化成 base64 是 27MB，一次传过去会被截断。
+            const cap = window.Capacitor;
+            const capExport = cap && cap.Plugins && cap.Plugins.ElainaExport;
+            if (capExport && typeof capExport.beginBinary === 'function') {
+                const begin = await capExport.beginBinary({ fileName, mimeType: 'application/zip' });
+                if (begin && begin.ok && begin.handle) {
+                    try {
+                        await appendInChunks(capExport, begin.handle, bytes, (done, total) => {
+                            setDataHint('导出中… ' + Math.round((done / total) * 100) + '%');
+                        });
+                        const finish = await capExport.finishBinary({ handle: begin.handle });
+                        if (finish && finish.ok) {
+                            setDataHint('已导出：' + fileName + '（' + sizeText + '）');
+                            showCustomAlert(
+                                '备份已保存到你选择的位置：\n\n' + fileName
+                                + '\n\n大小 ' + sizeText + '。'
+                                + '\n\n传到电脑后，在网页版的「我的数据 → 导入备份」里可以直接还原。',
+                                '导出完成');
+                            return;
+                        }
+                        setDataHint('导出失败：' + ((finish && finish.text) || '保存未完成'), true);
+                        return;
+                    } catch (writeErr) {
+                        // 中途失败要把句柄放掉，否则流一直挂在原生侧
+                        try { await capExport.abortBinary({ handle: begin.handle }); } catch { /* 尽力而为 */ }
+                        setDataHint('导出失败：' + ((writeErr && writeErr.message) || writeErr), true);
+                        return;
+                    }
+                }
+                if (begin && begin.reason === 'cancelled') { setDataHint('已取消导出'); return; }
+                // 选择器不可用（极精简 ROM）才回落固定目录，并把原因说出来
+                setDataHint((begin && begin.text) || '系统选择器不可用，改存固定位置…');
+            }
+
+            // 兜底：写应用文档目录。仅在拿不到系统选择器时走到。
+            const fs = nativeFs();
+            if (!fs) { setDataHint('导出失败：文件系统插件不可用', true); return; }
             const dir = (fs.Directory && fs.Directory.Documents) ? fs.Directory.Documents : 'DOCUMENTS';
             await nativeWriteFile(fileName, dir, bytes);
-            // 同时取一个 WebView 能访问的 URL，方便用户直接点开/分享
-            let where = '文档目录';
-            try {
-                const uri = await fs.getUri({ path: fileName, directory: dir });
-                if (uri && uri.uri) where = uri.uri;
-            } catch { /* 拿不到就只报目录名 */ }
-            setDataHint('已导出：' + fileName + '（' + Math.round(bytes.length / 1024) + ' KB）');
+            setDataHint('已导出：' + fileName + '（' + sizeText + '）');
             showCustomAlert(
                 '备份已保存到手机的**文档目录**：\n\n' + fileName
-                + '\n\n大小 ' + Math.round(bytes.length / 1024) + ' KB。'
+                + '\n\n大小 ' + sizeText + '。'
                 + '\n\n用系统「文件管理」进 文档 / Documents 就能看到它。'
                 + '传到电脑后，在网页版的「我的数据 → 导入备份」里可以直接还原。',
                 '导出完成');
@@ -92,7 +196,7 @@ async function exportDataBackup() {
     }
 
     try {
-        const res = await fetch('/api/data/export');
+        const res = await fetch(dataApiUrl('/api/data/export'), { headers: await exportSecretsHeader() });
         if (!res.ok) {
             // 插件目录读不到时后端会回 JSON 说明原因；只报 HTTP 状态会让用户以为是网络问题，反复重试。
             let why = '';
@@ -193,39 +297,46 @@ async function importFromDocumentsOrPicker() {
     }
 }
 
+/** 让用户在导入前选模式：合并（备份里有的键覆盖本机，其余不动）或覆盖（先清空本机数据再按备份重建）。
+    返回 'merge' | 'replace'，取消返回 null。两条导入路径（文件 / 局域网）共用同一个弹窗，文案才不会各说各话。 */
+async function chooseImportMode(title, note) {
+    const picked = await showCustomModal({
+        title,
+        message: (note ? note + '\n\n' : '')
+            + '请选择导入方式：\n\n'
+            + '**合并导入**：只覆盖备份里包含的数据（聊天记录 / 人设卡 / 记忆 / 设置 / 插件 / 技能），本机其它数据保留。\n\n'
+            + '**覆盖导入**：先清空本机的聊天记录与设置，再按备份重建；备份里没有的部分不会恢复。\n\n'
+            + '拿不准就用合并导入 —— 它不会删掉备份以外的数据。',
+        confirmText: '合并导入（推荐）',
+        altText: '覆盖导入',
+        altValue: 'replace',
+        cancelText: '取消',
+    });
+    return picked === true ? 'merge' : (picked === 'replace' ? 'replace' : null);
+}
+
 async function importDataBackup(file) {
     if (!file) return;
-    // 合并模式：只覆盖备份里有的数据，本机其它数据不动 —— 比"替换"安全得多，所以默认用它。
-    const okToGo = await showCustomConfirm(
-        '导入备份会覆盖同名的数据（聊天记录 / 人设卡 / 记忆 / 设置 / 插件 / 技能），本机其它数据保留。\n\n'
-        + '继续导入吗？', '导入备份');
-    if (!okToGo) { setDataHint('已取消'); return; }
+    const mode = await chooseImportMode('导入备份');
+    if (!mode) { setDataHint('已取消'); return; }
     setDataHint('导入中…');
-
-    if (IS_NATIVE_APP && window.ChatBackup) {
-        try {
-            const r = await window.ChatBackup.applyBackup(file);
-            setDataHint('已导入 ' + r.keys + ' 项数据（' + (r.source === 'zip' ? 'zip' : 'JSON 备份') + '）');
-            await refreshDataSettings();
-            showCustomAlert('已导入 ' + r.keys + ' 项数据。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
-        } catch (e) {
-            setDataHint('导入失败：' + (e.message || e), true);
-        }
-        return;
-    }
 
     try {
         // 直接把文件原样发上去：备份是 zip（二进制），不能走 JSON 包装；后端两种都认，这里不用判断类型。
-        const res = await fetch('/api/data/import?mode=merge', {
+        const res = await fetch(dataApiUrl('/api/data/import?mode=' + mode), {
             method: 'POST',
             headers: { 'Content-Type': 'application/octet-stream' },
             body: file
         });
         const json = await res.json().catch(() => ({ ok: false, message: '服务端返回了非 JSON 内容（HTTP ' + res.status + '）' }));
         if (!json.ok) { setDataHint(json.message || '导入失败', true); return; }
-        setDataHint(json.message || '导入完成');
-        await refreshDataSettings();
-        showCustomAlert((json.message || '导入完成') + '。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
+        // 重载前先把备份里的 Key 灌进 Keystore：重载后 loadApiSecrets 只补 Keystore 缺的名字，
+        // Keystore 已有的旧值会盖住备份里刚导入的新 Key。
+        await applyImportedSecrets();
+        // Web 与 APK 一样直接重载：导入改写了会话/卡片/设置的落盘值，页面内存里的
+        // Store 缓存与会话状态都要重拉；其它已打开页面由服务端的 store-change 广播对齐。
+        setDataHint('导入完成，正在刷新…');
+        location.reload();
     } catch (e) {
         setDataHint('导入失败：' + (e.message || e), true);
     }
@@ -245,12 +356,19 @@ function lanShareAddressText(share) {
     let text = '局域网共享已开启（' + Math.round(((share && share.expiresAt) ? (share.expiresAt - Date.now()) : 0) / 60000)
         + ' 分钟后自动关闭）。\n\n';
     if (!list.length) {
-        text += '未检测到局域网 IPv4 地址，请确认本机已连上 Wi-Fi / 网线。';
+        // 端口照给：共享已经开着了，只是本机没探到可用的局域网地址。
+        // 不给端口的话用户连"去系统设置里查一下自己的 IP 再填"都做不到。
+        text += '本机没探到局域网 IPv4 地址，无法自动给出可用的 IP。\n\n'
+            + '共享端口：' + (port || '（未知）') + '\n\n'
+            + '请在系统设置里查本机 Wi-Fi 的 IP（形如 192.168.x.x），'
+            + '和上面的端口一起填到对方的「局域网接收共享」里。'
+            + '如果本机根本没连 Wi-Fi / 网线，对方是连不上的。';
         return text;
     }
-    text += '把这台设备的 IP、端口和访问密码告诉对方：\n\n';
+    text += '把这台设备的 IP、端口告诉对方：\n\n';
     text += list.map((a) => '• ' + (a.label ? a.label + '：' : '') + 'IP ' + a.ip + '　端口 ' + (a.port || port)).join('\n');
-    text += '\n\n对方点「局域网接收共享」，填上面的 IP 和端口，再填访问密码即可。';
+    text += '\n\n对方登录用的是这台设备的**访问密码**（设置 → 高级 → 访问密码）。';
+    text += '\n对方点「局域网接收共享」，填上面的 IP、端口和这台设备的访问密码即可。';
     return text;
 }
 
@@ -258,14 +376,12 @@ async function openLanShare() {
     const btn = document.getElementById('lanShareOpenBtn');
     if (btn) btn.disabled = true;
     try {
-        const status = await fetch('/api/auth/status').then((r) => r.json()).catch(() => null);
-        if (status && status.ok && status.isDefaultPassword) {
-            showCustomAlert('还没有设置访问密码，局域网设备不能连接。\n\n请先在下方「访问密码（局域网）」里设置一个密码，再来开启局域网共享。', '无法开启局域网共享');
-            return;
-        }
-        const res = await fetch('/api/data/lan/enable', {
+        // 共享只是临时把本机暴露给局域网，凭据仍是本实例的访问密码；5 分钟自动关闭，只暴露登录与导出两个接口。
+        // 同时把 Keystore 里的 Key 交上去：手机上 Key 不在 data/ 里，不交的话对方拉到的备份缺 Key
+        // （这正是「局域网接收共享导入后 Key 为空」的成因）。
+        const res = await fetch(dataApiUrl('/api/data/lan/enable'), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', ...(await exportSecretsHeader()) },
             body: '{}',
         });
         const json = await res.json().catch(() => ({ ok: false, message: 'HTTP ' + res.status }));
@@ -278,7 +394,7 @@ async function openLanShare() {
     }
 }
 
-// 局域网接收共享的输入弹窗：IP 与端口一行两个，密码单独一行；密码就是对方登录用的访问密码。
+// 局域网接收共享的输入弹窗：IP 与端口一行两个，访问密码单独一行。
 function openLanReceiveDialog() {
     return new Promise((resolve) => {
         const old = document.getElementById('lanReceiveOverlay');
@@ -293,7 +409,7 @@ function openLanReceiveDialog() {
             '<h3 class="text-base font-bold text-ink">局域网接收共享</h3>',
             '<button type="button" id="lanReceiveClose" class="text-dim hover:text-soft" aria-label="关闭">✕</button>',
             '</div>',
-            '<p class="text-[12px] text-dim leading-relaxed mb-4">填对方「开启局域网共享」时给出的地址，以及对方登录用的访问密码。</p>',
+            '<p class="text-[12px] text-dim leading-relaxed mb-4">填对方「开启局域网共享」时给出的 IP、端口，以及<b>对方的访问密码</b>。</p>',
             '<div class="flex items-start gap-2 mb-3">',
             '<div class="flex-1">',
             '<label class="text-[11px] text-dim">对方 IP</label>',
@@ -305,8 +421,8 @@ function openLanReceiveDialog() {
             '</div>',
             '</div>',
             '<div class="mb-4">',
-            '<label class="text-[11px] text-dim">对方访问密码（对方登录用的密码）</label>',
-            '<input id="lanReceivePwd" class="modal-input w-full text-sm py-1.5" type="password" autocomplete="off">',
+            '<label class="text-[11px] text-dim">对方访问密码</label>',
+            '<input id="lanReceivePwd" class="modal-input w-full text-sm py-1.5" type="password" placeholder="对方设备的访问密码" autocomplete="off">',
             '</div>',
             '<div class="flex items-center justify-end gap-2">',
             '<button type="button" id="lanReceiveCancel" class="btn-secondary text-xs">取消</button>',
@@ -334,7 +450,7 @@ function openLanReceiveDialog() {
             if (!/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535) {
                 errEl.textContent = '请填合法端口（1–65535）。'; portEl.focus(); return;
             }
-            if (!pwd) { errEl.textContent = '请填对方登录用的访问密码。'; pwdEl.focus(); return; }
+            if (!pwd) { errEl.textContent = '请填对方的访问密码。'; pwdEl.focus(); return; }
             finish({ ip, port, password: pwd });
         };
         const onKey = (e) => {
@@ -359,7 +475,7 @@ async function receiveLanShare() {
     const btn = document.getElementById('lanShareReceiveBtn');
     if (btn) btn.disabled = true;
     try {
-        const res = await fetch('/api/data/lan/pull', {
+        const res = await fetch(dataApiUrl('/api/data/lan/pull'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ sourceUrl, password: String(pwd) }),
@@ -370,20 +486,21 @@ async function receiveLanShare() {
         }
         const blob = await res.blob();
         if (!blob.size) throw new Error('对方返回空内容');
-        const ok = await showCustomConfirm(
-            '已从对方拉取 ' + lanShareFmtSize(blob.size) + ' 的备份。\n\n'
-            + '将按「合并」方式导入本机：同名数据被覆盖，本机其它数据保留。\n\n继续导入吗？',
-            '从局域网导入');
-        if (!ok) return;
-        const up = await fetch('/api/data/import?mode=merge', {
+        const mode = await chooseImportMode('从局域网导入',
+            '已从对方拉取 ' + lanShareFmtSize(blob.size) + ' 的备份。');
+        if (!mode) return;
+        const up = await fetch(dataApiUrl('/api/data/import?mode=' + mode), {
             method: 'POST',
             headers: { 'Content-Type': 'application/octet-stream' },
             body: blob,
         });
         const json = await up.json().catch(() => null);
         if (!json || !json.ok) throw new Error((json && json.message) || ('HTTP ' + up.status));
-        await refreshDataSettings();
-        showCustomAlert((json.message || '导入完成') + '。\n\n刷新页面后即可看到导入的聊天记录与人设卡。', '导入完成');
+        // 与文件导入同一处理：备份里的 Key 要先写进 Keystore，否则旧值会盖住它。
+        await applyImportedSecrets();
+        // 与文件导入同一处理：本页重载拿一致状态，其它页面靠服务端广播对齐。
+        setDataHint('导入完成，正在刷新…');
+        location.reload();
     } catch (e) {
         showCustomAlert('导入失败：' + (e.message || e), '局域网接收共享');
     } finally {

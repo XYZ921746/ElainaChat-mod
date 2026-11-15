@@ -4,18 +4,19 @@
 //       node scripts/check-agent.mjs 续跑     只跑名字含该子串的用例
 
 import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { statSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
 import { readFrontend, readWebFile } from './frontend-sources.mjs';
-import { runChecks, ROOT, wait, waitServerUp, freePort } from './check-harness.mjs';
+import { runChecks, ROOT, startGoServer } from './check-harness.mjs';
 import { extractFunction as extractFnFrom, extractVariable, extractTopLevelFunctions, makeVmSandbox } from './check-source.mjs';
 
-const JAVA_DIR = path.join(ROOT, '..', 'android-app', 'android', 'app', 'src', 'main', 'java', 'com', 'elainachat', 'opensource');
+// 安卓原生工程与宿主同仓库（dist/Android/），不再依赖「放在上一级」的目录布局。
+const ANDROID_ROOT = path.join(ROOT, 'dist', 'Android');
+const JAVA_DIR = path.join(ANDROID_ROOT, 'android', 'app', 'src', 'main', 'java', 'com', 'elainachat', 'mod');
 const PLUGIN_JAVA = path.join(JAVA_DIR, 'ElainaShellPlugin.java');
-const MANIFEST = path.join(ROOT, '..', 'android-app', 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
+const MANIFEST = path.join(ANDROID_ROOT, 'android', 'app', 'src', 'main', 'AndroidManifest.xml');
 
 // 1. 三档 AI 权限（strict / auto / full）：手机操作全部不弹确认，风险由设置页免责声明承担；
 //    电脑命令 strict 每条问 / auto 只问危险 / full 从不问；stopRequested 时任何档位一律拒绝。
@@ -487,9 +488,9 @@ async function caseContinue(c) {
 //    原生层加悬浮窗就地确认；前端优先走悬浮窗、不可用回退应用内弹窗。全程只读源码。
 
 async function caseOverlay(c) {
-    /* 独立克隆（或 android-app 不在仓库上一级）时没有原生工程 —— 这是环境，不是缺陷，跳过。 */
+    /* 原生工程在 dist/Android/ 下；被裁剪过的副本可能没有它 —— 这是环境，不是缺陷，跳过。 */
     if (!existsSync(MANIFEST)) {
-        console.log('  --   跳过：没有 ../android-app 原生工程（独立克隆 / 未按作者目录结构放置）');
+        console.log('  --   跳过：没有 dist/Android 原生工程（工作区被裁剪时正常）');
         return;
     }
     const html = readFrontend();
@@ -553,13 +554,12 @@ async function caseOverlay(c) {
     }
 
     {
-        c.ok(/rt\.showOverlay\s*\(/.test(html), '开始操作时显示浮层');
+        c.ok(/rt\.syncOverlayWithVisibility\s*\(/.test(html), '开始操作时按可见性同步浮层');
         c.ok(/rt\.hideOverlay\s*\(/.test(html), '结束/停止时收起浮层');
-
-        const beginRunIdx = html.indexOf('rt.beginRun()');
-        const showIdx = html.indexOf('rt.showOverlay(');
-        c.ok(beginRunIdx > 0 && showIdx > beginRunIdx && showIdx - beginRunIdx < 900,
-            '显示浮层紧跟在 beginRun 之后（一次运行开一次，不是每步都开）');
+        c.ok(/function\s+syncOverlayWithVisibility\s*\(/.test(html),
+            '有「应用内状态条 ↔ 系统浮层」切换函数');
+        c.ok(/visibilityState === 'hidden'/.test(html), '只在应用不可见时才显示系统浮层');
+        c.ok(/addEventListener\('visibilitychange'/.test(html), '应用切后台 / 回前台会自动切换');
 
         c.ok(/requestStop[\s\S]{0,300}hideOverlay/.test(html) || /hideOverlay[\s\S]{0,200}requestStop/.test(html),
             '停止流程里会收起浮层');
@@ -666,7 +666,7 @@ async function caseOverlay(c) {
     }
 }
 
-// 4. 文件操作的「真实位置」解析与目录归类（真起一次 serve.mjs，LOG_TO_FILE=0，打真实 HTTP 断言）
+// 4. 文件操作的「真实位置」解析与目录归类（真起一次 Go 服务端，打真实 HTTP 断言）
 //    桌面可被移动/OneDrive 重定向，服务端从注册表读真实位置；junction 既不是目录也不是文件。
 
 async function casePaths(c) {
@@ -677,20 +677,17 @@ async function casePaths(c) {
     const note = (label, text) => console.log(`  --   ${label}: ${text}`);
 
     const projectRoot = ROOT;
-    const port = await freePort();
     // 数据目录必须隔离：否则一旦本机设置过访问密码，本机请求也会被要求登录，
     // 这个用例就全变成 401（与本用例要测的路径解析无关）。
     const dataTmp = mkdtempSync(path.join(os.tmpdir(), 'elaina-agent-paths-'));
-    const child = spawn(process.execPath, ['web/serve.mjs'], {
-        cwd: projectRoot,
-        env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', LOG_TO_FILE: '0', DATA_DIR: dataTmp, LOG_DIR: path.join(dataTmp, 'logs') },
-        stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let bootLog = '';
-    child.stdout.on('data', (d) => { bootLog += d.toString(); });
-    child.stderr.on('data', (d) => { bootLog += d.toString(); });
+    const srv = await startGoServer({ env: { DATA_DIR: dataTmp, LOG_DIR: path.join(dataTmp, 'logs') } });
+    if (!srv) {
+        c.ok(true, '环境性跳过：本机没有 Go 工具链，起不了真实服务端');
+        try { rmSync(dataTmp, { recursive: true, force: true }); } catch { /* ignore */ }
+        return;
+    }
 
-    const base = `http://127.0.0.1:${port}`;
+    const base = srv.base;
     const api = async (p) => {
         const res = await fetch(base + p);
         return { status: res.status, body: await res.json().catch(() => null) };
@@ -698,8 +695,7 @@ async function casePaths(c) {
     const ls = (p, access) => api('/api/agent/ls?access=' + access + '&path=' + encodeURIComponent(p));
 
     try {
-        const up = await waitServerUp(base);
-        if (!up) throw new Error('serve.mjs 没能启动：\n' + bootLog);
+        if (!srv.up) throw new Error('Go 服务端没能启动：\n' + srv.bootLog);
 
         const rootsRes = await api('/api/agent/roots?access=full');
         const roots = rootsRes.body?.roots || [];
@@ -793,7 +789,7 @@ async function casePaths(c) {
         check('没有 path 的条目不会被写进提示词（未认证时拿到的就是这种）',
             rootsText('full', roots.map((r) => ({ ...r, path: undefined }))), '');
     } finally {
-        child.kill();
+        srv.stop();
         try { rmSync(dataTmp, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 }
@@ -833,12 +829,13 @@ async function casePhone(c) {
         '手机应用列表', '手机通知', '手机设备信息', '手机通讯录', '手机日历', '手机短信',
         '手机列出文件', '手机读文件', '手机写文件', '手机删除文件',
     ];
-    // 读取标签由 phoneReadSkillLines() 运行时拼接，判据分两处：字面量查 skillFn、读取查过滤表。
+    // 读取标签由 phoneReadSkillLines() 拼进能力说明，判据分两处：固定标签查 skillFn、读取查它自己的函数体。
     const READ_TAGS = ['手机应用列表', '手机通知', '手机设备信息', '手机通讯录', '手机日历', '手机短信'];
     const literalTags = phoneTags.filter((t) => !READ_TAGS.includes(t));
     const missingLiteral = literalTags.filter((t) => !has(skillFn, '[操作:' + t));
     c.ok(missingLiteral.length === 0, '可用档列出了全部固定手机操作标签', '缺少: ' + missingLiteral.join('、'));
-    // 读取标签必须在过滤表里逐项出现（否则开关关掉后清单不会少那一项）
+    // 读取标签必须逐项出现在 phoneReadSkillLines 里：少一项模型就以为没这个能力，
+    // 而用户其实随时可以在系统里授予对应权限。
     const readFnMatch = html.match(/function phoneReadSkillLines\(\)\s*\{([\s\S]*?)\n\}/);
     c.ok(!!readFnMatch, '找得到 phoneReadSkillLines() 的函数体');
     if (readFnMatch) {
@@ -846,24 +843,24 @@ async function casePhone(c) {
         c.ok(missingRead.length === 0, '读取信息清单里列出了全部六项', '缺少: ' + missingRead.join('、'));
     }
 
-    // 一之二、能力清单按"实现方式 + 另一路是否可用"区分：无障碍做不到「手机打开 / 手机命令」，
-    //    两路都可用时能力面是并集（由"另一路 ready"推出）；另一路不可用时边界说明必须在。
+    // 一之二、能力清单按"实现方式 + 另一路是否可用"区分：「手机打开」两种方式都能做（无障碍走系统启动
+    //    intent），只有「手机命令」需要命令族；另一路不可用时边界说明必须在。
     c.ok(/const isAccessibility = backend === 'accessibility'/.test(skillFn),
         '能力清单按实现方式分支（无障碍 / 其它）');
-    c.ok(/不支持\*\* \[操作:手机打开\]|不支持.*手机打开/.test(skillFn),
-        '另一路不可用时明确说明**不支持**「手机打开」（原生确实做不到）');
+    c.ok(/· \[操作:手机打开 应用名或包名\]/.test(skillFn),
+        '★ 两种方式都列出「手机打开」，且允许写应用名（系统解析成包名，避免猜错应用）');
+    c.ok(!/不支持\*\* \[操作:手机打开\]/.test(skillFn),
+        '★ 不再把「手机打开」标成不支持（判死会让 AI 走偏后回不到目标应用）');
     c.ok(/手机命令/.test(skillFn) && /不支持|做不到/.test(skillFn),
-        '另一路不可用时明确说明不支持「手机命令」');
-    c.ok(/自动改用「模块」|换成「模块」方式|改用「模块」方式|把「模块」方式配置好/.test(skillFn),
-        '给出可行替代（自动换路，或引导去配置模块）');
+        '明确说明不支持「手机命令」');
     c.ok(/不要重复尝试/.test(skillFn),
         '明确要求模型遇到「不支持」时不要反复重试（否则会刷屏失败）');
     c.ok(/const otherId = isAccessibility \? 'module' : 'accessibility'/.test(skillFn),
         '找得到"另一路"的判据（otherId）');
     c.ok(/otherReady = Boolean\(backendStatus\[otherId\][\s\S]*state === 'ready'/.test(skillFn),
         '★ 并集判据读的是另一路的探测状态（backendStatus），不是写死的 true');
-    c.ok(/if \(canOpenAndCommand\) \{[\s\S]*手机打开 包名/.test(skillFn),
-        '「手机打开 / 手机命令」只在能力面覆盖到时才列出（互通后是并集）');
+    c.ok(/if \(!canCommand\) \{[\s\S]*按键只支持/.test(skillFn),
+        '「手机命令」能力面按另一路是否可用分档（按键范围随之收窄）');
 
     // 一之二之二、运行方式：前台（无障碍）/ 后台（模块）：两路都可用时弹窗让用户选。
     c.ok(/function pickPhoneRunMode\(/.test(html), '有 pickPhoneRunMode()（询问运行方式）');
@@ -897,8 +894,7 @@ async function casePhone(c) {
 
     // 一之二之三、strict 必须在原生侧贯穿全部换路点：选了前台仍走模块，
     //    根因是 pickCommandExecutor 在分流前自动挑选（候选只有模块）。
-    const shellPluginPath = path.join(root, '..', 'android-app', 'android', 'app', 'src', 'main',
-        'java', 'com', 'elainachat', 'opensource', 'ElainaShellPlugin.java');
+    const shellPluginPath = PLUGIN_JAVA;
     const plugin = readFileSync(shellPluginPath, 'utf8');
     /** 抠出 `if (strict) { ... }` 那个块（按花括号配平，避免用正则切歪） */
     function extractStrictBlock(src) {
@@ -959,23 +955,29 @@ async function casePhone(c) {
             '★★ 每轮重置 __lastAgentBackend（否则上一轮走过模块会让这一轮一直显示"看画面"）');
     }
 
-    // 一之三、读取信息受隐私开关控制：提示词也必须按开关过滤，否则模型仍输出标签、每步被拒。
+    // 一之三、读取信息不再有应用层开关：能读到什么只由系统权限决定。
+    //   断言"开关不存在"是为了防止有人再把那 6 个开关加回来 —— 加回来就必然要有"关掉"的路径，
+    //   而系统权限一旦授予，应用内关掉只是对模型隐身，用户以为收回了、其实没有。
     c.ok(/function phoneReadSkillLines\(/.test(html),
-        '有 phoneReadSkillLines()（按隐私开关过滤能力清单）');
-    c.ok(/phoneReadAllowed\(x\.action\)/.test(html),
-        '读取信息清单逐项按开关过滤');
-    c.ok(/function phoneReadAllowed\(/.test(html), '有 phoneReadAllowed() 判据');
-    c.ok(/function phoneReadBlockedReason\(/.test(html),
-        '有 phoneReadBlockedReason()（执行层的第二道闸）');
-    c.ok(/const PHONE_READ_OPS = \[/.test(html), '有 PHONE_READ_OPS 清单');
-    c.ok(/phoneReadBlockedReason\(parsed\.action\)/.test(html),
-        '★ runAgentPhoneOperation 里真的用了第二道闸（光有函数不算）');
+        '有 phoneReadSkillLines()（读取信息能力清单）');
+    c.ok(!/function phoneReadAllowed\(/.test(html),
+        '★ 不再有 phoneReadAllowed()（应用层开关已删除，能力由系统权限决定）');
+    c.ok(!/function phoneReadBlockedReason\(/.test(html),
+        '★ 不再有 phoneReadBlockedReason()（同上，执行层也不再按开关拒绝）');
+    c.ok(!/const PHONE_READ_OPS = \[/.test(html), '★ 不再有 PHONE_READ_OPS 清单');
     for (const id of ['settingAgentReadApps', 'settingAgentReadNotifications', 'settingAgentReadDevice',
         'settingAgentReadSms', 'settingAgentReadContacts', 'settingAgentReadCalendar']) {
-        c.ok(has(html, id), `设置界面有隐私开关 ${id}`);
+        c.ok(!has(html, id), `★ 设置界面不再有隐私开关 ${id}`);
     }
-    c.ok(/不想让 AI 知道太多信息/.test(html),
-        '★ 设置界面明确提示"不想让 AI 知道太多信息就关掉"（用户点名要的那句话）');
+    // 权限明细必须靠一个「!」展开：八项权限常显会把「手机操作」挤成一屏。
+    for (const id of ['agentPermDetailBtn', 'agentPermDetail', 'agentPermSummaryBadge']) {
+        c.ok(has(html, id), `设置界面有手机权限明细元素 ${id}`);
+    }
+    c.ok(/data-perm-act="requestAll"/.test(html), '明细里有「申请缺失项」入口');
+    c.ok(/data-perm-act="battery"/.test(html) && /data-perm-act="autostart"/.test(html),
+        '明细里有电池优化白名单与自启动的入口');
+    c.ok(/没有关闭权限的入口|去系统设置关/.test(html),
+        '★ 明确说明撤销权限只能去系统设置（应用内不提供关闭入口）');
 
     const layered = extractFn('buildLayeredRoleplayMessages');
     const legacy = extractFn('buildLegacyRoleplayMessages');
@@ -1030,12 +1032,10 @@ async function casePhone(c) {
         '★ live2d-video.js 不再持有手机分发（Live2D 卸掉不影响手机操作）');
     // 断言只关心注解名字，用 \s* 容忍换行（@CapacitorPlugin 加 permissions 段后变多行）。
     c.ok(/ElainaDevice/.test(html) && /@CapacitorPlugin\(\s*name\s*=\s*"ElainaDevice"/.test(
-        readFileSync(path.join(root, '..', 'android-app', 'android', 'app', 'src', 'main', 'java',
-            'com', 'elainachat', 'opensource', 'ElainaShellPlugin.java'), 'utf8')),
+        readFileSync(PLUGIN_JAVA, 'utf8')),
         '原生插件名与前端查找的名字一致（ElainaDevice）');
     c.ok(/registerPlugin\(ElainaShellPlugin\.class\)/.test(
-        readFileSync(path.join(root, '..', 'android-app', 'android', 'app', 'src', 'main', 'java',
-            'com', 'elainachat', 'opensource', 'MainActivity.java'), 'utf8')),
+        readFileSync(path.join(JAVA_DIR, 'MainActivity.java'), 'utf8')),
         'MainActivity 注册了原生插件（没注册就永远拿不到设备层）');
 
     // 五、静态标签指南不得把手机操作说成"总是可用"
@@ -1082,7 +1082,7 @@ async function casePhone(c) {
 
 async function caseStrictRoute(c) {
     if (!existsSync(PLUGIN_JAVA)) {
-        console.log('  --   跳过：没有 ../android-app 的 ElainaShellPlugin.java（独立克隆时正常）');
+        console.log('  --   跳过：没有 dist/Android 的 ElainaShellPlugin.java（工作区被裁剪时正常）');
         return;
     }
     const plugin = readFileSync(PLUGIN_JAVA, 'utf8');
@@ -1118,7 +1118,7 @@ async function caseStrictRoute(c) {
         const cannotDoBlock = plugin.slice(
             plugin.indexOf('private static boolean accessibilityCannotDo('),
             plugin.indexOf('private static JSObject annotateBackendSwap('));
-        const mirrored = ['手机打开', '手机命令'];
+        const mirrored = ['手机命令'];
         for (const act of mirrored) {
             c.ok(cannotDoBlock.includes('"' + act + '"'),
                 `镜像里当作"无障碍做不到"的「${act}」仍在原生清单里`);
@@ -1144,7 +1144,7 @@ async function caseStrictRoute(c) {
         }
         // ③ preferred 是无障碍
         if (preferred === 'accessibility') {
-            const cannotDo = ['手机打开', '手机命令'].includes(action);
+            const cannotDo = ['手机命令'].includes(action);
             if (cannotDo && modAvailable) return 'auto:module';               // 互通自动换路
             return 'accessibility';
         }
@@ -1174,8 +1174,10 @@ async function caseStrictRoute(c) {
     }
 
     {
-        const r = route({ action: '手机打开', args: 'pkg', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: true });
+        const r = route({ action: '手机命令', args: 'ls', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: true });
         c.ok(r === 'auto:module', '★ 非 strict + 无障碍做不到 + 模块可用 → 自动换模块（互通仍生效）', `实际=${r}`);
+        const r1b = route({ action: '手机打开', args: 'pkg', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: false });
+        c.ok(r1b === 'accessibility', '★ 「手机打开」无障碍自己就能做（不再换路、不判失败）', `实际=${r1b}`);
         const r2 = route({ action: '手机点击', args: '1 2', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: true });
         c.ok(r2 === 'accessibility', '非 strict + 无障碍做得到 → 走无障碍（不无谓换路）', `实际=${r2}`);
         // 非 strict 时中文输入仍走无障碍（命令族不支持非 ASCII）
@@ -1193,6 +1195,69 @@ async function caseStrictRoute(c) {
         c.ok(r2 !== 'accessibility',
             '★★ 选后台 + 中文输入 → 绝不被改到无障碍', `实际=${r2}`);
     }
+}
+
+// 6.5 手机权限：电池优化白名单与自启动只能经原生接口查询 / 跳转，前端无等价能力。
+//     单独成一个用例，不放 casePhone：后者在没有 mods/live2d 时整段跳过，会让这几条断言在本地永远不跑。
+
+async function casePhonePerms(c) {
+    if (!existsSync(PLUGIN_JAVA) || !existsSync(MANIFEST)) {
+        console.log('  --   跳过：没有 dist/Android 的 ElainaShellPlugin.java / AndroidManifest.xml（工作区被裁剪时正常）');
+        return;
+    }
+    const plugin = readFileSync(PLUGIN_JAVA, 'utf8');
+    const manifest = readFileSync(MANIFEST, 'utf8');
+    const perms = readWebFile('js/agent-permissions.js');
+
+    // 一、原生三个方法：电池优化状态可查、可申请，自启动可跳转。
+    c.ok(/@PluginMethod\s+public void powerStatus\(PluginCall call\)/.test(plugin),
+        '原生有 powerStatus()（查询电池优化白名单状态）');
+    c.ok(/isIgnoringBatteryOptimizations\(/.test(plugin),
+        '★ powerStatus 真的问了 PowerManager（不是写死值）');
+    c.ok(/@PluginMethod\s+public void requestBatteryExemption\(PluginCall call\)/.test(plugin),
+        '原生有 requestBatteryExemption()（申请电池优化白名单）');
+    c.ok(/ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS/.test(plugin),
+        '★ 申请走系统确认框的 action');
+    c.ok(/ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS/.test(plugin),
+        '★ 弹框失败时回退到电池优化列表页（直接报错会让人无从下手）');
+    c.ok(/@PluginMethod\s+public void openAutostartSettings\(PluginCall call\)/.test(plugin),
+        '原生有 openAutostartSettings()（跳厂商自启动页）');
+    c.ok(/com\.miui\.securitycenter[\s\S]{0,400}com\.huawei\.systemmanager/.test(plugin),
+        '★ 自启动页按厂商逐个尝试（小米 / 华为在前）');
+    c.ok(/ACTION_APPLICATION_DETAILS_SETTINGS/.test(plugin.slice(plugin.indexOf('openAutostartSettings'))),
+        '★ 全厂商都跳不过去时退到应用信息页');
+
+    // 二、清单声明：REQUEST_IGNORE_BATTERY_OPTIMIZATIONS 是弹确认框的前提。
+    c.ok(/REQUEST_IGNORE_BATTERY_OPTIMIZATIONS/.test(manifest),
+        '清单声明了 REQUEST_IGNORE_BATTERY_OPTIMIZATIONS');
+
+    // 三、前端接上了这三个方法，且电池状态查不到时如实说"无法检测"而不是冒充未授权。
+    for (const fn of ['powerStatus', 'requestBatteryExemption', 'openAutostartSettings']) {
+        c.ok(perms.includes('dev.' + fn), `前端调用了原生 ${fn}()`);
+    }
+    c.ok(/batteryKnown === false[\s\S]{0,120}'unknown'/.test(perms),
+        '★ 电池状态查不到时标成 unknown 圆点（不冒充未授权）');
+    c.ok(/visibilitychange/.test(perms),
+        '★ 从系统设置返回时补刷状态（WebView 不会重新加载页面）');
+
+    // 四、明细是浮层（不在设置卡片里就地展开），状态只用绿/红/灰圆点、不写文字。
+    const html = readFrontend();
+    c.ok(/id="agentPermSheet"/.test(html), '★ 权限明细是独立浮层 #agentPermSheet');
+    c.ok(!/id="agentPermDetail"/.test(html), '★ 卡片里不再有就地展开的明细容器');
+    c.ok(/agentPermSheetClose/.test(html), '浮层有关闭按钮');
+    c.ok(/class="agent-perm-dot"/.test(html), '★ 状态用圆点表示（不写「已授权 / 未授权」文字）');
+    c.ok(!/agentPermBadge[A-Za-z]+" class="agent-perm-badge"/.test(html),
+        '★ 明细行里不再用文字徽标');
+    // 浮层必须在 #settingsOverlay 之外：主面板的 transform 会关住 fixed 后代。
+    const overlayEnd = html.indexOf('id="settingsOverlay"');
+    const sheetIdx = html.indexOf('id="agentPermSheet"');
+    c.ok(sheetIdx > overlayEnd, '★ 浮层放在设置面板之后（嵌在里面会被主面板的 transform 关住）');
+    // 一键授权只能收"能弹系统框"的那几项；通知 / 自启动要跳页面，塞进来会让人以为点完就都开了。
+    c.ok(/AGENT_PERM_POPUP_KINDS = \['sms', 'contacts', 'calendar'\]/.test(perms),
+        '★★ 一键授权只弹「能弹框」的三项（通知 / 自启动不在其中）');
+    c.ok(/AGENT_PERM_POPUP_KINDS\)/.test(perms), '★ 一键授权真的遍历这张清单（不是写死三项）');
+    c.ok(/不需要的话点系统弹窗里的「拒绝」即可/.test(html),
+        '★ 卡片上注明了「不想授权就点拒绝」');
 }
 
 // 7. 标签协议解耦：[操作:] 分发若长在可卸的 Live2D 里，卸掉插件等于整个 Agent 失效。
@@ -1459,12 +1524,14 @@ async function caseOps(c) {
         [voiceSrc, 'runToolCalls(repliedToolCalls', 'voice.js 在回复带 tool_calls 时执行它们'],
         [voiceSrc, 'if (!repliedToolCalls.length) window.ElainaTags.drive(response)',
             '★ 一回合只走一条通道：有工具调用就不再解析标签（两条都跑＝同一个动作执行两次）'],
-        [agentSrc, 'raw = await callAI(AGENT_CONTINUE_PROMPT, agentToolOpt || undefined)',
-            '★ 续跑也带工具（不带的话多步任务到第二步就没工具可用了）'],
+        [agentSrc, 'raceAgentDeadline(callAI(AGENT_CONTINUE_PROMPT, agentToolOpt)',
+            '★ 续跑也带工具（不带的话多步任务到第二步就没工具可用了），且整次调用套了定时器死线'],
         [agentSrc, 'raw = await callAI(prompt, agentToolOpt || undefined)',
             '★ 失败解释也带工具（它常被用来"换个路径再试一次"）'],
         [uiSrc, 'message.hidden === true) return', '隐藏消息不进可见渲染'],
         [dataSrc, "if (m.role === 'tool')", '历史映射原样带下 role:tool（含 tool_call_id）'],
+        [dataSrc, 'windowToolCallIds', '孤儿 tool 兜底：窗口先收集 assistant 声明的 tool_calls（12 条窗口从协议消息对中间切开时，孤儿会被严格网关整包拒收）'],
+        [dataSrc, "windowToolCallIds.has(String(m.toolCallId || ''))", 'role:tool 只有能在窗口内对上 tool_calls 才原样下发，对不上降级成内部观察'],
         [dataSrc, 'entry.tool_calls = m.toolCalls', '历史映射原样带下 assistant 的 tool_calls'],
         [dataSrc, 'm && m.hidden !== true', '记忆摘要跳过隐藏消息（不让工具结果汇进长期记忆）'],
         // hidden 必须随整份对话原样读回，否则半途对话导入时工具消息会冒进聊天记录。
@@ -1540,6 +1607,16 @@ async function caseAgentParse(c) {
         '手机操作解析：动作 + 参数正确，认不出返回 null',
         JSON.stringify([A.parsePhoneOperation('手机点击 100 200'), A.parsePhoneOperation('手机应用列表')]));
 
+    c.ok(eq(A.parsePhoneOperation('[操作:手机点击 600 1071]'), { action: '手机点击', args: '600 1071' })
+        && eq(A.parsePhoneOperation('[[操作:手机查看界面]]'), { action: '手机查看界面', args: '' })
+        && eq(A.parsePhoneOperation('[操作:手机等待 800]'), { action: '手机等待', args: '800' })
+        && eq(A.parsePhoneOperation('手机写文件 a.txt|内容[1]'), { action: '手机写文件', args: 'a.txt|内容[1]' }),
+        '手机操作解析：整条标签当 raw 塞进来时剥掉包装（含双层括号）；裸正文原样保留、不误吃参数里的方括号',
+        JSON.stringify([
+            A.parsePhoneOperation('[操作:手机点击 600 1071]'),
+            A.parsePhoneOperation('手机写文件 a.txt|内容[1]'),
+        ]));
+
     c.ok(A.describePhoneOperation({ action: '手机写文件', args: 'a.txt|内容' }) === '写入：a.txt'
         && A.describePhoneOperation({ action: '手机截图', args: '' }) === '截取当前屏幕画面'
         && A.describePhoneOperation({ action: '不存在', args: '' }) === '',
@@ -1569,6 +1646,125 @@ async function caseAgentParse(c) {
         '这些纯解析函数已集中到 agent-parse.js（agent.js 不再重复定义）');
 }
 
+// 提示词层级：system 提示词按来源分 1-5 级，标签必须真的进到发送内容里，
+// 而不是只写一份说明文档；层级冲突规则与事实优先级必须分开，否则模型会拿数字去否定更近的事实。
+async function casePromptTiers(c) {
+    const config = readWebFile('js/core-config.js');
+    const roleplay = readWebFile('js/roleplay.js');
+
+    c.ok(config.includes('PROMPT_TIER_RULES') && config.includes('1 最高，5 最低'),
+        '核心配置里有 1-5 级提示词层级规则');
+    c.ok(config.includes('PROMPT_TIER_LABELS') && config.includes('1: \'宿主系统\'') && config.includes('5: \'记忆资料\''),
+        '五级标签齐全（宿主系统 / 用户设定 / 插件提示 / 运行时能力 / 记忆资料）');
+    c.ok(!config.includes('【信息优先级】') && config.includes('【事实与设定优先级】'),
+        '核心协议不再用 1-4 编号的「信息优先级」，避免与提示词层级两套编号冲突');
+    c.ok(config.includes('层级只判断指令该听谁的') && config.includes('事实冲突仍按时间更近'),
+        '层级只约束指令；事实冲突仍按时间/对象判断');
+
+    c.ok(roleplay.includes('function promptTierText(tier, content)')
+        && roleplay.includes('function promptTier(tier, content)'),
+        'roleplay 有把层级写进 system 内容的 helper');
+    c.ok(roleplay.includes('buildCharacterSystemMessages(card, options = {})')
+        && roleplay.includes('system(1, ROLEPLAY_CORE_PROTOCOL)')
+        && roleplay.includes('system(2, `# 世界观设定') && roleplay.includes('system(2, `# 角色卡'),
+        '角色卡/世界观标 2 级，核心协议标 1 级');
+    c.ok(roleplay.includes('buildCharacterSystemMessages(card, { tiered: true })')
+        && roleplay.includes('promptTier(1, PROMPT_TIER_RULES)'),
+        '分层路径注入层级规则，并对基础消息打标签');
+    c.ok(roleplay.includes('buildRoleplayMemoryMessages')
+        && roleplay.includes('promptTier(1, `# 记忆使用规则') && roleplay.includes('promptTier(5, `# 本轮参考记忆数据'),
+        '记忆规则 1 级、记忆数据 5 级（数据不是指令）');
+    c.ok(roleplay.includes('promptTier(3, t)'), 'mod 提示词固定 3 级');
+    c.ok(roleplay.includes('promptTier(4, phoneSkill)') && roleplay.includes('promptTier(4,\n            \'# Agent 能力'),
+        '手机/Agent 运行时能力标 4 级');
+    c.ok(roleplay.includes('addPart(2, legacyCharacterPrompt)') && roleplay.includes('addPart(1, THIRD_PERSON_GM_PROMPT)'),
+        '回滚拼接路径也带层级标签');
+    c.ok(roleplay.indexOf('promptTier(1, PROMPT_TIER_RULES)') < roleplay.indexOf('buildCharacterSystemMessages(card, { tiered: true })'),
+        '层级规则在角色设定之前，且不依赖消息位置生效');
+}
+
+// 12. 手机操作的真机问题：打开错应用 / 两条进度条 / 停止卡在「停止中」。
+//    这三条都只在 APK 上暴露，静态检查锁的是判据，行为由 dist/Android/test 的 CDP 测试补。
+async function casePhoneAgentFixes(c) {
+    const html = readFrontend();
+    const phone = readWebFile('js/agent-phone.js');
+    const cont = readWebFile('js/agent-continue.js');
+
+    // 打开应用：应用名先解析成包名；解析不出来就停在原地列候选，绝不把猜的包名交给原生。
+    c.ok(/function resolvePhoneOpenTarget\(/.test(phone), '有「应用名 → 包名」解析');
+    c.ok(/resolvePhoneOpenTarget\(parsed\.args\)/.test(phone), '「手机打开」执行前先解析目标');
+    c.ok(/function verifyPhoneOpenTarget\(/.test(phone), '打开后核对前台应用');
+    c.ok(/verifyPhoneOpenTarget\(openPkg\)/.test(phone), '核对结果回灌给模型（打开错了不能当成成功）');
+    c.ok(/lastUsedBackendId === 'accessibility'/.test(phone),
+        '只对无障碍后端核对（模块跑在虚拟副屏上，物理屏前台不是它）');
+    c.ok(/应用名或包名/.test(phone), '错误提示告诉模型可以直接写应用名');
+
+    // 两条进度条：系统悬浮条在用时，应用内状态条不渲染。
+    const rtStart = html.indexOf('const agentRuntime = (function ()');
+    const rtEnd = html.indexOf('window.agentRuntime = agentRuntime;');
+    const rt = (rtStart >= 0 && rtEnd > rtStart) ? html.slice(rtStart, rtEnd) : '';
+    c.ok(/const showBar = running && !overlayActive/.test(rt),
+        '★ 悬浮条在用时应用内状态条不渲染（只留一条进度）');
+    c.ok(/overlayActive = true;/.test(rt) && /overlayActive = false;/.test(rt),
+        '浮层显示 / 收起会同步这个状态');
+    c.ok(/settingScreenWatchBtn/.test(html) && /openScreenWatch\(\)/.test(html),
+        '「看画面」有状态条之外的入口（悬浮条模式下也能打开副屏监视）');
+
+    // 停止：立刻收界面 + 与模型调用赛跑，不再等请求自己返回。
+    const stopFn = rt.slice(rt.indexOf('function requestStop(reason)'), rt.indexOf('function settleStoppedRun()'));
+    c.ok(/settleStoppedRun\(\)/.test(stopFn),
+        '★ 停止当场收掉状态条 / 浮层（模型调用可能还要挂几分钟）');
+    c.ok(/stopWaiters/.test(stopFn) && /wake\('stopped'\)/.test(stopFn),
+        '停止会唤醒在途等待');
+    c.ok(/function waitStopped\(/.test(rt), '提供可赛跑的「被停止」信号');
+    c.ok(/function raceAgentStop\(/.test(cont), '模型调用与停止信号赛跑');
+    c.ok(/raceAgentStop\(\s*raceAgentDeadline\(callAI\(AGENT_CONTINUE_PROMPT/.test(cont),
+        '续跑的两次尝试都走赛跑');
+    c.ok(/if \(staleRun\(\)\) return;/.test(cont),
+        '★ 迟到的旧回复按运行代号作废（停止后 / 新一轮开始后都不再执行）');
+}
+
+// 6.6 API Key 存储：解不开的密文不能被静默删掉，也不能随系统备份搬走。
+//     Keystore 里的密钥不参与备份；密文被备份回来又解不开时，用户看到的就是「更新完 Key 全没了」，
+//     而原实现连排查线索都一起删了（decrypt 失败 → remove）。
+async function caseByokSecrets(c) {
+    const secretsJava = path.join(JAVA_DIR, 'ByokSecretsPlugin.java');
+    if (!existsSync(secretsJava) || !existsSync(MANIFEST)) {
+        console.log('  --   跳过：没有 dist/Android 的 ByokSecretsPlugin.java / AndroidManifest.xml（工作区被裁剪时正常）');
+        return;
+    }
+    const java = readFileSync(secretsJava, 'utf8');
+    const manifest = readFileSync(MANIFEST, 'utf8');
+    const persistence = readWebFile('js/persistence.js');
+
+    // 一、解密失败：必须报错给前端，且密文留底，不能当场删掉。
+    const getSecret = java.slice(java.indexOf('public void getSecret'), java.indexOf('public void setSecret'));
+    c.ok(!/catch\s*\([^)]*\)\s*\{\s*preferences\(\)\.edit\(\)\.remove\(name\)/.test(getSecret),
+        '★★ 解密失败不再静默删除密文（原来会把唯一的线索一起删掉）');
+    c.ok(/call\.reject\([^)]*SECRET_UNREADABLE/.test(getSecret),
+        '★ 解密失败以 SECRET_UNREADABLE 报错（空值会被前端当成用户清空）');
+    c.ok(/quarantine\(name, stored\)/.test(getSecret),
+        '★ 解不开的密文先隔离保留（系统升级 / 换机恢复后还有解开的机会）');
+    c.ok(/QUARANTINE_SUFFIX/.test(java) && /putString\(name \+ QUARANTINE_SUFFIX/.test(java),
+        '隔离副本写进独立的键（不覆盖原键）');
+    const setSecret = java.slice(java.indexOf('public void setSecret'), java.indexOf('public void clearSecrets'));
+    c.ok(/editor\.remove\(name \+ QUARANTINE_SUFFIX\)/.test(setSecret),
+        '★ 用户重填后清掉隔离副本（否则排查时会以为还有一份 Key）');
+
+    // 二、系统备份保持开启：聊天记录 / 设置 / Key 都要能跟着备份迁移。
+    // 这里只固定"备份没被关掉" —— 哪些内容进备份是「我的数据」导出那条链路的事（见 check-data）。
+    c.ok(/android:allowBackup="true"/.test(manifest),
+        '★ 系统备份保持开启（聊天记录 / 设置 / Key 要能跟着迁移）');
+
+    // 三、前端要如实提示「哪几项读不到」，不能只留一行 console.warn。
+    c.ok(/SECRET_UNREADABLE/.test(persistence),
+        '★ 前端识别 SECRET_UNREADABLE 错误码');
+    c.ok(/unreadable\.push\(name\)/.test(persistence) && /if \(unreadable\.length\)/.test(persistence),
+        '★ 收集解不开的名字，逐项交给提示（不是只 warn 一行）');
+    c.ok(/请到设置里重新填写/.test(persistence),
+        '★★ 提示里写明下一步是重填（用户不知道该怎么办等于没提示）');
+}
+
 const only = process.argv[2];
 const allCases = [
     { name: '三档 AI 权限', fn: caseAccess },
@@ -1577,9 +1773,13 @@ const allCases = [
     { name: '文件位置与目录归类', fn: casePaths },
     { name: '手机操作标签', fn: casePhone },
     { name: 'strict 路由决策表', fn: caseStrictRoute },
+    { name: '手机权限', fn: casePhonePerms },
+    { name: 'API Key 存储', fn: caseByokSecrets },
     { name: '标签协议解耦', fn: caseTags },
     { name: '操作注册表', fn: caseOps },
     { name: 'Agent 纯解析函数（agent-parse.js）', fn: caseAgentParse },
+    { name: '提示词层级', fn: casePromptTiers },
+    { name: '手机操作真机问题', fn: casePhoneAgentFixes },
 ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 

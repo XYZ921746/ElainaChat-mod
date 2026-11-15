@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  明文 HTTP 的放行范围。
+
+  为什么需要：Ollama / LM Studio / KernelSU 模块网关 / 局域网 API 网关都在本机或同一张内网，
+  而 Android 9 起默认禁止明文流量，不放行就连不上。
+
+  为什么在 XML 里放开、而不是只列回环：network-security-config 的 <domain> 不支持 CIDR，
+  192.168.x.x / 10.x.x.x 这种局域网地址没法逐段写。真正的出口限制仍在代码里：
+  ByokHttpPlugin.isAllowedUrl 只允许回环与 RFC1918 字面量走 HTTP，公网域名仍强制 HTTPS。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

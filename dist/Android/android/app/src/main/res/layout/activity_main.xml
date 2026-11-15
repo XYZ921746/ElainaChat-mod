@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WebView 必须显式给黑色背景：不写时它用自己的默认白底，而「HTML 解析到首帧」之间有一小段
+  空窗，那一段会露出白色 —— 这是"启动一瞬间闪白"的来源之一（窗口背景已经是黑的，
+  但 WebView 这块画布还是白的，会盖在上面）。
+-->
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/splashBackground"
+    tools:context=".MainActivity">
+
+    <WebView
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/splashBackground" />
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

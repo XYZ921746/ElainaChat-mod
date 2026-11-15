@@ -1,0 +1,11 @@
+{
+  "appId": "com.elainachat.mod",
+  "appName": "ElainaChat Mod",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

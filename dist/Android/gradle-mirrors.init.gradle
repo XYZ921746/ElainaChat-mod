@@ -1,0 +1,63 @@
+// Gradle 全局仓库镜像（init script）—— 对所有项目生效，包括 node_modules 里的插件。
+//
+// ── 为什么需要它（而不是只改 build.gradle）────────────────────────────────
+//
+// 2026-10 本机打 APK 时，官方 Maven 源连不上：
+//   · repo.maven.apache.org:443   连接超时（getsockopt）
+//   · plugins.gradle.org:443      连接超时
+//   · 部分节点 SSL 握手失败：PKIX path building failed
+//
+// 只改 `android/build.gradle` 是不够的 —— 实测仍失败，因为仓库声明散在**三处**：
+//   ① android/build.gradle                                    （能改）
+//   ② android/capacitor-cordova-android-plugins/build.gradle  （能改）
+//   ③ node_modules/@capacitor/android/capacitor/build.gradle  （**不该改**）
+//
+// ③ 是 npm 包内的文件：改了会在 `npm install` / 升级 Capacitor 时被覆盖，
+// 而且它带着 `plugins.gradle.org`，那正是超时的来源之一。
+//
+// ── 做法 ──────────────────────────────────────────────────────────────────
+//
+// 用 Gradle 的 init script：在**每个项目解析依赖之前**把仓库列表清掉、
+// 换成国内镜像。这是"外部覆盖"，不动任何工程文件，升级依赖也不会丢。
+// 写法参考 Gradle 官方文档的 repository 覆盖模式（allprojects + beforeEvaluate）。
+//
+// ── 怎么用 ────────────────────────────────────────────────────────────────
+//
+// 放到 `~/.gradle/init.d/` 下会自动生效；或用 `--init-script` 显式指定。
+// 本项目的 `android-app/package.json` 的 build 脚本用后者（路径可移植）。
+//
+// ★ 镜像分工：
+//     google()       → maven.aliyun.com/repository/google   （Android 官方构件）
+//     mavenCentral() → maven.aliyun.com/repository/public   （Maven 中央 + jcenter）
+//     plugins.gradle.org → maven.aliyun.com/repository/gradle-plugin（Gradle 插件门户镜像）
+
+def ALIYUN = [
+    'https://maven.aliyun.com/repository/public',
+    'https://maven.aliyun.com/repository/google',
+    'https://maven.aliyun.com/repository/gradle-plugin',
+]
+
+// 每个项目（含根项目与所有子项目）在评估前替换仓库
+allprojects { project ->
+    project.buildscript.repositories.clear()
+    ALIYUN.each { u -> project.buildscript.repositories.maven { url u } }
+    // 兜底：镜像缺件时仍可回落到官方源（放最后，正常不会等到超时）
+    project.buildscript.repositories.google()
+    project.buildscript.repositories.mavenCentral()
+
+    project.repositories.clear()
+    ALIYUN.each { u -> project.repositories.maven { url u } }
+    project.repositories.google()
+    project.repositories.mavenCentral()
+}
+
+// settings 层的插件仓库（plugins.gradle.org 的替代）
+settingsEvaluated { settings ->
+    try {
+        settings.pluginManagement.repositories.clear()
+        ALIYUN.each { u -> settings.pluginManagement.repositories.maven { url u } }
+        settings.pluginManagement.repositories.gradlePluginPortal()
+    } catch (Exception e) {
+        // 老版本 Gradle 没有 pluginManagement 时忽略
+    }
+}

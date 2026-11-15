@@ -1,5 +1,6 @@
-import { copyFile, mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { existsSync, readdirSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,35 +55,16 @@ const sourceRoot = path.join(projectRoot, 'web');
 // ★★ 2026-10：插件根目录从 `web/mods/` 搬到**项目根** `mods/`（与 data/ 平级）。
 //   它**不在** sourceRoot 下，所以下面所有读插件的地方都改用这个常量。
 const modsSourceRoot = path.join(projectRoot, 'mods');
-// android-app 已移到项目**上一级**（D:\222\android-app）—— 构建产物与工具链
-// 不放在项目目录里，避免被误提交、也便于多个项目复用同一套。
-const androidAppRoot = path.join(projectRoot, '..', 'android-app');
+// 安卓原生工程与前端同步产物都住在 dist/Android/ 下（Capacitor 的 www/ 也在这里）。
+// 它随仓库入库，因为原生代码是应用的一部分、不是可丢弃的构建产物；SDK / NDK / node_modules
+// 这类工具链仍留在仓库外，由 .gitignore 排除。
+const androidAppRoot = path.join(projectRoot, 'dist', 'Android');
 const androidWebRoot = path.join(androidAppRoot, 'www');
-// ★★ 2026-10：内嵌 Node 工程（手机端的"服务端那一半"，见 web/nodejs/）落在
-//   **assets/ 根下**，而不是 assets/public/ —— 两个理由：
-//     ① public/ 是 cap sync 的产物目录，而 cap sync 的复制是"只增不减"的：
-//        我们这边删掉的文件不会从它那里消失（工程里已经被这个坑咬过两次，
-//        见下面 LITE_CLEAN_ROOTS 的注释）；放在自己的目录里就能自己清干净。
-//     ② 它是服务端代码，没有理由暴露给 WebView 去 fetch。
-//   原生插件 ElainaNode 启动时把这一份复制到应用私有目录再执行 ——
-//   Node 只能跑真实路径上的脚本，assets/ 不是文件系统里的路径。
+// 旧 Node 手机端入口（web/nodejs/）曾经落在 assets/ 根下；APK 的服务端换成 Go 后
+// 不再打包它，这个路径只用于同步时清理历史残留 —— 旧副本留在工程里会被 cap sync
+// 继续打进 APK（死文件，还让排查的人以为手机上仍跑 Node）。
 const androidAssetsRoot = path.join(androidAppRoot, 'android', 'app', 'src', 'main', 'assets');
 const nodeHostDestRoot = path.join(androidAssetsRoot, 'nodejs');
-// ★★ 2026-10：内嵌 Node 要用的**与电脑端共用**的后端模块，从项目根的 server/ 复制进来
-//   （落到 assets/nodejs/server/，内嵌入口按 './server/xxx.mjs' 引用）。
-//
-//   为什么是显式清单、不整目录复制：server/ 下多数模块是**电脑端专用**的 ——
-//   pc-command 要命令行、auth-guard 是登录门、store/mods 走电脑的目录扫描与解压。
-//   整目录搬进 APK 只会白占体积，还会让人以为手机上也能用。
-//   共用哪个模块，由这里说了算；加一个就多一行。
-//   log-buffer.mjs：内存日志缓冲（手机端 /api/logs/tail 的数据源）。
-//   mod-server.mjs：mod 服务端半边的装载器（手机端跑与电脑端同一份
-//     server/mod-server.mjs，能力声明 / 超时 / 回滚全套同构）。
-//   zip.mjs：解压与落盘安全约束（readZip / BLOCKED_EXT / effectiveExt /
-//     isUnsafeEntryName / MAX_UPLOAD）—— 插件上传依赖它，两端必须同一份。
-//   往本清单加任何模块时须过 check-mod.mjs 的「共享模块闭包」用例
-//   （相对 import 全部落在清单内、无裸包依赖），防止复制出去少一个文件。
-const SHARED_SERVER_MODULES = ['relay.mjs', 'http-util.mjs', 'net-guard.mjs', 'log-buffer.mjs', 'mod-server.mjs', 'zip.mjs'];
 const modelsSourceRoot = path.join(modsSourceRoot, 'live2d-models', 'models');
 // ★ APK 里的落地路径**不变**：仍是 www/live2d/models/。
 //   为什么不变：模型 URL（`/live2d/models/<名>/…`）是前端与 AI 提示词里都在用的约定，
@@ -404,69 +386,113 @@ for (const [src, dest] of filesToCopy) {
     await copyFile(path.join(sourceRoot, src), destPath);
 }
 
-// ==================== 内嵌 Node 工程（复制到 assets/nodejs/）====================
+// ==================== 本地 Go 服务端（交叉编译到 jniLibsServer/）====================
 //
-// 落地目录是**我们的**（不是 cap sync 的），所以这里可以放心地把过期文件删掉 ——
-// 这也是把它放在 assets/ 根下、而不是 assets/public/ 的原因（见文件顶部常量处的说明）。
+// 手机端的服务端是静态编译的 Go 单文件，Java 服务进程从 nativeLibraryDir 直接 exec。
+// 不再复制 web/nodejs：那是已退役的 Node 入口，留在 assets 里只会被 cap sync 打进包。
 {
-    const sourceDir = path.join(sourceRoot, 'nodejs');
-    /** 收整棵目录，不限扩展名：以后可能有 .json、证书、静态资源等 */
-    async function collectNodeHostFiles(dir, prefix = '') {
-        const out = [];
-        let entries = [];
-        try { entries = await readdir(dir, { withFileTypes: true }); } catch { return out; }
-        for (const entry of entries) {
-            if (entry.name.startsWith('.')) continue;
-            const rel = prefix ? prefix + '/' + entry.name : entry.name;
-            if (entry.isDirectory()) out.push(...await collectNodeHostFiles(path.join(dir, entry.name), rel));
-            else if (entry.isFile()) out.push(rel);
+    // 与 app/build.gradle 的 buildLocalServer 是同一个开关（默认开）。
+    const localServer = !['0', 'false'].includes(String(process.env.ELAINA_LOCAL_SERVER || 'true').toLowerCase());
+    const serverGoRoot = path.join(projectRoot, 'server');
+    const jniRoot = path.join(androidAppRoot, 'android', 'app', 'src', 'main', 'jniLibsServer');
+
+    // 旧 Node 资源必须先清：只复制不删除会让上次构建的东西一直留在 APK 里。
+    await rm(nodeHostDestRoot, { recursive: true, force: true });
+
+    if (localServer) {
+        // 先编译进暂存目录，两个架构都成功后才替换旧产物：先删后编的话，
+        // 一次编译失败（比如缺 NDK）会把上一次的好产物一起带走，APK 只能整体重编。
+        const staging = jniRoot + '.staging';
+        await rm(staging, { recursive: true, force: true });
+        // debug 包要跑 x86_64 模拟器，release 只用 arm64；两边都编一次，代价是几十秒。
+        const targets = [
+            { abi: 'arm64-v8a', goarch: 'arm64', triple: 'aarch64-linux-android29' },
+            { abi: 'x86_64', goarch: 'amd64', triple: 'x86_64-linux-android29' },
+        ];
+        // android/amd64 的 PIE 必须走 cgo；arm64 无 NDK 时可退回纯 Go。
+        const ndkRoot = findNdkRoot();
+        const hostTag = process.platform === 'win32' ? 'windows-x86_64'
+            : process.platform === 'darwin' ? 'darwin-x86_64' : 'linux-x86_64';
+        const exeSuffix = process.platform === 'win32' ? '.cmd' : '';
+        const startedAt = Date.now();
+        for (const target of targets) {
+            const outDir = path.join(staging, target.abi);
+            await mkdir(outDir, { recursive: true });
+            const env = { ...process.env, GOOS: 'android', GOARCH: target.goarch };
+            const cc = ndkRoot
+                ? path.join(ndkRoot, 'toolchains', 'llvm', 'prebuilt', hostTag, 'bin', target.triple + '-clang' + exeSuffix)
+                : '';
+            if (cc && existsSync(cc)) {
+                env.CGO_ENABLED = '1';
+                env.CC = cc;
+            } else if (target.goarch === 'amd64') {
+                throw new Error('x86_64 调试包需要 Android NDK（android/amd64 的 PIE 必须走 cgo）；'
+                    + '未找到 ' + (cc || 'NDK'));
+            } else {
+                env.CGO_ENABLED = '0';
+            }
+            const result = spawnSync('go', [
+                'build', '-trimpath', '-buildmode=pie', '-ldflags', '-s -w',
+                '-o', path.join(outDir, 'libelaina_server.so'),
+                './cmd/elaina-server',
+            ], {
+                cwd: serverGoRoot,
+                encoding: 'utf8',
+                windowsHide: true,
+                env,
+            });
+            if (result.status !== 0) {
+                throw new Error('Go 服务端交叉编译失败（' + target.abi + '）：\n'
+                    + String(result.stderr || result.stdout || ''));
+            }
+            console.log('  Go 服务端：' + target.abi + ' → jniLibsServer/' + target.abi + '/libelaina_server.so');
         }
-        return out;
+        await rm(jniRoot, { recursive: true, force: true });
+        await rename(staging, jniRoot);
+        console.log('  交叉编译耗时 ' + Math.round((Date.now() - startedAt) / 1000) + 's');
+    } else {
+        await rm(jniRoot, { recursive: true, force: true });
+        console.log('  本地 Go 服务端：未打包（ELAINA_LOCAL_SERVER=false，与 gradle 侧同一个值）');
     }
+}
 
-    // ★★ 2026-10：与 app/build.gradle 的 buildNodeRuntime 是**同一个开关**（环境变量）。
-    //   默认关：什么都不复制，并且让下面的"过期清理"把上次留下的整个 assets/nodejs
-    //   清干净 —— 否则旧副本会被 cap sync 继续打进 APK，"摘掉 Node"就名不副实
-    //   （而且是白占体积的死文件）。
-    //   ⚠️ 值必须能同时满足两侧：gradle 侧是 `== 'true'`（只认 'true'），
-    //      这里同时认 'true' 与 '1' —— 所以**整条构建链请统一用 ELAINA_NODE_RUNTIME=true**。
-    //      只设 '1' 的话资源会复制、但 gradle 不编译 JNI、不注册 ElainaNodePlugin，
-    //      表现是"功能全休眠、白多十几 MB 资源"。
-    const nodeRuntime = ['1', 'true'].includes(String(process.env.ELAINA_NODE_RUNTIME || '').toLowerCase());
+/** 找 Android NDK，返回**版本目录**（含 `toolchains/` 的那一层）。
+ *
+ * NDK 属工具链、不进仓库，所以按优先级探测：
+ *   · `ANDROID_NDK_HOME` / `ANDROID_NDK_ROOT` —— 这两个变量按约定**直接指向版本目录**，
+ *     不能再往里找一层版本号（那样会拼出 `.../27.0.12077973/wrap.sh/toolchains/…`）；
+ *   · `ANDROID_HOME/ndk` / `ANDROID_SDK_ROOT/ndk` / 仓库内 `dist/Android/android-sdk/ndk`
+ *     —— 这三个是"存放版本号的父目录"，取目录名最大的那个版本。
+ * 都找不到时返回空串，调用方据此退回纯 Go（arm64）或报缺 NDK（x86_64）。 */
+function findNdkRoot() {
+    /** 一个候选目录是不是真正的 NDK 版本目录 */
+    const isNdkDir = (dir) => existsSync(path.join(dir, 'toolchains', 'llvm'));
+    /** 在"存放版本号的父目录"里挑最新版本 */
+    const latestUnder = (parent) => {
+        try {
+            const versions = readdirSync(parent).sort();
+            for (let i = versions.length - 1; i >= 0; i--) {
+                const dir = path.join(parent, versions[i]);
+                if (isNdkDir(dir)) return dir;
+            }
+        } catch { /* 这个位置没有就试下一个 */ }
+        return '';
+    };
 
-    // 计划表：[源绝对路径, 目标相对路径]。关掉时留空 —— 空计划 = 只清理、不复制。
-    const plan = [];
-    if (nodeRuntime) {
-        for (const rel of (await collectNodeHostFiles(sourceDir)).sort()) {
-            plan.push([path.join(sourceDir, rel), rel]);
-        }
-        // 与电脑端共用的后端模块（见顶部 SHARED_SERVER_MODULES 的说明）。
-        // 文件不存在时 copyFile 会直接抛错 → 同步失败 —— 这正是想要的：
-        // 模块改名/搬走却忘了改这里，必须当场炸，而不是安静地让 APK 少一个文件。
-        for (const name of SHARED_SERVER_MODULES) {
-            plan.push([path.join(projectRoot, 'server', name), 'server/' + name]);
-        }
+    const direct = [process.env.ANDROID_NDK_HOME, process.env.ANDROID_NDK_ROOT].filter(Boolean);
+    for (const dir of direct) {
+        if (isNdkDir(dir)) return dir;
     }
-
-    // 清掉这次不再要的文件：既包含"源里删了的"，也包含"开关关掉后的整个目录"
-    const desired = new Set(plan.map(([, dest]) => dest));
-    let staleRemoved = 0;
-    for (const rel of await collectNodeHostFiles(nodeHostDestRoot).catch(() => [])) {
-        if (desired.has(rel)) continue;
-        await rm(path.join(nodeHostDestRoot, rel), { force: true });
-        staleRemoved++;
+    const parents = [
+        process.env.ANDROID_HOME && path.join(process.env.ANDROID_HOME, 'ndk'),
+        process.env.ANDROID_SDK_ROOT && path.join(process.env.ANDROID_SDK_ROOT, 'ndk'),
+        path.join(androidAppRoot, 'android-sdk', 'ndk'),
+    ].filter(Boolean);
+    for (const parent of parents) {
+        const found = latestUnder(parent);
+        if (found) return found;
     }
-
-    for (const [srcPath, dest] of plan) {
-        const destPath = path.join(nodeHostDestRoot, dest);
-        await mkdir(path.dirname(destPath), { recursive: true });
-        await copyFile(srcPath, destPath);
-    }
-    console.log(nodeRuntime
-        ? `  内嵌 Node 工程：${plan.length} 个文件 → assets/nodejs/（含 ${SHARED_SERVER_MODULES.length} 个与电脑端共用的后端模块）`
-            + (staleRemoved ? `，顺带清掉 ${staleRemoved} 个过期文件` : '')
-        : `  内嵌 Node 工程：未打包（默认关闭；要打开就设 ELAINA_NODE_RUNTIME=true，与 gradle 侧同一个值）`
-            + (staleRemoved ? `，已清掉工程里残留的 ${staleRemoved} 个文件` : ''));
+    return '';
 }
 
 // ★★ 清掉"宿主已删、安卓工程里还留着"的旧文件（2026-10 新增）。
