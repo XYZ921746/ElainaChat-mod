@@ -317,10 +317,10 @@ async function caseProviders(c) {
     const indexHtml = readWebFile('index.html');
     c.ok(/<script[^>]*src="\/js\/chat-providers\.js"[^>]*><\/script>/.test(indexHtml), 'index.html 引用了 chat-providers.js');
 
-    // 加载顺序：必须在主脚本（最后一个内联 script）之前
+    // 加载顺序：必须在主脚本 core.js 之前（defer 按书写顺序执行，早于主脚本即早于全部业务逻辑）
     const refIdx = indexHtml.indexOf('/js/chat-providers.js');
-    const lastInline = indexHtml.lastIndexOf('<script>');
-    c.ok(refIdx > 0 && refIdx < lastInline, '引用位置在主脚本之前');
+    const mainScriptIdx = indexHtml.indexOf('/js/core.js');
+    c.ok(refIdx > 0 && mainScriptIdx > 0 && refIdx < mainScriptIdx, '引用位置在主脚本之前');
 
     c.ok(/window\.ChatProviders\.forFormat\(/.test(html), 'callChatAPI 用了 forFormat 分发');
 }
@@ -402,7 +402,7 @@ async function caseAnthropicRequest(c) {
     `, chatSandbox, { filename: 'core.js#chat-fakes' });
     const raw = chatSandbox.__ctx;
 
-    // ===== 让真实模块跑起来：先跑 index.html 抠出的代码拿到依赖挂进 fakeWindow.ChatDeps，
+    // 让真实模块跑起来：先跑 index.html 抠出的代码拿到依赖挂进 fakeWindow.ChatDeps，
     // 在 vm 里执行 chat-providers.js，再把 ChatProviders 挂回 fakeWindow 供 callChatAPI 使用。
     fakeWindow.ChatDeps = {
         ClientApiError: raw.ClientApiError,
@@ -627,7 +627,7 @@ async function caseAnthropicRequest(c) {
     check('Anthropic 开思考 → reasoning.effort 是档位名', anOn.body.reasoning, { effort: 'low' });
     check('  低/高强度时补 output_config.effort', anOn.body.output_config, { effort: 'low' });
 
-    // ★ 开了思考就不能带 temperature：Anthropic 官方禁止（会 400）
+    // 开了思考就不能带 temperature：Anthropic 官方禁止（会 400）
     const anTemp = await send({ thinking: true, temperature: 0.7 }, { baseUrl: 'https://api.anthropic.com' }, 'anthropic');
     check('★ Anthropic 开思考时不带 temperature（带了会 400）', 'temperature' in anTemp.body, false);
     const anTempOff = await send({ thinking: false, temperature: 0.7 }, { baseUrl: 'https://api.anthropic.com' }, 'anthropic');
@@ -821,7 +821,7 @@ async function caseModelList(c) {
     `, modelSandbox, { filename: 'core.js#models-fakes' });
     const ctx = modelSandbox.__ctx;
 
-    // ===== 加载真实的 chat-providers.js（三种协议的实现都在那边）=====
+    // 加载真实的 chat-providers.js（三种协议的实现都在那边）
     fakeWindow.ChatDeps = {
         ClientApiError: ctx.ClientApiError,
         getChatBaseUrl: ctx.getChatBaseUrl,
@@ -952,7 +952,7 @@ async function caseModelList(c) {
         check('找得到 detectChatProtocolForCreate 的函数体', body.length > 200, true);
         // 注释里会提到这些词（解释"为什么不用 POST"），断言只看代码。
         const bodyCode = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
-        // ★★ 探测绝不能发对话请求：那是真调用、按 token 计费，而探测是改地址就自动重跑的。
+        // 探测绝不能发对话请求：那是真调用、按 token 计费，而探测是改地址就自动重跑的。
         check('★★ 探测里没有任何 POST 对话请求（不产生计费）',
             /postJsonFromDevice|chat\/completions|'\/responses'/.test(bodyCode), false);
         check('★ 探测只走 GET 模型列表（getJsonFromDevice）', /getJsonFromDevice\(/.test(bodyCode), true);
@@ -1430,7 +1430,7 @@ async function caseStopAndAuth(c) {
             || /\['off',\s*'strict',\s*'auto',\s*'full'\]/.test(html)
             || /AGENT_ACCESS_LEVELS\s*=\s*\[[^\]]*'strict'[^\]]*'auto'[^\]]*'full'/.test(html),
             '合法性校验包含三档');
-        // ★ off 也是合法档位（关闭电脑操作），但三档校验不能因此缩水成"非空即可"。
+        // off 也是合法档位（关闭电脑操作），但三档校验不能因此缩水成"非空即可"。
         c.ok(/\['off',\s*'strict',\s*'auto',\s*'full'\]/.test(html)
             || /AGENT_ACCESS_LEVELS\s*=\s*\[[^\]]*'off'/.test(html),
             '★ off 也是合法档位（整体关闭电脑操作）');
@@ -1443,7 +1443,7 @@ async function caseStopAndAuth(c) {
         // 切到 full 时必须有一次性后果确认（不能静默开启）
         c.ok(/nextAccess === 'full' && currentAgentAccess\(\) !== 'full'/.test(html),
             '★ 切到「完全访问」时弹一次后果确认');
-        c.ok(/不会询问你/.test(html), '★ 后果说明里点明"这些操作都不会再询问你"');
+        c.ok(/不会询问你|都不会再问你/.test(html), '★ 后果说明里点明"这些操作都不会再询问你"');
     }
 
     console.log('\n=== 2. 聊天停止按钮 ===');

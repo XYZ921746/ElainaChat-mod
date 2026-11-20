@@ -33,12 +33,16 @@ dist/Android/
 | --- | --- |
 | `MainActivity.java` | 注册全部 Capacitor 插件；系统返回键先交给页面的 `window.ElainaHost.systemBack` |
 | `ElainaNodePlugin.java` / `ElainaNodeService.java` | 本地服务客户端与 `:node` 进程宿主（Messenger 控制面 + `127.0.0.1` 数据面） |
-| `ElainaShellPlugin.java` | 手机操作设备层（前端当作 `window.ElainaDevice`） |
-| `ElainaAccessibilityService.java` | 无障碍后端：读界面、点击、滑动、输入、截图 |
+| `ElainaShellPlugin.java` | 手机操作设备层（前端当作 `window.ElainaDevice`）；四种运行方式的路由与授权入口 |
+| `ElainaAccessibilityService.java` | 前台后端：读界面、点击、滑动、输入、截图（按 displayId 也可读副屏） |
+| `DisplayHolder.java` / `IDisplayHolder.aidl` | 后台副屏引擎（Shizuku 与 Root 共用）：建屏、定向启动与注入、ImageReader 抓帧 |
+| `ShizukuBridge.java` / `ShizukuHolderService.java` | Shizuku / Sui 的授权与 UserService holder（shell 或 root uid） |
+| `RootBridge.java` / `RootHolderMain.java` | Root 后端：`su` 起 holder，命令 / 结果 JSON 文件桥 + 一次性 token（不经 Binder / Provider） |
+| `ElainaAgentService.java` | 后台会话保活（主进程 `specialUse` 前台服务 + PARTIAL_WAKE_LOCK） |
 | `ElainaOverlay.java` | 系统级悬浮窗（授权确认不能落在被操作的应用里） |
 | `ElainaNotificationListener.java` / `DeviceInfoReader.java` | 通知、短信、通讯录、日历、应用列表读取 |
 | `AgentWorkspace.java` | Agent 工作区与用户授权文件夹 |
-| `ShellBackends.java` / `ShellProcess.java` / `PhoneCommand.java` / `DeviceArtifacts.java` | 命令族后端、进程执行、标签翻译、dump/screencap 产物处理 |
+| `ShellBackends.java` / `ShellProcess.java` / `PhoneCommand.java` / `DeviceArtifacts.java` | 后端注册（含 holder 的「不执行任意命令」约束）、进程执行、标签翻译、dump/screencap 产物处理 |
 | `ByokHttpPlugin.java` / `ByokSecretsPlugin.java` | BYOK 直连与 Keystore 密钥 |
 | `EdgeTtsPlugin.java` / `MiniWebSocket.java` | Edge TTS（端点校验 UA，WebView 的 WebSocket 不能自定义请求头） |
 | `ElainaExportPlugin.java` | 日志导出（SAF 让用户自选保存位置） |

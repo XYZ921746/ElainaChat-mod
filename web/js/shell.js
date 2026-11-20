@@ -13,7 +13,7 @@ function openAnnouncementDeferred() {
 }
 
 function showSidebarFunc() {
-    if (window.innerWidth <= 980) {
+    if (isMobile()) {
         elements.initialState.classList.add('sidebar-underlay-hidden');
         elements.floatingMic.classList.add('sidebar-underlay-hidden');
     }
@@ -24,7 +24,7 @@ function showSidebarFunc() {
 function syncViewportHeight() {
     const viewport = window.visualViewport;
     const viewportHeight = viewport?.height || window.innerHeight;
-    const viewportTop = window.innerWidth <= 980 ? Math.max(0, viewport?.offsetTop || 0) : 0;
+    const viewportTop = isMobile() ? Math.max(0, viewport?.offsetTop || 0) : 0;
     if (viewportHeight) document.documentElement.style.setProperty('--app-height', `${Math.round(viewportHeight)}px`);
     document.documentElement.style.setProperty('--viewport-offset-top', `${Math.round(viewportTop)}px`);
 }
@@ -48,7 +48,7 @@ function keepFocusedComposerVisible(input) {
 let sidebarPinnedOpen = false;
 
 function setSidebarCollapsed(collapsed) {
-    if (window.innerWidth <= 980) return;
+    if (isMobile()) return;
     const on = document.documentElement.classList.toggle('rd-sidebar-collapsed', Boolean(collapsed));
     const btn = elements.showSidebar || document.getElementById('showSidebar');
     if (btn) {
@@ -60,13 +60,13 @@ function setSidebarCollapsed(collapsed) {
 
 /** 用户手动展开：对话页默认收起，但手动打开后不能被 syncSidePanelForView 立刻收回去。 */
 function expandSidebarPanel() {
-    if (window.innerWidth <= 980) return;
+    if (isMobile()) return;
     sidebarPinnedOpen = true;
     setSidebarCollapsed(false);
 }
 
 function toggleSidebarPanel() {
-    if (window.innerWidth <= 980) return;
+    if (isMobile()) return;
     const collapsed = !document.documentElement.classList.contains('rd-sidebar-collapsed');
     sidebarPinnedOpen = !collapsed;
     setSidebarCollapsed(collapsed);
@@ -74,7 +74,7 @@ function toggleSidebarPanel() {
 
 /** 只有首页展开（要挑对话），对话、回忆整页、设置 / 成就 / 市场都收起；对话页手动展开过则保持。 */
 function syncSidePanelForView() {
-    if (window.innerWidth <= 980) { sidebarPinnedOpen = false; return; }
+    if (isMobile()) { sidebarPinnedOpen = false; return; }
     const initEl = document.getElementById('initialState');
     const home = initEl ? !initEl.classList.contains('hidden') : false;
     let overlayOpen = false;
@@ -116,7 +116,7 @@ function watchSidePanel() {
     }
     syncSidePanelForView();
     try {
-        const mq = window.matchMedia('(max-width: 980px)');
+        const mq = window.matchMedia('(max-width: ' + MOBILE_BREAKPOINT + 'px)');
         if (mq && mq.addEventListener) mq.addEventListener('change', syncSidePanelForView);
     } catch (e) { /* 老 WebView 没有 addEventListener 时只在启动时同步一次 */ }
 }

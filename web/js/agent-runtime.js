@@ -44,14 +44,18 @@ const agentRuntime = (function () {
             const mode = (typeof runModeDecision === 'string') ? runModeDecision : '';
             const used = String(window.__lastAgentBackend || '');
             const fallbackDefault = (typeof currentBackendId === 'function') ? currentBackendId() : '';
-            const effective = (mode === 'module' || mode === 'accessibility')
-                ? mode
-                : (used || fallbackDefault);
+            const known = (typeof AGENT_BACKENDS !== 'undefined' && Array.isArray(AGENT_BACKENDS))
+                ? AGENT_BACKENDS.some((b) => b.id === mode)
+                : (mode === 'module' || mode === 'accessibility');
+            const effective = known ? mode : (used || fallbackDefault);
+            // 「看画面」读的是模块网关的副屏画面：Shizuku / Root 的副屏帧走「手机截图」，没有这条实时流。
             watch.classList.toggle('hidden', !(running && effective === 'module'));
         }
     }
 
     function beginBatch() {
+        // 子代理运行中：新聊天消息不打断任务、不解禁停止、不动运行代号 —— 会话与聊天分离的核心语义
+        if (typeof agentSessionActive === 'function' && agentSessionActive()) return;
         halted = false;
         stopRequested = false;      // 新的用户请求 = 新的一批：停止状态到这里才解除
         // 新一批也可能和上一轮迟到的请求重叠：递增代号，让那些旧回复自己作废。
@@ -66,6 +70,9 @@ const agentRuntime = (function () {
         stopReason = '';
         step = 0;
         currentAction = '';
+        // 后台方式下 agent 循环跑在主进程：切到别的应用后系统会冻结它（副屏还在、循环已经停了）。
+        // 保活只在后台方式下开 —— 前台方式本来就要求用户停在本应用，不需要额外占着 CPU。
+        syncAgentKeepAlive(true);
         render();
     }
 
@@ -75,7 +82,21 @@ const agentRuntime = (function () {
         if (!halted) stopRequested = false;
         aborters.clear();
         currentAction = '';
+        syncAgentKeepAlive(false);
         render();
+    }
+
+    /** 后台会话保活：只在后台方式、且确实在运行时开；其它情况一律关掉。 */
+    function syncAgentKeepAlive(on) {
+        const dev = (typeof deviceBridge === 'function') ? deviceBridge() : null;
+        if (!dev || typeof dev.keepAlive !== 'function') return;
+        const mode = (typeof runModeDecision === 'string') ? runModeDecision : '';
+        const background = (typeof backendKindOf === 'function')
+            ? backendKindOf(mode || currentBackendId()) === 'background'
+            : (mode === 'module');
+        try {
+            void dev.keepAlive({ on: Boolean(on && background) }).catch(() => { });
+        } catch (e) { /* 保活失败不影响任务本身 */ }
     }
 
     function requestStop(reason) {
@@ -99,6 +120,15 @@ const agentRuntime = (function () {
             if (pending) pending(false);
         }
         settleStoppedRun();
+        // 停止也要有交代：过程话没有发给用户，不在这里补一段总结就等于这次操作在对话里毫无痕迹。
+        if (typeof agentFinishRun === 'function') {
+            try { agentFinishRun('stopped'); } catch (e) { /* 收尾失败不该阻塞停止 */ }
+        }
+        // 会话收尾写回的是隐藏报告；停止的可见总结只能在这里补。requestStop 有幂等闸，
+        // 不会和停止入口处的提示重复。
+        if (typeof appendAgentVisibleMessage === 'function' && typeof agentRunSummaryText === 'function') {
+            try { appendAgentVisibleMessage(agentRunSummaryText('stopped')); } catch (e) { /* 总结失败不该阻塞停止 */ }
+        }
         return true;
     }
 
@@ -233,16 +263,11 @@ const agentRuntime = (function () {
         overlayListenerReady = true;
 
         plugin.addListener('overlayStop', () => {
-            const stopped = requestStop('用户在悬浮窗上点了停止');
+            requestStop('用户在悬浮窗上点了停止');
             // 必须把"正在等确认"的 Promise 也了结掉，否则用户点停止时 requestApproval 会永远 await 下去。
             const pending = overlayApprovalPending;
             overlayApprovalPending = null;
             if (pending) pending(false);
-            // 悬浮条上的停止是用户唯一能看到的反馈：停止后回到应用要有记录，
-            // 否则这次中止在对话里毫无痕迹，用户会以为任务还在跑。
-            if (stopped && typeof insertAgentResult === 'function') {
-                insertAgentResult('已停止：你在悬浮窗上点了停止，后续动作没有执行。如需继续，请重新告诉 AI 要做什么，或让它先说明刚才做到哪一步。');
-            }
         });
 
         plugin.addListener('overlayApproval', (data) => {
@@ -356,9 +381,8 @@ if (typeof document !== 'undefined' && typeof document.addEventListener === 'fun
 
 document.getElementById('agentStopBtn')?.addEventListener('click', () => {
     if (agentRuntime.requestStop('用户点了停止')) {
-        // 停止后收起悬浮窗，否则它会一直挂在屏幕上，用户以为还在跑
+        // 停止后收起悬浮窗，否则它会一直挂在屏幕上，用户以为还在跑；总结由 requestStop 统一补。
         if (agentRuntime.hideOverlay) agentRuntime.hideOverlay();
-        insertAgentResult('已停止：用户手动中止了 AI 的手机操作，后续动作没有执行。如需继续，请重新告诉 AI 要做什么，或让它先说明刚才做到哪一步。');
     }
 });
 

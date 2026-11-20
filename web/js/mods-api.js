@@ -18,9 +18,19 @@
         const getPendingRegistrations = deps.getPendingRegistrations;
         const getRegByDir = deps.getRegByDir;
         const getDirByReg = deps.getDirByReg;
-        const getModRoot = deps.getModRoot;
-        const isAppReady = deps.isAppReady;
-        const markAppReadyState = deps.markAppReadyState;
+    const getModRoot = deps.getModRoot;
+    const isAppReady = deps.isAppReady;
+    const markAppReadyState = deps.markAppReadyState;
+
+    /* 服务端高危能力名（与 server/internal/plugin 的 capabilityNames 对应）：只有「执行本机命令」
+     * 算高危 —— fs-read / fs-write 被 safePath 限制在插件自己目录内，route / upload / static / zip
+     * 也都在各自声明的范围内活动，属正常功能面。新增能力时重新评估这份清单并同步 开发文档.md 表 A23。 */
+    const RISKY_SERVER_CAPS = ['exec'];
+    function riskyServerCapsOf(manifest) {
+        const server = manifest && manifest.server;
+        if (!server || !Array.isArray(server.capabilities)) return [];
+        return server.capabilities.filter((c) => RISKY_SERVER_CAPS.includes(c));
+    }
 
     return {
         /** 把插件在 localStorage 里的偏好搬进 host.storage（启动时自动调用；测试/诊断可手动调） */
@@ -99,6 +109,9 @@
                 // 是不是「加载失败后自动停用」造成的关闭：设置界面据此把卡片文案写成"加载失败已自动停用"，
                 // 并在卡片上给出原因，否则用户只看到开关是关的、以为是自己没开
                 autoDisabled: e.autoDisabled === true,
+                // 服务端高危能力（exec）：设置界面在用户开启开关时先弹窗确认 ——
+                //   风险落点是「代码开始跑」那一刻，不是下载那一刻；其余能力属正常功能面，不打扰
+                riskyServerCaps: riskyServerCapsOf(e.manifest),
                 // 运行期出错次数（守护边界累计）：设置页拿它区分「一装就坏」与「跑着跑着开始坏」，
                 // 后者的下一步是修插件，而不是"再点一次开关试试"
                 faultCount: e.faultCount || 0,
@@ -164,6 +177,8 @@
 
         /** 宿主插槽的名字清单（诊断与 mod 自查用） */
         slotNames: () => [...slotImpls.keys()],
+        /** 某插件登记的 Agent 工具名清单（设置卡片据此画「工具免确认」开关） */
+        agentToolsOf: deps.agentToolsOf || (() => []),
         _disposeContributions: disposeContributions,
         _registry: getRegistry(),
 

@@ -3,11 +3,14 @@ package httpapi
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"elainachat/server/internal/auth"
@@ -191,5 +194,142 @@ func TestChangePasswordWritesConfigAndDropsAuthFile(t *testing.T) {
 	}
 	if _, err := os.Stat(authPath); !os.IsNotExist(err) {
 		t.Fatalf("重启后 auth.json 应保持不存在：%v", err)
+	}
+}
+
+// 未登录刷新深层页面时，登录后要回到原页面：next 只对应用页面带上，静态资源与 API 不带。
+func TestLoginNextKeepsAppRoute(t *testing.T) {
+	s := newStaticTestServer(t, map[string]string{"index.html": "<html></html>"})
+	const password = "Abc12345"
+	if err := s.auth.SetPassword(password); err != nil {
+		t.Fatalf("设置访问密码失败：%v", err)
+	}
+
+	rec := staticRequest(s, http.MethodGet, "/notes/?tab=1", "", "")
+	if rec.Code != http.StatusFound {
+		t.Fatalf("未登录访问应用页应 302，实际 %d", rec.Code)
+	}
+	loc, err := url.Parse(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("Location 不合法：%v", err)
+	}
+	if loc.Path != "/login" || loc.Query().Get("next") != "/notes/?tab=1" {
+		t.Fatalf("登录跳转应保留应用页地址，实际 %q", rec.Header().Get("Location"))
+	}
+
+	// 静态资源不配 next：登录后跳到一个 JS 文件没有意义。
+	asset := staticRequest(s, http.MethodGet, "/js/app.js", "", "")
+	if asset.Code != http.StatusFound || asset.Header().Get("Location") != "/login" {
+		t.Fatalf("静态资源未登录应直接跳 /login，实际 %d %q", asset.Code, asset.Header().Get("Location"))
+	}
+}
+
+// 已登录访问 /login 按 next 回跳；外部地址 / 非应用页一律丢弃。
+func TestLoginRedirectUsesSafeNext(t *testing.T) {
+	s := newStaticTestServer(t, map[string]string{"index.html": "<html></html>"})
+	if err := s.auth.SetPassword("Abc12345"); err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.auth.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := s.auth.SessionCookieName() + "=" + token
+	request := func(target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req.RemoteAddr = "127.0.0.1:45678"
+		req.Host = "127.0.0.1:4199"
+		req.Header.Set("Cookie", cookie)
+		rec := httptest.NewRecorder()
+		s.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := request("/login?next=%2Fsettings%2Fmodel%2F"); rec.Code != http.StatusFound ||
+		rec.Header().Get("Location") != "/settings/model/" {
+		t.Fatalf("已登录应按 next 回到设置分栏，实际 %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, next := range []string{"/js/app.js", "/api/store", "%2F%2Fevil.com%2F"} {
+		rec := request("/login?next=" + next)
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/" {
+			t.Errorf("不安全 / 非应用页 next 应回首页：%s → %d %q", next, rec.Code, rec.Header().Get("Location"))
+		}
+	}
+}
+
+// 并发改密是一个串行事务：两个请求都成功后，内存接受的密码必须与磁盘一致，
+// 且配置文件始终是合法 JSON（以前共享临时文件会互相截断、争抢 rename）。
+func TestConcurrentPasswordChangesStayConsistent(t *testing.T) {
+	s, root := newTestServer(t)
+	s.SetConfigPath(filepath.Join(root, "data", "config.json"))
+	if err := s.auth.SetPassword("initial-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	token, err := s.auth.NewSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := s.auth.SessionCookieName() + "=" + token
+
+	for i := 0; i < 12; i++ {
+		a := fmt.Sprintf("password-a-%d-x", i)
+		b := fmt.Sprintf("password-b-%d-y", i)
+		results := make([]int, 2)
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; results[0] = postChangePassword(s, a, cookie).Code }()
+		go func() { defer wg.Done(); <-start; results[1] = postChangePassword(s, b, cookie).Code }()
+		close(start)
+		wg.Wait()
+		for j, code := range results {
+			if code != http.StatusOK {
+				t.Fatalf("第 %d 轮并发改密返回 %d（请求 %d）", i, code, j)
+			}
+		}
+		cfg, err := config.LoadFile(s.configPath)
+		if err != nil {
+			t.Fatalf("并发写后配置文件不是合法 JSON：%v", err)
+		}
+		if cfg.Password != a && cfg.Password != b {
+			t.Fatalf("磁盘密码既不是请求 A 也不是请求 B：%q", cfg.Password)
+		}
+		if !s.auth.VerifyPassword(cfg.Password) {
+			t.Fatalf("内存认证与磁盘密码不一致：磁盘 %q", cfg.Password)
+		}
+		// 下一轮用当前有效密码重新登录，保证两个请求都带合法会话。
+		if err := s.auth.SetPassword("initial-password-1"); err != nil {
+			t.Fatal(err)
+		}
+		token, err := s.auth.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cookie = s.auth.SessionCookieName() + "=" + token
+	}
+}
+
+func TestSafeNextPath(t *testing.T) {
+	good := map[string]string{
+		"/":                    "/",
+		"/notes/":              "/notes/",
+		"/settings/model/":     "/settings/model/",
+		"/web/store/":          "/web/store/",
+		"/notes/?from=history": "/notes/?from=history",
+	}
+	for in, want := range good {
+		if got := safeNextPath(in); got != want {
+			t.Errorf("%q 应放行，实际 %q", in, got)
+		}
+	}
+	bad := []string{
+		"", "//evil.com", "https://evil.com/", "javascript:alert(1)",
+		"/\\evil.com", "/js/app.js", "/api/store", "/settings/nope/",
+		"/notes/../api/store", "/%2F%2Fevil.com", "/notes/\r\nX: y",
+	}
+	for _, in := range bad {
+		if got := safeNextPath(in); got != "" {
+			t.Errorf("%q 应拒绝，实际 %q", in, got)
+		}
 	}
 }

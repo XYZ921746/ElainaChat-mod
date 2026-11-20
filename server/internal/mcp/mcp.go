@@ -86,9 +86,9 @@ func (d ServerDef) Transport() string {
 }
 
 type client interface {
-	Start() (*ServerInfo, error)
-	ListTools() ([]Tool, error)
-	CallTool(name string, args map[string]any) (ToolResult, error)
+	Start(ctx context.Context) (*ServerInfo, error)
+	ListTools(ctx context.Context) ([]Tool, error)
+	CallTool(ctx context.Context, name string, args map[string]any) (ToolResult, error)
 	Close()
 	Running() bool
 	Info() *ServerInfo
@@ -101,7 +101,7 @@ func newClient(def ServerDef, log *logx.Logger, version string) client {
 	return newStdioClient(def, log, version)
 }
 
-// ---------------- JSON-RPC 公共类型 ----------------
+// JSON-RPC 公共类型
 
 type rpcError struct {
 	Code    int    `json:"code"`
@@ -130,7 +130,7 @@ func idOf(raw json.RawMessage) (int64, bool) {
 
 func buildInitializeParams(version string) map[string]any {
 	if version == "" {
-		version = "2.2.0"
+		version = "2.2.1"
 	}
 	return map[string]any{
 		"protocolVersion": protocolVersion,
@@ -222,7 +222,7 @@ func clipRunes(text string, limit int) string {
 	return text[:cut] + fmt.Sprintf("\n…（已截断，原文 %d 字节，仅保留前 %d 字节）", len(text), cut)
 }
 
-// ---------------- stdio 客户端 ----------------
+// stdio 客户端
 
 type stdioClient struct {
 	def     ServerDef
@@ -238,12 +238,23 @@ type stdioClient struct {
 	initDone bool
 	info     *ServerInfo
 	done     chan struct{}
+	// writeMu 只保护一次完整的 stdin 写：JSON-RPC 按行分帧，两条请求的字节
+	// 交错会让对端解析出垃圾。持锁期间不做任何可能长时间阻塞的操作。
+	writeMu sync.Mutex
+	// startMu 单飞并发 Start：两个请求同时发现「没启动」时只允许一个真正拉起进程。
+	startMu sync.Mutex
+	// 生命周期 context 与请求 ctx 分开：/api/mcp/tools 的请求结束不能杀掉
+	// 刚拉起的子进程，只有 Close 才取消它。
+	lifeCtx    context.Context
+	lifeCancel context.CancelFunc
 }
 
 func newStdioClient(def ServerDef, log *logx.Logger, version string) *stdioClient {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &stdioClient{
 		def: def, log: log, version: version,
 		pending: map[int64]chan rpcMessage{}, done: make(chan struct{}),
+		lifeCtx: ctx, lifeCancel: cancel,
 	}
 }
 
@@ -274,9 +285,14 @@ func (c *stdioClient) Info() *ServerInfo {
 	return c.info
 }
 
-func (c *stdioClient) Start() (*ServerInfo, error) {
+// Start 按需拉起子进程。ctx 只控制本次初始化等待；子进程本身跟着 lifeCtx 走，
+// 请求结束、客户端断开都不会杀掉它，只有 Close 才会。
+func (c *stdioClient) Start(ctx context.Context) (*ServerInfo, error) {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+
 	c.mu.Lock()
-	if c.cmd != nil {
+	if c.cmd != nil && !c.closed && c.initDone {
 		info := c.info
 		c.mu.Unlock()
 		return info, nil
@@ -285,6 +301,22 @@ func (c *stdioClient) Start() (*ServerInfo, error) {
 	if command == "" {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("MCP 服务器「%s」没有配置启动命令", c.def.ID)
+	}
+	// 上一次初始化失败留下的半启动进程：先清干净，让本次 Start 真正重试。
+	if c.cmd != nil && c.stdin != nil {
+		_ = c.stdin.Close()
+		if c.cmd.Process != nil {
+			_ = c.cmd.Process.Kill()
+		}
+	}
+	c.pending = map[int64]chan rpcMessage{}
+	c.nextID = 0
+	c.initDone = false
+	c.info = nil
+	// Close 后重启：生命周期 ctx 已取消，必须换新的，否则所有请求立刻失败。
+	if c.lifeCtx.Err() != nil {
+		fresh, freshCancel := context.WithCancel(context.Background())
+		c.lifeCtx, c.lifeCancel = fresh, freshCancel
 	}
 	args := append([]string{}, c.def.Args...)
 	// Windows 上 .cmd/.bat 必须显式走 cmd.exe /c：用 shell 拼接 args 会在路径含空格时断掉。
@@ -325,13 +357,15 @@ func (c *stdioClient) Start() (*ServerInfo, error) {
 	c.stdin = stdin
 	c.closed = false
 	c.done = make(chan struct{})
+	done := c.done
+	cancel := c.lifeCancel
 	c.logf("启动：%s", describeCommand(c.def.Command, c.def.Args))
 	c.mu.Unlock()
 
 	go c.readStdout(stdout)
 	go c.drainStderr(stderr)
-	go c.watchExit(cmd)
-	return c.initialize()
+	go c.watchExit(cmd, done, cancel)
+	return c.initialize(ctx)
 }
 
 func (c *stdioClient) readStdout(r io.Reader) {
@@ -414,15 +448,26 @@ func (c *stdioClient) drainStderr(r io.Reader) {
 	}
 }
 
-func (c *stdioClient) watchExit(cmd *exec.Cmd) {
+// watchExit 等子进程退出并清理状态。done 与 cancel 是本次进程对应的代次资源：
+// 捕获进参而不是读字段，防止旧进程的退出回调误清重启后的新状态、关掉新代次的 done。
+func (c *stdioClient) watchExit(cmd *exec.Cmd, done chan struct{}, cancel context.CancelFunc) {
 	err := cmd.Wait()
 	c.mu.Lock()
-	c.closed = true
-	c.cmd = nil
-	pending := c.pending
-	c.pending = map[int64]chan rpcMessage{}
-	close(c.done)
+	// 代次守卫：Start 可能已经拉起了新进程，旧回调只能收拾自己那一代。
+	current := c.cmd == cmd
+	var pending map[int64]chan rpcMessage
+	if current {
+		c.closed = true
+		c.cmd = nil
+		c.stdin = nil
+		pending = c.pending
+		c.pending = map[int64]chan rpcMessage{}
+	}
 	c.mu.Unlock()
+	// 进程退出（含 Close 强杀）时同步取消生命周期：在途请求立刻醒来并报错，
+	// 而不是各自等到超时。
+	cancel()
+	close(done)
 	reason := "已退出"
 	if err != nil {
 		reason += "（" + err.Error() + "）"
@@ -444,13 +489,16 @@ func (c *stdioClient) send(payload any) error {
 	if stdin == nil || closed {
 		return fmt.Errorf("MCP 服务器「%s」没有在运行", c.def.ID)
 	}
+	// 写入整体持锁：两条请求的字节交错会让按行分帧的对端解析出垃圾。
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	_, err = stdin.Write(append(raw, '\n'))
 	return err
 }
 
-func (c *stdioClient) request(method string, params any, timeout time.Duration) (json.RawMessage, error) {
+func (c *stdioClient) request(ctx context.Context, method string, params any, timeout time.Duration) (json.RawMessage, error) {
 	c.mu.Lock()
-	if c.closed {
+	if c.closed || c.lifeCtx.Err() != nil {
 		c.mu.Unlock()
 		return nil, fmt.Errorf("MCP 服务器「%s」已关闭", c.def.ID)
 	}
@@ -471,23 +519,44 @@ func (c *stdioClient) request(method string, params any, timeout time.Duration) 
 		return nil, err
 	}
 
+	// 超时、调用方取消、客户端关闭三选一先到：都要清 pending，防止迟到响应
+	// 占着表项。取消已发出的请求时尽力通知对端（通知不等待回应）。
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	select {
 	case msg := <-ch:
 		if msg.Error != nil {
 			return nil, fmt.Errorf("%s（code %d）", msg.Error.Message, msg.Error.Code)
 		}
 		return msg.Result, nil
-	case <-time.After(timeout):
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+	case <-ctx.Done():
+		c.removePending(id)
+		c.send(map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "notifications/cancelled",
+			"params":  map[string]any{"requestId": id},
+		})
+		return nil, fmt.Errorf("MCP 请求已取消：%s", method)
+	case <-c.lifeCtx.Done():
+		c.removePending(id)
+		return nil, fmt.Errorf("MCP 服务器「%s」已关闭", c.def.ID)
+	case <-timer.C:
+		c.removePending(id)
 		return nil, fmt.Errorf("MCP 服务器「%s」在 %d 秒内没有回应 %s", c.def.ID, int(timeout.Seconds()), method)
 	}
 }
 
-func (c *stdioClient) initialize() (*ServerInfo, error) {
-	result, err := c.request("initialize", buildInitializeParams(c.version), initTimeout)
+func (c *stdioClient) removePending(id int64) {
+	c.mu.Lock()
+	delete(c.pending, id)
+	c.mu.Unlock()
+}
+
+func (c *stdioClient) initialize(ctx context.Context) (*ServerInfo, error) {
+	result, err := c.request(ctx, "initialize", buildInitializeParams(c.version), initTimeout)
 	if err != nil {
+		// 初始化失败不能留下「进程活着但没握手」的半连接：关掉，让下一次 Start 重来。
+		c.Close()
 		return nil, err
 	}
 	var payload struct {
@@ -506,22 +575,22 @@ func (c *stdioClient) initialize() (*ServerInfo, error) {
 	return payload.ServerInfo, nil
 }
 
-func (c *stdioClient) ListTools() ([]Tool, error) {
-	if _, err := c.Start(); err != nil {
+func (c *stdioClient) ListTools(ctx context.Context) ([]Tool, error) {
+	if _, err := c.Start(ctx); err != nil {
 		return nil, err
 	}
-	result, err := c.request("tools/list", map[string]any{}, listTimeout)
+	result, err := c.request(ctx, "tools/list", map[string]any{}, listTimeout)
 	if err != nil {
 		return nil, err
 	}
 	return normalizeTools(result)
 }
 
-func (c *stdioClient) CallTool(name string, args map[string]any) (ToolResult, error) {
-	if _, err := c.Start(); err != nil {
+func (c *stdioClient) CallTool(ctx context.Context, name string, args map[string]any) (ToolResult, error) {
+	if _, err := c.Start(ctx); err != nil {
 		return ToolResult{}, err
 	}
-	result, err := c.request("tools/call", map[string]any{
+	result, err := c.request(ctx, "tools/call", map[string]any{
 		"name": name, "arguments": args,
 	}, callTimeout)
 	if err != nil {
@@ -530,8 +599,9 @@ func (c *stdioClient) CallTool(name string, args map[string]any) (ToolResult, er
 	return flattenToolResult(result), nil
 }
 
-// Close 先礼后兵：关 stdin 让它自行退出，5 秒不退再强杀。
+// Close 先取消生命周期让在途请求立刻醒来，再关 stdin 让它自行退出，5 秒不退再强杀。
 func (c *stdioClient) Close() {
+	c.lifeCancel()
 	c.mu.Lock()
 	stdin := c.stdin
 	done := c.done
@@ -552,7 +622,7 @@ func (c *stdioClient) Close() {
 	}
 }
 
-// ---------------- Streamable HTTP 客户端 ----------------
+// Streamable HTTP 客户端
 
 type httpClient struct {
 	def     ServerDef
@@ -938,16 +1008,21 @@ func (c *httpClient) postNotification(message map[string]any) {
 	}
 }
 
-func (c *httpClient) Start() (*ServerInfo, error) {
+func (c *httpClient) Start(ctx context.Context) (*ServerInfo, error) {
 	c.mu.Lock()
-	if c.initDone {
+	if c.initDone && !c.closed {
 		info := c.info
 		c.mu.Unlock()
 		return info, nil
 	}
+	// Close 后重启：上一轮的会话已随 DELETE 结束，全部清掉重新握手。
+	c.closed = false
+	c.initDone = false
+	c.info = nil
+	c.sessionID = ""
 	c.mu.Unlock()
 
-	result, err := c.request(context.Background(), "initialize", buildInitializeParams(c.version), initTimeout)
+	result, err := c.request(ctx, "initialize", buildInitializeParams(c.version), initTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -970,22 +1045,22 @@ func (c *httpClient) Start() (*ServerInfo, error) {
 	return payload.ServerInfo, nil
 }
 
-func (c *httpClient) ListTools() ([]Tool, error) {
-	if _, err := c.Start(); err != nil {
+func (c *httpClient) ListTools(ctx context.Context) ([]Tool, error) {
+	if _, err := c.Start(ctx); err != nil {
 		return nil, err
 	}
-	result, err := c.request(context.Background(), "tools/list", map[string]any{}, listTimeout)
+	result, err := c.request(ctx, "tools/list", map[string]any{}, listTimeout)
 	if err != nil {
 		return nil, err
 	}
 	return normalizeTools(result)
 }
 
-func (c *httpClient) CallTool(name string, args map[string]any) (ToolResult, error) {
-	if _, err := c.Start(); err != nil {
+func (c *httpClient) CallTool(ctx context.Context, name string, args map[string]any) (ToolResult, error) {
+	if _, err := c.Start(ctx); err != nil {
 		return ToolResult{}, err
 	}
-	result, err := c.request(context.Background(), "tools/call", map[string]any{
+	result, err := c.request(ctx, "tools/call", map[string]any{
 		"name": name, "arguments": args,
 	}, callTimeout)
 	if err != nil {
@@ -996,21 +1071,31 @@ func (c *httpClient) CallTool(name string, args map[string]any) (ToolResult, err
 
 func (c *httpClient) Close() {
 	c.mu.Lock()
-	c.closed = true
 	session := c.sessionID
-	c.sessionID = ""
+	c.closed = true
+	c.initDone = false
 	c.mu.Unlock()
 	if session == "" {
 		return
 	}
-	// 礼貌地结束会话：Streamable HTTP 用 DELETE，失败也无所谓（服务端会超时回收）。
+	// 礼貌地结束会话：Streamable HTTP 用 DELETE。会话 ID 必须在状态清空前
+	// 构造请求头——之前先清 sessionID 再 buildHeaders，DELETE 实际不带会话。
+	headers := http.Header{}
+	headers.Set("Content-Type", "application/json")
+	headers.Set("MCP-Protocol-Version", c.negotiated)
+	headers.Set("Mcp-Session-Id", session)
+	for k, v := range c.def.Headers {
+		if k != "" {
+			headers.Set(k, v)
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.def.URL, nil)
 	if err != nil {
 		return
 	}
-	req.Header = c.buildHeaders()
+	req.Header = headers
 	if resp, err := c.client.Do(req); err == nil {
 		_ = resp.Body.Close()
 	}
@@ -1023,7 +1108,7 @@ func clip(s string, n int) string {
 	return s[:n] + "…"
 }
 
-// ---------------- 注册表 ----------------
+// 注册表
 
 type entry struct {
 	def       ServerDef
@@ -1095,18 +1180,18 @@ func (r *Registry) ensure(def ServerDef) (*entry, error) {
 
 type unavailableClient struct{ id string }
 
-func (u *unavailableClient) Start() (*ServerInfo, error) {
+func (u *unavailableClient) Start(context.Context) (*ServerInfo, error) {
 	return nil, errors.New("这台服务器既没有地址（url）也没有启动命令（command）")
 }
-func (u *unavailableClient) ListTools() ([]Tool, error) { return nil, nil }
-func (u *unavailableClient) CallTool(string, map[string]any) (ToolResult, error) {
+func (u *unavailableClient) ListTools(context.Context) ([]Tool, error) { return nil, nil }
+func (u *unavailableClient) CallTool(context.Context, string, map[string]any) (ToolResult, error) {
 	return ToolResult{}, errors.New("没有可用的传输方式")
 }
 func (u *unavailableClient) Close()            {}
 func (u *unavailableClient) Running() bool     { return false }
 func (u *unavailableClient) Info() *ServerInfo { return nil }
 
-func (r *Registry) start(e *entry) *entry {
+func (r *Registry) start(ctx context.Context, e *entry) *entry {
 	r.mu.Lock()
 	if e.state == "ready" {
 		r.mu.Unlock()
@@ -1116,7 +1201,7 @@ func (r *Registry) start(e *entry) *entry {
 	e.errText = ""
 	r.mu.Unlock()
 
-	if _, err := e.client.Start(); err != nil {
+	if _, err := e.client.Start(ctx); err != nil {
 		r.mu.Lock()
 		e.state = "error"
 		e.errText = err.Error()
@@ -1133,8 +1218,9 @@ func (r *Registry) start(e *entry) *entry {
 	return e
 }
 
-// ListTools 拿某台服务器的工具清单（会按需启动）。
-func (r *Registry) ListTools(def ServerDef) ([]Tool, string, error) {
+// ListTools 拿某台服务器的工具清单（会按需启动）。ctx 只控制本次等待；
+// 子进程的生命周期由客户端自己的关闭信号管理，不随请求结束。
+func (r *Registry) ListTools(ctx context.Context, def ServerDef) ([]Tool, string, error) {
 	e, err := r.ensure(def)
 	if err != nil {
 		return nil, "", err
@@ -1143,7 +1229,7 @@ func (r *Registry) ListTools(def ServerDef) ([]Tool, string, error) {
 	ready := e.state == "ready" && e.client.Running()
 	r.mu.Unlock()
 	if !ready {
-		e = r.start(e)
+		e = r.start(ctx, e)
 		r.mu.Lock()
 		ok := e.state == "ready"
 		eErr := e.errText
@@ -1160,7 +1246,7 @@ func (r *Registry) ListTools(def ServerDef) ([]Tool, string, error) {
 	}
 	r.mu.Unlock()
 
-	tools, listErr := e.client.ListTools()
+	tools, listErr := e.client.ListTools(ctx)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if listErr != nil {
@@ -1177,7 +1263,7 @@ func (r *Registry) ListTools(def ServerDef) ([]Tool, string, error) {
 
 // CallTool 调一个工具；工具自身报错（isError / 超时）作为正常结果返回，
 // 模型需要那条具体原因而不是「接口 500」。
-func (r *Registry) CallTool(def ServerDef, name string, args map[string]any) ToolResult {
+func (r *Registry) CallTool(ctx context.Context, def ServerDef, name string, args map[string]any) ToolResult {
 	e, err := r.ensure(def)
 	if err != nil {
 		return ToolResult{OK: false, Text: "MCP 服务器配置无效：" + err.Error()}
@@ -1186,7 +1272,7 @@ func (r *Registry) CallTool(def ServerDef, name string, args map[string]any) Too
 	ready := e.state == "ready" && e.client.Running()
 	r.mu.Unlock()
 	if !ready {
-		e = r.start(e)
+		e = r.start(ctx, e)
 		r.mu.Lock()
 		ok := e.state == "ready"
 		eErr := e.errText
@@ -1195,7 +1281,7 @@ func (r *Registry) CallTool(def ServerDef, name string, args map[string]any) Too
 			return ToolResult{OK: false, Text: "MCP 服务器没起来：" + eErr}
 		}
 	}
-	result, callErr := e.client.CallTool(name, args)
+	result, callErr := e.client.CallTool(ctx, name, args)
 	r.mu.Lock()
 	if !e.client.Running() {
 		e.state = "error"

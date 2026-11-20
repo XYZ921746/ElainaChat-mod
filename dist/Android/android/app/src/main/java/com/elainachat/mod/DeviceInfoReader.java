@@ -4,8 +4,10 @@ import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.BatteryManager;
@@ -23,10 +25,9 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 手机的「读取信息」能力（★ 2026-10 新增）。
+ * 手机的「读取信息」能力。
  *
- * <p>用户要求："添加文件访问…读取应用和读取通知的权限这些信息在对话中用的上"。
- * 于是把这几类信息变成 AI 能读的东西：
+ * <p>把这几类信息变成 AI 能读的东西：
  * <ul>
  *   <li>{@code 手机应用列表} —— 装了哪些应用（包名 + 应用名）</li>
  *   <li>{@code 手机通知}     —— 最近收到的通知（由 {@link ElainaNotificationListener} 缓存）</li>
@@ -36,7 +37,7 @@ import java.util.Locale;
  *   <li>{@code 手机日历}     —— 近期日程</li>
  * </ul>
  *
- * <p>★★ 两条独立的安全边界，缺一不可 —— 这是本类最重要的设计点：
+ * <p>两条独立的安全边界，缺一不可 —— 这是本类最重要的设计点：
  * <ol>
  *   <li><b>应用层</b>：设置里的隐私开关（{@code agentReadSms} 等）。关掉后前端
  *       连标签都不注入给模型，且 {@code runAgentPhoneOperation} 会直接拒绝。</li>
@@ -49,6 +50,15 @@ import java.util.Locale;
  * 所以"没有权限"和"用户关了开关"是两种不同的失败，本类只负责前者。
  */
 final class DeviceInfoReader {
+
+    /**
+     * 国内厂商（工信部牵头统一实现）的「获取应用列表」权限。
+     *
+     * <p>它不是 Android 原生权限，而是各家在自己的 ROM 里加的额外管控层：申请了
+     * {@code QUERY_ALL_PACKAGES} 之后仍要过这一关。小米由 {@code com.lbe.security.miui}
+     * 承载，MIUI 默认授予、**澎湃OS 默认拒绝**。
+     */
+    static final String VENDOR_APP_LIST_PERMISSION = "com.android.permission.GET_INSTALLED_APPS";
 
     private final Context context;
 
@@ -90,9 +100,62 @@ final class DeviceInfoReader {
         out.put("calendar", granted(Manifest.permission.READ_CALENDAR));
         // 通知读取不是运行时权限：它由"通知使用权"控制
         out.put("notifications", ElainaNotificationListener.isEnabled(context));
-        // 已安装应用列表在 Android 11+ 需要 QUERY_ALL_PACKAGES（清单里已声明，属安装期权限）
-        out.put("apps", true);
+        // 应用列表要如实报：国产 ROM（澎湃OS 等）在 QUERY_ALL_PACKAGES 之上还有一层自家管控，
+        // 这一项真的可能是"没开"。写死 true 会让用户在设置里看到一个绿点，
+        // 却仍然只拿到本应用 —— 排查时最误导的就是这种"显示正常"的状态。
+        out.put("apps", appListReadable());
+        out.put("appListNeedsVendorPermission", needsVendorAppListPermission());
         return out;
+    }
+
+    /**
+     * 应用列表到底能不能读到「本应用以外」的东西。
+     *
+     * <p>直接拿结果本身做判据：枚举一次可启动应用，数出几个不是自己的包名。
+     * 不用「查权限是否授予」—— 各家 ROM 的管控实现不同（AppOps / 自定义权限 / 厂商服务），
+     * 权限查询 API 在这些机型上给不出可信答案，而"能不能真的列出来"永远是真的。
+     *
+     * <p>代价是多一次枚举：只在设置页刷新状态时调用，不在 AI 每次读列表时调用。
+     */
+    boolean appListReadable() {
+        try {
+            PackageManager pm = context.getPackageManager();
+            String self = context.getPackageName();
+            for (ApplicationInfo info : launchableApps(pm)) {
+                if (!self.equals(info.packageName)) return true;
+            }
+            return false;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /**
+     * 这台机器是否需要申请厂商自家的「获取应用列表」权限。
+     *
+     * <p>工信部牵头的国内厂商统一权限 {@code com.android.permission.GET_INSTALLED_APPS}：
+     * 小米由 {@code com.lbe.security.miui} 承载，澎湃OS 默认**不授予**（MIUI 默认授予），
+     * 所以在澎湃OS 上即使清单里申请了 QUERY_ALL_PACKAGES，也只能拿到本应用自己。
+     *
+     * <p>先确认该权限确实由小米的安全服务提供再报 true：别的 ROM 上盲申请一个不存在的
+     * 权限只会让系统弹一句莫名其妙的失败，或者静默什么都不做。
+     */
+    boolean needsVendorAppListPermission() {
+        if (appListReadable()) return false;
+        try {
+            android.content.pm.PermissionInfo info =
+                context.getPackageManager().getPermissionInfo(VENDOR_APP_LIST_PERMISSION, 0);
+            return info != null && "com.lbe.security.miui".equals(info.packageName);
+        } catch (PackageManager.NameNotFoundException notFound) {
+            return false;
+        } catch (Throwable error) {
+            return false;
+        }
+    }
+
+    /** 厂商「获取应用列表」权限是否已授予（系统不认识该权限时按"无需授予"处理） */
+    boolean vendorAppListPermissionGranted() {
+        return granted(VENDOR_APP_LIST_PERMISSION);
     }
 
     private boolean granted(String permission) {
@@ -109,7 +172,7 @@ final class DeviceInfoReader {
             case "手机日历": where = "「日历」"; break;
             default: where = "对应权限"; break;
         }
-        // ★★ 2026-10 修：申请入口已从「申请权限」按钮改成**可点的状态标记**
+        // 申请入口是**可点的状态标记**（不是「申请权限」按钮）
         //   （见 index.html 的 .agent-perm-badge / app-03-agent.js 的
         //   handleAgentPermBadgeAction）。这段文案会作为失败原因回灌给模型，
         //   模型再复述给用户 —— 不跟着改，用户就被引去点一个**已经不存在的按钮**。
@@ -137,26 +200,68 @@ final class DeviceInfoReader {
         }
     }
 
-    // ==================== 已安装应用列表 ====================
+    // 已安装应用列表
 
     private String listApps() {
         PackageManager pm = context.getPackageManager();
-        List<ApplicationInfo> apps = pm.getInstalledApplications(0);
         List<String> lines = new ArrayList<>();
-        for (ApplicationInfo info : apps) {
-            // 只列**用户能启动**的应用：系统里大量没有启动入口的组件列出来只是噪音，
-            // 而 AI 要这个列表的目的是"知道该启动哪个包名"。
-            Intent launch = pm.getLaunchIntentForPackage(info.packageName);
-            if (launch == null) continue;
+        for (ApplicationInfo info : launchableApps(pm)) {
             String label = String.valueOf(pm.getApplicationLabel(info));
             lines.add(label + " | " + info.packageName);
         }
         lines.sort(String::compareTo);
+        // 只剩自己 = 被 ROM 的「获取应用列表」管控挡住了。如实说明并给出可执行的下一步，
+        // 而不是回一句"共 1 个"让模型以为这台设备真的只装了聊天应用。
+        if (lines.size() <= 1 && needsVendorAppListPermission()) {
+            return "只能读到本应用，其它应用被系统的「获取应用列表」权限挡住了。"
+                + "\n请到「设置 → 能力 → 手机操作 → 读取信息」里点「已安装应用列表」右侧的状态标记申请，"
+                + "或到系统的「设置 → 应用 → ElainaChat Mod → 权限 → 读取应用列表」手动打开，然后重试。";
+        }
         if (lines.isEmpty()) return "没有找到可启动的应用。";
         return "已安装应用（共 " + lines.size() + " 个，格式：应用名 | 包名）：\n" + String.join("\n", lines);
     }
 
-    // ==================== 通知 ====================
+    /**
+     * 枚举「有启动入口」的应用。
+     *
+     * <p>不用 {@code getInstalledApplications()} + 逐个 {@code getLaunchIntentForPackage()}：
+     * 那条路先要拿到全部包、再逐个查启动入口，两步都受包可见性约束。Android 11+ 上
+     * 只要 QUERY_ALL_PACKAGES 没生效（被应用商店政策驳回、或机型/定制系统忽略它），
+     * 第一步就只剩本应用自己，于是列表永远只有一行 —— 这正是"手机应用列表只返回本应用"的表现。
+     *
+     * <p>改成直接按 ACTION_MAIN + CATEGORY_LAUNCHER 查：这是系统对"桌面能看见的应用"的定义，
+     * 语义上就是要的集合（AI 拿这个列表是为了知道该启动哪个包名），而且被可见性过滤后
+     * 剩下的仍然是有启动入口的那批，不会退化成"只有自己"。
+     */
+    private List<ApplicationInfo> launchableApps(PackageManager pm) {
+        Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> resolved;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            resolved = pm.queryIntentActivities(launcher, PackageManager.ResolveInfoFlags.of(0));
+        } else {
+            resolved = pm.queryIntentActivities(launcher, 0);
+        }
+        List<ApplicationInfo> apps = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (ResolveInfo item : resolved) {
+            ActivityInfo activity = item.activityInfo;
+            if (activity == null || !seen.add(activity.packageName)) continue;
+            try {
+                apps.add(pm.getApplicationInfo(activity.packageName, 0));
+            } catch (PackageManager.NameNotFoundException ignored) {
+                // 查询与取详情之间被卸载：跳过这一条，不让整个列表失败
+            }
+        }
+        // 兜底：一个都查不到时退回全量枚举。可见性被完全挡住时这里仍可能只有本应用，
+        // 但至少不会因为查询方式本身把列表变成空。
+        if (apps.isEmpty()) {
+            apps.addAll(pm.getInstalledApplications(0));
+            apps.removeIf((info) -> pm.getLaunchIntentForPackage(info.packageName) == null);
+        }
+        return apps;
+    }
+
+    // 通知
 
     private String listNotifications() {
         if (!ElainaNotificationListener.isEnabled(context)) {
@@ -170,7 +275,7 @@ final class DeviceInfoReader {
         return "最近的通知（新的在下）：\n" + String.join("\n", lines);
     }
 
-    // ==================== 设备与前台状态 ====================
+    // 设备与前台状态
 
     private String deviceInfo() {
         StringBuilder sb = new StringBuilder();
@@ -246,7 +351,7 @@ final class DeviceInfoReader {
         }
     }
 
-    // ==================== 短信 ====================
+    // 短信
 
     private String listSms(String args) {
         if (!granted(Manifest.permission.READ_SMS)) {
@@ -271,7 +376,7 @@ final class DeviceInfoReader {
         return "最近 " + lines.size() + " 条短信（新的在前）：\n" + String.join("\n", lines);
     }
 
-    // ==================== 通讯录 ====================
+    // 通讯录
 
     private String listContacts(String args) {
         if (!granted(Manifest.permission.READ_CONTACTS)) {
@@ -307,7 +412,7 @@ final class DeviceInfoReader {
         return head + "\n" + String.join("\n", lines);
     }
 
-    // ==================== 日历 ====================
+    // 日历
 
     private String listCalendar(String args) {
         if (!granted(Manifest.permission.READ_CALENDAR)) {
@@ -342,7 +447,7 @@ final class DeviceInfoReader {
         return "接下来 " + days + " 天的日程（共 " + lines.size() + " 项）：\n" + String.join("\n", lines);
     }
 
-    // ==================== 工具 ====================
+    // 工具
 
     private static String safe(String value) {
         return value == null ? "" : value.trim();

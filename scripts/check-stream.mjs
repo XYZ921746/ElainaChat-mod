@@ -327,8 +327,10 @@ async function caseStreamAndCot(c) {
     c.ok(/\.process-row\.is-open \.process-row-body\s*\{\s*display:\s*block;/.test(indexHtml),
         '展开时才显示详情');
 
-    c.ok(/const showReasoning = Boolean\(state\.settings\.thinkingMode\);/.test(ui),
-        '思考行由思考开关控制');
+    c.ok(/const showReasoning = thinkingRequested \|\| String\(trace\.reasoning \|\| ''\)\.trim\(\)\.length > 0;/.test(ui),
+        '★ 思考行跟随数据（有内容就显示），不只看思考开关');
+    c.ok(!/服务商未返回思考内容/.test(ui),
+        '★ 不再给「服务商未返回思考内容」提示（收不到就安静不显示，避免误判界面出错）');
     c.ok(/for \(const t of trace\.tools\)/.test(ui),
         '★ 工具调用行**无条件**渲染（不受 thinkingMode 影响）');
     {
@@ -506,7 +508,7 @@ async function caseStreamAndCot(c) {
             '★★ 兜底条款显式点名"不得省略【故事】/【状态】标签"');
         {
             const gmStart = dataSrc.indexOf('const THIRD_PERSON_GM_PROMPT');
-            const gmEnd = dataSrc.indexOf('const THINKING_LANGUAGE_PROMPT');
+            const gmEnd = dataSrc.indexOf('const FIRST_PERSON_CONVERT_PROMPT');
             const gm = dataSrc.slice(gmStart, gmEnd);
             const prioAt = gm.indexOf('本提示词优先级最高');
             c.ok(prioAt > 0 && prioAt < 200,
@@ -516,8 +518,7 @@ async function caseStreamAndCot(c) {
                 '★ GM 提示词的【输出格式】/【故事】/【状态】三者齐全（改文案时别删标签）');
         }
 
-        // legacy 回滚路径也必须有 thirdPerson 的 GM 提示词与 THINKING_LANGUAGE_PROMPT，
-        //    否则切回 legacy 后第三人称失效、思维链变英文。
+        // legacy 回滚路径也必须有 thirdPerson 的 GM 提示词（分层与 legacy 两条路的 thirdPerson 语义一致）。
         {
             const legacySeg = dataCode.slice(dataCode.indexOf('function buildLegacyRoleplayMessages'),
                 dataCode.indexOf('async function callAI'));
@@ -525,33 +526,25 @@ async function caseStreamAndCot(c) {
                 '★★ legacy 路径也会因 thirdPerson 注入 GM 提示词（原为永不生效的真 bug）');
             c.ok(/if \(options\.thirdPerson\) addPart\(1, THIRD_PERSON_GM_PROMPT\)/.test(legacySeg),
                 '★ legacy 的注入是条件式的（非 thirdPerson 时不得误注入）');
-            c.ok(/THINKING_LANGUAGE_PROMPT/.test(legacySeg),
-                '★★ legacy 路径也注入思考语言要求（原为缺口：切回 legacy 思维链变英文）');
+            c.ok(!/THINKING_LANGUAGE_PROMPT/.test(dataCode),
+                '★ 思考语言要求已移除（不再干预思维链语言）');
             const gmAt = legacySeg.indexOf('addPart(1, THIRD_PERSON_GM_PROMPT)');
             const cardAt = legacySeg.indexOf('addPart(2, legacyCharacterPrompt)');
             c.ok(gmAt >= 0 && cardAt > gmAt,
                 '★★ legacy 里 GM 提示词排在角色卡**之前**（否则优先级语义就反了）');
         }
 
-        // 两段都要有中文思维链要求：第二段是手搭的最小消息数组，不继承全局要求就会用英文思考。
+        // 第二段是手搭的最小消息数组：确认它不再注入思考语言要求（语言交给模型自己跟用户）。
         {
             // 边界要用 generateThirdPersonReply 之后的函数当终点，否则 slice 得到空串、断言全假失败。
             const gen3p = dataCode.slice(dataCode.indexOf('async function generateThirdPersonReply'),
                 dataCode.indexOf('function extractReplyTags'));
             const p2 = gen3p.slice(gen3p.indexOf('const pass2Messages'));
-            c.ok(/THINKING_LANGUAGE_PROMPT/.test(p2),
-                '★★ 第二阶段也注入中文思维链要求（原为英文思维链 —— 与第一阶段不一致）');
-            c.ok(/if \(state\.settings\.thinkingMode\)\s*\{\s*pass2Messages\.push\(\{ role: 'system', content: THINKING_LANGUAGE_PROMPT \}\)/.test(p2),
-                '★ 该注入是条件式的（关掉思考模式时不注入，省 token）');
-            // 位置：必须在 user 消息（第一段正文）**之前** —— 排在最后就成了"事后补充"，
-            // 而且第二段的 user 消息是待改写的正文，插在它后面语义就乱了。
-            const thinkAt = p2.indexOf('THINKING_LANGUAGE_PROMPT');
-            const userAt = p2.indexOf("role: 'user', content: pass1Text");
-            c.ok(thinkAt >= 0 && userAt > thinkAt,
-                '★ 中文思维链要求在第二阶段 user 消息之前注入（位置得当）');
+            c.ok(!/THINKING_LANGUAGE_PROMPT|思维模式要求/.test(p2),
+                '★ 第二阶段不注入思考语言要求');
             const p1 = gen3p.slice(0, gen3p.indexOf('const pass2Messages'));
             c.ok(/buildLayeredRoleplayMessages/.test(p1),
-                '★ 第一阶段经 buildLayeredRoleplayMessages（其中已含中文思维链要求）');
+                '★ 第一阶段经 buildLayeredRoleplayMessages');
         }
 
         c.ok(/const commitAiMessageOnce = \(\) => \{/.test(voice), '有幂等的消息提交函数');

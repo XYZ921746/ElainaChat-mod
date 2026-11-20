@@ -63,7 +63,7 @@ function startMultiDeviceSync() {
 }
 
 // 把扩展子项挪出滚动容器（仅窄屏）：#settingsTabNav 与 #settingsTopBar 的 overflow:auto 在窄屏会裁掉绝对定位的子项，而放开 overflow 会让滚动失效，故挂到 overflow:hidden 的 #settingsPanel；宽屏导航是左侧竖排一列、不受影响。
-const EXT_FLOAT_MQ = '(max-width: 980px)';
+const EXT_FLOAT_MQ = '(max-width: ' + MOBILE_BREAKPOINT + 'px)';
 function syncExtMenuParent() {
     const menu = document.querySelector('.ext-nav-children');
     const group = document.getElementById('settingsExtNav');
@@ -140,6 +140,8 @@ async function init() {
 
     if (IS_MOBILE_DEVICE) {
         showInitialState();
+        // 地址栏里是哪一页就先落在哪一页（/notes/、/settings/model/ 这类），并且必须在首帧门放行与公告之前完成：否则刷新会先闪一下首页。
+        try { window.ElainaRouter?.applyInitial?.(); } catch (e) { console.warn('[Router] 首屏路由应用失败（按对话页继续）', e); }
         const announcementPending = openAnnouncementDeferred();
         startAnnouncements();
         // 提前 return 不能漏掉与电脑路径共用的启动收尾：定时任务轮询（漏了手机的定时任务永不触发）与 app-ready（漏了插件永远等不到启动信号）。
@@ -156,6 +158,8 @@ async function init() {
             loadConversation(conv.id);
         }
     }
+    // 桌面路径同理：会话 / 首页已定，再按地址栏打开目标页；同样排在公告与首帧门之前。
+    try { window.ElainaRouter?.applyInitial?.(); } catch (e) { console.warn('[Router] 首屏路由应用失败（按对话页继续）', e); }
     const announcementPending = openAnnouncementDeferred();
     startAnnouncements();
     setInterval(checkScheduledTasks, 30000);

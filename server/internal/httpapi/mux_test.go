@@ -78,3 +78,37 @@ func TestMuxServesHTTPAndHTTPSOnSamePort(t *testing.T) {
 		t.Fatalf("HTTPS 应答异常：%d %q", resp.StatusCode, body)
 	}
 }
+
+// 预留监听必须独立于开始服务：重复实例在迁移数据之前就要拿到「端口被占」。
+func TestListenReservesPortBeforeStart(t *testing.T) {
+	cfg := &config.Config{Host: "127.0.0.1"}
+	mux, err := Listen(cfg, logx.Discard(), 0)
+	if err != nil {
+		t.Fatalf("预留监听失败：%v", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = mux.Shutdown(ctx)
+	}()
+
+	// 预留之后、Start 之前，同一端口再 Listen 必然失败。
+	if _, err := Listen(cfg, logx.Discard(), mux.Port()); err == nil {
+		t.Fatal("端口已预留时二次预留应失败")
+	}
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	})
+	if err := mux.Start(nil, handler, nil); err != nil {
+		t.Fatalf("开始服务失败：%v", err)
+	}
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/", mux.Port()))
+	if err != nil {
+		t.Fatalf("请求失败：%v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("应答异常：%d", resp.StatusCode)
+	}
+}

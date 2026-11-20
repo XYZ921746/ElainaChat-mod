@@ -172,7 +172,7 @@ async function requestUserImpression() {
     }
 }
 
-// ---- 资料面板 ----
+// 资料面板
 
 let profileOverlay = null;
 

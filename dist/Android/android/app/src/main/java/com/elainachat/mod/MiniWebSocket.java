@@ -22,7 +22,7 @@ import javax.net.ssl.SSLSocketFactory;
  * <b>不允许自定义任何请求头</b>，只能带 WebView 自己的 UA，于是握手被拒 ——
  * 实测：缺 UA 返回 <b>403</b>，补上完整浏览器头后立刻 <b>101 Switching Protocols</b>。
  *
- * <p><b>为什么不用 {@code HttpURLConnection}</b>（第一版就是这么写的，踩了坑）：
+ * <p><b>为什么不用 {@code HttpURLConnection}</b>：
  * JDK 把 {@code Connection} / {@code Upgrade} 列为**受限头**，
  * {@code setRequestProperty} 会被静默忽略 —— 而这两个正是 WebSocket 握手的核心。
  * 少了它们，服务端不把它当握手，返回 400/404。

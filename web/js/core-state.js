@@ -17,6 +17,7 @@ const state = {
     diaryMode: false,
     // 记忆页与日记页同级：也是"整页浏览"，不是弹窗。
     memoryPageMode: false,
+
     // 日记页的"只看某段对话"筛选（空 = 显示全部）。由 focusDiaryGroup() 设置；进/出日记页时清掉，
     // 避免下次进来莫名其妙只看到一部分（那会让人以为日记丢了）。
     diaryFilterConvId: '',
@@ -156,6 +157,8 @@ const elements = {
     customModalEditor: document.getElementById('customModalEditor'),
     customModalGutter: document.getElementById('customModalGutter'),
     customModalPresets: document.getElementById('customModalPresets'),
+    // 多选项列表：N 选 1（后台运行要选 Shizuku / Root / 模块），只有 confirm/alt 两键的弹窗装不下
+    customModalOptions: document.getElementById('customModalOptions'),
     customModalActions: document.getElementById('customModalActions'),
     customModalCancelBtn: document.getElementById('customModalCancelBtn'),
     customModalAltBtn: document.getElementById('customModalAltBtn'),

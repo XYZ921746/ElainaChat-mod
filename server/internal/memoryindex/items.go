@@ -48,7 +48,7 @@ type Item struct {
 	SupersededBy         string  `json:"supersededBy"`
 	ContentHash          string  `json:"contentHash"`
 	// Meta 是 kind 专属的附加字段（JSON 对象）：日记的 conversationTitle / essences / date /
-	// timestamp、计划的 date。M2b 起它是权威数据的一部分，必须能原样还原六类目。
+	// timestamp、计划的 date。它是权威数据的一部分，必须能原样还原六类目。
 	Meta string `json:"meta,omitempty"`
 }
 

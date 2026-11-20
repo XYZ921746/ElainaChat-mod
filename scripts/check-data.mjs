@@ -94,7 +94,7 @@ async function caseDataApi(c) {
         ok(existsSync(path.join(dataDir, 'main', 'characters', 'card_x.json')), '人设卡迁移成独立文件');
         ok(existsSync(path.join(dataDir, 'conversations', 'conv1.json')), '旧单文件聊天记录拆成一对话一文件');
         ok(!existsSync(path.join(dataDir, 'conversations.json')), '旧的单文件 conversations.json 已删除');
-        // M2b 起记忆正文迁进 SQLite，类目文件挪进 legacy-backup-<ts>/ 留底（不再是顶层 memory/）。
+        // 记忆正文在 SQLite，类目文件挪进 legacy-backup-<ts>/ 留底（不在顶层 memory/）。
         {
             const backupDirs = readdirSync(path.join(dataDir, 'main', 'memory'))
                 .filter((n) => n.startsWith('legacy-backup-'));
@@ -121,7 +121,7 @@ async function caseDataApi(c) {
             const convs = JSON.parse(j.data.elaina_open_conversations || '[]');
             ok(convs.length === 1, '聊天记录读回');
             ok(convs[0].messages[0].text === '你好', '对话消息完整');
-            // M2b：记忆权威在 SQLite，store 键不再承载记忆 —— 正文从 /api/memory/core 读。
+            // 记忆权威在 SQLite，store 键不承载记忆 —— 正文从 /api/memory/core 读。
             const core = await (await fetch(base + '/api/memory/core')).json();
             ok(core.ok && Array.isArray(core.core.diary) && core.core.diary.length === 1
                 && core.core.diary[0].content === '记忆一',
@@ -184,7 +184,7 @@ async function caseDataApi(c) {
             ok(names.filter((n) => /^data\/characters\/.+\.json$/.test(n) && !n.endsWith('index.json')).length === 2, 'zip 含 2 张卡（一卡一文件）');
             ok(names.includes('data/conversations/index.json'), 'zip 含 data/conversations/index.json');
             ok(names.filter((n) => /^data\/conversations\/.+\.json$/.test(n) && !n.endsWith('index.json')).length === 1, 'zip 含 1 个对话（一对话一文件）');
-            // M2b：记忆走逻辑导出（data/memory-index/items.json），.db 与类目文件都不进备份。
+            // 记忆走逻辑导出（data/memory-index/items.json），.db 与类目文件都不进备份。
             ok(names.includes('data/memory-index/items.json'), 'zip 含 data/memory-index/items.json（记忆逻辑导出）');
             ok(!names.some((n) => /^data\/memory\/[A-Za-z0-9_-]+\.json$/.test(n)), '类目 JSON 不进备份（权威已换代）');
             ok(!names.some((n) => n.endsWith('.db')), '.db 不进备份');
@@ -800,9 +800,10 @@ async function caseSingleSource(c) {
     console.log('\n=== 7. APK 原生后端（假 Capacitor + 假本机服务）===');
     {
         // 假 Capacitor Filesystem：磁盘 Map；假本机 Go 服务：GET/POST /api/store。
-        function makeNativeSandbox({ serverData = {}, disk = new Map(), fetchImpl = null } = {}) {
+        function makeNativeSandbox({ serverData = {}, disk = new Map(), fetchImpl = null, syncXhr = false } = {}) {
             const calls = [];
             const events = [];
+            const localStage = new Map();
             const fakeFs = {
                 Directory: { Data: 'DATA' },
                 readFile: async ({ path: p }) => {
@@ -828,10 +829,30 @@ async function caseSingleSource(c) {
                 Object, Array, JSON, String, Boolean, Error, Promise, Date, RegExp,
                 setTimeout, clearTimeout,
                 CustomEvent: class { constructor(type, opts) { this.type = type; this.detail = opts && opts.detail; } },
-                XMLHttpRequest: function () { throw new Error('APK 不应走 Web 后端'); },
+                // 默认构造即抛错：守住「引导不得碰同步 XHR」。暂存重放用例传 syncXhr:true 换成可用的
+                // 同步假件 —— replayStagedPatch 的基线比对是同步的，send() 必须立即回填 serverData 活引用。
+                XMLHttpRequest: syncXhr
+                    ? function () {
+                        this.status = 0;
+                        this.responseText = '';
+                        this.open = function (method, url) { this._url = String(url); };
+                        this.send = function () {
+                            if (this._url !== 'http://node.test/api/store') { this.status = 404; return; }
+                            this.status = 200;
+                            this.responseText = JSON.stringify({ ok: true, data: serverData });
+                        };
+                    }
+                    : function () { throw new Error('APK 不应走 Web 后端'); },
                 fetch: fakeFetch,
                 navigator: {},
                 Blob: class {},
+                // stagePatch / bootThemeSnapshot 都落在 localStorage：没有垫片时暂存是静默 no-op，
+                // 「暂存 → 恢复 → 重放」整条通路测不到。
+                localStorage: {
+                    getItem: (k) => (localStage.has(k) ? localStage.get(k) : null),
+                    setItem: (k, v) => { localStage.set(k, String(v)); },
+                    removeItem: (k) => { localStage.delete(k); },
+                },
             };
             sandbox.window = sandbox;
             sandbox.window.Capacitor = {
@@ -844,7 +865,7 @@ async function caseSingleSource(c) {
             sandbox.globalThis = sandbox;
             const ctx = vm.createContext(sandbox);
             vm.runInContext(src['store.js'], ctx, { filename: 'store.js' });
-            return { sandbox, Store: sandbox.window.Store, disk, calls, events };
+            return { sandbox, Store: sandbox.window.Store, disk, calls, events, localStage };
         }
 
         const serverData = {
@@ -908,6 +929,39 @@ async function caseSingleSource(c) {
             await new Promise((r) => setTimeout(r, 50));
             ok(fallback.events.some((e) => e.type === 'elaina:store-save-failed'),
                 '★ APK：服务不可用时写入发出 elaina:store-save-failed（不静默丢）');
+        }
+
+        // 暂存重放（APK 行为用例）：服务未就绪期间的写入必须落暂存，服务恢复后重放推回服务端；
+        // 基线已被超越的键丢弃而不是覆盖。重放比对依赖 native 后端的同步 loadAllSync ——
+        // 缺这个实现时整条通路静默失效（写入永远留在暂存里），这里用端到端行为守住。
+        {
+            const replayServer = { 'elaina_theme': 'bumped-by-other-device' };
+            const seq = makeNativeSandbox({ serverData: replayServer, disk: new Map(), syncXhr: true });
+            seq.sandbox.window.__nodeBase = '';
+            await seq.Store.bootstrap();
+            seq.Store.setItem('elaina_open_settings', JSON.stringify({ model: 'offline-edit' }));
+            seq.Store.setItem('elaina_theme', 'offline-dark');
+            seq.Store._flush();
+            await new Promise((r) => setTimeout(r, 50));
+            const stagedRaw = seq.localStage.get('elaina_store_stage') || '';
+            ok(/offline-edit/.test(stagedRaw) && /offline-dark/.test(stagedRaw),
+                '★★ APK：服务未就绪期间的写入进入本地暂存', stagedRaw.slice(0, 200));
+
+            // 服务恢复（"另一台设备"恢复前已把主题改成 bumped-by-other-device），
+            // 一次成功保存触发重放：settings 基线仍是空（没人写过）→ 重放；theme 基线已被超越 → 丢弃。
+            seq.sandbox.window.__nodeBase = 'http://node.test';
+            seq.Store.setItem('elaina_open_favorites', '[]');
+            seq.Store._flush();
+            await new Promise((r) => setTimeout(r, 50));
+            const replayPost = seq.calls.find((c) => c.options && c.options.method === 'POST'
+                && c.options.body && c.options.body.indexOf('offline-edit') !== -1);
+            ok(Boolean(replayPost) && JSON.parse(replayPost.options.body).data['elaina_open_settings'] === JSON.stringify({ model: 'offline-edit' }),
+                '★★ APK：服务恢复后暂存被重放推回服务端');
+            ok(!seq.calls.some((c) => c.options && c.options.method === 'POST' && c.options.body && c.options.body.indexOf('offline-dark') !== -1),
+                '★★ APK：基线已被别的设备超越的暂存被丢弃，不覆盖新值');
+            const stageAfter = seq.localStage.get('elaina_store_stage') || '';
+            ok(!/offline-edit/.test(stageAfter) && !/offline-dark/.test(stageAfter),
+                '★★ APK：重放完成后暂存清空');
         }
 
         // 语音样本不在缓存里重复存字节：权威那份已在 elaina-data/main/voice-samples/ 下，
@@ -1104,6 +1158,20 @@ async function caseStoreWriteGate(c) {
     const post = box.calls.find((x) => !x.xhr && x.options && x.options.method === 'POST');
     ok(Boolean(post) && JSON.parse(post.options.body).data['elaina_theme'] === 'dark',
         '★ 加载成功后写入正常放行');
+
+    // 写入通路不得用 sendBeacon：它返回 true 只表示「已入队」，浏览器可以把请求压到页面卸载
+    // 时才真正发出（实测同页面同时刻 beacon 十几秒未送达、keepalive fetch 半秒内落盘）。
+    // 写入被压后延意味着「界面说已保存」与「数据在盘上」之间有一段长度未知的窗口。
+    const saveBody = extractFunction(storeSrc, 'createWebBackend');
+    ok(!/navigator\s*\.\s*sendBeacon/.test(saveBody),
+        '★★ 写入不走 sendBeacon（返回 true 不等于送达，会被推迟到页面卸载）');
+    ok(/keepalive\s*:\s*keepaliveOk/.test(saveBody),
+        '★ 小包写入用 keepalive fetch（关页面也能发出，且能设 X-Store-Client）');
+
+    // 暂存重放必须比对基线：一台设备留下的陈旧暂存不得覆盖另一台设备写入的新值。
+    const replayBody = extractFunction(storeSrc, 'replayStagedPatch');
+    ok(/synced|base\[|staged\.base/.test(replayBody),
+        '★★ 重放前比对服务端基线（陈旧暂存丢弃，不覆盖别人的新值）');
 }
 
 
@@ -1226,7 +1294,7 @@ async function caseMultiDeviceSync(c) {
 }
 
 
-// 6. 记忆权威（M2b）：正文以服务端 /api/memory/core 为准，前端保存 = 整类目替换 + dropIds。
+// 6. 记忆权威：正文以服务端 /api/memory/core 为准，前端保存 = 整类目替换 + dropIds。
 //    页面对 Store 键零读写：服务端不可用 / 写入失败时改动只留在页面内存，等恢复后重试。
 async function caseMemoryItemsIndex(c) {
     const ok = (cond, label, extra) => c.ok(cond, label, extra);
@@ -1483,6 +1551,20 @@ async function caseLegacyConversionAndVector(c) {
     c.ok(dataJs.includes('chatProviderKeys') && dataJs.includes('elainachat_open_api_secrets'),
         '旧 chatProviderKeys / 单 Key 都走密钥通道，已有值优先');
 
+    // 运行方式（agentBackend）的白名单：漏一个 id，用户选的运行方式每次启动都会被重置成空。
+    {
+        const line = dataJs.match(/if \(!\[([^\]]*)\]\.includes\(state\.settings\.agentBackend\)\)/);
+        c.ok(Boolean(line), '找得到 agentBackend 的白名单校验行');
+        if (line) {
+            const ids = [...line[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+            for (const id of ['', 'accessibility', 'shizuku', 'root', 'module']) {
+                c.ok(ids.includes(id), `agentBackend 白名单含 '${id}'`, ids.join(','));
+            }
+            // 未实现的后端不能被当成合法值留下（残留选择会让界面显示一个走不通的入口）
+            c.ok(!ids.includes('sui'), 'agentBackend 白名单不认未实现的 sui');
+        }
+    }
+
     // 真跑一次迁移函数：这是会直接决定用户 Key 是否还在的代码，不能只靠字符串断言。
     {
         const fn = extractFunction(dataJs, 'migrateEmbeddedLegacySecrets');
@@ -1628,6 +1710,15 @@ async function caseLegacyConversionAndVector(c) {
         '不再写旧单卡镜像 elaina_open_character_card');
     c.ok(!/['"]elaina_open_memory_core['"]\s*,/.test(storeJs),
         '记忆正文旧键已从 DATA_KEYS 移除（权威只在 SQLite）');
+
+    // TTS 迁移只认「有旧 Key」：没 Key 时 ttsProviders 一直空，模型页把 MiMo 字段整块隐藏，
+    // 用户连模型和参考音频都点不到。空列表自愈按当前 ttsProvider 建可编辑条目。
+    const config = read('web/js/core-config.js');
+    c.ok(/ttsProviderRepaired !== true/.test(persistence) && /if \(!s\.ttsProviders\.length\)/.test(persistence)
+        && /prov_tts_/.test(persistence) && /TTS_PROTOCOL_PRESETS\.find/.test(persistence),
+        '★ TTS 空列表自愈：按当前 ttsProvider 建可编辑条目');
+    c.ok(/s\.ttsProviderRepaired = true/.test(persistence) && /ttsProviderRepaired: false/.test(config),
+        '★ 自愈只跑一次（独立标记 + 默认值），用户主动删除后不会被建回来');
 }
 
 // 按命令行参数过滤用例（便于只跑其中一段）

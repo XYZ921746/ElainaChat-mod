@@ -1,7 +1,6 @@
 // Go 服务端的检查入口：编译、静态分析、单元/集成测试。
 // 这是运行时真正在跑的那一份实现（启动脚本与打包都用 server/bin/elaina-server.exe），
 // 其余检查模块覆盖前端回归；这里覆盖 Go 侧。
-//
 // 没有 Go 工具链的机器按环境性跳过（不判红）：检查脚本不该因为机器没装某套工具就整体失败。
 
 import { spawnSync } from 'node:child_process';

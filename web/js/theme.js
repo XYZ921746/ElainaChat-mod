@@ -370,7 +370,7 @@
         } catch (e) { return 'light'; }
     }
 
-    /** meta theme-color 只认这里：不跟随主题的话 PWA 标题栏 / 移动端地址栏会一直停在 HTML 里写死的浅色值。 */
+    /** meta theme-color 只认这里：不跟随主题的话移动端地址栏会一直停在 HTML 里写死的浅色值。 */
     function syncThemeColorMeta() {
         const meta = document.querySelector('meta[name="theme-color"]');
         if (!meta) return;
@@ -383,7 +383,6 @@
 
     // 启动快照：把算好的呈现结果（属性 + 自定义变量文本）存起来，供 index.html 的内联脚本在首帧渲染前回放。
     // 快照只在这里维护，内联脚本机械回放、不含主题逻辑 —— 避免主题推导逻辑出现两份。
-    //
     // 落盘走 Store.bootThemeSnapshot（store.js）：localStorage 的访问统一收在存储层，
     // 业务代码不直接碰。用 localStorage 而不是 sessionStorage，是因为后者在进程被杀后清空 ——
     // 而 APK 每次冷启动都是新进程，那样手机端每次启动都会先闪一帧默认浅色再切回用户主题。

@@ -61,8 +61,9 @@
             console.debug = function () { origDebug.apply(console, arguments); push('debug', toText(arguments)); };
         }
 
-        // console.log 只转发 `[Mod:` 前缀的那几条：插件加载成功走 host.log() 落到 console.log，失败才有 [Mod:…] 的 error ——
-        // 不补这一段，"没有 mod 日志"既可能是成功也可能是 mods.js 压根没跑。不转发全部 console.log：宿主日志量大，会把启动窗口刷满。
+        // console.log 只转发带明确前缀的那几条：插件加载走 host.log() 落到 console.log，
+        // 失败才有 [Mod:…] 的 error；手机操作走原生桥、不经过本机服务，靠 [Agent] 这一行
+        // 才能让日志页看到"AI 动过设备"。不转发全部 console.log：宿主日志量大，会把启动窗口刷满。
         var origLog = console.log;
         console.log = function () {
             origLog.apply(console, arguments);
@@ -74,6 +75,18 @@
                 }
             } catch (e) { /* 绝不影响应用本身 */ }
         };
+
+        // console.info 同样只放行 [Agent] 前缀：手机操作结果就是这样进日志页的。
+        var origInfo = console.info;
+        if (typeof origInfo === 'function') {
+            console.info = function () {
+                origInfo.apply(console, arguments);
+                try {
+                    var first = arguments.length ? String(arguments[0]) : '';
+                    if (first.indexOf('[Agent]') === 0) push('info', toText(arguments));
+                } catch (e) { /* 绝不影响应用本身 */ }
+            };
+        }
 
         window.addEventListener('error', function (e) {
             push('error', '未捕获异常: ' + (e.message || '') + '  @'

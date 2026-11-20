@@ -33,7 +33,7 @@ final class DeviceArtifacts {
 
     private static final Pattern BOUNDS = Pattern.compile("\\[(\\d+),(\\d+)]\\[(\\d+),(\\d+)]");
 
-    // ==================== 控件树 ====================
+    // 控件树
 
     /**
      * 把 {@code uiautomator dump} 出来的 XML 压成「一行一个元素」的扁平文本。
@@ -45,13 +45,36 @@ final class DeviceArtifacts {
         if (file == null || !file.isFile()) {
             return "没有拿到界面结构文件（uiautomator dump 可能失败了）。";
         }
+        try (FileInputStream input = new FileInputStream(file)) {
+            return flatten(new java.io.InputStreamReader(input, "utf-8"));
+        } catch (Exception error) {
+            return "读取界面结构失败：" + ShellProcess.describe(error);
+        }
+    }
+
+    /**
+     * 从字符串压扁平文本。
+     *
+     * <p>后台 holder 的 {@code dumpUi} 先把整份 {@code --windows} 输出按 display 切好，
+     * 再传字符串过来 —— 那边不落盘，所以不能复用文件版本。
+     */
+    static String flattenUiXmlText(String xml) {
+        if (xml == null || xml.trim().isEmpty()) return "界面结构是空的。";
+        try {
+            return flatten(new java.io.StringReader(xml));
+        } catch (Exception error) {
+            return "解析界面结构失败：" + ShellProcess.describe(error);
+        }
+    }
+
+    private static String flatten(java.io.Reader source) {
         StringBuilder builder = new StringBuilder();
         int count = 0;
         boolean truncated = false;
 
-        try (FileInputStream input = new FileInputStream(file)) {
+        try {
             XmlPullParser parser = Xml.newPullParser();
-            parser.setInput(input, "utf-8");
+            parser.setInput(source);
 
             int event = parser.getEventType();
             while (event != XmlPullParser.END_DOCUMENT) {
@@ -147,7 +170,7 @@ final class DeviceArtifacts {
         return dot >= 0 && dot < className.length() - 1 ? className.substring(dot + 1) : className;
     }
 
-    // ==================== 截图 ====================
+    // 截图
 
     /**
      * 读截图并缩小，返回 base64 + 尺寸 + **缩放比**。
@@ -159,19 +182,32 @@ final class DeviceArtifacts {
         if (file == null || !file.isFile()) {
             throw new IllegalStateException("没有拿到截图文件（screencap 可能被拒绝了）");
         }
+        return readScreenshotBytes(fileToBytes(file));
+    }
+
+    /**
+     * 从内存里的图片字节读截图并缩小。
+     *
+     * <p>后台 holder 的副屏帧直接以 PNG 字节回来（ImageReader 出来的），
+     * 不落盘 —— 落盘再读多一次 IO，而且临时文件还要处理并发与清理。
+     */
+    static JSONObject readScreenshotBytes(byte[] bytes) throws Exception {
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalStateException("没有拿到截图数据");
+        }
 
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.length, bounds);
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            throw new IllegalStateException("截图文件不是有效的图片");
+            throw new IllegalStateException("截图数据不是有效的图片");
         }
 
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight);
         options.inPreferredConfig = Bitmap.Config.RGB_565;
 
-        Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+        Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         if (bitmap == null) throw new IllegalStateException("截图解码失败");
 
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
@@ -195,11 +231,85 @@ final class DeviceArtifacts {
         return result;
     }
 
+    private static byte[] fileToBytes(File file) throws Exception {
+        try (FileInputStream input = new FileInputStream(file);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+            return output.toByteArray();
+        }
+    }
+
     private static int sampleSize(int width, int height) {
         int longest = Math.max(width, height);
         int sample = 1;
         while (longest / sample > SCREENSHOT_MAX_SIDE * 2) sample *= 2;
         return sample;
+    }
+
+    /**
+     * 从整屏 JPEG 里裁一块区域返回。
+     *
+     * <p>局部观测只需要动作附近几十万像素，整屏编码后传回前端再裁会把上行字节翻几倍；
+     * 这里在原生侧裁好，前端拿到的坐标只需要加上 region 偏移。
+     *
+     * <p>整屏图可能是缩放过的（accessibility 截图长边 ≤1120）：传入物理屏幕尺寸，
+     * 内部先把物理坐标换算到图内像素再裁剪；regionX/Y/W/H 仍以**物理屏幕坐标**回传，
+     * 前端 regionPointToScreen 用它们 + imageWidth/Height 把图内坐标映射回屏幕。
+     *
+     * @param screenW 物理屏幕宽；传 0 视为整屏图未缩放（screenW = 图宽）
+     */
+    static JSONObject readRegion(byte[] jpeg, int x, int y, int w, int h, int screenW, int screenH) throws Exception {
+        if (jpeg == null || jpeg.length == 0) throw new IllegalStateException("没有拿到整屏截图");
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, bounds);
+        int imgW = bounds.outWidth;
+        int imgH = bounds.outHeight;
+        if (imgW <= 0 || imgH <= 0) throw new IllegalStateException("整屏截图解码失败");
+        if (screenW <= 0 || screenH <= 0) {
+            screenW = imgW;
+            screenH = imgH;
+        }
+        float sx = screenW > 0 ? (float) imgW / screenW : 1f;
+        float sy = screenH > 0 ? (float) imgH / screenH : 1f;
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inPreferredConfig = Bitmap.Config.RGB_565;
+        Bitmap bitmap = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length, options);
+        if (bitmap == null) throw new IllegalStateException("整屏截图解码失败");
+        try {
+            int left = Math.max(0, Math.min(imgW - 1, Math.round(x * sx)));
+            int top = Math.max(0, Math.min(imgH - 1, Math.round(y * sy)));
+            int right = Math.max(left + 1, Math.min(imgW, Math.round((x + w) * sx)));
+            int bottom = Math.max(top + 1, Math.min(imgH, Math.round((y + h) * sy)));
+            int cropW = right - left;
+            int cropH = bottom - top;
+            Bitmap cropped = Bitmap.createBitmap(bitmap, left, top, cropW, cropH);
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            cropped.compress(Bitmap.CompressFormat.JPEG, 80, buffer);
+            byte[] region = buffer.toByteArray();
+            if (cropped != bitmap) cropped.recycle();
+
+            JSONObject result = new JSONObject();
+            result.put("imageBase64", Base64.encodeToString(region, Base64.NO_WRAP));
+            result.put("imageMime", "image/jpeg");
+            result.put("imageBytes", region.length);
+            result.put("screenWidth", screenW);
+            result.put("screenHeight", screenH);
+            result.put("imageWidth", cropW);
+            result.put("imageHeight", cropH);
+            result.put("regionX", Math.round(left / sx));
+            result.put("regionY", Math.round(top / sy));
+            result.put("regionW", Math.round(cropW / sx));
+            result.put("regionH", Math.round(cropH / sy));
+            result.put("scaleX", round(screenW / (double) imgW));
+            result.put("scaleY", round(screenH / (double) imgH));
+            return result;
+        } finally {
+            bitmap.recycle();
+        }
     }
 
     private static double round(double value) {
@@ -211,7 +321,8 @@ final class DeviceArtifacts {
         return "已截取当前屏幕。\n"
             + "屏幕真实尺寸：" + meta.optInt("screenWidth") + " × " + meta.optInt("screenHeight") + " 像素。\n"
             + "给你的图片已缩小到 " + meta.optInt("imageWidth") + " × " + meta.optInt("imageHeight") + "。\n"
-            + "**图片上的坐标要乘 " + meta.optDouble("scaleX", 1) + "（横向）和 "
-            + meta.optDouble("scaleY", 1) + "（纵向）才是屏幕真实坐标**，点击时要用真实坐标。";
+            + "**图片上的像素坐标要乘 " + meta.optDouble("scaleX", 1) + "（横向）和 "
+            + meta.optDouble("scaleY", 1) + "（纵向）才是屏幕真实坐标**；"
+            + "如果截图上叠了坐标网格（白色线条 + 屏幕坐标数值），直接照网格标签读数即可，无需换算。";
     }
 }

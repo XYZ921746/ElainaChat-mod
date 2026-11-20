@@ -64,7 +64,6 @@ html.rd .conv-filter-btn { display: none; }
        插件注册的按钮继续留在顶栏，插件代码不需要任何改动。 */
     html.rd #headerMemoryBtn,
     html.rd #headerAnnounceBtn,
-    html.rd #headerInstallBtn,
     html.rd #headerThemeBtn,
     html.rd #rdModelPill,
     html.rd #headerSettingsBtn { display: none !important; }
@@ -813,7 +812,7 @@ html.rd .conv-filter-btn { display: none; }
     /* 5 · 设置：整页下钻 */
     /* 窄屏不给 7 个分栏做一条横向图标栏：分类由「我的」负责，设置只显示当前这一类。 */
 
-    /* 窄屏设置是整页下钻，不再给外壳顶栏留那 58px（留着会露出「我的」那条栏）；
+    /* 窄屏设置是整页下钻，不给外壳顶栏留那 58px（留着会露出「我的」那条栏）；
        安全区内边距保持 pages-luxe 的写法。 */
     html.rd #settingsOverlay,
     html.rd #marketOverlay {
@@ -822,12 +821,12 @@ html.rd .conv-filter-btn { display: none; }
         justify-content: stretch !important;
     }
 
-    /* 三个「看内容」的整页不再各写一遍页头：外壳顶栏已经写了标题，分类交给回忆分段条。 */
+    /* 三个「看内容」的整页不各写一遍页头：外壳顶栏已经写了标题，分类交给回忆分段条。 */
     html.rd #notesPage > .page-secondary-header,
     html.rd #diaryPage > .page-secondary-header,
     html.rd #memoryPage > .page-secondary-header { display: none !important; }
 
-    /* 成就沿用同一套：外壳顶栏 + 回忆分段条 + 列表，不再是独立的一座浮窗。 */
+    /* 成就沿用同一套：外壳顶栏 + 回忆分段条 + 列表，不是独立的一座浮窗。 */
     html.rd #achievementsOverlay { padding: 0 !important; }
 
     html.rd #achievementsOverlay .modal-panel {
@@ -1092,7 +1091,7 @@ html.rd .conv-filter-btn { display: none; }
 
     /* 8 · 输入栏与消息 */
 
-    /* 进会话后底栏收起（沉浸），主区不再给它留 58px。 */
+    /* 进会话后底栏收起（沉浸），主区不给它留 58px。 */
     body.mm-in-conv #mainContent { padding-bottom: 0 !important; }
 
     html.rd #inputBar {
@@ -1606,7 +1605,7 @@ html.rd .memory-tier-input { width: 92px; }
 html.rd .memory-tier-settings-btn span { display: none; }
 html.rd .memory-tier-settings-btn { padding: 6px 9px; }
 
-/* ---------- 模型分栏：窄屏整屏下钻 ---------- */
+/* 模型分栏：窄屏整屏下钻 */
 /* 桌面是「左列表右详情」双栏；窄屏双栏只会把两边都压扁（列表 40% 高、详情剩半屏）。
    改成一步一屏：没选提供商时只显示列表，点进去详情占满整屏，返回键回列表。 */
 @media (max-width: 980px) {

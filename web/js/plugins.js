@@ -142,6 +142,7 @@ function renderModCard(m, opts) {
           + (desc ? '<div class="mod-desc text-[11px] text-dim leading-relaxed mt-1">' + desc + '</div>' : '')
           + errorDetail
           + blockReason
+          + toolsTrustRow(id)
           + '<div class="flex items-center gap-1.5 mt-2">'
             + '<button type="button" class="mod-act mod-readme-btn" data-mod-id="' + id + '"'
               + ' data-mod-name="' + name + '" title="查看插件自带的说明（README）">' + ICON.doc + '</button>'
@@ -187,6 +188,18 @@ function renderGroupHtml(g, items, order) {
             : '<div class="text-[11px] text-dim py-3 text-center">把插件卡片拖到这里</div>')
         + '</div>'
         + '</div>';
+}
+
+/* Agent 工具信息行：只给登记过工具的插件画。通道完全开放（模型直接调用），这一行只负责**可见性** ——
+ * 让用户与社区在插件卡片上就能看到这个插件给 AI 暴露了哪些工具，审查时不用翻源码。 */
+function toolsTrustRow(id) {
+    const mods = window.ElainaMods;
+    if (!mods || typeof mods.agentToolsOf !== 'function') return '';
+    let tools = [];
+    try { tools = mods.agentToolsOf(id); } catch (e) { return ''; }
+    if (!tools.length) return '';
+    return '<div class="mod-toolstrust-row text-[11px] text-dim mt-1.5" title="这些工具已进入 AI 的工具清单，模型可直接调用（不经确认）。安装即信任 —— 装之前看一眼它给 AI 加了什么。">'
+        + '<span>Agent 工具（' + tools.length + ' 个，模型可直接调用）：' + escAttr(tools.join('、')) + '</span></div>';
 }
 
 function escAttr(s) {
@@ -342,10 +355,8 @@ function bindPrereqToggle(toggle) {
             btn.setAttribute('aria-expanded', modsPrereqOpen ? 'true' : 'false');
             const c = btn.querySelector('[data-prereq-caret]');
             if (c) {
-                c.style.transition = 'transform .32s ease';
-                c.style.display = 'inline-block';
-                c.style.transform = modsPrereqOpen ? 'rotate(0deg)' : 'rotate(-90deg)';
-                c.textContent = '▾';
+                // 用字形本身表示开合：rotate 的变换框会探出卡片右缘，手机上多出一条横向滚动。
+                c.textContent = modsPrereqOpen ? '▾' : '▸';
             }
         }
     });
@@ -363,6 +374,41 @@ function bindModToggle(box, hint) {
             // 记一份快照：成功后对比出这次连带打开了哪些前置，不说的话用户会以为插件列表「自己动了」。
             const before = el.checked
                 ? new Map(window.ElainaMods.list().map((p) => [p.id, p.enabled])) : null;
+            // 开启声明了高危服务端能力（当前只有 exec：执行本机命令）的插件前先确认：风险落点是
+            // 「代码开始跑」这一刻，所以闸门放开启时、不放安装时；拒绝即拨回开关，什么都不启用。
+            // 连带被拉起的高危前置一起确认：前置是被依赖方静默带起来的，不并入弹窗就会被绕过。
+            if (el.checked) {
+                const list0 = window.ElainaMods.list();
+                const capNames = { 'exec': '执行本机命令' };
+                const riskyOf = (p) => (p && Array.isArray(p.riskyServerCaps) ? p.riskyServerCaps : [])
+                    .map((c) => capNames[c] || c);
+                const self0 = list0.find((p) => p.id === id);
+                const selfCaps = riskyOf(self0);
+                const pulledRisky = [];   // 本次会被连带启用的高危前置：[{ name, caps }]
+                if (self0 && Array.isArray(self0.after)) {
+                    for (const dep of self0.after) {
+                        const d = list0.find((p) => p.id === dep || p.dir === dep || p.regName === dep);
+                        const dcaps = riskyOf(d);
+                        if (dcaps.length && !(d && d.enabled)) pulledRisky.push({ name: d.name || d.id, caps: dcaps });
+                    }
+                }
+                const lines = [];
+                if (selfCaps.length) {
+                    lines.push('插件「' + (self0.name || id) + '」声明了服务端高危能力：' + selfCaps.join('、') + '。');
+                }
+                for (const r of pulledRisky) {
+                    lines.push('前置插件「' + r.name + '」声明了服务端高危能力：' + r.caps.join('、') + '（开启本插件会连带启用它）。');
+                }
+                if (lines.length) {
+                    el.checked = false;   // 先拨回：确认前不能留"看起来开了"的假状态
+                    const agreed = await showCustomConfirm(
+                        lines.join('\n')
+                        + '\n开启后这些插件的服务端代码将获得上述权限（能力范围见各自 manifest 的 server 段）。确定开启吗？',
+                        '开启高危插件');
+                    if (!agreed) return;
+                    el.checked = true;
+                }
+            }
             // 停用有运行中依赖方的插件：弹窗说明并把开关拨回去（拒绝本身发生在 setEnabled 内部，这里是先查，为了把「谁在用」说给用户听）。
             if (!el.checked && typeof window.ElainaMods.dependentsOf === 'function') {
                 const using = window.ElainaMods.dependentsOf(id);
@@ -675,8 +721,7 @@ async function refreshModsList() {
             + '<span class="text-[11px] font-semibold text-dim">前置扩展</span>'
             + '<span class="text-[10px] text-dim">' + prereqMods.length
             + ' 个 · 被其他插件依赖；可单独开关，关闭前需先关掉用它的插件</span>'
-            + '<span class="ml-auto text-[10px] text-dim" data-prereq-caret'
-            + ' style="display:inline-block;transform:rotate(' + (modsPrereqOpen ? '0' : '-90') + 'deg)">▾</span>'
+            + '<span class="ml-auto text-[10px] text-dim" data-prereq-caret>' + (modsPrereqOpen ? '▾' : '▸') + '</span>'
             + '</button>'
             + '<div id="modsPrereqBody" class="mod-grid' + (modsPrereqOpen ? '' : ' hidden') + '">'
             + prereqMods.map((m) => renderModCard(m, { noGrip: true })).join('')

@@ -278,6 +278,7 @@ function containerSlot(containerId, note) {
 
     window.ElainaMods.defineSlot('sidebar.footer', containerSlot('sidebarModSlot', '侧栏底部的一块区域'));
 
+
     // composer.actions —— 输入框那一行（文本输入与麦克风/发送之间）；容器 display:contents，插件元素直接参与该行 flex 布局
     window.ElainaMods.defineSlot('composer.actions', containerSlot('composerModSlot', '输入框那一行的按钮位'));
 

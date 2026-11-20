@@ -66,7 +66,7 @@ function renderMemoryPage() {
         const section = document.createElement('section');
         section.className = 'memory-section animate-fade-in-up';
 
-        // —— 对话组头：标题 + 三层分布徽标 ——
+        // 对话组头：标题 + 三层分布徽标
         const head = document.createElement('div');
         head.className = 'memory-conv-head';
         const title = document.createElement('span');
@@ -86,7 +86,7 @@ function renderMemoryPage() {
         head.appendChild(badges);
         section.appendChild(head);
 
-        // —— 组内三层分区（空层不渲染）——
+        // 组内三层分区（空层不渲染）
         for (const layer of MEMORY_TIER_LAYERS) {
             const tier = group[layer.key];
             if (!tier.items.length) continue;
@@ -297,7 +297,7 @@ function buildMemoryTierCard(tierKey, item) {
     return card;
 }
 
-/* —— 分层设置弹层：右上角按钮打开。容量以模型上下文为总标尺，双点滑块做三段分配 ——
+/* 分层设置弹层：右上角按钮打开。容量以模型上下文为总标尺，双点滑块做三段分配
    左点 = 空闲|温边界，右点 = 温|热边界；两点的 token 值持久化，保存后记忆页分区实时重排。 */
 
 let memoryTierSettingsEl = null;
@@ -355,7 +355,7 @@ function openMemoryTierSettings() {
     body.innerHTML = '';
     const enabled = memoryCompressionEnabled();
 
-    // —— 模型上下文档位 ——
+    // 模型上下文档位
     const ctxRow = document.createElement('div');
     ctxRow.className = 'memory-tier-ctx-row';
     const ctxLabel = document.createElement('span');
@@ -409,7 +409,7 @@ function openMemoryTierSettings() {
     ctxRow.append(ctxLabel, ctxSelect, ctxCustom, ctxUnit);
     body.appendChild(ctxRow);
 
-    // —— 双点滑块 ——
+    // 双点滑块
     const slider = document.createElement('div');
     slider.className = 'memory-tier-slider';
     slider.id = 'memoryTierSlider';

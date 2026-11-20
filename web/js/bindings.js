@@ -11,14 +11,26 @@ function bindAppEvents() {
     elements.closeSettings.addEventListener('click', () => {
         // 手机上添加模型是设置内的二级页：顶栏返回先退回模型页，再按一次才关设置。
         const modelTab = document.getElementById('tab-model');
-        if (window.innerWidth <= 980 && modelTab && modelTab.classList.contains('is-add') && typeof closeModelAddPage === 'function') {
+        if (isMobile() && modelTab && modelTab.classList.contains('is-add') && typeof closeModelAddPage === 'function') {
             closeModelAddPage();
             return;
         }
         // 提供商详情同样是设置内的二级页：顶栏返回先回列表，再按一次才关设置。
         const modelBody = document.getElementById('modelPageBody');
-        if (window.innerWidth <= 980 && modelBody && modelBody.classList.contains('is-detail') && typeof backFromModelDetail === 'function') {
+        if (isMobile() && modelBody && modelBody.classList.contains('is-detail') && typeof backFromModelDetail === 'function') {
             backFromModelDetail();
+            return;
+        }
+        // 分区二级页（我的数据 / 访问密码 / 人设与世界观…）只能从「我的」页的行打开，
+        // 返回目标就是「我的」本身：先收子页，再立即隐层 —— 不走 closeOverlayPanel 的 300ms 淡出，
+        // 否则淡出过程露出的是没有导航的裸分栏（看起来像一张废弃页）；最后 closeSettingsPanel
+        // 做收尾（pop 历史，内部的 closeSettingsSubpage 幂等），「我的」在层下一直开着，隐层即落到「我的」。
+        const subpage = document.getElementById('settingsSubpage');
+        if (isMobile() && subpage && !subpage.classList.contains('hidden')) {
+            if (typeof closeSettingsSubpage === 'function') closeSettingsSubpage();
+            elements.settingsOverlay.classList.add('hidden');
+            elements.settingsOverlay.classList.remove('flex');
+            closeSettingsPanel();
             return;
         }
         closeSettingsPanel();

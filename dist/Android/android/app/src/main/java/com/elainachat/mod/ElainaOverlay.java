@@ -46,7 +46,7 @@ final class ElainaOverlay {
     /** 全局单例：同一时刻只该有一个悬浮窗（多个会互相盖住、也没意义） */
     private static ElainaOverlay instance;
 
-    // ---- show() 之前到达的调用在这里排队 ----
+    // show() 之前到达的调用在这里排队
     //
     // 为什么需要：show() 是 post 到主线程的，而 updateStep / askApproval 会**立刻**读
     // instance。真机实测（adb 连发 show + updateOverlay + askOverlayApproval）：
@@ -79,7 +79,7 @@ final class ElainaOverlay {
         this.windowManager = (WindowManager) this.context.getSystemService(Context.WINDOW_SERVICE);
     }
 
-    // ==================== 权限 ====================
+    // 权限
 
     /** 悬浮窗权限是否已授予。未授予时任何 show 调用都是无声失败，所以调用方要先查。 */
     static boolean canDraw(Context context) {
@@ -115,7 +115,7 @@ final class ElainaOverlay {
         }
     }
 
-    // ==================== 生命周期 ====================
+    // 生命周期
 
     /**
      * 显示（或更新）悬浮窗。
@@ -127,11 +127,10 @@ final class ElainaOverlay {
         if (!canDraw(context)) return;
         final Context app = context.getApplicationContext();
         final Runnable task = () -> {
-            // ★★ 2026-10（用户反馈"不要因为一点问题一直在闪"）：
-            //   前端每开始一步都会再调一次 show()。原来这里**无条件** setStep(text)，
-            //   于是已经显示着的浮层会被重置回初始文案（"AI 正在操作手机"），
+            // 前端每开始一步都会再调一次 show()；若每次都**无条件** setStep(text)，
+            //   已经显示着的浮层会被重置回初始文案（"AI 正在操作手机"），
             //   副标题来回跳 —— 用户看到的就是"一直在闪"。
-            //   现在只在"这次才刚建出窗口"、或确实有排队的新文案时才写这一行。
+            //   所以只在"这次才刚建出窗口"、或确实有排队的新文案时才写这一行。
             final boolean alreadyShown = instance != null && instance.root != null;
             if (instance == null) instance = new ElainaOverlay(app);
             instance.ensureShown();
@@ -208,7 +207,7 @@ final class ElainaOverlay {
         return instance != null && instance.root != null;
     }
 
-    // ==================== 内部实现 ====================
+    // 内部实现
 
     private void ensureShown() {
         if (root != null) return;

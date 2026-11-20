@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 	"elainachat/server/internal/auth"
 	"elainachat/server/internal/config"
 	"elainachat/server/internal/logx"
+	"elainachat/server/internal/mcp"
 	"elainachat/server/internal/plugin"
 	"elainachat/server/internal/store"
 )
@@ -247,5 +250,39 @@ func TestBeginShutdownClosesBrowser(t *testing.T) {
 	s.BeginShutdown()
 	if s.browser.IsRunning() {
 		t.Error("BeginShutdown 后浏览器会话应已关闭")
+	}
+}
+
+// BeginShutdown 必须停掉全部 MCP 客户端：http.Server.Shutdown 不会取消仍在执行的
+// handler，远程会话与 stdio 子进程不显式停就会遗留到进程退出之后。
+func TestBeginShutdownStopsMCP(t *testing.T) {
+	var deleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		if r.Method == http.MethodDelete {
+			deleted = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if sid := r.Header.Get("Mcp-Session-Id"); sid == "" {
+			w.Header().Set("Mcp-Session-Id", "sess-1")
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"serverInfo":{"name":"r"}}}`, msg["id"])
+	}))
+	defer server.Close()
+
+	s := newServiceTestServer(t)
+	def := mcp.ServerDef{ID: "remote", URL: server.URL}
+	if _, _, err := s.mcp.ListTools(context.Background(), def); err != nil {
+		t.Fatalf("建立 MCP 会话失败：%v", err)
+	}
+	s.BeginShutdown()
+	if !deleted {
+		t.Error("BeginShutdown 应向远程 MCP 会话发送 DELETE")
+	}
+	if got := s.mcp.Status(def); got.State != "idle" {
+		t.Errorf("BeginShutdown 后 MCP 状态应回到 idle，实际 %+v", got)
 	}
 }

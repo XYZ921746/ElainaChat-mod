@@ -423,7 +423,7 @@ func login(base, password string) (status int, detail, cookie string, err error)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp.StatusCode, "", "", nil
 	}
-	// 会话 cookie 以 elaina_session 开头（新版本带实例后缀，旧版本无后缀），
+	// 会话 cookie 以 elaina_session 开头（带实例后缀或无后缀两种形状），
 	// 只认有值的那些：清旧 cookie 的那条 Max-Age=0、Value 为空。
 	for _, c := range resp.Cookies() {
 		if strings.HasPrefix(c.Name, "elaina_session") && c.Value != "" {

@@ -277,8 +277,9 @@ async function caseCssLayers(c) {
 
     const order = [...html.matchAll(/<link rel="stylesheet" href="\/css\/([^"]+)">/g)].map((m) => m[1]);
     const layers = ['themes.css', 'achievements.css', 'redesign.css', 'layout-full.css', 'pages-luxe.css'];
-    c.ok(order[0] === 'base.css' && layers.every((f) => order.indexOf(f) > 0),
-        '★ 加载顺序：base.css 打头，四份覆盖层在其后', order.join(' → '));
+    // tailwind.css 必须收口：.hidden 等工具类要压过组件类自带的 display（同权重靠后胜）。
+    c.ok(order[0] === 'base.css' && order[order.length - 1] === 'tailwind.css' && layers.every((f) => order.indexOf(f) > 0),
+        '★ 加载顺序：base.css 打头，四份覆盖层在其后，tailwind.css 收口', order.join(' → '));
 
     const layerCss = readFileSync(path.join(ROOT, 'web', 'css', 'base.css'), 'utf8');
     const external = layers.map((f) => ({ file: f, css: readFileSync(path.join(ROOT, 'web', 'css', f), 'utf8') }));
@@ -315,6 +316,24 @@ async function caseCssLayers(c) {
         '自测：只被覆盖一部分的规则只报被覆盖的声明', JSON.stringify(halfDead));
 }
 
+/** router.js 的包装依赖入口脚本先于它加载、init.js 在它之后：顺序一变，页面切换就会静默不写 URL。 */
+async function caseRouterLoadOrder(c) {
+    const html = readFileSync(HTML_FILE, 'utf8');
+    const order = [...html.matchAll(/<script[^>]*\bsrc="\/js\/([^"]+)"/g)].map((m) => m[1]);
+    const at = (name) => order.indexOf(name);
+    const router = at('router.js');
+    c.ok(router >= 0, 'index.html 引入 router.js');
+    c.ok(router < at('init.js'),
+        '★ router.js 必须排在 init.js 之前（init 末尾调用 applyInitial）');
+    // 这些文件承载 router.js 包装的入口；晚于 router.js 加载会让包装捕不到原函数，地址栏静默不同步。
+    const wrappedIn = ['favorites.js', 'settings.js', 'diary.js', 'memory-page.js',
+        'ui.js', 'conversations.js', 'achievements.js', 'mod-market.js'];
+    const late = wrappedIn.filter((name) => at(name) < 0 || at(name) > router);
+    c.ok(late.length === 0,
+        'router.js 在被包装入口之后加载',
+        late.join('、') + ' 未在 router.js 之前引入');
+}
+
 await runChecks({
     title: '前端结构（DOM 引用 / 内联脚本 / Store 键 / 消息渲染）',
     usage: 'node scripts/check-frontend.mjs',
@@ -323,6 +342,7 @@ await runChecks({
         { name: '内联脚本语法', fn: caseInlineScripts },
         { name: 'Store 键白名单', fn: caseStoreKeys },
         { name: '消息渲染', fn: caseMessageRender },
+        { name: '路由加载顺序', fn: caseRouterLoadOrder },
         { name: '检查工具自身（源码抽取）', fn: caseCheckSourceTools },
         { name: 'CSS 分层（基础层不得被覆盖层压掉）', fn: caseCssLayers },
     ],

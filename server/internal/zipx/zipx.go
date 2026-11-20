@@ -164,7 +164,7 @@ func IsZip(data []byte) bool {
 
 // SplitDataFiles 把 AllowScripts 读取的结果分成数据路径可用 / 数据路径会拦下两份，
 // 让备份导入只解压一遍：数据遍（不开 allowScripts）与脚本扫描遍共享同一次解压，
-// 不再把整包解压两次、峰值内存翻倍。返回的 blocked 与「按数据路径重新 Read」一致。
+// 整包只解压一次，避免峰值内存翻倍。返回的 blocked 与「按数据路径重新 Read」一致。
 func SplitDataFiles(files []File) (data []File, blocked []string) {
 	data = make([]File, 0, len(files))
 	blocked = []string{}

@@ -137,6 +137,8 @@ function loadSettings() {
     delete state.settings.providerMode;
     // 残留键必须删掉，否则会一直跟着设置落盘与同步。
     delete state.settings.optTopK;
+    delete state.settings.thinkingPrefill;
+    delete state.settings.thinkingPrefillText;
     if (!CHAT_API_FORMATS[state.settings.apiFormat]) state.settings.apiFormat = 'openai-compatible';
     const preset = CHAT_API_FORMATS[state.settings.apiFormat] || CHAT_API_FORMATS['openai-compatible'];
     if (!String(state.settings.baseUrl || '').trim()) state.settings.baseUrl = preset.defaultBaseUrl;
@@ -245,7 +247,7 @@ function loadSettings() {
     }
     delete state.settings.tavilyApiKey;
     // 空表示「还没选过」；id 列表必须与 AGENT_BACKENDS 一致（漏一个会让选择刷新后被重置），也不能多认已删除的 id，否则残留选择会被当成合法值留下。
-    if (!['', 'accessibility', 'module'].includes(state.settings.agentBackend)) state.settings.agentBackend = '';
+    if (!['', 'accessibility', 'shizuku', 'root', 'module'].includes(state.settings.agentBackend)) state.settings.agentBackend = '';
     // asrApiKey 与 MiMo 共用凭据的迁移必须放在 loadApiSecrets() 之后（见 migrateLegacySharedAsrKey / migrateLegacySharedMimoCredentials），否则会被密钥库覆盖。
     if (!['mimo', 'openai-tts', 'minimax', 'dashscope'].includes(state.settings.ttsProvider)) state.settings.ttsProvider = 'mimo';
     // 四类动态提供商列表（文字转语音 / 语音转文字 / 嵌入 / 重排序）逐项归一：坏一项不能丢整张表。

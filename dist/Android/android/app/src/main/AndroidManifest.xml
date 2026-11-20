@@ -3,15 +3,11 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-         手机操作（AI 设备层）相关的声明。两类后端：
-           无障碍 → accessibility-service（本文件下方）
-           模块   → 不需要声明权限，靠本机回环 HTTP（见 network_security_config）
-
-         ★ 2026-10：Shizuku 与 Root 后端已删除，所以下面这些声明一并移除了：
-           · moe.shizuku.manager.permission.API_V23（Shizuku 授权）
-           · rikka.shizuku.ShizukuProvider（Shizuku 授权通道）
-           · 查询 Shizuku 管理器的 <queries>
-           它们只服务于那两条已删的路，留着会让"应用能做什么"看起来比实际大。
+         手机操作（AI 设备层）相关的声明。三类运行方式：
+           前台   → accessibility-service（本文件下方），在物理屏上操作
+           后台   → Shizuku / Root：应用自带 holder 进程创建独立副屏，
+                    Shizuku 走下方 ShizukuProvider，Root 走文件桥（RootBridge / RootHolderMain）
+           模块   → agent-mobile-use 的本地网关（127.0.0.1:3070），不需要声明权限
     -->
     <application
         android:allowBackup="true"
@@ -53,7 +49,28 @@
                 android:resource="@xml/elaina_accessibility" />
         </service>
 
-        <!-- 手机操作：Shizuku 后端的授权通道（★ 2026-10 已随 Shizuku 后端一起删除） -->
+        <!-- 手机操作：Shizuku 的授权通道。
+             这个 Provider 由 dev.rikka.shizuku:provider 提供，是 Shizuku 与本应用
+             交换 Binder 的唯一入口；缺它授权弹窗不会出现。Sui 也走同一个 Provider。 -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+        <!-- 手机操作：后台会话保活。后台方式下 agent 循环跑在 WebView 主进程，
+             切到别的应用后系统会冻结它 —— 副屏还在、循环已经停了，表现为"点几步就不动"。
+             类型与 :node 一致（specialUse），理由见下面 :node 的说明。 -->
+        <service
+            android:name=".ElainaAgentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="background phone automation session keeping the agent loop alive" />
+        </service>
 
         <!-- ★ 2026-10 新增：通知读取。
              它不是运行时权限，而是"通知使用权"（系统设置里的开关），
@@ -112,6 +129,9 @@
          配套权限，不声明则 startForeground 抛 SecurityException。 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Shizuku 授权：由 Shizuku 管理器按这个自定义权限判断本应用是否申请过。
+         没有它 requestPermission 会直接被拒。 -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
     <!-- Permissions -->
 
@@ -141,6 +161,39 @@
     -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
+
+    <!--
+        国产 ROM 的「获取应用列表」权限（工信部牵头、各厂商统一实现，不是 Android 原生权限）。
+
+        为什么申请了 QUERY_ALL_PACKAGES 还不够：澎湃OS 等系统在这条原生权限之上又加了一层
+        自家管控，默认**拒绝**（MIUI 默认授予，升级到澎湃OS 后行为变了）。没有它时
+        getInstalledApplications() 只返回本应用自己 —— 表现就是「手机应用列表」只有一行，
+        而设置页里所有权限都显示"已给"。小米侧由 com.lbe.security.miui 承载。
+
+        声明只表示"有资格申请"，不会自动授予：用户点设置页里「已安装应用列表」的状态标记才弹框
+        （见 ElainaShellPlugin.requestReadPermission 的 apps 分支）。
+    -->
+    <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS" />
+
+    <!--
+        QUERY_ALL_PACKAGES 的备份通道：它属于"敏感权限"，部分分发渠道与定制系统会把它
+        从生效权限里剔除，届时 getInstalledApplications() 只剩本应用自己 ——
+        表现就是「手机应用列表」只返回一行。
+
+        <queries> 里的 MAIN/LAUNCHER 意图是**不受该权限影响**的可见性声明：声明后系统会把
+        "有桌面入口的应用"对应用可见，正好就是 AI 需要的那批（DeviceInfoReader.launchableApps
+        也按同一意图查询）。两条声明取并集，任一生效都能拿到完整列表。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <!-- 后台运行：要能判断 Shizuku 管理器装没装、在不在运行。
+             Shizuku 正式版与 Sui 的包名不同，两个都列。 -->
+        <package android:name="moe.shizuku.privileged.api" />
+        <package android:name="moe.shizuku.manager" />
+    </queries>
 
     <!--
         AI 操作手机时的系统级悬浮窗（「显示在其他应用上层」）。

@@ -3,7 +3,9 @@ package httpapi
 import (
 	"html/template"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strings"
 )
 
 // loginTemplate 是未登录时唯一能看到的页面。它不引用任何静态资源：
@@ -128,7 +130,9 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!DOCTYPE html>
         body: JSON.stringify({ password: document.getElementById('pwd').value })
       });
       var json = await res.json();
-      if (json.ok) { location.href = '/'; return; }
+      // next 已由服务端过滤为站内应用页（单个 / 开头、非 //host）；没有就回首页。
+      var next = {{.Next}};
+      if (json.ok) { location.href = next || '/'; return; }
       err.textContent = json.message || '密码不正确';
     } catch (e2) {
       err.textContent = '网络错误：' + e2.message;
@@ -138,7 +142,28 @@ var loginTemplate = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 </body>
 </html>`))
 
-func (s *Server) renderLogin(w http.ResponseWriter) {
+// safeNextPath 只放行站内应用页：登录后跳转的目标来自查询串，必须挡住 //host、
+// 绝对 URL、反斜杠与控制字符，否则登录页会成为开放重定向的一环。
+func safeNextPath(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw[0] != '/' || strings.HasPrefix(raw, "//") {
+		return ""
+	}
+	if strings.ContainsAny(raw, "\\\r\n\"'<>") {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.Opaque != "" {
+		return ""
+	}
+	// %2F 解码后可能变成 //host，必须按解码后的 Path 再判一次。
+	if !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") || !isAppRoute(u.Path) {
+		return ""
+	}
+	return raw
+}
+
+func (s *Server) renderLogin(w http.ResponseWriter, next string) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Cache-Control", "no-store")
@@ -153,5 +178,6 @@ func (s *Server) renderLogin(w http.ResponseWriter) {
 	_ = loginTemplate.Execute(w, struct {
 		AuthPath   string
 		ConfigPath string
-	}{AuthPath: s.auth.AuthFile(), ConfigPath: configPath})
+		Next       string
+	}{AuthPath: s.auth.AuthFile(), ConfigPath: configPath, Next: next})
 }

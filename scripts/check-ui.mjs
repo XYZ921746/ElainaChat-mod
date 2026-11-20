@@ -1055,7 +1055,7 @@ const serverOut = () => (srv ? srv.bootLog : '');
             const errs = [];
             page.on('pageerror', (e) => errs.push(e.message));
 
-            // 记忆正文的权威是 /api/memory/core（M2b）：Node 夹具没有这个接口，
+            // 记忆正文的权威是 /api/memory/core：Node 夹具没有这个接口，
             // 在浏览器层把请求拦下并返回夹具 canonical —— 页面走的仍是真实路径
             //（refreshMemoryCore → adopt → 渲染），不是往 state 里硬塞。
             const memoryCoreFixture = {

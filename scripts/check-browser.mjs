@@ -383,8 +383,8 @@ async function caseVisionToggle(c) {
     c.ok(/visionEnabled === true/.test(data), '★ data.js 的形态归一仍认 visionEnabled');
     c.ok(/visionEnabled === true/.test(settings), '★ 生效判据仍读 visionEnabled（visionConfigured）');
 
-    // 提示必须点名"主模型能识图时选「不使用」"
-    const hasHint = /本来就支持查看图片/.test(settings) && /不使用/.test(html) && /建议/.test(settings);
+    // 提示必须点名"主模型能识图时选「不使用」"；控件与提示都在总览的图片转述卡片里（由 providers.js 渲染）。
+    const hasHint = /本来就支持查看图片/.test(settings) && /不使用/.test(settings) && /建议/.test(settings);
     c.ok(hasHint, '★ 提示写明主模型能看图时选「不使用」');
 }
 

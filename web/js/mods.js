@@ -64,6 +64,12 @@
             return Boolean(manifest && manifest.defaultEnabled === true);
         }
     }
+    /* 用户在 Store 里有没有**显式**写过这个插件的开关。defaultEnabled 只是作者的"建议"，而 exec 之类的
+     * 服务端高危能力必须由用户**亲手**打开 —— 只读 manifest 就自动加载的话，第三方 zip 里写
+     * defaultEnabled:true 就绕过了设置页的开启前确认弹窗。loadOne 用本函数识别"该被拦下的默认开"。 */
+    function hasExplicitEnabledFlag(id) {
+        try { return Store.getItem(MOD_ENABLED_KEY_PREFIX + id) !== null; } catch (e) { return true; }
+    }
     function setModEnabled(id, on) {
         try { Store.setItem(MOD_ENABLED_KEY_PREFIX + id, on ? '1' : '0'); } catch (e) { /* 忽略 */ }
     }
@@ -92,6 +98,7 @@
             ...(hasGroup('achievements') ? extras.achievementsHostApi(ctx) : {}),
             ...(hasGroup('desktopWindow') ? extras.desktopWindowHostApi(ctx) : {}),
             ...(hasGroup('appUi') ? extras.appUiHostApi(ctx) : {}),
+            ...(hasGroup('agentTools') ? extras.agentToolsHostApi(ctx) : {}),
         };
     }
 
@@ -161,6 +168,7 @@
         injectStyleLink, injectScript, setLoadingDir: (v) => { loadingDir = v; },
         getPendingRegistrations: () => pendingRegistrations, getRegByDir: () => regByDir,
         lifecycleFor, withTimeout, createHostApi, MOD_INIT_TIMEOUT_MS, autoDisableBroken,
+        hasExplicitEnabledFlag,
     });
 
     const { discover, loadAll } = window.ElainaModsLoad({
@@ -219,6 +227,13 @@
         getModRoot: () => MOD_ROOT,
         isAppReady: () => appReadyFired,
         markAppReadyState: () => { appReadyFired = true; },
+        /* 某插件登记的 Agent 工具名清单（设置卡片据此画「工具免确认」开关）；
+         * 收它的必须是 ElainaModsApi —— plugins.js 读的是 window.ElainaMods.agentToolsOf，
+         * 传给 ElainaModsHost 会被它的解构清单直接丢弃，卡片上那行就永远画不出来。 */
+        agentToolsOf: (modId) => {
+            const b = host().agentTools;
+            try { return b ? b.byMod(modId) : []; } catch (e) { return []; }
+        },
     });
 
     // 页面就绪后自动加载（宿主也可以显式调 loadAll）。必须等 Store 启动完成：

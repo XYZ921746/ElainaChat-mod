@@ -1398,22 +1398,6 @@ html.rd #tab-log .log-pill[aria-pressed="true"] {
 
 html.rd #tab-log .log-pill[aria-pressed="false"] { opacity: .4 !important; }
 
-/* 设置：插件市场平台分类 */
-
-html.rd #marketPlatformPills .market-pill {
-    color: var(--rd-text-3) !important;
-    border-color: var(--rd-border) !important;
-    background: transparent !important;
-}
-
-html.rd #marketPlatformPills .market-pill[aria-pressed="true"] {
-    color: var(--rd-accent) !important;
-    border-color: var(--rd-accent-border) !important;
-    background: var(--rd-accent-soft) !important;
-}
-
-html.rd #marketPlatformPills .market-pill[aria-pressed="false"] { opacity: .4 !important; }
-
 html.rd #tab-log .log-select,
 html.rd #tab-log .log-search,
 html.rd #tab-log .log-icon-btn {
@@ -2362,9 +2346,7 @@ html.rd #settingsContent .rd-more p:first-of-type { margin-top: 6px; }
     }
 }
 
-/* ============================================================
-   记忆分层（热/温/冷）：对话组头、分区条、分类卡片、分层设置弹层
-   ============================================================ */
+/* 记忆分层（热/温/冷）：对话组头、分区条、分类卡片、分层设置弹层 */
 
 html.rd .memory-toolbar { display: flex; align-items: center; gap: 10px; }
 html.rd .memory-toolbar .diary-count { margin-right: auto; }
@@ -2595,7 +2577,7 @@ html.rd .memory-tier-btn.is-ghost {
     border: 1px solid var(--rd-border);
 }
 
-/* 记忆页「选择对话」按钮：手机端由 mobile-shell.css 在窄屏接管样式；桌面端在这里给出等价外观（此前该按钮被 mobile-shell.css 的桌面隐藏规则藏住）。 */
+/* 记忆页「选择对话」按钮：手机端由 mobile-shell.css 在窄屏接管样式；桌面端在这里给出等价外观。 */
 html.rd .memory-toolbar .conv-filter-btn {
     display: inline-flex;
     align-items: center;

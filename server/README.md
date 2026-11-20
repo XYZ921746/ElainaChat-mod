@@ -11,7 +11,9 @@ Go 版服务端，**电脑版与安卓版运行时本体**：启动脚本、Wind
 - 端口 / 监听地址 / HTTPS 开关 / 自定义证书走`data/config.json`（环境变量优先）
 - 静态资源（`web/` 与 `mods/`）、路径穿越与隐藏文件拦截
 - 访问密码、会话、改密、防爆破、密码强度校验（≥8 位，数字 + 其他字符，不强制大小写）；
-  改密后密码持久形态是 `data/config.json`（旧 `data/auth.json` 向下兼容，config 没写 password 时照常生效）
+  改密后密码持久形态是 `data/config.json`（旧 `data/auth.json` 向下兼容，config 没写 password 时照常生效）；
+  改密是串行事务（写配置 → 换内存认证 → 吊销会话 → 发新会话），配置先落盘而后续失败时恢复快照，
+  不会出现「接口报错但密码已换」或内存与磁盘密码分叉
 - `/api/server-info`、`/api/ping`、`/api/auth/*`、`/api/client-log`
 - `/api/store` 与 `/api/store/stream`（SSE）；磁盘布局沿用既有 `data/store.json` 分片格式，含旧数据迁移。
   SQLite 记忆可用时，`GET /api/store` 不再返回 `elaina_open_memory_core`（旧键不能成为第二份权威）
@@ -26,20 +28,26 @@ Go 版服务端，**电脑版与安卓版运行时本体**：启动脚本、Wind
   （派生缓存，按 `(指纹, id)` 复合键分桶，可随时重建；不进备份）。`begin` 无条件接管同指纹构建并清空旧行，
   `commit` 校验 buildId；未 commit 的桶读出为空，旧 build 的写入/提交返回 409
 - `/api/data/export|import|info`：完整备份（数据 + 插件 + 技能）、v1/v2/v3/v4 导入、merge / replace；
-  v4 起记忆以 `data/memory-index/items.json` 逻辑导出，`.db` 不进备份，旧备份的记忆类目 JSON 导入时自动转换
+  v4 起记忆以 `data/memory-index/items.json` 逻辑导出，`.db` 不进备份，旧备份的记忆类目 JSON 导入时自动转换。
+  导入前按 zip 条目做严格校验：已识别的设置 / 集合索引 / 索引引用条目 / 记忆记录损坏即整体 400，
+  不再静默跳过（否则 replace 会把损坏备份当成「空集合」清掉本地数据）；合法的空集合仍可导入
 - 插件与技能：`/api/plugins`（列表 / 安装 / 删除 / README / 打开目录）、`/api/skills`（列表 / 安装 / 删除 / 内容）
 - 插件宿主：扫描 `mods/`、生成 `/mods/index.json`、装载 `manifest.server.entry`、
   分发插件路由与静态目录；`ctx` 契约见 `开发文档.md` 表 A23（`register(ctx)`、禁止 import、
   能力校验、`ctx.fs` / `ctx.zip` / `ctx.exec`）
 - `/api/relay` 本地中转：SSRF 防护（含拨号时按 IP 复查）、流式透传、TLS 1.2 回退
 - `/api/logs/tail` 与 `/api/logs/settings`：内存日志缓冲、级别 / 模块 / 关键词过滤、运行期调级别与追踪开关
-- `/api/agent/roots|ls|read|write|delete|exec`：四档权限（off / strict / auto / full）、路径别名、删除守卫、危险命令判定与超时/截断
+- `/api/agent/roots|ls|read|write|delete|exec`：四档权限（off / strict / auto / full）、路径别名、删除守卫、危险命令判定与超时/截断；
+  数据目录 / 程序文件的保护边界按**真实路径**判定（Windows 目录联接用句柄级解析），经链接包装的受保护路径读写、删除与命令工作目录都会被拒绝
 - `/api/agent/activity`：前台窗口与进程（PowerShell + 缓存）
 - `/api/agent/browser` 与 `browser/status`：Chrome / Edge CDP（临时 profile、只绑回环、URL 白名单、空闲关闭）
-- `/api/mcp/tools|call|test|stop|status`：stdio + Streamable HTTP
+- `/api/mcp/tools|call|test|stop|status`：stdio + Streamable HTTP；请求取消只结束本次等待
+  （stdio 子进程跟着客户端生命周期走，不随单个请求退出），`BeginShutdown` 会停掉全部客户端并
+  结束远程会话 / 杀掉本地子进程
 - `/api/data/lan/enable|export|pull`：局域网共享（5 分钟开关、6 位验证码、连错 5 次换码、`host=127.0.0.1` 时临时监听、私网 SSRF 校验、代登录拉取；老客户端仍可填访问密码）
 - `/api/app/update`：GitHub Release 检测（缓存、错误归一化、公共 DNS 直连、hosts 证据）
-- 只绑配置里的那一个端口，被占用即报错退出（不静默换端口）；占用者是「本项目实例已在跑」时按复用处理（退出码 3）
+- 只绑配置里的那一个端口，被占用即报错退出（不静默换端口）；占用者是「本项目实例已在跑」时按复用处理（退出码 3）。
+  桌面端**先预留监听再迁移数据**：重复实例在改认证 / 迁移 Store / 打开 SQLite 之前就退出
 - 安卓服务模式（`ELAINA_SERVICE_MODE=1`）：只绑回环、端口交内核分配并写 `ELAINA_PORT_FILE`、
   Origin 白名单 `https://localhost` + CORS、`/api/ping` / `/api/mods/status` / `/api/shutdown`；
   完整路由表照常可用（`/api/store`、`/api/data/*`、`/api/data/lan/*`、`/api/memory/*` 等），

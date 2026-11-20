@@ -3,7 +3,7 @@
 (function () {
     'use strict';
 
-    var MOBILE_MQ = '(max-width: 980px)';
+    var MOBILE_MQ = '(max-width: ' + MOBILE_BREAKPOINT + 'px)';
 
     function byId(id) { return document.getElementById(id); }
 
@@ -19,6 +19,7 @@
         memories: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4.5h9.5L18 7v12.5H6z"/><path d="M15.5 4.5V7H18M9 11h6M9 14.5h4"/></svg>',
         mine: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.7"/><path d="M4.5 20a7.5 7.5 0 0115 0"/></svg>',
         dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+        globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.4"/><path d="M3.6 12h16.8M12 3.6c2.7 2.5 2.7 14.3 0 16.8M12 3.6c-2.7 2.5-2.7 14.3 0 16.8"/></svg>',
         memory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h7"/><path d="M17 17h3m-1.5-1.5v3"/></svg>',
         mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="10.5" rx="3"/><path d="M5.5 11a6.5 6.5 0 0013 0M12 17.5V21"/></svg>',
         bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 17h5l-1.4-1.4A2 2 0 0118 14.2V11a6 6 0 00-4-5.7V5a2 2 0 10-4 0v.3C7.7 6.2 6 8.4 6 11v3.2c0 .5-.2 1-.6 1.4L4 17h5m6 0v1a3 3 0 11-6 0v-1"/></svg>',
@@ -81,6 +82,7 @@
         try {
             onPage = !!(state.notesMode || state.diaryMode || state.memoryPageMode);
         } catch (e) { onPage = false; }
+        // 插件页不算「已经在回忆里」：点底栏「回忆」应该进记忆页，而不是停在插件页上什么都不发生。
         if (onPage) return;
         if (typeof enterMemoryPage === 'function') enterMemoryPage();
     }
@@ -617,14 +619,6 @@
             clickExisting('headerMemoryBtn');
             closeSheet();
         }));
-        body.appendChild(makeRow(ICONS.bell, '公告', '更新与活动', function () {
-            clickExisting('headerAnnounceBtn');
-            closeSheet();
-        }));
-        body.appendChild(makeRow(ICONS.model, '当前模型', '查看或切换 BYOK 模型', function () {
-            closeSheet();
-            openSettingsAt('tab-model');
-        }));
 
         panel.appendChild(handle);
         panel.appendChild(head);
@@ -652,6 +646,7 @@
         try {
             if (state.notesMode || state.diaryMode || state.memoryPageMode) active = 'memories';
         } catch (e) { /* state 未就绪时按「对话」显示 */ }
+
         if (achOverlayOpen()) active = 'memories';
 
         var minePage = byId('mobileMine');
@@ -912,7 +907,7 @@
         syncNav();
     }
 
-    /** 同一分栏里的分区在手机上拆成独立二级页：每行直达自己的分区，不再多行共用一页只靠滚动区分；
+    /** 同一分栏里的分区在手机上拆成独立二级页：每行直达自己的分区，而不是多行共用一页只靠滚动区分；
         传数组时多个分区同页（人设与世界观本是一起编辑的一套）；包不上二级页（桌面 / 分区缺失）时退回滚动定位。 */
     function openSettingsSection(tab, sectionIds, title) {
         if (typeof openSettings === 'function') openSettings();
@@ -920,7 +915,7 @@
             try { switchSettingsTab(tab); } catch (e) { /* 分栏不存在时只开设置 */ }
         }
         var wrapped = false;
-        if (window.innerWidth <= 980 && typeof openSectionSubpage === 'function') {
+        if (isMobile() && typeof openSectionSubpage === 'function') {
             try { wrapped = openSectionSubpage(sectionIds, title); } catch (e) { wrapped = false; }
         }
         var firstId = Array.isArray(sectionIds) ? sectionIds[0] : sectionIds;
@@ -979,28 +974,29 @@
 
         scroll.appendChild(makeMineGroup('个性化', [
             { icon: ICONS.theme, title: '外观与主题', desc: themeDesc(), descId: 'mmThemeDesc', onClick: function () { openSettingsAt('tab-appearance'); } },
-            { icon: ICONS.mine, title: '人设与世界观', desc: '角色卡 / 世界规则与时代背景', onClick: function () { openSettingsSection('tab-character', ['characterSettingsSection', 'worldSettingsSection'], '人设与世界观'); } }
+            { icon: ICONS.mine, title: '人设与世界观', desc: '角色设定卡 / 世界规则与时代背景', onClick: function () { openSettingsSection('tab-character', 'characterCard', '人设与世界观'); } }
         ]));
 
-        // 模型不再按五类拆五行：总览一页就能看全并直接切换，具体提供商进「我的模型」。
+        // 模型是一行入口：总览一页含绑定、偏好与联网搜索，「对话偏好」深链与之重复。
         scroll.appendChild(makeMineGroup('智能', [
-            { icon: ICONS.model, title: '模型与连接', descId: 'mmModelSummary', desc: '五类模型与提供商', onClick: function () { openSettingsAt('tab-model'); } },
-            { icon: ICONS.bell, title: '对话偏好', desc: '默认模型、生成参数与联网搜索', onClick: function () { openSettingsAt('tab-model', 'settingChatModel'); } },
+            { icon: ICONS.model, title: '模型', descId: 'mmModelSummary', desc: '五类模型、偏好与联网搜索', onClick: function () { openSettingsAt('tab-model'); } },
             { icon: MINE_ICONS.capability, title: '能力与权限', desc: '手机操作 / 文件读写 / 浏览器', onClick: function () { openSettingsAt('tab-capability'); } },
-            { icon: ICONS.memory, title: '记忆整理与检索', desc: '整理模型、每几轮、召回与重排', onClick: function () { openSettingsAt('tab-capability', 'memoryRecallSection'); } }
+            { icon: ICONS.bell, title: '定时任务', desc: 'AI 定时提醒与消息', onClick: function () { openSettingsAt('tab-timers'); } },
+            { icon: ICONS.memory, title: '记忆整理', desc: '整理模型、每几轮与立即整理', onClick: function () { openSettingsAt('tab-model', 'memoryRecallSection'); } }
         ]));
 
         scroll.appendChild(makeMineGroup('扩展', [
             { icon: MINE_ICONS.plugins, title: '插件与扩展', desc: '插件 / 技能 / MCP', onClick: function () { openSettingsAt('tab-mods'); } }
         ]));
 
-        // 日志是全局诊断入口，放在「数据与系统」比塞进「扩展」更符合用户找它的路径。
+        // 日志是全局诊断入口，放在「数据与系统」比塞进「扩展」更符合用户找它的路径；
+        // 三个高级设置子页（数据 / 密码 / 更新）相邻成组，日志（独立页）放最后。
         var dataSystemRows = [
             { icon: MINE_ICONS.data, title: '我的数据', desc: '导入 / 导出 / 局域网共享', onClick: function () { openSettingsSection('tab-advanced', 'dataSettingsSection', '我的数据'); } },
-            { icon: MINE_ICONS.log, title: '日志', desc: '按级别与模块排查', onClick: function () { openSettingsAt('tab-log'); } },
-            { icon: MINE_ICONS.about, title: '版本与更新', desc: '检测新版本与安装包', onClick: function () { openSettingsSection('tab-advanced', 'updateSettingsSection', '版本与更新'); } }
+            { icon: MINE_ICONS.about, title: '版本与更新', desc: '检测新版本与安装包', onClick: function () { openSettingsSection('tab-advanced', 'updateSettingsSection', '版本与更新'); } },
+            { icon: MINE_ICONS.log, title: '日志', desc: '按级别与模块排查', onClick: function () { openSettingsAt('tab-log'); } }
         ];
-        // 访问密码在两端都能设：局域网共享也用它做凭据，手机端不再例外。
+        // 访问密码在两端都能设：局域网共享也用它做凭据，手机端与电脑同规则。
         dataSystemRows.splice(1, 0, { icon: MINE_ICONS.lock, title: '访问密码', desc: '本机与局域网登录凭据', onClick: function () { openSettingsSection('tab-advanced', 'authSettingsSection', '访问密码'); } });
         scroll.appendChild(makeMineGroup('数据与系统', dataSystemRows));
 
@@ -1105,12 +1101,19 @@
     function syncSettingsBackLabel() {
         var btn = byId('closeSettings');
         if (!btn) return;
-        var label = window.matchMedia(MOBILE_MQ).matches ? '返回' : '关闭设置';
+        var label = isMobile() ? '返回' : '关闭设置';
         btn.title = label;
         btn.setAttribute('aria-label', label);
     }
 
     function settingsTitleText() {
+        // 分区二级页（我的数据 / 访问密码 / 提供商详情…）打开时，顶栏直接写分区名 ——
+        // 父分栏名（高级设置 / 能力）在这层页面上是最不具体的那个标题。
+        var sub = byId('settingsSubpage');
+        if (sub && !sub.classList.contains('hidden')) {
+            var st = byId('settingsSubpageTitle');
+            if (st && st.textContent.trim()) return st.textContent.trim();
+        }
         // 添加模型是模型分栏里的整页下钻：顶栏标题跟着写到「添加模型」，返回键也退回模型页而不是关设置。
         var modelTab = byId('tab-model');
         if (modelTab && modelTab.classList.contains('is-add')) return '添加模型';
@@ -1141,7 +1144,6 @@
                 }
                 return '我的模型';
             }
-            if (view === 'prefs') return '使用偏好';
             return '模型';
         }
         var btn = document.querySelector('#settingsTabNav .settings-tab-btn.active');
@@ -1165,12 +1167,16 @@
         if (nav) new MutationObserver(syncSettingsTitle).observe(nav, { subtree: true, attributes: true, attributeFilter: ['class'] });
         var modelTab = byId('tab-model');
         if (modelTab) new MutationObserver(syncSettingsTitle).observe(modelTab, { attributes: true, attributeFilter: ['class', 'data-model-view'] });
+        // 分区二级页的开合不走分栏 class，单独观察：关掉子页时顶栏要从分区名退回分栏名。
+        var subpage = byId('settingsSubpage');
+        if (subpage) new MutationObserver(syncSettingsTitle).observe(subpage, { attributes: true, attributeFilter: ['class'] });
         var overlay = byId('settingsOverlay');
         if (overlay) {
+            // 设置页的历史记录归 router.js 管（打开压 /settings/…，返回时回到进入前的页面），
+            // 这里只跟着显隐同步标题与底栏 —— 两套历史逻辑同时改 history 会互相吃掉对方的记录。
             new MutationObserver(function () {
-                if (overlay.classList.contains('hidden')) { dropSettingsHistoryEntry(); syncNav(); return; }
+                if (overlay.classList.contains('hidden')) { syncNav(); return; }
                 syncSettingsTitle();
-                pushSettingsHistoryEntry();
                 syncNav();
             }).observe(overlay, { attributes: true, attributeFilter: ['class'] });
         }
@@ -1211,32 +1217,8 @@
         try { closeSettingsPanel(); } catch (e) { /* 忽略：关不掉也不该挡住导航 */ }
     }
 
-    // 设置页的系统返回：三条路是左上角返回键、系统返回手势、底部导航。手势走的是浏览器返回，所以打开设置时压一条历史记录，返回时把它吃掉并关面板。
-    var settingsHistoryPushed = false;
-
-    function pushSettingsHistoryEntry() {
-        if (settingsHistoryPushed || !window.history || !history.pushState) return;
-        if (!window.matchMedia('(max-width: 980px)').matches) return;
-        try {
-            history.pushState({ mmSettings: 1 }, '');
-            settingsHistoryPushed = true;
-        } catch (e) { /* 无历史 API 时退化成"只能用底部导航" */ }
-    }
-
-    function dropSettingsHistoryEntry() {
-        if (!settingsHistoryPushed) return;
-        settingsHistoryPushed = false;
-        try { history.back(); } catch (e) { /* 忽略 */ }
-    }
-
-    window.addEventListener('popstate', function () {
-        if (!settingsHistoryPushed) return;
-        settingsHistoryPushed = false;
-        var overlay = byId('settingsOverlay');
-        if (overlay && !overlay.classList.contains('hidden')) {
-            try { closeSettingsPanel(); } catch (e) { /* 忽略 */ }
-        }
-    });
+    // 设置页的浏览器返回由 router.js 统一处理：打开时把地址压成 /settings/…，返回时按地址恢复上一页。
+    // 这里不单独压一条 mmSettings 历史 —— 两套记录会让一次返回只吃掉其中一条。
 
     /** 顶栏的公告入口：宿主自己的按钮在窄屏都收进了「更多」，但公告属于「要主动看」的东西，留一颗铃铛在顶栏才算显眼。 */
     function buildAnnounceBtn() {
@@ -1542,7 +1524,7 @@
 
     /** 进入多选（由长按菜单里的「多选」调用）。长按菜单本身保持原样 —— 那些都是「只对这一条」的操作；进了多选才换成「一次处理一批」的两颗按钮，单条操作这时没有意义，六项菜单也挤不进一条底部横条。 */
     function enterConvSelect(convId) {
-        if (!window.matchMedia(MOBILE_MQ).matches) return;
+        if (!isMobile()) return;
         if (typeof closeConversationContextMenu === 'function') closeConversationContextMenu();
         convSelect.on = true;
         if (convId) convSelect.ids[convId] = true;
@@ -1654,7 +1636,7 @@
 
     function pushConvSelectHistory() {
         if (convSelect.historyPushed || !window.history || !history.pushState) return;
-        if (!window.matchMedia(MOBILE_MQ).matches) return;
+        if (!isMobile()) return;
         try {
             history.pushState({ mmConvSelect: 1 }, '');
             convSelect.historyPushed = true;
@@ -1782,7 +1764,7 @@
         if (!shell || shell.getAttribute('data-mm-draft') === '1') return;
         shell.setAttribute('data-mm-draft', '1');
         shell.addEventListener('pointerdown', function (ev) {
-            if (!window.matchMedia(MOBILE_MQ).matches) return;
+            if (!isMobile()) return;
             if (ev.target && ev.target.closest && ev.target.closest('button')) return;
             // 拦住默认聚焦：焦点要落到底部那条输入框上，而不是原地闪一下再跳。
             if (typeof ev.preventDefault === 'function') ev.preventDefault();
@@ -2014,7 +1996,7 @@
         var panel = byId('announcePanel');
         var header = byId('chatHeader');
         if (!panel || !header) return;
-        var mobile = window.matchMedia(MOBILE_MQ).matches;
+        var mobile = isMobile();
         if (mobile) {
             if (panel.parentElement !== document.body) {
                 if (!ensureAnnounceHost.home) ensureAnnounceHost.home = panel.parentElement;
@@ -2083,7 +2065,7 @@
             if (mine && mine.classList.contains('open') && (!settings || settings.classList.contains('hidden'))) closeMine();
         });
         window.addEventListener('resize', function () {
-            if (!window.matchMedia(MOBILE_MQ).matches) closeMine();
+            if (!isMobile()) closeMine();
             ensureAnnounceHost();
             renderMobileConvList();
             syncNav();

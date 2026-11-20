@@ -15,21 +15,9 @@ if (window.Element && !Element.prototype.replaceChildren) {
 // 原生（Capacitor APK）Live2D 模型存储适配：APK 的本机服务不提供模型目录接口，/api/live2d/ 下接口在本机用 Capacitor Filesystem 实现。
 const IS_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 
-// 这个浏览器有没有「安装到桌面」入口：判据只有会不会发 beforeinstallprompt，不用 UA 名单（套壳浏览器 UA 五花八门）。
-let ownInstallEntryKnown = null;
-function browserShowsOwnInstallEntry() {
-    if (ownInstallEntryKnown !== null) return ownInstallEntryKnown;
-    ownInstallEntryKnown = ('onbeforeinstallprompt' in window);
-    return ownInstallEntryKnown;
-}
-
-// 运行环境事实（D5）：平台分支判断留在这里，对外只暴露与平台无关的语义（如 pwa.js 要问"能不能装成一个应用"）。
+// 运行环境事实（D5）：平台分支判断留在这里，对外只暴露与平台无关的语义。
 window.ElainaRuntime = {
     get isNativeShell() { return IS_NATIVE_APP; },
-    // 安卓壳已经是 APK，再注册 SW 只会多一层缓存风险；地址栏自带安装入口的浏览器不再给按钮，只有 Firefox / 桌面 Safari 这类才需要。
-    get canInstallAsApp() {
-        return !IS_NATIVE_APP && !browserShowsOwnInstallEntry();
-    },
 };
 const IS_MOBILE_DEVICE = (function () {
     try {
@@ -318,6 +306,12 @@ window.ElainaHost = {
     },
     get achievements() {
         try { return window.ElainaAchievements || null; } catch (e) { return null; }
+    },
+
+    // 插件 Agent 工具桥（agent-mod-tools.js）：插件经能力组 agentTools 注册工具、桥里带分级确认门。
+    // null = 桥未加载；插件系统经 host().agentTools 取，不自己摸 window 全局名（D14 同一条理由）。
+    get agentTools() {
+        try { return window.ElainaAgentToolBridge || null; } catch (e) { return null; }
     },
 
     // 桌面壳桥（WebView2 宿主才有）：插件要开原生透明置顶窗只能经这里，自己摸 window.chrome.webview

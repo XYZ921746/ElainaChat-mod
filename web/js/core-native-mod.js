@@ -89,7 +89,7 @@ async function nativeListPlugins(fs, dir) {
     for (const e of (entries.files || [])) {
         if (!e.name || e.name === 'index.json') continue;
         if (e.type === 'directory') { ids.push(e.name); continue; }
-        if (e.type) continue;                      // 明确是文件 → 跳过
+        if (e.type) continue;
         try {
             const st = await fs.stat({ path: `${NATIVE_MODS_DIR}/${e.name}`, directory: dir });
             if (!st || st.type === 'directory') ids.push(e.name);
@@ -136,7 +136,7 @@ async function nativeReadModReadme(fs, dir, modId) {
         try {
             const r = await fs.readFile({ path: `${NATIVE_MODS_DIR}/${dirName}/${name}`, directory: dir, encoding: 'utf8' });
             text = String(r && r.data || '');   // Capacitor readFile 回 {data}，不是裸字符串
-        } catch (e) { continue; }   // 这个名字不存在 → 试下一个
+        } catch (e) { continue; }
         if (text.length > 256 * 1024) {
             return { ok: false, message: '说明文件过大（超过 256KB），已拒绝读取' };
         }

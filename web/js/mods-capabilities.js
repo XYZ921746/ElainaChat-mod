@@ -13,6 +13,8 @@
         desktopWindow: () => Boolean(host().desktopWindow),
         /** 能打开宿主设置面板 */
         appUi: () => Boolean(host().appUi),
+        /** 能注册 Agent 工具（桥 + 工具注册表都在） */
+        agentTools: () => Boolean(host().agentTools),
         conversations: () => Boolean(host().state),
         /** 有语音合成能力（TTS 是否已配 Key 另说） */
         speech: () => Boolean(host().speech),
@@ -37,6 +39,7 @@
         openFolder: ['openFolder'],
         desktopWindow: ['desktopWindow'],
         appUi: ['openAppSettings'],
+        agentTools: ['agentTools'],
     };
 
     /* 读某个插件声明的 host API 能力组：声明位置是 manifest 的 `capabilities`（数组，与 server.capabilities 同名但各管一半），

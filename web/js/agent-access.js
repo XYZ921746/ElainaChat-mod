@@ -1,6 +1,6 @@
 'use strict';
 
-// 一个 state.settings.agentAccess 管两件事：能碰哪里（三档都能访问任意路径）、要不要问与能不能删 —— off 关闭（不读不写不删不执行，电脑信息不再注入提示词）、strict 逐条确认（读取不问）、auto 自动通过但禁止删除、full 含删除全部放行；手机有独立总开关。
+// 一个 state.settings.agentAccess 管两件事：能碰哪里（三档都能访问任意路径）、要不要问与能不能删 —— off 关闭（不读不写不删不执行，电脑信息不注入提示词）、strict 逐条确认（读取不问）、auto 自动通过但禁止删除、full 含删除全部放行；手机有独立总开关。
 const AGENT_ACCESS_LEVELS = ['off', 'strict', 'auto', 'full'];
 const AGENT_ACCESS_DEFAULT = 'strict';
 
@@ -43,7 +43,7 @@ window.agentActions = {
     setLive2dBackground(v) { const l2d = live2dService(); if (l2d) l2d.setBackground(v); },
     // 文件操作：解析 [操作:列出文件/查看文件/保存文件/删除文件 …] 并执行（权限档位见上）
     agentFileOperation(raw) {
-        if (agentAccessDisabled()) { insertAgentResult(AGENT_DISABLED_NOTE); return; }
+        if (agentAccessDisabled()) { agentSessionRecordFailure(AGENT_DISABLED_NOTE, { progress: false, summary: 'AI 权限已关闭' }); return; }
         const access = currentAgentAccess();
         const text = String(raw || '').trim();
         let action = 'ls';
@@ -51,9 +51,10 @@ window.agentActions = {
         // 删除先判：触发词与其它几个不重叠，但先判可避免「删除文件 xxx」里的"文件"被文件分支吃掉。
         if (/删除文件|删除目录|删除文件夹|删掉文件|删掉目录|移除文件/.test(text)) {
             if (!agentAccessAllowsDelete()) {
-                insertAgentResult('该操作不可用：当前是「' + (currentAgentAccess() === 'auto'
+                agentSessionRecordFailure('该操作不可用：当前是「' + (currentAgentAccess() === 'auto'
                     ? '自动通过（禁止删除）' : '逐条确认') + '」模式，AI 不能删除文件。'
-                    + '需要删除的话，请在「设置 → 能力 → AI 权限」里切到「完全访问」，或自己手动删除。');
+                    + '需要删除的话，请在「设置 → 能力 → AI 权限」里切到「完全访问」，或自己手动删除。',
+                    { progress: false, summary: '删除不被当前权限档允许' });
                 return;
             }
             rest = text.replace(/删除文件|删除目录|删除文件夹|删掉文件|删掉目录|移除文件/, '').trim();
@@ -93,11 +94,21 @@ window.agentActions = {
     agentPhoneOperation(raw) {
         void ElainaOps.invoke('phone', { raw });
     },
+    // 问主代理：子代理向主对话求助（需要记忆 / 偏好 / 主观判断的事）；答复直接喂回子代理上下文
+    agentAskMain(raw) {
+        const question = String(raw || '').replace(/^问主代理[:：]?\s*/, '').trim();
+        if (typeof agentSessionAskMain !== 'function') {
+            insertAgentResult('子代理模块没有加载，这条询问无法处理。', { continueLoop: false, asContext: true });
+            return;
+        }
+        void agentSessionAskMain(question);
+    },
     // 联网搜索：[操作:搜索 今天北京天气]；把标签通道的一句话翻成工具通道的结构化参数。
     agentWebSearchOperation(raw) {
         const query = String(raw || '').replace(/^(搜索|搜一下|联网搜索|查一下)\s*[:：]?\s*/, '').trim();
         if (!query) {
-            insertAgentResult('没有给出要搜索的内容。写成 [操作:搜索 要查的东西] 就行。');
+            agentSessionRecordFailure('没有给出要搜索的内容。写成 [操作:搜索 要查的东西] 就行。',
+                { progress: false, summary: '搜索缺少关键词' });
             return;
         }
         void runAgentWebSearch({ query });
@@ -106,24 +117,26 @@ window.agentActions = {
     agentBrowserOperation(raw) {
         const parsed = parseBrowserTag(String(raw || ''));
         if (!parsed) {
-            insertAgentResult('看不懂这条浏览器操作。可用写法：'
+            agentSessionRecordFailure('看不懂这条浏览器操作。可用写法：'
                 + '\n· [操作:浏览器打开 <网址>]'
                 + '\n· [操作:浏览器看页面]'
                 + '\n· [操作:浏览器点击 <编号>]'
                 + '\n· [操作:浏览器输入 <编号>|<文字>]'
                 + '\n· [操作:浏览器回车]'
-                + '\n· [操作:浏览器关闭]');
+                + '\n· [操作:浏览器关闭]',
+                { progress: false, summary: '浏览器标签看不懂' });
             return;
         }
         void runAgentBrowserOperation(parsed);
     },
     // 电脑命令：[操作:电脑命令 dir]；三档都可执行，区别只在要不要问（见 doAgentCommand 与 server 的 agentExec）。
     agentCommandOperation(raw) {
-        if (agentAccessDisabled()) { insertAgentResult(AGENT_DISABLED_NOTE); return; }
+        if (agentAccessDisabled()) { agentSessionRecordFailure(AGENT_DISABLED_NOTE, { progress: false, summary: 'AI 权限已关闭' }); return; }
         const text = String(raw || '').trim();
         const command = text.replace(/^(?:电脑命令|执行命令|运行命令|电脑执行)\s*/, '').trim();
         if (!command) {
-            insertAgentResult('没有给出要执行的命令。请用 [操作:电脑命令 <命令>] 的格式。');
+            agentSessionRecordFailure('没有给出要执行的命令。请用 [操作:电脑命令 <命令>] 的格式。',
+                { progress: false, summary: '命令标签为空' });
             return;
         }
         void ElainaOps.invoke('pc_command', { command }, { access: currentAgentAccess() });

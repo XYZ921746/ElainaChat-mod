@@ -56,12 +56,13 @@ const AGENT_PERM_DOTS = [
     'agentPermBadgeDevice',
 ];
 
-// 汇总只数"能被用户授权"的几项：应用列表是安装期授权、设备状态无需权限，
-// 把它们算进去会让分数永远不满，用户以为还有东西没开。
+// 汇总只数"能被用户授权"的几项：设备状态无需权限，算进去会让分数永远不满。
+// 应用列表要看真实结果 —— 国产 ROM 在 QUERY_ALL_PACKAGES 之上还有一层管控，它真的可能是关的。
 const AGENT_PERM_COUNTED = ['sms', 'contacts', 'calendar', 'notifications', 'battery'];
 
 // 能直接弹系统框的权限 —— 只有这几项能进「一键授权」。通知要跳「通知使用权」、
 // 自启动只能跳厂商页，都不是弹框能解决的，硬塞进一键授权只会让用户以为点完就都开了。
+// apps 也不进一键授权：它只在国产 ROM 上才有申请入口，混进来会让其它机型弹一个注定失败的框。
 const AGENT_PERM_POPUP_KINDS = ['sms', 'contacts', 'calendar'];
 
 /** 写一个状态圆点（kind: 'ok' | 'no' | 'unknown'）。明细里只画点、不写文字 ——
@@ -77,12 +78,16 @@ function setAllAgentPermDots(kind) {
     AGENT_PERM_DOTS.forEach((id) => setAgentPermDot(id, kind));
 }
 
-// 应用列表是安装期授权、设备状态无需权限，都算已开启 —— 写成"未开启"会让用户白找一圈设置。
+// 应用列表按真实结果标：原生层会枚举一次可启动应用，数出几个不是自己的包名。
+// 不能默认写"已开启" —— 澎湃OS 等 ROM 在 QUERY_ALL_PACKAGES 之上还有一层自家管控，
+// 那种情况下绿点会让用户（和排查的人）以为一切正常，而 AI 只读得到一个应用。
 function renderAgentPermDots(status) {
     const s = status || {};
     const p = s.permissions || {};
     const yesNo = (id, ok) => setAgentPermDot(id, ok ? 'ok' : 'no');
-    setAgentPermDot('agentPermBadgeApps', p.apps === false ? 'no' : 'ok');
+    // 老版本原生层没有 apps 字段（只报 true）：缺字段时按"无法检测"显示，不冒充已授权。
+    if (typeof p.apps !== 'boolean') setAgentPermDot('agentPermBadgeApps', 'unknown');
+    else setAgentPermDot('agentPermBadgeApps', p.apps ? 'ok' : 'no');
     setAgentPermDot('agentPermBadgeDevice', 'ok');
     yesNo('agentPermBadgeNotifications', Boolean(p.notifications));
     yesNo('agentPermBadgeSms', Boolean(p.sms));
@@ -172,6 +177,18 @@ function closeAgentPermSheet() {
     btn?.setAttribute('aria-expanded', 'false');
 }
 
+// 「完全访问」的后果清单只在这档被选中时展开：平时挂着，选「逐条确认」的人也要盯一屏红字。
+function syncFullAccessWarning() {
+    const box = document.getElementById('fullAccessWarning');
+    if (!box) return;
+    const access = document.querySelector('input[name="agentAccess"]:checked')?.value || 'strict';
+    box.classList.toggle('hidden', access !== 'full');
+}
+
+document.querySelectorAll('input[name="agentAccess"]').forEach((r) => {
+    r.addEventListener('change', syncFullAccessWarning);
+});
+
 document.getElementById('agentPermDetailBtn')?.addEventListener('click', () => openAgentPermSheet());
 document.getElementById('agentPermSheetClose')?.addEventListener('click', () => closeAgentPermSheet());
 // 点遮罩关掉：浮层是全屏容器，点到面板外才算"点外面"。
@@ -192,6 +209,12 @@ async function handleAgentPermAction(act) {
             if (typeof dev.requestReadPermission !== 'function') return;
             // 已授权时原生层直接返回、不弹框，所以不必先查状态再决定要不要申请。
             await dev.requestReadPermission({ kind: act });
+        } else if (act === 'apps') {
+            if (typeof dev.requestReadPermission !== 'function') return;
+            // 原生层先判断这台机器到底需不需要：列表本来能读全、或系统没有该权限入口时，
+            // 它直接回报原因而不弹框。结果里的 text 只在失败时才有内容，值得让用户看到。
+            const res = await dev.requestReadPermission({ kind: 'apps' });
+            if (res && res.ok === false && res.text) await showCustomAlert(res.text, '已安装应用列表');
         } else if (act === 'requestAll') {
             if (typeof dev.requestReadPermission !== 'function') return;
             // 只依次弹"能弹框的那几项"。通知与自启动弹不出来，混进来只会让用户以为点完就都开了。

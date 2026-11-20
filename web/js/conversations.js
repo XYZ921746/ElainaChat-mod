@@ -172,7 +172,7 @@ let conversationContextTarget = null;
 let suppressConversationClickUntil = 0;
 
 function isMobileConversationLayout() {
-    return window.matchMedia('(max-width: 980px)').matches;
+    return isMobile();
 }
 
 function closeConversationContextMenu() {

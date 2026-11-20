@@ -31,8 +31,16 @@ async function explainAgentFailure(reason) {
     // 这一轮有工具调用就走工具通道、跳过标签解析 —— 两条都跑会让同一个动作执行两次。
     const repliedToolCalls = (agentToolOpt && agentToolOpt.replyInfo
         && Array.isArray(agentToolOpt.replyInfo.toolCalls)) ? agentToolOpt.replyInfo.toolCalls : [];
-    const wantsRetry = !repliedToolCalls.length && canRetry && /\[操作[:：]/.test(raw || '');
-    if (text) {
+    const retryOps = (typeof agentTagKeepsRunning === 'function')
+        ? agentTagKeepsRunning(raw)
+        : /\[操作[:：]/.test(raw || '');
+    const wantsRetry = !repliedToolCalls.length && canRetry && retryOps;
+    // 这段解释里如果还带着重试动作，它只是过程话：压进本轮缓冲，等任务收尾统一总结。
+    const suppressReply = repliedToolCalls.length > 0 || wantsRetry;
+    if (text && suppressReply) {
+        if (typeof agentRunNoteNarration === 'function') agentRunNoteNarration(text);
+    }
+    if (text && !suppressReply) {
         const aiMessage = { id: generateId(), role: 'ai', text, timestamp: new Date().toLocaleTimeString() };
         conv.messages.push(aiMessage);
         saveConversations();
@@ -43,9 +51,26 @@ async function explainAgentFailure(reason) {
     }
     // 解释里带了工具调用就执行（结果以 role:'tool' 回灌，执行完自己调度续跑）；否则才看标签。
     if (repliedToolCalls.length) {
+        // 协议要求 assistant.tool_calls 与随后的 tool 结果成对出现，不再依赖历史窗口的孤儿降级。
+        conv.messages.push({
+            id: generateId(), role: 'ai', text: '',
+            timestamp: new Date().toLocaleTimeString(),
+            toolCalls: repliedToolCalls, hidden: true,
+        });
+        saveConversations();
         void runToolCalls(repliedToolCalls, { access: currentAgentAccess() });
     } else if (wantsRetry && window.ElainaTags) {
         window.ElainaTags.drive(raw);
+    }
+}
+
+/** 旧观察压成一行：只保留最新一份完整界面，长任务不会把每次的控件树都塞进上下文。 */
+function compactAgentObservations(messages) {
+    for (const m of messages || []) {
+        if (!m || m.kind !== 'agent-observation' || m.currentScreen === false) continue;
+        m.currentScreen = false;
+        m.text = '【第 ' + (m.step || '?') + ' 步｜历史】\n'
+            + (m.summary || '（旧界面，坐标已过期；需要坐标请重新读界面）');
     }
 }
 
@@ -61,13 +86,33 @@ function insertAgentResult(text, options = {}) {
         text: '【AI 操作结果】\n' + text,
         timestamp: new Date().toLocaleTimeString(),
     };
+    if (options.observation === true) {
+        compactAgentObservations(conv.messages);
+        const step = Number(options.step) || 0;
+        const summary = String(options.summary || '').trim();
+        msg.kind = 'agent-observation';
+        msg.step = step;
+        msg.summary = summary || ('第 ' + step + ' 步观察');
+        msg.currentScreen = options.currentScreen === true;
+        msg.text = (msg.currentScreen
+            ? '【AI 操作结果｜当前界面｜第 ' + step + ' 步】\n'
+            : '【AI 操作结果｜第 ' + step + ' 步】\n') + text;
+    }
     if (asContext) msg.hidden = true;
     conv.messages.push(msg);
     saveConversations();
     if (!asContext && state.currentConversationId === conv.id) renderMessage(msg);
-    // 熔断计数：只有"真的做成了一件事"（唯一会传 continueLoop: true 的场景）才算进展（见 AGENT_STALL_FUSE）。
+    // 熔断计数：只有"真的推进了一步"才算进展；界面没变化的成功也要计入无进展，
+    // 否则点空会把计数清零，模型能在同一处转到熔断永远不触发（见 AGENT_STALL_FUSE）。
     if (options.continueLoop === true) {
-        agentStalledSteps = 0;
+        if (options.progress === false) agentStalledSteps += 1;
+        else if (options.progress === null) {
+            // 界面持续变化 / 读不到界面：既不算进展，也不算失败，保持熔断计数不变。
+        } else {
+            agentStalledSteps = 0;
+            // 系统催办不是“做成了事”，不能把它算进收尾判据。
+            if (options.system !== true && typeof agentRunNoteSuccess === 'function') agentRunNoteSuccess();
+        }
         scheduleAgentContinue();
     } else {
         agentStalledSteps += 1;

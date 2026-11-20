@@ -12,12 +12,12 @@ import (
 
 // 本文件是「六类目记忆」与 memory_items 行之间的双向转换。
 //
-// M2b 起 memory_items 是记忆的唯一权威：迁移（Store 的 elaina_open_memory_core）、
+// memory_items 是记忆的唯一权威：迁移（Store 的 elaina_open_memory_core）、
 // 页面的读写（/api/memory/core）、备份导入都经过这里，所以转换必须**双向无损**——
 // 类目里每个字段（含日记的 timestamp / conversationTitle / essences 这类附加字段）
 // 都要能从行里原样还原。附加字段统一塞进 meta 列（JSON 对象），content 单独成列。
 
-// Core 是前端 state.memoryCore 的形状（键名与旧版 JSON 完全一致，前端零改动）。
+// Core 是前端 state.memoryCore 的形状（键名与前端现有 JSON 完全一致，前端零改动）。
 type Core struct {
 	Diary         []DiaryEntry `json:"diary"`
 	Promise       []string     `json:"promise"`
@@ -112,7 +112,7 @@ func parseDiaryDateMs(date string) int64 {
 	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local).UnixMilli()
 }
 
-// ParseCore 解析旧版六类目 JSON。缺的类目补空数组；类目条目里的额外字段原样保留在
+// ParseCore 解析 legacy 六类目 JSON。缺的类目补空数组；类目条目里的额外字段原样保留在
 // map 里（转行时进 meta），不会因为结构体没声明就丢掉。
 func ParseCore(raw []byte) (Core, error) {
 	var parsed map[string]json.RawMessage

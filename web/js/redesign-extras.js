@@ -17,7 +17,7 @@
     function currentModel() {
         try {
             // 这段对话在「当前会话设定」里绑定了模型时，胶囊显示会话自己的；否则显示
-            //   「默认模型」那张卡的模型名（state.settings.model 只是迁移源，不再跟随用户切换）。
+            //   「默认模型」那张卡的模型名（state.settings.model 只是迁移源，不跟随用户切换）。
             if (typeof effectiveConversationModel === 'function') {
                 const convModel = String(effectiveConversationModel() || '');
                 if (convModel) return convModel;
@@ -88,10 +88,15 @@
 
     const modelPill = byId('rdModelPill');
     if (modelPill) {
-        // 胶囊在顶栏常驻，是「调这段对话的人设」最顺手的落点；切模型仍走设置页。
+        // 胶囊在顶栏常驻：对话内是「调这段对话的人设」最顺手的落点；
+        // 首页没有当前对话，点它就没法编辑会话人设，改为去模型设置看/换默认模型。
         modelPill.addEventListener('click', function () {
-            if (typeof openConversationPromptEditor === 'function') openConversationPromptEditor();
-            else openSettingsTab('tab-model');
+            const conv = typeof getCurrentConversation === 'function' ? getCurrentConversation() : null;
+            if (conv && typeof openConversationPromptEditor === 'function') {
+                openConversationPromptEditor();
+                return;
+            }
+            openSettingsTab('tab-model');
         });
     }
 
@@ -290,7 +295,7 @@
     function syncComposerPlaceholder() {
         const input = byId('textInput');
         if (!input) return;
-        input.placeholder = window.matchMedia('(max-width: 980px)').matches
+        input.placeholder = isMobile()
             ? '和伊蕾娜说点什么…'
             : '和伊蕾娜说点什么...（Enter 发送）';
     }

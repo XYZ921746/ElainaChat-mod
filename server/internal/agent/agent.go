@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"elainachat/server/internal/fsx"
 	"elainachat/server/internal/logx"
 	"elainachat/server/internal/store"
 	"elainachat/server/internal/zipx"
@@ -216,13 +217,82 @@ const blockedReadMessage = "该路径在保护范围内（存放访问密钥、�
 // 只封 exe 文件本身、不封整个所在目录：开发目录与安装目录里还有大量用户要 AI 读的
 // 正常文件（项目代码、日志、插件），按目录封会把它们一起挡掉。
 func (h *Handler) CheckReadable(target string) error {
-	if h.dataDir != "" && isPathInside(target, h.dataDir) {
-		return errors.New(blockedReadMessage)
+	return h.checkProtected(target, false)
+}
+
+const blockedWriteMessage = "该路径在保护范围内（存放访问密钥、会话数据或运行时文件），AI 不能写入或删除"
+
+// CheckMutable 是写/删侧的硬边界，与 CheckReadable 封同一批目标。
+//
+// 读被挡住、写却放行时，边界是假的：data/ 里的 config.json 是访问密码、session-key 是
+// 会话签名密钥、session-epoch 是吊销代数。能写它们就等于能改整机访问权——「禁止删除」
+// 档位只挡住了删，改密码和删库在效果上是同一件事（都能把用户锁在外面）。
+// 所以这里同样不设档位豁免，full 也不例外：AI 的工作面是用户的工作文件，不是应用的运行数据。
+// 与读侧一致，只封数据目录与可执行文件本身，不封它们所在的上级目录。
+func (h *Handler) CheckMutable(target string) error {
+	return h.checkProtected(target, true)
+}
+
+func (h *Handler) checkProtected(target string, forWrite bool) error {
+	message := blockedReadMessage
+	if forWrite {
+		message = blockedWriteMessage
 	}
-	if exe := h.executablePath(); exe != "" && samePath(target, exe) {
-		return errors.New(blockedReadMessage)
+	protected := func(candidate string) bool {
+		if h.dataDir != "" && isPathInside(candidate, h.dataDir) {
+			return true
+		}
+		if exe := h.executablePath(); exe != "" && samePath(candidate, exe) {
+			return true
+		}
+		if h.dataDir != "" {
+			if resolved, err := fsx.ExistingPathWithin(candidate, h.dataDir); err == nil && isPathInside(resolved, h.dataDir) {
+				return true
+			}
+		}
+		if exe := h.executablePath(); exe != "" {
+			if resolved, err := fsx.RealPath(candidate); err == nil && samePath(resolved, exe) {
+				return true
+			}
+		}
+		return false
+	}
+	if protected(target) {
+		return errors.New(message)
+	}
+	if h.dataDir != "" {
+		if err := fsx.WritablePathWithin(target, h.dataDir); err == nil {
+			return errors.New(message)
+		}
 	}
 	return nil
+}
+
+// ResolveWorkingDir 只约束命令启动目录；命令本身仍由 Agent 权限档与确认流程约束。
+func (h *Handler) ResolveWorkingDir(raw string) (string, error) {
+	target := strings.TrimSpace(raw)
+	if target == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		target = wd
+	}
+	resolved, err := h.Resolve(target)
+	if err != nil {
+		return "", err
+	}
+	if err := h.CheckReadable(resolved); err != nil {
+		return "", err
+	}
+	if err := h.CheckMutable(resolved); err != nil {
+		return "", err
+	}
+	info, err := os.Stat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("工作目录不存在或不是目录")
+	}
+	return resolved, nil
 }
 
 func (h *Handler) executablePath() string {
@@ -313,6 +383,9 @@ func (h *Handler) Write(rawPath, content, access string, overwrite bool) (string
 	if h.blockedWriteTarget(target, access) {
 		return target, nil, errors.New("应用文件夹内不允许写 .html/.js/.svg 等可执行类型的文件（防止同源代码注入）")
 	}
+	if err := h.CheckMutable(target); err != nil {
+		return target, nil, err
+	}
 	_, statErr := os.Stat(target)
 	exists := statErr == nil
 	if access == "strict" && !overwrite {
@@ -353,6 +426,9 @@ func (h *Handler) Delete(rawPath, access string, confirmed bool) (string, bool, 
 	if reason := h.deleteGuard(target); reason != "" {
 		return target, false, nil, errors.New(reason)
 	}
+	if err := h.CheckMutable(target); err != nil {
+		return target, false, nil, err
+	}
 	info, err := os.Stat(target)
 	if err != nil {
 		return target, false, nil, fmt.Errorf("要删除的东西不存在：%s", target)
@@ -383,7 +459,12 @@ func (h *Handler) blockedWriteTarget(target, access string) bool {
 		return false
 	}
 	appRoot := filepath.Clean(h.appRoot)
-	inAppRoot := samePath(target, appRoot) || strings.HasPrefix(strings.ToLower(target), strings.ToLower(appRoot)+string(filepath.Separator))
+	inAppRoot := isPathInside(target, appRoot)
+	if !inAppRoot {
+		if err := fsx.WritablePathWithin(target, appRoot); err == nil {
+			inAppRoot = true
+		}
+	}
 	if !inAppRoot {
 		return false
 	}
@@ -465,12 +546,7 @@ func isDir(path string) bool {
 }
 
 func isPathInside(target, dir string) bool {
-	t := filepath.Clean(target)
-	d := filepath.Clean(dir)
-	if samePath(t, d) {
-		return true
-	}
-	return strings.HasPrefix(strings.ToLower(t), strings.ToLower(d)+string(filepath.Separator))
+	return fsx.PathInside(target, dir)
 }
 
 func samePath(a, b string) bool {

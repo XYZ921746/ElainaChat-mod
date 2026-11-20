@@ -8,7 +8,7 @@
 //   node scripts/run-checks.mjs --bail          第一个失败就停（不启动后续模块）
 
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -32,7 +32,8 @@ const MODULES = [
     { name: 'check-log' },
     { name: 'check-security' },
     { name: 'check-ui' },
-    { name: 'check-pwa' },
+    // 手机 / 桌面同一份 DOM 响应式呈现的约定检查：断点收口、分层退出、「我的」入口落地、二级页单壳。
+    { name: 'check-mobile' },
     { name: 'check-system' },
     { name: 'check-update' },
     // 浏览器能力（CDP）：没装 Chrome/Edge 的机器上，真浏览器用例按环境性跳过（不判红）
@@ -95,6 +96,8 @@ function runModule(mod, timeoutMs, portBase) {
 
         const finish = (code) => {
             clearTimeout(timer);
+            // 每个模块一份独立的临时配置：跑完就删，不在 temp 里攒小文件。
+            try { rmSync(configPath, { force: true }); } catch { /* 删不掉也不影响结果 */ }
             if (killedByTimeout) {
                 out += `\n  FAIL  模块超时（${Math.round(timeoutMs / 1000)}s 未结束，已强制终止）`
                     + '\n  · 多半是某处轮询的 fetch 没带单次超时（连接建立了但对方不回包）'

@@ -2,18 +2,31 @@
 'use strict';
 
 // 工具结果进对话但不进可见记录：OpenAI 要求 assistant 的 tool_calls 后紧跟一条 role:'tool'，模型下一轮才知道上一步成没成；hidden 供各处过滤。
-function insertToolResult(callId, result) {
+function insertToolResult(callId, result, meta = {}) {
     const conv = getCurrentConversation();
     if (!conv) return;
     const text = String((result && result.text) || '').trim();
-    conv.messages.push({
+    if (meta.observation === true && typeof compactAgentObservations === 'function') {
+        compactAgentObservations(conv.messages);
+    }
+    const msg = {
         id: generateId(),
         role: 'tool',
         toolCallId: String(callId || ''),
         text: text || (result && result.ok ? '（这一步已完成，没有输出）' : '（这一步没有成功）'),
         hidden: true,
         timestamp: new Date().toLocaleTimeString(),
-    });
+    };
+    if (meta.observation === true) {
+        msg.kind = 'agent-observation';
+        msg.step = Number(meta.step) || 0;
+        msg.summary = String(meta.summary || ('第 ' + msg.step + ' 步观察'));
+        msg.currentScreen = meta.currentScreen === true;
+        msg.text = (msg.currentScreen
+            ? '【AI 操作结果｜当前界面｜第 ' + msg.step + ' 步】\n'
+            : '【AI 操作结果｜第 ' + msg.step + ' 步】\n') + msg.text;
+    }
+    conv.messages.push(msg);
     saveConversations();
 }
 
@@ -163,13 +176,34 @@ async function runToolCalls(calls, ctx = {}) {
                 }
             }
             agentToolsProven = true;
-            insertToolResult(call.id, result);
+            const phoneOp = Boolean(op && op.ns === 'phone');
+            const stepNo = (window.agentRuntime && typeof window.agentRuntime.getStep === 'function')
+                ? window.agentRuntime.getStep() : 0;
+            const rawArg = String((call.args && call.args.raw) || '');
+            const currentScreen = phoneOp && /手机查看界面|手机截图/.test(rawArg);
+            const changeText = result.progress === false ? '界面没有变化'
+                : (result.progress === null ? '变化未知' : '已执行');
+            insertToolResult(call.id, result, phoneOp
+                ? { observation: true, step: stepNo, currentScreen,
+                    summary: '第 ' + stepNo + ' 步：' + label + ' → ' + changeText }
+                : {});
             updateTurnTool(traceItem, {
                 state: result.ok ? 'ok' : 'error',
                 result: String(result.text || '').slice(0, 4000),
             });
-            if (result.ok) agentStalledSteps = 0; else agentStalledSteps += 1;
             if (result.ok) anySucceeded = true;
+            // 熔断记账单源：执行型操作的结果在会话模式下已由执行器经 agentSessionRouteResult 记账
+            // （agentSessionAddObservation 内含同一套 progress 语义），这里再记就是双份 ——
+            // 派发回合的一次失败会被算成两步无进展。非会话模式（含会话没启动成的派发）才在这里记。
+            const routedToSession = typeof agentSessionActive === 'function' && agentSessionActive()
+                && op && (op.ns === 'phone' || op.ns === 'file' || op.ns === 'pc');
+            if (!routedToSession) {
+                // 界面没有变化不算进展；持续变化 / 读不到界面（progress:null）保持计数不变。
+                if (result.ok && result.progress === false) agentStalledSteps += 1;
+                else if (result.ok && result.progress === null) { /* 未知：不动熔断计数 */ }
+                else if (result.ok) agentStalledSteps = 0;
+                else agentStalledSteps += 1;
+            }
         } catch (err) {
             const reason = String((err && err.message) || err || '执行出错');
             insertToolResult(call.id, { ok: false, text: reason });

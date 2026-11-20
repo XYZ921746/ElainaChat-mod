@@ -8,18 +8,12 @@
     <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>ElainaChat Mod · 伊蕾娜</title>
-    <link rel="manifest" href="/manifest.webmanifest">
     <meta name="theme-color" content="#9fb0c7">
-    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png">
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="ElainaChat">
+    <link rel="icon" type="image/png" sizes="512x512" href="/icons/icon-512.png">
     <script>
         // 启动主题回放：把 theme.js 存的快照在首帧渲染前套到 <html> 上，消除刷新与冷启动时的默认色首帧。
         // 快照只含算好的结果（属性 + 自定义变量文本），主题推导逻辑都在 theme.js 里，这里机械回放、不做任何推导。
         // 整体 try/catch：快照缺失或损坏时走默认主题，绝不阻塞启动。
-        //
         // 这个内联脚本排在 store.js 之前执行（首帧必须早于任何 defer 脚本），所以此刻
         // window.Store 还不存在 —— 只能直接读 localStorage。写入侧统一走
         // Store.bootThemeSnapshot（store.js），读取侧这里是唯一例外，理由同上一行。
@@ -64,7 +58,6 @@
                 // 而该变量由 themes.css 定义（在 <head> 里晚 1700 行才到）。中间这段变量未定义，
                 // background 计算失败会透出默认画布色 —— 就是"布局已出来、底色还是浅的"那一帧。
                 // 内联到 <html> 上，优先级高于任何未加载完的样式表。
-                //
                 // 老快照（升级前存的）没有 bg 字段：按 dark 字段兜一个底色，否则升级后第一次启动
                 // 仍会闪一帧浅色（用户实测就是这个现象）。两个值与 themes.css 的 rd-bg 默认值/深色值一致。
                 var isDark = snap.dark === 'dark';
@@ -132,16 +125,12 @@
         // 首帧门：首屏真正建好之前，先别把半成品画出来。
         // 必须在 body 解析之前挂上 data-ui-boot，否则第一帧已经露出来了；隐藏规则住在 base.css
         // （内联样式块被前端结构检查禁止），这里只负责挂属性与判定何时摘掉。
-        //
-        // 判定要等两件事：
-        //   ① 工具类生效 —— tailwind.js 扫完 DOM 才异步产出 `.hidden` / `.flex` / `.w-9`，
-        //      在那之前布局类全部不生效（该藏的弹窗铺满屏、卡片没有尺寸）。
-        //   ② 首屏建好 —— HTML 里那份只是骨架：手机壳层（首页头像 / 问候 / 金句卡 / 底栏）
-        //      与首页状态都由 JS 在启动末尾现建。只等 ① 就揭示的话，露出的是桌面版骨架
-        //      （顶栏是汉堡 + 对话名、金句卡还不存在），正是"顶栏不对、内容缺一块"。
-        //      信号由 init() 在启动末尾发（window.ElainaUiGate.ready），见 init.js。
-        // 不逐份检查 <link> 是否加载成功：某份样式表 404 时那个条件永远不成立，页面会被白挡到超时。
-        // 超时兜底必须留：探针出错、脚本报错或引擎挂了时，宁可露出半成品也不能把页面永久藏住。
+        // 判定只等「首屏建好」：工具类由 head 里阻塞加载的 tailwind.css 提供，首帧即有；
+        // HTML 里那份只是骨架 —— 手机壳层（首页头像 / 问候 / 金句卡 / 底栏）与首页状态
+        // 由 JS 在启动末尾现建，只等样式就揭示会露出桌面版骨架（顶栏是汉堡 + 对话名、
+        // 金句卡还不存在），正是"顶栏不对、内容缺一块"。
+        // 信号由 init() 在启动末尾发（window.ElainaUiGate.ready），见 init.js。
+        // 超时兜底必须留：脚本报错或启动卡住时，宁可露出半成品也不能把页面永久藏住。
         // 探针全程 try/catch —— 它跑在首帧路径上，抛错就等于白屏。
         (function () {
             var root = document.documentElement;
@@ -154,17 +143,6 @@
                 // init() 在启动末尾调：Store 已读完、首页状态已定、手机壳层已建。
                 ready: function () { appReady = true; }
             };
-            function utilsReady() {
-                // 引擎已宣告失败时不再等它：base.css 的 .fallback-ready 兜底规则接手。
-                if (document.body.classList.contains('fallback-ready')) return true;
-                var probe = document.createElement('div');
-                probe.className = 'hidden';
-                probe.style.cssText = 'position:absolute;left:-9999px;top:0';
-                document.body.appendChild(probe);
-                var ok = getComputedStyle(probe).display === 'none';
-                probe.remove();
-                return ok;
-            }
             function reveal() {
                 if (revealed) return;
                 revealed = true;
@@ -177,7 +155,7 @@
             function tick() {
                 try {
                     if (Date.now() - t0 > 3000) { reveal(); return; }
-                    if (document.body && appReady && utilsReady()) {
+                    if (document.body && appReady) {
                         if (++stable >= 2) { reveal(); return; }
                     } else {
                         stable = 0;
@@ -191,7 +169,6 @@
             requestAnimationFrame(tick);
         })();
     </script>
-    <script src="/vendor/tailwind.js"></script>
     <link rel="stylesheet" href="/vendor/katex/katex.min.css">
     <script src="/vendor/katex/katex.min.js"></script>
     <!-- 加载顺序（defer 脚本按书写顺序执行）：store.js 必须最先（提供 window.Store —— data/ 是唯一权威存储，Web 与 APK 都走 /api/store，业务层一行平台判断都不写）；chat-providers.js 在主脚本之前（主脚本会挂 window.ChatDeps 供它取依赖）；katex / readme-view 缺失时 renderMessageText 静默回落纯文本；字体样式表必须非阻塞（media="print" + onload 切回 all），否则整页打不开。 -->
@@ -218,31 +195,17 @@
     <link rel="stylesheet" href="/css/pages-luxe.css">
     <link rel="stylesheet" href="/css/mobile-shell.css">
     <link rel="stylesheet" href="/css/settings.css">
+    <!-- 工具类必须排在整条 CSS 链最后：`.hidden` 要能压过组件类自带的 display
+         （例如 .modal-code-wrap 的 flex），同权重下只有后加载才赢；
+         运行时引擎的注入顺序同样在最后，这里保持一致的层叠语义。 -->
+    <link rel="stylesheet" href="/css/tailwind.css">
 </head>
 <body>
-    <script>
-        (function () {
-            function probeTailwind() {
-                if (document.body.classList.contains('fallback-ready')) return;
-                var probe = document.createElement('div');
-                probe.className = 'hidden';
-                document.body.appendChild(probe);
-                var ok = getComputedStyle(probe).display === 'none';
-                probe.remove();
-                if (!ok) {
-                    document.body.classList.add('fallback-ready');
-                    console.warn('[UI] Tailwind 引擎未加载，已启用内置兜底样式');
-                }
-            }
-            window.addEventListener('load', probeTailwind);
-            setTimeout(probeTailwind, 2500);
-        })();
-    </script>
     <div id="appShell" class="flex h-full w-full">
         <aside id="sidebar" class="glass-panel fixed left-4 top-4 bottom-4 w-[280px] rounded-2xl z-40 flex flex-col overflow-hidden animate-slide-in-left" style="isolation:isolate">
             <div class="sidebar-rail" aria-label="主导航">
                 <div class="sidebar-rail-logo" aria-hidden="true">
-                                        <img src="/icons/icon-192.png" alt="" draggable="false">
+                                        <img src="/icons/icon-512.png" alt="" draggable="false">
                 </div>
                 <button id="railChatBtn" class="sidebar-rail-btn active" type="button" title="对话" aria-label="对话" data-rail-action="chat">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M5 6.5h14v9H9l-4 3v-12z"/><path stroke-linecap="round" d="M8 10h8M8 13h5"/></svg>
@@ -303,7 +266,7 @@
             <div id="sidebarModSlot" class="px-3 flex-shrink-0"></div>
 
             <div id="sidebarFooter" class="px-4 py-3 border-t border-white/50 flex-shrink-0">
-                <div id="appVersionFooter" data-version="2.2.0" class="text-center text-[10px] text-dim select-none">v2.2.0 · 魔女之旅</div>
+                <div id="appVersionFooter" data-version="2.2.1" class="text-center text-[10px] text-dim select-none">v2.2.1 · 魔女之旅</div>
             </div>
         </aside>
 
@@ -346,10 +309,6 @@
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
                     <span>公告</span>
                     <span id="announceStatusDot" class="announce-dot hidden w-2 h-2 rounded-full flex-shrink-0"></span>
-                </button>
-                <button id="headerInstallBtn" class="header-memory-btn hidden" type="button" title="安装到桌面（独立窗口打开）">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0l-3.5-3.5M12 14l3.5-3.5"/><path d="M4 16.5V19a1.5 1.5 0 001.5 1.5h13A1.5 1.5 0 0020 19v-2.5"/></svg>
-                    <span>安装</span>
                 </button>
                 <button id="headerSettingsBtn" class="header-memory-btn" type="button" title="设置">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.73v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.73l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -698,7 +657,11 @@
                         </button>
                         <button type="button" class="settings-tab-btn" data-settings-tab="tab-capability" data-title="能力">
                             <span class="settings-nav-ic" aria-hidden="true"></span>
-                            <span class="settings-nav-copy"><b>能力</b><i>定时任务、权限与浏览器</i></span>
+                            <span class="settings-nav-copy"><b>能力</b><i>AI 权限、手机操作与浏览器</i></span>
+                        </button>
+                        <button type="button" class="settings-tab-btn" data-settings-tab="tab-timers" data-title="定时任务">
+                            <span class="settings-nav-ic" aria-hidden="true"></span>
+                            <span class="settings-nav-copy"><b>定时任务</b><i>AI 定时提醒与消息</i></span>
                         </button>
                     </div>
                     <div class="settings-nav-group">
@@ -798,6 +761,8 @@
                     <p class="settings-page-eyebrow">Character</p>
                     <h1>角色</h1>
                 </header>
+                <section id="characterCard" class="rd-display-card settings-span-2">
+                <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 人设与世界观</div>
                 <section id="characterSettingsSection">
                     <div class="mb-4 pb-3 border-b border-soft">
                         <div class="modal-label flex items-center gap-2 mb-2">
@@ -831,10 +796,6 @@
                         <label class="text-xs text-dim mb-1 block">开场白（首页问候语）</label>
                         <input id="ccGreeting" type="text" class="modal-input text-sm">
                     </div>
-                    <div class="flex gap-2">
-                        <button id="previewPromptBtn" class="btn-secondary text-xs">查看完整 Prompt</button>
-                        <button id="resetCharacterBtn" class="btn-secondary text-xs">恢复默认伊蕾娜卡</button>
-                    </div>
                 </section>
 
                 <section id="worldSettingsSection" class="mt-6 pt-4 border-t border-soft">
@@ -842,9 +803,14 @@
                         <span class="text-accent">✦</span> 世界观卡
                     </div>
                     <div class="mb-3">
-                        <label class="text-xs text-dim mb-1 block">世界观设定</label>
-                        <textarea id="ccWorldSetting" rows="6" class="modal-textarea text-sm resize-y" placeholder="描述世界规则、时代背景，以及角色与用户为何能够面对面交流"></textarea>
+                        <textarea id="ccWorldSetting" rows="6" class="modal-textarea text-sm resize-y" placeholder="世界规则、时代背景与角色所处的环境"></textarea>
                     </div>
+                </section>
+
+                <div class="mt-4 pt-3 border-t border-soft flex gap-2">
+                    <button id="previewPromptBtn" class="btn-secondary text-xs">查看完整 Prompt</button>
+                    <button id="resetCharacterBtn" class="btn-secondary text-xs">恢复默认伊蕾娜卡</button>
+                </div>
                 </section>
                 </div>
 
@@ -860,10 +826,182 @@
                 <div id="modelSectionTabs" class="model-section-tabs" role="tablist" aria-label="模型分区">
                     <button type="button" role="tab" aria-selected="true" class="model-section-tab is-active" data-model-view="overview">总览</button>
                     <button type="button" role="tab" aria-selected="false" class="model-section-tab" data-model-view="providers">我的模型 <span id="modelProviderCount" class="model-tab-count"></span></button>
-                    <button type="button" role="tab" aria-selected="false" class="model-section-tab" data-model-view="prefs">使用偏好</button>
                 </div>
                 <div id="modelOverviewPane" class="model-view-pane">
                     <div id="modelOverviewCards"></div>
+                    <section id="modelGenerationSection" class="rd-display-card settings-span-2">
+                        <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 生成参数</div>
+                        <p class="rd-field-hint mb-2">对默认对话模型生效；关闭 = 不发送该项。</p>
+                    <div class="set-row set-row-top" id="settingThinkingEffortRow">
+                        <div class="copy">
+                            <b>思考强度</b>
+                            <span>更慢但更聪明；开思考时部分服务商忽略自定义采样参数</span>
+                            <span id="thinkingModeHint" class="block mt-1"></span>
+                        </div>
+                        <select id="settingThinkingEffort" class="modal-input text-sm flex-none" style="max-width: 320px">
+                            <option value="off">关闭（不思考，直接回答）</option>
+                            <option value="low">低（快速思考）</option>
+                            <option value="high">高（均衡）</option>
+                            <option value="max">极高（深度思考，慢但更贵）</option>
+                        </select>
+                    </div>
+
+                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
+                        <div class="text-xs text-[var(--pixso-brown)]">采样参数</div>
+                        <div class="mt-2 space-y-3">
+                            <div>
+                                <div class="flex items-center justify-between gap-3">
+                                    <label class="text-xs text-[var(--text-muted)]" for="settingOptTemperature">温度</label>
+                                    <div class="flex items-center gap-2">
+                                        <span id="settingOptTemperatureValue" class="text-[11px] font-medium text-[var(--pixso-brown)] tabular-nums">服务商默认</span>
+                                        <label class="mod-switch" title="开启 / 关闭自定义温度">
+                                            <input type="checkbox" id="settingOptTemperatureOn" aria-label="自定义温度">
+                                            <span class="track"></span><span class="knob"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <input id="settingOptTemperature" type="range" min="0" max="2" step="0.1" value="1" class="custom-slider mt-2" aria-label="温度" disabled>
+                            </div>
+                            <div>
+                                <div class="flex items-center justify-between gap-3">
+                                    <label class="text-xs text-[var(--text-muted)]" for="settingOptTopP">Top P</label>
+                                    <div class="flex items-center gap-2">
+                                        <span id="settingOptTopPValue" class="text-[11px] font-medium text-[var(--pixso-brown)] tabular-nums">服务商默认</span>
+                                        <label class="mod-switch" title="开启 / 关闭自定义 Top P">
+                                            <input type="checkbox" id="settingOptTopPOn" aria-label="自定义 Top P">
+                                            <span class="track"></span><span class="knob"></span>
+                                        </label>
+                                    </div>
+                                </div>
+                                <input id="settingOptTopP" type="range" min="0" max="1" step="0.05" value="1" class="custom-slider mt-2" aria-label="Top P" disabled>
+                            </div>
+                        </div>
+                        <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">开关关闭 = 不发送，用服务商默认值；开思考时部分服务商会忽略这些参数。</p>
+                    </div>
+                    </section>
+
+                <!-- 记忆整理：整理节奏与整理模型；嵌入 / 重排序的绑定就是上面总览里的嵌入 / 重排序卡片，
+                     同一设置在两个页面各摆一套入口会互相打架。 -->
+                <section id="memoryRecallSection" class="rd-display-card settings-span-2">
+                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 记忆整理</div>
+
+                    <div class="mt-2 space-y-3">
+                        <div class="set-row set-row-top">
+                            <div class="copy">
+                                <b>整理模型</b>
+                                <span>想用更便宜的模型在后台整理记忆，就在这里单独指定。</span>
+                            </div>
+                            <select id="settingMemoryModel" class="modal-input text-sm flex-none" style="max-width: 320px">
+                                <option value="off">关闭</option>
+                                <option value="">沿用当前对话模型</option>
+                            </select>
+                        </div>
+
+                        <div class="memory-every-row">
+                            <span class="memory-every-text">每</span>
+                            <div class="memory-stepper">
+                                <button type="button" id="memoryEveryMinus" class="memory-step-btn" title="少一点" aria-label="减少轮数">−</button>
+                                <input id="settingMemoryEvery" type="number" min="3" max="50" inputmode="numeric" class="memory-step-input" aria-label="每多少轮整理一次记忆">
+                                <button type="button" id="memoryEveryPlus" class="memory-step-btn" title="多一点" aria-label="增加轮数">＋</button>
+                            </div>
+                            <span class="memory-every-text">轮整理一次</span>
+                        </div>
+
+                        <button type="button" id="memoryNowBtn" class="memory-now-btn">
+                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/><path stroke-linecap="round" d="M17 17h3m-1.5-1.5v3"/></svg>
+                            <span>立即整理记忆</span>
+                        </button>
+                    </div>
+                </section>
+                <section id="conversationTuningSection" class="rd-display-card settings-span-2">
+                    <div class="modal-label flex items-center gap-2"><span class="text-warn">✦</span> 对话与联网</div>
+
+
+                    <div>
+                        <div class="flex items-center justify-between gap-3">
+                            <div class="min-w-0">
+                                <div class="text-xs text-[var(--pixso-brown)]">联网搜索</div>
+                            </div>
+                            <label class="mod-switch" title="开启 / 关闭 AI 联网搜索">
+                                <input type="checkbox" id="settingTavilyEnabled" aria-label="AI 联网搜索">
+                                <span class="track"></span><span class="knob"></span>
+                            </label>
+                        </div>
+
+                        <div id="tavilyFields" class="mt-3 space-y-3">
+                            <div>
+                                <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchProvider">搜索服务商</label>
+                                <select id="settingSearchProvider" class="modal-input text-sm"></select>
+                                <p id="searchProviderHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
+                            </div>
+                            <div>
+                                <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingTavilyApiKey"><span id="searchKeyLabel">API Key</span></label>
+                                <div class="flex items-center gap-2">
+                                    <input id="settingTavilyApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm flex-1" placeholder="">
+                                    <button id="testTavilyBtn" type="button" class="btn-secondary text-[11px]" style="padding:4px 10px;white-space:nowrap">测试</button>
+                                </div>
+                                <p id="searchKeyHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
+                            </div>
+                            <div id="searchCustomFields" class="hidden space-y-3">
+                                <div>
+                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomEndpoint">搜索接口地址（必须 https）</label>
+                                    <input id="settingSearchCustomEndpoint" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.example.com/v1/search">
+                                </div>
+                                <div class="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomAuth">鉴权方式</label>
+                                        <select id="settingSearchCustomAuth" class="modal-input text-sm">
+                                            <option value="bearer">Authorization: Bearer &lt;Key&gt;</option>
+                                            <option value="raw">自定义头（值为 Key 本身）</option>
+                                            <option value="x-api-key">x-api-key: &lt;Key&gt;</option>
+                                            <option value="none">不带鉴权头（Key 在请求体里）</option>
+                                        </select>
+                                    </div>
+                                    <div id="searchCustomHeaderRow">
+                                        <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomAuthHeader">头名称</label>
+                                        <input id="settingSearchCustomAuthHeader" autocomplete="off" type="text" class="modal-input text-sm" placeholder="Authorization">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomBody">请求体模板（JSON，可留空）</label>
+                                    <textarea id="settingSearchCustomBody" rows="2" class="modal-input text-sm" spellcheck="false" placeholder='{"query":"{{query}}","count":{{count}}}'></textarea>
+                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">支持 <code class="text-dim">{{query}}</code> 与 <code class="text-dim">{{count}}</code> 占位符。</p>
+                                </div>
+                                <div>
+                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomResultsPath">结果数组路径（可留空）</label>
+                                    <input id="settingSearchCustomResultsPath" autocomplete="off" type="text" class="modal-input text-sm" placeholder="data.webPages.value">
+                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">留空自动识别；识别错了再填。</p>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingTavilyMaxResults">每次返回条数</label>
+                                    <input id="settingTavilyMaxResults" type="number" min="1" max="100" step="1" class="modal-input text-sm" value="5">
+                                </div>
+                                <div>
+                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingTavilySearchDepth">搜索深度</label>
+                                    <select id="settingTavilySearchDepth" class="modal-input text-sm">
+                                        <option value="basic">basic（快，够用）</option>
+                                        <option value="advanced">advanced（更全，更慢更贵）</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <p id="tavilyHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed"></p>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)] flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <div class="text-xs text-[var(--pixso-brown)]">第三人称（两段式生成）</div>
+                            <div class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-0.5">先以旁白推进剧情，再改写成第一人称口吻。</div>
+                        </div>
+                        <label class="mod-switch" title="开启 / 关闭第三人称">
+                            <input type="checkbox" id="settingThirdPerson" aria-label="第三人称（两段式生成）">
+                            <span class="track"></span><span class="knob"></span>
+                        </label>
+                    </div>
+
+                    </section>
                 </div>
                 <div id="modelProvidersPane" class="model-view-pane hidden">
                     <div id="modelFilterNav" class="model-filter-nav" role="tablist" aria-label="模型分类"></div>
@@ -1185,180 +1323,6 @@
                     </div>
                     </div>
                 </div>
-                <div id="modelPrefsPane" class="model-view-pane hidden">
-                <section id="chatBindingSection" class="rd-display-card settings-span-2">
-                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 对话模型与回退</div>
-                    <p class="rd-field-hint mb-2">选择对话使用的默认模型与失败回退策略；提供商本体在「模型」分栏添加与管理。</p>
-                    <div class="set-row" id="settingChatModel">
-                        <div class="copy"><b>默认模型</b><span>聊天、记忆整理、Agent 等全部请求都走这个模型</span></div>
-                        <select id="defaultChatModelSelect" class="modal-input text-sm flex-none" style="max-width: 320px"></select>
-                    </div>
-                    <div class="set-row set-row-top">
-                        <div class="copy"><b>失败回退模型（按顺序）</b><span>默认模型请求失败（限流 / Key 失效 / 网络等）时，按此顺序逐个尝试；第 2 个及之后的在「编辑」里看。</span></div>
-                        <details class="fbc-editor flex-1 min-w-0" style="max-width: 340px">
-                            <summary>
-                                <span id="fallbackChainFirst" class="truncate">未设置回退</span>
-                                <span id="fallbackChainMore" class="fbc-editor-more"></span>
-                                <svg class="fbc-editor-chev" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-                            </summary>
-                            <div id="fallbackChainList" class="space-y-1.5 mt-2"></div>
-                            <div class="flex items-center gap-2 mt-1.5">
-                                <select id="fallbackAddSelect" class="modal-input text-sm flex-1 min-w-0"></select>
-                                <button id="fallbackAddBtn" type="button" class="btn-secondary text-xs flex-none">添加</button>
-                            </div>
-                        </details>
-                    </div>
-                    <div class="set-row set-row-top" id="visionSettingsSection">
-                        <div class="copy">
-                            <b>图片转述（可选）</b>
-                            <span>主模型能识图时选「不使用」；只有纯文本主模型才需要接一个视觉模型替它看。地址与 Key 直接取该提供商在「模型」分栏配好的那份。</span>
-                            <span id="visionMainModelHint" class="block mt-1"></span>
-                        </div>
-                        <select id="settingVisionModelPair" class="modal-input text-sm flex-none" style="max-width: 320px"></select>
-                    </div>
-                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">请求直接发往各服务商，Key 只保存在本机。</p>
-                </section>
-
-                    <section id="modelGenerationSection" class="rd-display-card settings-span-2">
-                        <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 生成参数</div>
-                        <p class="rd-field-hint mb-2">对默认对话模型生效；开关关闭 = 不发送该项，使用服务商默认值。</p>
-                    <div class="set-row set-row-top" id="settingThinkingEffortRow">
-                        <div class="copy">
-                            <b>思考强度</b>
-                            <span>越 thinking 越慢但更聪明；部分服务商开思考时会忽略自定义采样参数</span>
-                            <span id="thinkingModeHint" class="block mt-1"></span>
-                        </div>
-                        <select id="settingThinkingEffort" class="modal-input text-sm flex-none" style="max-width: 320px">
-                            <option value="off">关闭（不思考，直接回答）</option>
-                            <option value="low">低（快速思考）</option>
-                            <option value="high">高（均衡）</option>
-                            <option value="max">极高（深度思考，慢但更贵）</option>
-                        </select>
-                    </div>
-
-                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
-                        <div class="text-xs text-[var(--pixso-brown)]">采样参数</div>
-                        <div class="mt-2 space-y-3">
-                            <div>
-                                <div class="flex items-center justify-between gap-3">
-                                    <label class="text-xs text-[var(--text-muted)]" for="settingOptTemperature">温度</label>
-                                    <div class="flex items-center gap-2">
-                                        <span id="settingOptTemperatureValue" class="text-[11px] font-medium text-[var(--pixso-brown)] tabular-nums">服务商默认</span>
-                                        <label class="mod-switch" title="开启 / 关闭自定义温度">
-                                            <input type="checkbox" id="settingOptTemperatureOn" aria-label="自定义温度">
-                                            <span class="track"></span><span class="knob"></span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <input id="settingOptTemperature" type="range" min="0" max="2" step="0.1" value="1" class="custom-slider mt-2" aria-label="温度" disabled>
-                            </div>
-                            <div>
-                                <div class="flex items-center justify-between gap-3">
-                                    <label class="text-xs text-[var(--text-muted)]" for="settingOptTopP">Top P</label>
-                                    <div class="flex items-center gap-2">
-                                        <span id="settingOptTopPValue" class="text-[11px] font-medium text-[var(--pixso-brown)] tabular-nums">服务商默认</span>
-                                        <label class="mod-switch" title="开启 / 关闭自定义 Top P">
-                                            <input type="checkbox" id="settingOptTopPOn" aria-label="自定义 Top P">
-                                            <span class="track"></span><span class="knob"></span>
-                                        </label>
-                                    </div>
-                                </div>
-                                <input id="settingOptTopP" type="range" min="0" max="1" step="0.05" value="1" class="custom-slider mt-2" aria-label="Top P" disabled>
-                            </div>
-                        </div>
-                        <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-2">开关关闭 = 不发送，用服务商默认值；开思考时部分服务商会忽略这些参数。</p>
-                    </div>
-                    </section>
-                <section id="conversationTuningSection" class="rd-display-card settings-span-2">
-                    <div class="modal-label flex items-center gap-2"><span class="text-warn">✦</span> 对话与联网</div>
-
-
-                    <div>
-                        <div class="flex items-center justify-between gap-3">
-                            <div class="min-w-0">
-                                <div class="text-xs text-[var(--pixso-brown)]">联网搜索</div>
-                            </div>
-                            <label class="mod-switch" title="开启 / 关闭 AI 联网搜索">
-                                <input type="checkbox" id="settingTavilyEnabled" aria-label="AI 联网搜索">
-                                <span class="track"></span><span class="knob"></span>
-                            </label>
-                        </div>
-
-                        <div id="tavilyFields" class="mt-3 space-y-3">
-                            <div>
-                                <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchProvider">搜索服务商</label>
-                                <select id="settingSearchProvider" class="modal-input text-sm"></select>
-                                <p id="searchProviderHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
-                            </div>
-                            <div>
-                                <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingTavilyApiKey"><span id="searchKeyLabel">API Key</span></label>
-                                <div class="flex items-center gap-2">
-                                    <input id="settingTavilyApiKey" autocomplete="new-password" autocapitalize="off" autocorrect="off" spellcheck="false" type="password" class="modal-input text-sm flex-1" placeholder="">
-                                    <button id="testTavilyBtn" type="button" class="btn-secondary text-[11px]" style="padding:4px 10px;white-space:nowrap">测试</button>
-                                </div>
-                                <p id="searchKeyHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5"></p>
-                            </div>
-                            <div id="searchCustomFields" class="hidden space-y-3">
-                                <div>
-                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomEndpoint">搜索接口地址（必须 https）</label>
-                                    <input id="settingSearchCustomEndpoint" autocomplete="off" type="url" inputmode="url" class="modal-input text-sm" placeholder="https://api.example.com/v1/search">
-                                </div>
-                                <div class="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomAuth">鉴权方式</label>
-                                        <select id="settingSearchCustomAuth" class="modal-input text-sm">
-                                            <option value="bearer">Authorization: Bearer &lt;Key&gt;</option>
-                                            <option value="raw">自定义头（值为 Key 本身）</option>
-                                            <option value="x-api-key">x-api-key: &lt;Key&gt;</option>
-                                            <option value="none">不带鉴权头（Key 在请求体里）</option>
-                                        </select>
-                                    </div>
-                                    <div id="searchCustomHeaderRow">
-                                        <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomAuthHeader">头名称</label>
-                                        <input id="settingSearchCustomAuthHeader" autocomplete="off" type="text" class="modal-input text-sm" placeholder="Authorization">
-                                    </div>
-                                </div>
-                                <div>
-                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomBody">请求体模板（JSON，可留空）</label>
-                                    <textarea id="settingSearchCustomBody" rows="2" class="modal-input text-sm" spellcheck="false" placeholder='{"query":"{{query}}","count":{{count}}}'></textarea>
-                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">支持 <code class="text-dim">{{query}}</code> 与 <code class="text-dim">{{count}}</code> 占位符。</p>
-                                </div>
-                                <div>
-                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingSearchCustomResultsPath">结果数组路径（可留空）</label>
-                                    <input id="settingSearchCustomResultsPath" autocomplete="off" type="text" class="modal-input text-sm" placeholder="data.webPages.value">
-                                    <p class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-1.5">留空自动识别；识别错了再填。</p>
-                                </div>
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <div>
-                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingTavilyMaxResults">每次返回条数</label>
-                                    <input id="settingTavilyMaxResults" type="number" min="1" max="100" step="1" class="modal-input text-sm" value="5">
-                                </div>
-                                <div>
-                                    <label class="text-xs text-[var(--text-muted)] mb-1 block" for="settingTavilySearchDepth">搜索深度</label>
-                                    <select id="settingTavilySearchDepth" class="modal-input text-sm">
-                                        <option value="basic">basic（快，够用）</option>
-                                        <option value="advanced">advanced（更全，更慢更贵）</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <p id="tavilyHint" class="text-[11px] text-[var(--text-muted)] leading-relaxed"></p>
-                        </div>
-                    </div>
-
-                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)] flex items-center justify-between gap-3">
-                        <div class="min-w-0">
-                            <div class="text-xs text-[var(--pixso-brown)]">第三人称（两段式生成）</div>
-                            <div class="text-[11px] text-[var(--text-muted)] leading-relaxed mt-0.5">先以旁白推进剧情，再改写成第一人称口吻。</div>
-                        </div>
-                        <label class="mod-switch" title="开启 / 关闭第三人称">
-                            <input type="checkbox" id="settingThirdPerson" aria-label="第三人称（两段式生成）">
-                            <span class="track"></span><span class="knob"></span>
-                        </label>
-                    </div>
-
-                    </section>
-                </div>
                 <div id="modelAddPane" class="model-view-pane hidden">
                     <header class="settings-page-head model-add-head">
                         <div class="model-page-head-copy">
@@ -1376,128 +1340,49 @@
                 <header class="settings-page-head">
                     <p class="settings-page-eyebrow">Capabilities</p>
                     <h1>能力</h1>
-                    <p class="settings-page-sub">Agent 的定时任务、设备权限与浏览器；联网搜索、第三人称、默认模型与生成参数都在「模型 → 使用偏好」，朗读播放在「文字转语音」提供商里。</p>
+                    <p class="settings-page-sub">AI 权限档位、手机操作与浏览器。</p>
                 </header>
 
 
-
-
-                <!-- 记忆与检索：整理、召回、重排回答的是同一个问题「记忆怎么进来、怎么被找出来」，
-                     原来散在「对话与朗读」里，多一类模型就多一个找不到的开关。 -->
-                <section id="memoryRecallSection" class="rd-display-card settings-span-2">
-                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 记忆与检索</div>
-                    <p class="rd-field-hint mb-2">记忆怎么整理、怎么被找出来；各类模型的提供商本体在「模型」分栏添加。</p>
-
-                    <div class="text-xs text-[var(--pixso-brown)]">记忆整理</div>
-                    <div class="mt-2 space-y-3">
-                        <div class="set-row set-row-top">
-                            <div class="copy">
-                                <b>整理模型</b>
-                                <span>后台整理记忆用的模型；候选项来自「模型」分栏已勾选的模型。想让便宜些的模型在后台跑整理，就在这里单独指定。</span>
-                            </div>
-                            <select id="settingMemoryModel" class="modal-input text-sm flex-none" style="max-width: 320px">
-                                <option value="off">关闭</option>
-                                <option value="">沿用当前对话模型</option>
-                            </select>
-                        </div>
-
-                        <div class="memory-every-row">
-                            <span class="memory-every-text">每</span>
-                            <div class="memory-stepper">
-                                <button type="button" id="memoryEveryMinus" class="memory-step-btn" title="少一点" aria-label="减少轮数">−</button>
-                                <input id="settingMemoryEvery" type="number" min="3" max="50" inputmode="numeric" class="memory-step-input" aria-label="每多少轮整理一次记忆">
-                                <button type="button" id="memoryEveryPlus" class="memory-step-btn" title="多一点" aria-label="增加轮数">＋</button>
-                            </div>
-                            <span class="memory-every-text">轮整理一次</span>
-                        </div>
-
-                        <button type="button" id="memoryNowBtn" class="memory-now-btn">
-                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M4 12h16M4 17h10"/><path stroke-linecap="round" d="M17 17h3m-1.5-1.5v3"/></svg>
-                            <span>立即整理记忆</span>
-                        </button>
-                    </div>
-
-                    <div class="mt-4 pt-3 border-t border-[var(--pixso-line)]">
-                        <div class="text-xs text-[var(--pixso-brown)]">记忆召回</div>
-                        <p class="rd-field-hint mb-2">嵌入负责先找出候选记忆，重排序负责把候选再排一遍；两者可以同时开启，只开其中一个也能工作。</p>
-                        <div class="mt-2 space-y-3">
-                            <div class="set-row set-row-top">
-                                <div class="copy">
-                                    <b>嵌入模型</b>
-                                    <span>把记忆与消息转成向量，按语义找回相关内容；不选则只按关键词匹配。</span>
-                                    <span id="memoryEmbeddingHint" class="block mt-1 text-[11px] text-dim"></span>
-                                </div>
-                                <select id="settingMemoryEmbeddingProvider" class="modal-input text-sm flex-none" style="max-width: 320px">
-                                    <option value="">未启用（只按关键词召回）</option>
-                                </select>
-                            </div>
-                            <div class="set-row set-row-top">
-                                <div class="copy">
-                                    <b>重排序模型</b>
-                                    <span>先粗筛一批候选记忆，再按与当前问题的相关度重排；不选则保持召回顺序。</span>
-                                    <span id="memoryRerankHint" class="block mt-1 text-[11px] text-dim"></span>
-                                </div>
-                                <select id="settingMemoryRerankProvider" class="modal-input text-sm flex-none" style="max-width: 320px">
-                                    <option value="">未启用（保持召回顺序）</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- 权限与自动化：都是「AI 能对这台机器/这个账号做什么」的同一类决定，合成一张卡，
-                     免得定时任务、权限、手机操作、浏览器四个分区在长页里各据一方。 -->
                 <section id="agentAutomationCard" class="rd-display-card settings-span-2">
                 <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 权限与自动化</div>
-                <p class="rd-field-hint mb-2">AI 能替你做哪些事、做到什么程度；这些开关同时管电脑与手机，手机能不能读到数据另由系统权限决定。</p>
+                <p class="rd-field-hint mb-2">这些档位同时管电脑与手机。</p>
 
-                <section id="scheduledTaskSection">
-                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 定时任务（AI 未来消息）</div>
-                    <div class="rd-field-hint mb-2">对 AI 说「明天提醒我…」即可建任务，到点以角色身份发来消息；这里可查看与取消。</div>
-                    <div id="scheduledTaskList" class="space-y-2">
-                        <p class="text-[11px] text-dim">（暂无任务）</p>
-                    </div>
-                    <!-- 定时任务靠应用内的轮询触发：进程被系统清掉就没人叫醒它。这条提示放在任务列表下方，
-                         因为用户是在这里发现"任务没来"的，而不是先去翻权限明细。 -->
-                    <p id="scheduledTaskKeepAliveHint" class="text-[11px] leading-relaxed mt-2 set-warn-text">
-                        ⚠️ 应用被系统清掉或划掉后台后，到点任务<b>不会自己醒来</b>：需要在下方「手机权限」的
-                        <b>!</b> 里允许<b>自启动</b>、把应用加进<b>电池优化白名单</b>，并在最近任务里<b>锁定后台</b>。
-                    </p>
-                </section>
-
-                    <section id="agentPermissionSection" class="settings-span-2">
+<section id="agentPermissionSection" class="settings-span-2">
                         <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> AI 权限</div>
-                        <div class="rd-field-hint mb-2">前三档<b>同时管电脑与手机</b>；手机读取数据的权限在下方「手机权限」里。</div>
 
-                        <div class="space-y-2 mb-3">
-                            <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
-                                <input type="radio" name="agentAccess" value="off" class="accent-pink-500 mt-0.5">
-                                <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold text-soft">🚫 关闭（AI 不能碰这台电脑）</span>
+                        <div class="access-list mb-3">
+                            <label class="access-row">
+                                <input type="radio" name="agentAccess" value="off" class="accent-pink-500">
+                                <span class="access-copy">
+                                    <b>🚫 关闭</b>
+                                    <span>AI 不能碰这台电脑。</span>
                                 </span>
                             </label>
-                            <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
-                                <input type="radio" name="agentAccess" value="strict" class="accent-pink-500 mt-0.5">
-                                <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold text-soft">逐条确认</span>
-                                    <span class="block text-[11px] text-dim leading-relaxed mt-0.5">写入、覆盖、删除、执行命令<b>每次都问你</b>；读取不问。</span>
+                            <label class="access-row">
+                                <input type="radio" name="agentAccess" value="strict" class="accent-pink-500">
+                                <span class="access-copy">
+                                    <b>逐条确认</b>
+                                    <span>写入、覆盖、删除、执行命令<b>每次都问你</b>；读取不问。</span>
                                 </span>
                             </label>
-                            <label class="flex items-start gap-2 cursor-pointer set-note set-choice">
-                                <input type="radio" name="agentAccess" value="auto" class="accent-pink-500 mt-0.5">
-                                <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold text-soft">自动通过（禁止删除）</span>
+                            <label class="access-row">
+                                <input type="radio" name="agentAccess" value="auto" class="accent-pink-500">
+                                <span class="access-copy">
+                                    <b>自动通过</b>
+                                    <span>直接放行，但只禁删除、不禁覆盖 —— 覆盖同样会丢原内容。</span>
                                 </span>
                             </label>
-                            <label class="flex items-start gap-2 cursor-pointer set-note set-note-warn">
-                                <input type="radio" name="agentAccess" value="full" class="accent-pink-500 mt-0.5">
-                                <span class="flex-1 min-w-0">
-                                    <span class="text-xs font-semibold set-warn-text">完全访问（含删除）</span>
+                            <label class="access-row">
+                                <input type="radio" name="agentAccess" value="full" class="accent-pink-500">
+                                <span class="access-copy">
+                                    <b>⚠️ 完全访问</b>
+                                    <span>任意路径读写删、执行命令，<b>都不会再询问你</b>；局域网登录后同样可用。</span>
                                 </span>
                             </label>
                         </div>
 
-                        <div class=" set-note set-note-warn">
+                        <div id="fullAccessWarning" class="set-note set-note-warn hidden">
                             <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 开启「完全访问」意味着</div>
                             <ul class="text-[11px] leading-relaxed space-y-1 set-warn-body">
                                 <li>· AI 能读写<b>任意路径</b>的文件，并能执行 <code>PowerShell</code> / <code>cmd</code> 命令。</li>
@@ -1508,28 +1393,22 @@
                             </ul>
                         </div>
 
-                        <div class="mt-2 set-note">
-                            <div class="text-[11px] font-semibold mb-1 text-soft">ℹ️ 三档共有的说明</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1 text-dim">
-                                <li>· 三档都能访问<b>任意路径</b>；<b>读取任何档位下都不会询问</b> —— 包括 <code>data/store.json</code>（含 API Key 明文）。</li>
-                                <li>· 「自动通过」档<b>只禁删除、不禁覆盖</b> —— 覆盖同样会丢原内容，写同名文件即可绕过删除禁令。</li>
-                            </ul>
-                        </div>
+                        <p class="rd-field-hint mt-2">三档都能访问<b>任意路径</b>（含 <code>data/store.json</code>，含 API Key 明文），读取任何档位下都不会询问；「自动通过」档只禁删除、不禁覆盖。</p>
                     </section>
 
-                    <section id="agentPhoneSection" class="settings-span-2">
+<section id="agentPhoneSection" class="settings-span-2">
                         <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 手机操作</div>
                         <div class="rd-field-hint mb-2">需要安卓版 App；浏览器没有这个能力。</div>
 
                         <div class="mb-3 set-note">
                             <div class="flex items-center gap-2">
-                                <span class="text-[11px] text-soft font-semibold">实现方式</span>
+                                <span class="text-[11px] text-soft font-semibold">运行方式</span>
                                 <span id="settingBackendBadge" class="ml-auto"></span>
                             </div>
-                            <p id="settingBackendSummary" class="text-[11px] mt-1 leading-relaxed set-warn-text">还没有选择实现方式，AI 现在不能操作手机。</p>
+                            <p id="settingBackendSummary" class="text-[11px] mt-1 leading-relaxed set-warn-text">还没有选择运行方式，AI 现在不能操作手机。</p>
                             <p id="settingBackendBridge" class="text-[11px] mt-1 leading-relaxed text-dim">原生设备层：检测中…</p>
                             <div class="flex items-center gap-2 mt-2">
-                                <button id="settingBackendChooseBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">选择实现方式</button>
+                                <button id="settingBackendChooseBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">选择运行方式</button>
                                 <button id="settingBackendRefreshBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px">重新检测</button>
                                 <button id="settingScreenWatchBtn" type="button" class="btn-secondary text-[11px]" style="padding:3px 10px"
                                     title="后台运行时查看 AI 在副屏上操作了什么">看副屏画面</button>
@@ -1550,7 +1429,7 @@
                                 手机操作<b>不逐步确认</b>，直接执行；发现异常点悬浮窗上的「停止」。
                             </p>
                             <p class="text-[11px] leading-relaxed mt-2 set-warn-text">
-                                ⚠️ <b>模块后端就是 KernelSU（root）</b>：它的「手机命令」能执行任意系统命令且<b>不会询问你</b>，破坏力与电脑的「完全访问」档同级。无障碍方式只能点按界面，风险有限。
+                                ⚠️ <b>后台运行</b>（Shizuku / Root / 模块）拿到的是 shell 或 root 级权限：AI 在独立副屏上操作，不会逐条询问你，破坏力与电脑的「完全访问」档同级。后台权限只用于启动应用、点击、读界面等内部动作，不向模型开放任意命令。无障碍方式只能点按界面，风险有限。
                             </p>
                         </div>
 
@@ -1606,7 +1485,7 @@
                         </div>
                     </section>
 
-                    <section id="agentBrowserSection" class="settings-span-2">
+<section id="agentBrowserSection" class="settings-span-2">
                         <div class="modal-label flex items-center gap-2"><span class="text-accent">🌐</span> 浏览器</div>
                         <div class="rd-field-hint mb-2">独立窗口与临时配置，不碰你平时那个浏览器的书签与登录状态。</div>
 
@@ -1624,22 +1503,31 @@
                             <button id="settingBrowserRefreshBtn" type="button" class="btn-secondary text-[11px] mt-2" style="padding:3px 10px">重新检测</button>
                         </div>
 
-                        <div class="mb-3 set-note">
-                            <div class="text-[11px] font-semibold mb-1 text-soft">它能看到什么、能做什么</div>
-                            <ul class="text-[11px] leading-relaxed space-y-1 text-dim">
-                                <li>· 能：打开网页、读页面、点按钮、填表单；不能读本地文件。</li>
-                                <li>· 需要登录的站点要在它打开的窗口里自己登一次。</li>
-                                <li>· 「逐条确认」档下每次打开都询问；关掉开关即拒绝。</li>
-                            </ul>
-                        </div>
-
-                        <div class=" set-note set-note-warn">
-                            <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 请知道这一点</div>
+                        <div class="mb-3 set-note set-note-warn">
+                            <div class="text-[11px] font-semibold mb-1 set-warn-text">⚠️ 它以你的身份发生</div>
                             <p class="text-[11px] leading-relaxed set-warn-text">
-                                AI 在这个窗口里做的事<b>是以你的身份发生的</b>（提交表单、下单、发帖都一样）。重要操作前请看着它做，或先关掉这个开关。
+                                能打开网页、读页面、点按钮、填表单，不能读本地文件；需要登录的站点在它打开的窗口里自己登一次，「逐条确认」档每次打开都询问。AI 做的事<b>就是你在做的事</b>（提交表单、下单、发帖都一样）——重要操作前请看着它做，或先关掉这个开关。
                             </p>
                         </div>
-                    </section>
+                </section>
+                </section>
+                </div>
+
+                <div id="tab-timers" class="settings-tab-panel">
+                    <header class="settings-page-head">
+                        <p class="settings-page-eyebrow">Timers</p>
+                        <h1>定时任务</h1>
+                        <p class="settings-page-sub">对 AI 说「明天提醒我…」即可建任务，到点以角色身份发来消息；这里查看与取消。</p>
+                    </header>
+                <section id="scheduledTaskSection" class="rd-display-card settings-span-2">
+                    <div class="modal-label flex items-center gap-2"><span class="text-accent">✦</span> 定时任务</div>
+                    <div id="scheduledTaskList" class="space-y-2">
+                        <p class="text-[11px] text-dim">（暂无任务）</p>
+                    </div>
+                    <p id="scheduledTaskKeepAliveHint" class="text-[11px] leading-relaxed mt-2 set-warn-text">
+                        ⚠️ 应用被系统清掉或划掉后台后，到点任务<b>不会自己醒来</b>：需要在下方「手机权限」的
+                        <b>!</b> 里允许<b>自启动</b>、把应用加进<b>电池优化白名单</b>，并在最近任务里<b>锁定后台</b>。
+                    </p>
                 </section>
                 </div>
 
@@ -1954,14 +1842,15 @@
         <div class="modal-panel w-full max-w-md max-h-[86vh] flex flex-col overflow-hidden animate-modal-pop">
             <div class="px-5 py-4 border-b border-white/60 flex items-start gap-3">
                 <div class="flex-1 min-w-0">
-                    <h3 class="text-base font-bold text-ink">实现方式</h3>
-                    <p class="text-[11px] text-dim mt-0.5 leading-relaxed">AI 用哪种方式操作手机。能力与门槛各不相同，选一个。</p>
+                    <h3 class="text-base font-bold text-ink">运行方式</h3>
+                    <p class="text-[11px] text-dim mt-0.5 leading-relaxed">前台在你正在用的屏幕上操作；后台在独立副屏上操作，不抢你的屏幕。</p>
                 </div>
                 <button id="backendPanelClose" type="button" class="btn-secondary text-xs flex-shrink-0">关闭</button>
             </div>
             <div id="backendList" class="flex-1 overflow-y-auto scroll-soft px-5 py-4 space-y-2"></div>
             <div class="px-5 py-3 border-t border-white/60 flex items-center gap-3">
                 <p class="text-[11px] text-dim leading-relaxed flex-1">当前生效：<span id="backendCurrent" class="text-dim font-semibold">尚未选择</span></p>
+                <button id="backendProbeBtn" type="button" class="btn-secondary text-xs flex-shrink-0 hidden">检测副屏</button>
                 <button id="backendRefresh" type="button" class="btn-secondary text-xs flex-shrink-0">重新检测</button>
             </div>
         </div>
@@ -1973,6 +1862,7 @@
                 <h3 id="customModalTitle" class="text-base font-bold text-ink mb-2">提示</h3>
                 <p id="customModalMessage" class="text-sm text-ink leading-relaxed whitespace-pre-wrap max-h-[50vh] overflow-y-auto scroll-soft"></p>
                 <div id="customModalPresets" class="hidden mt-3 mb-1 flex flex-wrap gap-1.5"></div>
+                <div id="customModalOptions" class="hidden mt-3 flex flex-col gap-2"></div>
                 <div id="customModalEditor" class="hidden mt-3 modal-code-wrap">
                     <div class="modal-code-gutter" aria-hidden="true"><div id="customModalGutter"></div></div>
                     <textarea id="customModalInput" autocomplete="off" rows="1" spellcheck="false"
@@ -1991,7 +1881,7 @@
         </div>
     </div>
 
-    <!-- 应用主脚本按功能分区拆成多个外置脚本，共享同一全局词法环境（顶层 function / const / let 互相可见），拆分不改调用点；⚠️ 顺序即依赖：必须按下面书写的顺序加载（加新模块插进合适位置、别追加到末尾）—— pwa.js / chat-stream.js 在 core.js 之后，agent-ops.js 在 agent-tags.js 之前，mcp.js 在 agent.js 之后且 init.js 之前，mods-*.js 全部在 mods.js 之前、host-slots.js 紧随 mods.js 之后（两者都在 init.js 之前），theme.js / diagnostics.js 在 mods.js 之前，theme.js / redesign-extras.js 必须在 init.js 之前（init 的启动重放要调到它们暴露的命名空间）。
+    <!-- 应用主脚本按功能分区拆成多个外置脚本，共享同一全局词法环境（顶层 function / const / let 互相可见），拆分不改调用点；⚠️ 顺序即依赖：必须按下面书写的顺序加载（加新模块插进合适位置、别追加到末尾）—— chat-stream.js 在 core.js 之后，agent-ops.js 在 agent-tags.js 之前，mcp.js 在 agent.js 之后且 init.js 之前，mods-*.js 全部在 mods.js 之前、host-slots.js 紧随 mods.js 之后（两者都在 init.js 之前），theme.js / diagnostics.js 在 mods.js 之前，theme.js / redesign-extras.js 必须在 init.js 之前（init 的启动重放要调到它们暴露的命名空间）。
      样式表顺序（全部在 head 内）：base.css 最先；themes.css 零 !important，规则挂在 html.rd / html.rd[data-theme-template=…] 之下，靠属性选择器的特异性取胜（比 base 层的同名规则高半级）；mobile-shell.css 排在 settings.css 之前（settings.css 是设置页的收口层，必须最后加载）；⚠️ 本注释里不要写脚本开标签字面量 —— 会骗过「内联脚本语法检查」的扫描。 -->
     <script defer src="/js/core-native.js"></script>
 <script defer src="/js/core-search.js"></script>
@@ -2000,10 +1890,10 @@
 <script defer src="/js/core-state.js"></script>
 <script defer src="/js/core-relay.js"></script>
 <script defer src="/js/core.js"></script>
-<script defer src="/js/core-native-mod.js"></script>
-    <script defer src="/js/pwa.js"></script>
+    <script defer src="/js/core-native-mod.js"></script>
     <script defer src="/js/chat-stream.js"></script>
     <script defer src="/js/agent-ops.js"></script>
+    <script defer src="/js/agent-mod-tools.js"></script>
     <script defer src="/js/agent-tags.js"></script>
     <script defer src="/js/announcements.js"></script>
 <script defer src="/js/profile.js"></script>
@@ -2027,6 +1917,7 @@
 <script defer src="/js/agent-permissions.js"></script>
 <script defer src="/js/agent-tools.js"></script>
 <script defer src="/js/agent-continue.js"></script>
+<script defer src="/js/agent-session.js"></script>
 <script defer src="/js/agent-manuals.js"></script>
     <script defer src="/js/agent-search.js"></script>
     <script defer src="/js/playback.js"></script>
@@ -2094,6 +1985,9 @@
 <script defer src="/js/bindings.js"></script>
     <!-- redesign-extras 暴露的 ElainaRdVisual 要在 init() 的启动重放里调用，必须排在 init.js 之前（与 theme.js 同理）。 -->
     <script defer src="/js/redesign-extras.js"></script>
+    <!-- router.js 必须排在 init.js 之前：init.js 在脚本求值阶段就会在 readyState=interactive 时直接启动，
+         init 里的 applyInitial 要能拿到已经装好包装的 ElainaRouter。 -->
+    <script defer src="/js/router.js"></script>
 <script defer src="/js/init.js"></script>
     <script defer src="/js/mobile-shell.js"></script>
 
@@ -2141,6 +2035,9 @@
                 </div>
                 <div class="agent-perm-row">
                     <div class="agent-perm-name">已安装应用列表<span class="text-[11px] text-dim">（用于"帮我打开某某"）</span></div>
+                    <!-- 可点：国产 ROM（澎湃OS 等）在 QUERY_ALL_PACKAGES 之上还有一层自家管控，
+                         未授予时只能读到本应用。状态标记本身就是申请入口，与其它几项一致。 -->
+                    <button type="button" class="agent-perm-act" data-perm-act="apps">授权</button>
                     <span id="agentPermBadgeApps" class="agent-perm-dot"></span>
                 </div>
                 <div class="agent-perm-row">
@@ -2221,11 +2118,11 @@
                 <div class="flex items-center gap-2 mb-3">
                     <label for="marketSearch" class="text-[11px] text-dim flex-none">搜索</label>
                     <input id="marketSearch" autocomplete="off" type="search" class="modal-input text-xs flex-1 min-w-0" placeholder="搜插件：名字 / 说明 / 依赖，例如 live2d、背景">
-                </div>
-                <div id="marketPlatformPills" class="flex items-center flex-wrap gap-1.5 mb-3" role="group" aria-label="按平台分类">
-                    <button type="button" class="market-pill" data-platform="all" aria-pressed="true">全部</button>
-                    <button type="button" class="market-pill" data-platform="mobile" aria-pressed="false">手机</button>
-                    <button type="button" class="market-pill" data-platform="desktop" aria-pressed="false">电脑</button>
+                    <select id="marketPlatformSelect" class="modal-input text-xs flex-none market-platform-select" aria-label="按平台筛选" title="按平台筛选">
+                        <option value="all">全部</option>
+                        <option value="mobile">手机</option>
+                        <option value="desktop">电脑</option>
+                    </select>
                 </div>
                 <div id="marketList" class="space-y-2"></div>
                 <div class="flex items-center gap-2 mt-5">

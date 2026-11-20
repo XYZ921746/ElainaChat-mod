@@ -24,6 +24,7 @@ const THIRD_PERSON_GM_PROMPT = `从现在起，你将作为互动故事的讲述
 7. 维护“故事圣经”：记录时间线、地点、NPC、势力、主角状态、物品、伏笔和关系变化，避免前后矛盾。
 8. 每 3—5 回合制造一个小冲突或小高潮，每 10 回合左右推动一次大转折。
 9. 收到用户输入后直接推进，无需确认。
+10. 叙述语言跟随用户输入的语言：用户用英文写就用英文叙述，用中文写就用中文叙述。
 
 【输出格式】
 你必须严格按以下三部分输出，并使用标签分隔：
@@ -46,9 +47,6 @@ const THIRD_PERSON_GM_PROMPT = `从现在起，你将作为互动故事的讲述
 【故事】可以缩短到 1—2 句，但**绝不允许**省略【故事】/【状态】标签，
 也绝不允许改回第一人称直接对话 —— 缩短的只是篇幅，不是格式。`;
 
-// 思考模式的语言要求：只在开启「先思考再回答」时注入（关着时只会白白拉长提示词）；本项目走各家原生推理字段，文案不写标签名。
-const THINKING_LANGUAGE_PROMPT = '【思维模式要求】在你的思考过程（推理内容）中，请遵守以下规则：'
-    + '全部以中文进行输出，不要使用英文（专有名词、代码、公式等除外）。';
 
 const FIRST_PERSON_CONVERT_PROMPT = `你将作为第一人称视角转换器。
 
@@ -376,7 +374,7 @@ function buildRoleplayImageMessage(characterName) {
 /** 内部日语朗读稿的输出格式；只在开启配音时注入。 */
 function buildRoleplayVoiceJpMessage() {
     return promptTier(1, `# 内部配音输出格式（不要展示给用户）
-完成中文回复后，在同一条输出末尾追加日语朗读稿，并严格包裹在 <voice_jp> 与 </voice_jp> 标签中。只翻译中文正文中的对白，不翻译括号、方括号或动作描写。标签及其内容是客户端内部字段，客户端会自动删除，禁止解释该字段。没有可朗读对白时输出空的 <voice_jp></voice_jp>。`);
+完成正文后，在同一条输出末尾追加日语朗读稿，并严格包裹在 <voice_jp> 与 </voice_jp> 标签中。只翻译正文中的对白（正文语言不变），不翻译括号、方括号或动作描写。标签及其内容是客户端内部字段，客户端会自动删除，禁止解释该字段。没有可朗读对白时输出空的 <voice_jp></voice_jp>。`);
 }
 
 /** 插件用 host.setPromptHint() 注册的 system 提示词；停用的插件不会出现在这里。 */
@@ -410,11 +408,6 @@ function buildLayeredRoleplayMessages(text, options = {}) {
     const coreIndex = messages.findIndex(m => m.role === 'system' && m.content.includes(ROLEPLAY_CORE_PROTOCOL));
     if (options.thirdPerson && coreIndex >= 0) {
         messages[coreIndex] = promptTier(1, THIRD_PERSON_GM_PROMPT);
-    }
-    // 思考语言要求紧跟核心协议 / GM 提示词：它管「怎么想」，排在角色卡之后时模型常先按角色口吻起思、语言跟着跑。
-    if (state.settings.thinkingMode) {
-        const insertAt = (coreIndex >= 0 ? coreIndex : 0) + 1;
-        messages.splice(insertAt, 0, promptTier(1, THINKING_LANGUAGE_PROMPT));
     }
     const conversationPrompt = getConversationPromptText();
     if (conversationPrompt) messages.push(promptTier(2, conversationPrompt));
@@ -518,13 +511,11 @@ function buildLegacyRoleplayMessages(text, options = {}) {
     // 回滚路径同样要认 options.thirdPerson：legacy 没有独立核心协议（世界观与角色卡合并在一段、无法替换），所以把 GM 提示词前置，位置语义与分层路径的核心协议一致。
     if (options.thirdPerson) addPart(1, THIRD_PERSON_GM_PROMPT);
     addPart(2, legacyCharacterPrompt);
-    // legacy 路径也要注入思考语言要求，位置对齐分层路径（紧跟角色设定之后），漏了就会「切回 legacy 后思维链变英文」。
-    if (state.settings.thinkingMode) addPart(1, THINKING_LANGUAGE_PROMPT);
     const conversationPrompt = getConversationPromptText();
     if (conversationPrompt) addPart(2, conversationPrompt);
     if (options.includeVoiceJp) {
         addPart(1, `# 内部配音字段（不要展示给用户）
-完成中文回复后，在同一条输出末尾追加日语朗读稿，并严格包裹在 <voice_jp> 与 </voice_jp> 标签中。只翻译中文正文中的对白，不翻译括号、方括号或动作描写。标签及其内容是客户端内部字段，客户端会自动删除，禁止解释该字段。没有可朗读对白时输出空的 <voice_jp></voice_jp>。`);
+完成正文后，在同一条输出末尾追加日语朗读稿，并严格包裹在 <voice_jp> 与 </voice_jp> 标签中。只翻译正文中的对白（正文语言不变），不翻译括号、方括号或动作描写。标签及其内容是客户端内部字段，客户端会自动删除，禁止解释该字段。没有可朗读对白时输出空的 <voice_jp></voice_jp>。`);
     }
     const memoryBlock = formatMemoryForPrompt(MEMORY_DAYS);
     const related = getRelatedMemories(text);

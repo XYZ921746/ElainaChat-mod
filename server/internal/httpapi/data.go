@@ -33,7 +33,7 @@ func (s *Server) buildBackupWithSecrets(secrets map[string]string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	// 记忆走逻辑导出（M2b）：权威在 SQLite，.db 不进备份，导入按行重建。
+	// 记忆走逻辑导出：权威在 SQLite，.db 不进备份，导入按行重建。
 	if s.memory != nil {
 		dump, dumpErr := s.memory.ExportItems()
 		if dumpErr != nil {
@@ -133,7 +133,11 @@ func (s *Server) handleDataImport(w http.ResponseWriter, r *http.Request) {
 		}
 		packageFiles = files
 		dataFiles, _ = zipx.SplitDataFiles(files)
-		data = store.ParseBackup(dataFiles)
+		data, err = store.ParseBackup(dataFiles)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": "备份数据损坏：" + err.Error()}, nil)
+			return
+		}
 		// v4 记忆导出在 memory/ 前缀之外，ParseBackup 不会碰它；这里单独取出来。
 		for _, f := range files {
 			name := strings.ReplaceAll(f.Name, "\\", "/")
@@ -369,7 +373,7 @@ func (s *Server) handleDataInfo(w http.ResponseWriter, r *http.Request) {
 			"settings":      "main/store.json（设置 / API Key / UI 偏好）",
 			"characters":    "main/characters/（一卡一文件）",
 			"conversations": "conversations/（一对话一文件）",
-			// M2b 起记忆正文在 SQLite；类目 JSON 只在迁移备份里留底，不再出现在此处。
+			// 记忆正文在 SQLite；类目 JSON 只在迁移备份里留底，不出现在此处。
 			"memory": "main/memory/index.db（SQLite，记忆正文权威）",
 			"mods":   "mods/（已安装插件，导入备份时原样写回）",
 			"skills": "skills/（本地技能，导入备份时原样写回）",

@@ -76,6 +76,8 @@ async function doAgentFile(action, { path, content } = {}, access, traceItem) {
             summary: path || '（未提供路径）',
         });
     }
+    // 首个 PC 动作实际执行前启动子代理会话（与手机侧同款；已在运行时幂等）
+    if (typeof agentSessionStart === 'function') agentSessionStart(state._agentGoal);
     try {
         let result;
         if (action === 'delete') {
@@ -96,7 +98,8 @@ async function doAgentFile(action, { path, content } = {}, access, traceItem) {
                 updateTurnTool(traceItem, { state: 'running', result: '⚠️ 删除不可恢复，正在等用户确认…' });
                 if (!await confirmAgentDelete(path, result.isDir)) {
                     updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许删除' });
-                    insertAgentResult('已取消删除：用户没有允许。\n目标：' + (path || '（未提供路径）'), { asContext: true });
+                    agentSessionRecordFailure('已取消删除：用户没有允许。\n目标：' + (path || '（未提供路径）'),
+                        { asContext: true, progress: false, summary: '删除被用户拒绝' });
                     // 必须返回结果对象，不能裸 return：裸 return 会被读成"没有返回结果"，成功被说成失败。
                     return { ok: false, text: '用户没有允许删除：' + (path || '（未提供路径）') };
                 }
@@ -121,9 +124,10 @@ async function doAgentFile(action, { path, content } = {}, access, traceItem) {
                 updateTurnTool(traceItem, { state: 'running', result: '⚠️ 目标文件已存在，正在等用户确认是否覆盖…' });
                 if (!await confirmAgentOverwrite(path)) {
                     updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许覆盖这个文件' });
-                    insertAgentResult('已取消写入：目标文件已存在，而你没有允许覆盖它。\n'
+                    agentSessionRecordFailure('已取消写入：目标文件已存在，而你没有允许覆盖它。\n'
                         + '目标：' + (path || '（未提供路径）')
-                        + '\n（想保留原文件的话，可以让 AI 换一个新文件名保存。）', { asContext: true });
+                        + '\n（想保留原文件的话，可以让 AI 换一个新文件名保存。）',
+                        { asContext: true, progress: false, summary: '覆盖被用户拒绝' });
                     return { ok: false, text: '用户没有允许覆盖，这一步没有执行：' + (path || '（未提供路径）') };
                 }
                 updateTurnTool(traceItem, { state: 'running', result: '用户已允许覆盖，正在写入…', resetTimer: true });
@@ -132,8 +136,9 @@ async function doAgentFile(action, { path, content } = {}, access, traceItem) {
                 updateTurnTool(traceItem, { state: 'running', result: '⚠️ 正在等用户确认是否新建这个文件…' });
                 if (!await confirmAgentCreate(path)) {
                     updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许新建这个文件' });
-                    insertAgentResult('已取消写入：你没有允许新建这个文件。\n'
-                        + '目标：' + (path || '（未提供路径）'), { asContext: true });
+                    agentSessionRecordFailure('已取消写入：你没有允许新建这个文件。\n'
+                        + '目标：' + (path || '（未提供路径）'),
+                        { asContext: true, progress: false, summary: '新建被用户拒绝' });
                     return { ok: false, text: '用户没有允许新建这个文件：' + (path || '（未提供路径）') };
                 }
                 updateTurnTool(traceItem, { state: 'running', result: '用户已允许，正在写入…', resetTimer: true });
@@ -171,19 +176,27 @@ async function doAgentFile(action, { path, content } = {}, access, traceItem) {
                 result: resultText.length > 4000 ? resultText.slice(0, 4000) + '\n…（已截断）' : resultText
             });
             agentConsecutiveFailures = 0; // 成功了就把重试预算还回去
-            if (ownTrace) insertAgentResult(resultText, { continueLoop: true, asContext: true });
-            return { ok: true, text: resultText };
+            const fileSummary = (titleMap[action] || '文件操作') + '：' + (path || '');
+            const routed = (typeof agentSessionRouteResult === 'function')
+                && agentSessionRouteResult(resultText, { summary: fileSummary });
+            if (!routed && ownTrace) insertAgentResult(resultText, { continueLoop: true, asContext: true });
+            // 会话模式只回紧凑摘要：完整结果已进会话观察，主对话的协议对不携带全文
+            return { ok: true, text: routed ? fileSummary + '（完成，结果已回灌子代理）' : resultText };
         } else {
             updateTurnTool(traceItem, { state: 'error', result: errMsg });
             agentConsecutiveFailures += 1;
-            if (ownTrace) await explainAgentFailure(errMsg);
+            const routed = (typeof agentSessionRouteResult === 'function')
+                && agentSessionRouteResult(errMsg, { progress: false, summary: (titleMap[action] || '文件操作') + '失败' });
+            if (!routed && ownTrace) await explainAgentFailure(errMsg);
             return { ok: false, text: errMsg };
         }
     } catch (err) {
         const reason = (err && err.message) || String(err);
         updateTurnTool(traceItem, { state: 'error', result: reason });
         agentConsecutiveFailures += 1;
-        if (ownTrace) await explainAgentFailure(reason);
+        const routed = (typeof agentSessionRouteResult === 'function')
+            && agentSessionRouteResult(reason, { progress: false, summary: (titleMap[action] || '文件操作') + '失败' });
+        if (!routed && ownTrace) await explainAgentFailure(reason);
         return { ok: false, text: reason };
     }
 }
@@ -208,10 +221,12 @@ async function doAgentCommand(command, access, traceItem) {
         const msg = '当前是安卓 App，电脑命令只支持电脑侧；手机文件请走手机操作。'
             + '请在电脑上运行本应用（双击 启动.bat）后用浏览器打开。';
         updateTurnTool(traceItem, { state: 'stopped', result: msg });
-        insertAgentResult(msg);
+        agentSessionRecordFailure(msg, { progress: false, summary: '电脑命令只支持电脑侧' });
         return { ok: false, text: msg };
     }
 
+    // 首个 PC 动作实际执行前启动子代理会话（与手机侧同款；已在运行时幂等）
+    if (typeof agentSessionStart === 'function') agentSessionStart(state._agentGoal);
     try {
         // 批准凭据是服务端签发的一次性令牌（绑定命令全文），不是请求体里的布尔：
         // 布尔等于任何持会话的脚本都能替用户点头。首拍不带令牌，确认后带 403 里的 approvalToken 重试。
@@ -227,7 +242,8 @@ async function doAgentCommand(command, access, traceItem) {
             updateTurnTool(traceItem, { state: 'running', result: '⚠️ 这条命令被判定为危险操作，正在等用户确认…' });
             if (!await confirmAgentDangerousCommand(command, result.reasons)) {
                 updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许执行这条命令' });
-                insertAgentResult('已跳过这条命令：用户没有允许。请换一种更安全的方式，或先向用户说明为什么要执行它。', { asContext: true });
+                agentSessionRecordFailure('已跳过这条命令：用户没有允许。请换一种更安全的方式，或先向用户说明为什么要执行它。',
+                    { asContext: true, progress: false, summary: '命令被用户拒绝' });
                 return { ok: false, text: '用户没有允许执行这条命令' };
             }
             updateTurnTool(traceItem, { state: 'running', result: '用户已允许，正在执行…', resetTimer: true });
@@ -241,20 +257,28 @@ async function doAgentCommand(command, access, traceItem) {
                 result: text.length > 4000 ? text.slice(0, 4000) + '\n…（已截断）' : text
             });
             agentConsecutiveFailures = 0;
-            if (ownTrace) insertAgentResult('命令执行结果：\n' + text, { continueLoop: true, asContext: true });
-            return { ok: true, text };
+            const commandSummary = '执行命令：' + String(command || '').slice(0, 80);
+            const routed = (typeof agentSessionRouteResult === 'function')
+                && agentSessionRouteResult('命令执行结果：\n' + text, { summary: commandSummary });
+            if (!routed && ownTrace) insertAgentResult('命令执行结果：\n' + text, { continueLoop: true, asContext: true });
+            // 会话模式只回紧凑摘要：完整输出已进会话观察，主对话的协议对不携带全文
+            return { ok: true, text: routed ? commandSummary + '（完成，输出已回灌子代理）' : text };
         } else {
             const errMsg = String(result?.message || result?.text || result?.stderr || '命令执行失败');
             updateTurnTool(traceItem, { state: 'error', result: errMsg });
             agentConsecutiveFailures += 1;
-            if (ownTrace) await explainAgentFailure(errMsg);
+            const routed = (typeof agentSessionRouteResult === 'function')
+                && agentSessionRouteResult(errMsg, { progress: false, summary: '命令执行失败' });
+            if (!routed && ownTrace) await explainAgentFailure(errMsg);
             return { ok: false, text: errMsg };
         }
     } catch (err) {
         const reason = (err && err.message) || String(err);
         updateTurnTool(traceItem, { state: 'error', result: reason });
         agentConsecutiveFailures += 1;
-        if (ownTrace) await explainAgentFailure(reason);
+        const routed = (typeof agentSessionRouteResult === 'function')
+            && agentSessionRouteResult(reason, { progress: false, summary: '命令执行失败' });
+        if (!routed && ownTrace) await explainAgentFailure(reason);
         return { ok: false, text: reason };
     }
 }

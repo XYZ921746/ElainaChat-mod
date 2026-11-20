@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,8 +14,8 @@ import (
 )
 
 // 备份格式版本与 server/store.mjs 对齐：v1 是单个 JSON，v2 是 zip（数据摊在根上），
-// v3 是 zip + data/ 目录；v4 = v3 目录 + 记忆改为 data/memory-index/items.json 逻辑导出
-// （M2b：记忆权威在 SQLite，.db 文件不进备份，导入即按行重建）。
+// v3 是 zip + data/ 目录；v4 = v3 目录 + 记忆为 data/memory-index/items.json 逻辑导出
+// （记忆权威在 SQLite，.db 文件不进备份，导入即按行重建）。
 // 导入三种都要认，换机器 / 重装 / 回滚才能连续。
 const (
 	BackupFormat  = "elainachat-backup"
@@ -24,7 +25,7 @@ const (
 
 // MemoryDumpZipPath 是 v4 备份里记忆逻辑导出的固定路径。
 // 刻意放在 memory/ 前缀之外：ParseBackup 只认 memory/<类目>.json，
-// 旧版本与 Node 版导入 v4 备份时会把它当未知文件忽略，不会解析出垃圾类目。
+// 其他实现导入 v4 备份时会把它当未知文件忽略，不会解析出垃圾类目。
 const MemoryDumpZipPath = dataPrefix + "memory-index/items.json"
 
 // voiceSampleFileRe 限定 voice-samples/ 下的合法文件名，防路径穿越。
@@ -144,27 +145,128 @@ func (s *Store) ExportZipWithSecrets(extra []zipx.Entry, extraCounts map[string]
 	return zipx.Write(entries)
 }
 
+// exportCollection 导出「索引 + 一条一文件」的集合。
+//
+// 索引按**实际打进 zip 的条目**重建，而不是原样拷贝磁盘上的 index.json：
+// 磁盘索引可能指向读不出来的条目、含非法 / 重复 ID，原样带走就产出一个自己导不回来的
+// 备份（导入侧对这类不一致是整包拒绝）。宁可少带一条读不出的条目并留下日志，
+// 也不要让整份备份因为一条坏数据全部作废。
 func (s *Store) exportCollection(dir, prefix string) ([]zipx.Entry, error) {
-	raw, ok := readJSONFile(filepath.Join(dir, "index.json"))
-	if !ok {
-		return nil, nil
+	indexPath := filepath.Join(dir, "index.json")
+	raw, readErr := os.ReadFile(indexPath)
+	if readErr != nil {
+		// 索引缺失可能是「这个集合还没迁移出来」，也可能是「索引损坏后已被
+		// readCollection 隔离成 .bad-*」——后者条目文件还在，必须抢救：
+		// 备份里缺这个键，replace 导入会把这台机器的同名集合清成空集合。
+		salvaged, err := s.salvageCollection(dir, prefix)
+		if err != nil {
+			return nil, err
+		}
+		if len(salvaged) > 1 {
+			s.logf("warn", "[store] 备份按目录扫描抢救 %s：index.json 缺失，带上 %d 个条目", dir, len(salvaged)-1)
+		}
+		return salvaged, nil
 	}
-	entries := []zipx.Entry{{Name: prefix + "index.json", Data: raw}}
 	var idx collectionIndex
 	if json.Unmarshal(raw, &idx) != nil {
-		return entries, nil
+		// 索引读不出来：顺序与当前指针都不可信，但条目文件可能还在。
+		// 必须把能读出来的条目带上 —— 备份里缺这个键，replace 导入会把这台机器
+		// 的同名集合清成空集合，用户以为恢复了其实什么都没恢复。
+		salvaged, err := s.salvageCollection(dir, prefix)
+		if err != nil {
+			return nil, err
+		}
+		s.logf("warn", "[store] 备份按目录扫描抢救 %s：index.json 无法解析，带上 %d 个条目", dir, len(salvaged)-1)
+		return salvaged, nil
 	}
+	entries := make([]zipx.Entry, 0, len(idx.Order)+1)
+	order := make([]string, 0, len(idx.Order))
+	seen := make(map[string]struct{}, len(idx.Order))
+	skipped := make([]string, 0)
 	for _, id := range idx.Order {
 		if !safeID.MatchString(id) {
+			skipped = append(skipped, id)
 			continue
 		}
-		item, ok := readJSONFile(filepath.Join(dir, id+".json"))
-		if !ok {
+		if _, dup := seen[id]; dup {
 			continue
 		}
+		item, readOK := readJSONFile(filepath.Join(dir, id+".json"))
+		if !readOK {
+			skipped = append(skipped, id)
+			continue
+		}
+		seen[id] = struct{}{}
+		order = append(order, id)
 		entries = append(entries, zipx.Entry{Name: prefix + id + ".json", Data: item})
 	}
-	return entries, nil
+	if len(skipped) > 0 {
+		s.logf("warn", "[store] 备份跳过 %s 下 %d 个无法导出的条目：%s",
+			dir, len(skipped), strings.Join(skipped, "、"))
+	}
+	current := ""
+	if _, kept := seen[idx.CurrentCardID]; kept {
+		current = idx.CurrentCardID
+	}
+	indexRaw, err := marshalIndent(collectionIndex{Version: 1, Order: order, CurrentCardID: current})
+	if err != nil {
+		return nil, err
+	}
+	return append([]zipx.Entry{{Name: prefix + "index.json", Data: indexRaw}}, entries...), nil
+}
+
+// salvageCollection 在 index.json 不可解析时按目录扫描重建集合：
+// 只认文件名是合法 ID 且内容是 JSON 对象的条目，按文件名排序给一个稳定顺序。
+// 顺序信息已经丢了，但「有数据」比「顺序对」重要得多。
+func (s *Store) salvageCollection(dir, prefix string) ([]zipx.Entry, error) {
+	dirEntries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// 目录本身不存在：这个集合还没有任何数据，备份里也就不该出现这个键。
+			return nil, nil
+		}
+		return nil, err
+	}
+	names := make([]string, 0, len(dirEntries))
+	for _, entry := range dirEntries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".json") || name == "index.json" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	entries := make([]zipx.Entry, 0, len(names)+1)
+	order := make([]string, 0, len(names))
+	skipped := make([]string, 0)
+	for _, name := range names {
+		id := strings.TrimSuffix(name, ".json")
+		if !safeID.MatchString(id) {
+			skipped = append(skipped, name)
+			continue
+		}
+		item, readOK := readJSONFile(filepath.Join(dir, name))
+		if !readOK {
+			skipped = append(skipped, name)
+			continue
+		}
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(item, &fields) != nil || fields == nil {
+			skipped = append(skipped, name)
+			continue
+		}
+		order = append(order, id)
+		entries = append(entries, zipx.Entry{Name: prefix + name, Data: item})
+	}
+	if len(skipped) > 0 {
+		s.logf("warn", "[store] 备份跳过 %s 下 %d 个无法导出的条目：%s",
+			dir, len(skipped), strings.Join(skipped, "、"))
+	}
+	indexRaw, err := marshalIndent(collectionIndex{Version: 1, Order: order})
+	if err != nil {
+		return nil, err
+	}
+	return append([]zipx.Entry{{Name: prefix + "index.json", Data: indexRaw}}, entries...), nil
 }
 
 func (s *Store) exportMemory() []zipx.Entry {
@@ -180,12 +282,32 @@ func (s *Store) exportMemory() []zipx.Entry {
 	}
 	sort.Strings(names)
 	out := make([]zipx.Entry, 0, len(names))
+	skipped := make([]string, 0)
 	for _, name := range names {
+		// 类目名直接当文件名：导入侧按 safeID 校验类目，带出去只会让整包被拒。
+		if !safeID.MatchString(strings.TrimSuffix(name, ".json")) {
+			skipped = append(skipped, name)
+			continue
+		}
 		raw, ok := readJSONFile(filepath.Join(s.memoryDir, name))
 		if !ok {
+			skipped = append(skipped, name)
+			continue
+		}
+		// 导入侧要求每条记录是 {"version":1,"value":…}：形状不对的记录打进备份会让
+		// 整包被拒，所以这里按同一判据先筛一遍，坏记录跳过并留日志。
+		var rec struct {
+			Value *json.RawMessage `json:"value"`
+		}
+		if json.Unmarshal(raw, &rec) != nil || rec.Value == nil || !json.Valid(*rec.Value) {
+			skipped = append(skipped, name)
 			continue
 		}
 		out = append(out, zipx.Entry{Name: dataPrefix + "memory/" + name, Data: raw})
+	}
+	if len(skipped) > 0 {
+		s.logf("warn", "[store] 备份跳过 %d 个无法导出的记忆记录：%s",
+			len(skipped), strings.Join(skipped, "、"))
 	}
 	return out
 }
@@ -250,9 +372,11 @@ func parseArray(raw string) ([]json.RawMessage, error) {
 	return items, nil
 }
 
-// ParseBackup 从 zip 条目还原前端看到的键值表。v3 在 data/ 下，v2 直接摊在根上，
-// 两种布局都认；单个文件坏掉只跳过它，不该让整包失败。
-func ParseBackup(files []zipx.File) map[string]string {
+var ErrCorruptBackup = errors.New("备份数据损坏")
+
+// ParseBackup 从 zip 条目还原前端看到的键值表，v2/v3 两种目录布局共用同一份校验。
+// 已识别的数据文件损坏时必须报错：缺键与坏数据在替换导入里是完全不同的语义。
+func ParseBackup(files []zipx.File) (map[string]string, error) {
 	byName := make(map[string][]byte, len(files))
 	for _, f := range files {
 		byName[f.Name] = f.Data
@@ -267,68 +391,70 @@ func ParseBackup(files []zipx.File) map[string]string {
 		}
 		return "", false
 	}
+	corrupt := func(name, reason string) error {
+		return fmt.Errorf("%w：%s（%s）", ErrCorruptBackup, name, reason)
+	}
 
 	if text, ok := readText("settings.json"); ok {
 		var obj map[string]json.RawMessage
-		if json.Unmarshal([]byte(text), &obj) == nil {
-			for k, v := range obj {
-				var str string
-				if json.Unmarshal(v, &str) == nil {
-					data[k] = str
-				}
+		if json.Unmarshal([]byte(text), &obj) != nil || obj == nil {
+			return nil, corrupt("settings.json", "不是合法的键值对象")
+		}
+		for k, v := range obj {
+			var str string
+			if json.Unmarshal(v, &str) != nil {
+				return nil, corrupt("settings.json", "键 "+k+" 的值不是字符串")
 			}
+			data[k] = str
 		}
 	}
 
-	if text, ok := readText("characters/index.json"); ok {
-		var idx collectionIndex
-		if json.Unmarshal([]byte(text), &idx) == nil {
-			cards := []json.RawMessage{}
-			for _, id := range idx.Order {
-				if !safeID.MatchString(id) {
-					continue
-				}
-				t, ok := readText("characters/" + id + ".json")
-				if !ok {
-					continue
-				}
-				if json.Valid([]byte(t)) {
-					cards = append(cards, json.RawMessage(t))
-				}
-			}
-			if len(cards) > 0 {
-				if raw, err := marshalCompact(cards); err == nil {
-					data[CharacterListKey] = string(raw)
-				}
-				if idx.CurrentCardID != "" {
-					data[CharacterCurrentKey] = idx.CurrentCardID
-				}
-			}
+	readCollection := func(dir, key string, currentKey bool) error {
+		indexName := dir + "/index.json"
+		text, ok := readText(indexName)
+		if !ok {
+			return nil
 		}
+		var idx collectionIndex
+		if json.Unmarshal([]byte(text), &idx) != nil || idx.Order == nil {
+			return corrupt(indexName, "索引不是合法 JSON 或缺少 order")
+		}
+		items := make([]json.RawMessage, 0, len(idx.Order))
+		seen := make(map[string]struct{}, len(idx.Order))
+		for _, id := range idx.Order {
+			if !safeID.MatchString(id) {
+				return corrupt(indexName, "索引含非法条目 ID")
+			}
+			if _, duplicate := seen[id]; duplicate {
+				return corrupt(indexName, "索引含重复条目 ID："+id)
+			}
+			seen[id] = struct{}{}
+			name := dir + "/" + id + ".json"
+			item, exists := readText(name)
+			if !exists {
+				return corrupt(name, "索引引用的条目缺失")
+			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal([]byte(item), &fields) != nil || fields == nil {
+				return corrupt(name, "条目不是合法 JSON 对象")
+			}
+			items = append(items, json.RawMessage(item))
+		}
+		raw, err := marshalCompact(items)
+		if err != nil {
+			return corrupt(indexName, "集合无法序列化")
+		}
+		data[key] = string(raw)
+		if currentKey && idx.CurrentCardID != "" {
+			data[CharacterCurrentKey] = idx.CurrentCardID
+		}
+		return nil
 	}
-
-	if text, ok := readText("conversations/index.json"); ok {
-		var idx collectionIndex
-		if json.Unmarshal([]byte(text), &idx) == nil {
-			convs := []json.RawMessage{}
-			for _, id := range idx.Order {
-				if !safeID.MatchString(id) {
-					continue
-				}
-				t, ok := readText("conversations/" + id + ".json")
-				if !ok {
-					continue
-				}
-				if json.Valid([]byte(t)) {
-					convs = append(convs, json.RawMessage(t))
-				}
-			}
-			if len(convs) > 0 {
-				if raw, err := marshalCompact(convs); err == nil {
-					data[ConversationKey] = string(raw)
-				}
-			}
-		}
+	if err := readCollection("characters", CharacterListKey, true); err != nil {
+		return nil, err
+	}
+	if err := readCollection("conversations", ConversationKey, false); err != nil {
+		return nil, err
 	}
 
 	memObj := map[string]json.RawMessage{}
@@ -347,30 +473,33 @@ func ParseBackup(files []zipx.File) map[string]string {
 		}
 		category := strings.TrimSuffix(rest, ".json")
 		if !safeID.MatchString(category) {
-			continue
+			return nil, corrupt(name, "记忆类目名不合法")
 		}
 		var rec struct {
 			Value *json.RawMessage `json:"value"`
 		}
-		if json.Unmarshal(f.Data, &rec) != nil || rec.Value == nil {
-			continue
+		if json.Unmarshal(f.Data, &rec) != nil || rec.Value == nil || !json.Valid(*rec.Value) {
+			return nil, corrupt(name, "记忆记录不是合法 JSON 或缺少 value")
 		}
 		memObj[category] = *rec.Value
 	}
 	if len(memObj) > 0 {
-		if raw, err := marshalCompact(memObj); err == nil {
-			data[MemoryKey] = string(raw)
+		raw, err := marshalCompact(memObj)
+		if err != nil {
+			return nil, corrupt("memory/", "记忆无法序列化")
 		}
+		data[MemoryKey] = string(raw)
 	} else if text, ok := readText("memory.json"); ok {
 		var rec struct {
 			Value *string `json:"value"`
 		}
-		if json.Unmarshal([]byte(text), &rec) == nil && rec.Value != nil {
-			data[MemoryKey] = *rec.Value
+		if json.Unmarshal([]byte(text), &rec) != nil || rec.Value == nil {
+			return nil, corrupt("memory.json", "旧记忆记录不是合法 JSON 或缺少 value")
 		}
+		data[MemoryKey] = *rec.Value
 	}
 
-	return normalizeData(data)
+	return normalizeData(data), nil
 }
 
 // ParseLegacyJSON 认 v1 的单个 JSON 备份：{data:{…}} 或直接一份键值表。
@@ -442,6 +571,24 @@ func (s *Store) ImportBackup(incoming map[string]string, mode string) (int, erro
 	keys := len(incoming)
 	if keys == 0 {
 		return 0, errors.New("备份里没有可导入的数据")
+	}
+	if mode == "replace" {
+		for _, key := range []string{CharacterListKey, ConversationKey} {
+			raw, exists := incoming[key]
+			if !exists {
+				continue
+			}
+			var items []json.RawMessage
+			if json.Unmarshal([]byte(raw), &items) != nil {
+				return 0, fmt.Errorf("%w：%s 不是合法 JSON 数组", ErrCorruptBackup, key)
+			}
+		}
+		if raw, exists := incoming[MemoryKey]; exists {
+			var memory map[string]json.RawMessage
+			if json.Unmarshal([]byte(raw), &memory) != nil || memory == nil {
+				return 0, fmt.Errorf("%w：记忆不是合法 JSON 对象", ErrCorruptBackup)
+			}
+		}
 	}
 
 	s.writeMu.Lock()

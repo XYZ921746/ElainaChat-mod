@@ -17,11 +17,14 @@
 
   这里只申请"读窗口内容 + 执行手势 + 截图"，不申请过滤按键、不申请控制安全设置，
   权限面尽量小。
+
+  flagRetrieveInteractiveWindows 是 getWindows() 的开关：没有它，窗口列表只回激活窗口，
+  pickReadableRoot() 的"选应用窗口"和点击遮挡检测都会静默退化成单窗口。
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewFocused|typeViewSelected"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews"
+    android:accessibilityFlags="flagDefault|flagReportViewIds|flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:canPerformGestures="true"
     android:canRetrieveWindowContent="true"
     android:canTakeScreenshot="true"

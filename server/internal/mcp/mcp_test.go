@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -67,6 +68,12 @@ func TestMCPHelperProcess(t *testing.T) {
 			_, _ = writer.Write(append(reply, '\n'))
 			continue
 		}
+		// tools/call 支持可配置延迟：取消路径的测试需要一个不会立刻回话的对端。
+		if method == "tools/call" {
+			if ms, _ := strconv.Atoi(os.Getenv("GO_MCP_HELPER_DELAY_MS")); ms > 0 {
+				time.Sleep(time.Duration(ms) * time.Millisecond)
+			}
+		}
 		reply, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
 		_, _ = writer.Write(append(reply, '\n'))
 	}
@@ -82,14 +89,14 @@ func TestStdioClientListAndCall(t *testing.T) {
 	client := newStdioClient(def, nil, "test")
 	defer client.Close()
 
-	tools, err := client.ListTools()
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
 	if len(tools) != 1 || tools[0].Name != "echo" {
 		t.Fatalf("工具清单不对：%+v", tools)
 	}
-	result, err := client.CallTool("echo", map[string]any{})
+	result, err := client.CallTool(t.Context(), "echo", map[string]any{})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
@@ -128,14 +135,14 @@ func TestHTTPClientSSE(t *testing.T) {
 	client := newHTTPClient(ServerDef{ID: "remote", URL: server.URL}, nil, "test")
 	defer client.Close()
 
-	tools, err := client.ListTools()
+	tools, err := client.ListTools(t.Context())
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
 	if len(tools) != 1 || tools[0].Name != "search" {
 		t.Fatalf("工具清单不对：%+v", tools)
 	}
-	result, err := client.CallTool("search", map[string]any{})
+	result, err := client.CallTool(t.Context(), "search", map[string]any{})
 	if err != nil {
 		t.Fatalf("CallTool: %v", err)
 	}
@@ -230,7 +237,7 @@ func TestRegistryReusesConnectionAndStatus(t *testing.T) {
 	if idle.State != "idle" {
 		t.Errorf("查询状态不应启动服务器：%+v", idle)
 	}
-	tools, errText, err := reg.ListTools(def)
+	tools, errText, err := reg.ListTools(t.Context(), def)
 	if err != nil || len(tools) != 1 {
 		t.Fatalf("ListTools: err=%v errText=%s tools=%v", err, errText, tools)
 	}
@@ -243,9 +250,109 @@ func TestRegistryReusesConnectionAndStatus(t *testing.T) {
 	}
 }
 
+// 请求取消只影响本次等待：子进程要继续活着（长命进程），取消时还应尽力发出
+// notifications/cancelled，且 pending 表不留迟到响应。
+func TestStdioRequestCancelKeepsProcessAlive(t *testing.T) {
+	def := ServerDef{
+		ID:      "helper",
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestMCPHelperProcess"},
+		Env: map[string]string{
+			"GO_WANT_MCP_HELPER":     "1",
+			"GO_MCP_HELPER_DELAY_MS": "30000",
+		},
+	}
+	client := newStdioClient(def, nil, "test")
+	defer client.Close()
+
+	if _, err := client.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.CallTool(ctx, "echo", map[string]any{})
+		done <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("取消后 request 应报错返回")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("取消没有解除 request 阻塞")
+	}
+	client.mu.Lock()
+	alive := client.cmd != nil && client.cmd.Process != nil
+	client.mu.Unlock()
+	if !alive {
+		t.Fatal("请求取消不应杀掉 MCP 子进程")
+	}
+}
+
+// Close 的 DELETE 必须带上会话 ID：先清 sessionID 再构造请求头的写法会让
+// 服务端收到一条匿名 DELETE，无法结束会话。
+func TestHTTPCloseSendsSessionID(t *testing.T) {
+	var gotSession string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			gotSession = r.Header.Get("Mcp-Session-Id")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		var msg map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		w.Header().Set("Content-Type", "application/json")
+		if sid := r.Header.Get("Mcp-Session-Id"); sid == "" {
+			w.Header().Set("Mcp-Session-Id", "sess-1")
+		}
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"serverInfo":{"name":"r"}}}`, msg["id"])
+	}))
+	defer server.Close()
+
+	client := newHTTPClient(ServerDef{ID: "remote", URL: server.URL}, nil, "test")
+	if _, err := client.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	client.Close()
+	if gotSession != "sess-1" {
+		t.Fatalf("DELETE 应携带会话 ID，实际 %q", gotSession)
+	}
+}
+
+// Close 后允许重新 Start：远程会话状态要全部复位，不能拿旧的 initDone 直接成功。
+func TestHTTPClientRestartAfterClose(t *testing.T) {
+	var inits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		if msg["method"] == "initialize" {
+			atomic.AddInt32(&inits, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%v,"result":{"serverInfo":{"name":"r"}}}`, msg["id"])
+	}))
+	defer server.Close()
+
+	client := newHTTPClient(ServerDef{ID: "remote", URL: server.URL}, nil, "test")
+	defer client.Close()
+	if _, err := client.Start(t.Context()); err != nil {
+		t.Fatalf("第一次 Start: %v", err)
+	}
+	client.Close()
+	if _, err := client.Start(t.Context()); err != nil {
+		t.Fatalf("Close 后 Start 应重新握手：%v", err)
+	}
+	if got := atomic.LoadInt32(&inits); got != 2 {
+		t.Fatalf("重启应重新 initialize 一次，实际 %d 次", got)
+	}
+}
+
 func TestUnavailableTransport(t *testing.T) {
 	reg := NewRegistry(nil)
-	_, errText, err := reg.ListTools(ServerDef{ID: "x"})
+	_, errText, err := reg.ListTools(t.Context(), ServerDef{ID: "x"})
 	if err == nil || !strings.Contains(errText, "既没有地址") {
 		t.Fatalf("缺少传输方式时应报可操作错误：err=%v text=%s", err, errText)
 	}

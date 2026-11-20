@@ -55,46 +55,64 @@ func newHTTPServer(handler http.Handler, tlsCfg *tls.Config, quiet *stdlog.Logge
 	}
 }
 
-func ListenAndServe(cfg *config.Config, log *logx.Logger, store *auth.Store, handler http.Handler, cert *tlsutil.Info, port int) (*Mux, error) {
+// Listen 只预留监听、不开始服务：入口在改密/迁移/打开数据库之前先绑定端口，
+// 重复双击的第二个实例在这一步就会失败退出，而不是先改完数据才发现端口被占。
+func Listen(cfg *config.Config, log *logx.Logger, port int) (*Mux, error) {
 	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.Host, strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
 	}
-	m := &Mux{
+	return &Mux{
 		log:      log,
-		auth:     store,
 		listener: ln,
 		httpCh:   make(chan net.Conn),
 		httpsCh:  make(chan net.Conn),
 		closed:   make(chan struct{}),
-	}
+	}, nil
+}
 
+// Start 让已预留的监听开始分发请求。证书在这一步才接上：预留阶段不需要它。
+func (m *Mux) Start(authStore *auth.Store, handler http.Handler, cert *tlsutil.Info) error {
+	m.auth = authStore
 	quiet := stdlog.New(io.Discard, "", 0)
 	m.httpSrv = newHTTPServer(handler, nil, quiet)
 	var tlsCfg *tls.Config
+	var err error
 	if cert != nil {
 		tlsCfg, err = cert.TLSConfig()
 		if err != nil {
-			_ = ln.Close()
-			return nil, err
+			_ = m.listener.Close()
+			return err
 		}
 		m.httpsSrv = newHTTPServer(handler, tlsCfg, quiet)
 	}
 
 	go func() {
-		if serveErr := m.httpSrv.Serve(&chanListener{ch: m.httpCh, closed: m.closed, addr: ln.Addr()}); serveErr != nil && !errors.Is(serveErr, net.ErrClosed) {
-			log.Errorf("HTTP", "HTTP 服务退出：%v", serveErr)
+		if serveErr := m.httpSrv.Serve(&chanListener{ch: m.httpCh, closed: m.closed, addr: m.listener.Addr()}); serveErr != nil && !errors.Is(serveErr, net.ErrClosed) {
+			m.log.Errorf("HTTP", "HTTP 服务退出：%v", serveErr)
 		}
 	}()
 	if m.httpsSrv != nil {
 		go func() {
-			if serveErr := m.httpsSrv.Serve(&chanListener{ch: m.httpsCh, closed: m.closed, addr: ln.Addr()}); serveErr != nil && !errors.Is(serveErr, net.ErrClosed) {
-				log.Errorf("Cert", "HTTPS 服务退出：%v", serveErr)
+			if serveErr := m.httpsSrv.Serve(&chanListener{ch: m.httpsCh, closed: m.closed, addr: m.listener.Addr()}); serveErr != nil && !errors.Is(serveErr, net.ErrClosed) {
+				m.log.Errorf("Cert", "HTTPS 服务退出：%v", serveErr)
 			}
 		}()
 	}
 
 	go m.acceptLoop(tlsCfg)
+	return nil
+}
+
+func ListenAndServe(cfg *config.Config, log *logx.Logger, store *auth.Store, handler http.Handler, cert *tlsutil.Info, port int) (*Mux, error) {
+	m, err := Listen(cfg, log, port)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.Start(store, handler, cert); err != nil {
+		_ = m.listener.Close()
+		return nil, err
+	}
 	return m, nil
 }
 

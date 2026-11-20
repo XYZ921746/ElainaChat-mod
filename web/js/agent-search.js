@@ -201,13 +201,18 @@ async function runAgentWebSearch(args, traceItem) {
     if (!query) {
         const m = '没有给出要搜索的内容。请在 query 里写清楚要查什么。';
         updateTurnTool(traceItem, { state: 'error', result: m });
+        agentSessionRouteResult(m, { progress: false, summary: '搜索缺少关键词' });
         return { ok: false, text: m };
     }
+    // 首个 PC 动作实际执行前启动子代理会话（与手机侧同款；已在运行时幂等）
+    if (typeof agentSessionStart === 'function') agentSessionStart(state._agentGoal);
     const res = await webSearchQuery(query);
     if (!res.ok) {
         updateTurnTool(traceItem, { state: 'error', result: res.text });
-        // 失败不插可见气泡就走工具通道；标签通道让角色自己解释（与文件操作同一条规则）
-        if (ownTrace) await explainAgentFailure(res.text);
+        // 失败不插可见气泡就走工具通道；标签通道让角色自己解释（与文件操作同一条规则）；会话模式失败观察进会话
+        const routed = (typeof agentSessionRouteResult === 'function')
+            && agentSessionRouteResult(res.text, { progress: false, summary: '搜索失败：' + query.slice(0, 60) });
+        if (!routed && ownTrace) await explainAgentFailure(res.text);
         return { ok: false, text: res.text };
     }
     const text = String(res.text || '');
@@ -215,7 +220,11 @@ async function runAgentWebSearch(args, traceItem) {
         state: 'ok',
         result: text.length > 4000 ? text.slice(0, 4000) + '\n…（已截断）' : text,
     });
-    if (ownTrace) insertAgentResult(text, { continueLoop: true, asContext: true });
-    return { ok: true, text };
+    const searchSummary = '联网搜索：' + query.slice(0, 80);
+    const routed = (typeof agentSessionRouteResult === 'function')
+        && agentSessionRouteResult(text, { summary: searchSummary });
+    if (!routed && ownTrace) insertAgentResult(text, { continueLoop: true, asContext: true });
+    // 会话模式只回紧凑摘要：搜索结果全文已进会话观察，主对话的协议对不携带全文
+    return { ok: true, text: routed ? searchSummary + '（完成，结果已回灌子代理）' : text };
 }
 

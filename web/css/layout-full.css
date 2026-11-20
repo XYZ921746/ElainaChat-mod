@@ -51,7 +51,7 @@ html.rd #sidebar {
         inset: 0 !important;
     }
 
-    /* 原型在窄屏只保留对话抽屉，不再把左侧竖栏塞进抽屉 —— 导航交给底部栏。 */
+    /* 窄屏只保留对话抽屉，左侧竖栏不进抽屉 —— 导航交给底部栏。 */
     html.rd #sidebar {
         width: min(326px, 88vw) !important;
         flex-basis: auto !important;
@@ -64,7 +64,7 @@ html.rd #sidebar {
         margin-left: 0 !important;
     }
 
-    /* 底部导航占位：聊天/语笺/日记内容不再被导航条盖住。 */
+    /* 底部导航占位：聊天/语笺/日记内容不被导航条盖住。 */
     html.rd #mainContent {
         padding-bottom: calc(58px + var(--safe-bottom)) !important;
     }
@@ -164,12 +164,10 @@ html.rd .rd-model-pill .rd-model-label { max-width: 150px; overflow: hidden; tex
 html.rd .rd-model-pill svg { width: 12px; height: 12px; color: var(--rd-text-3); flex: none; }
 
 html.rd #headerMemoryBtn > span:not(#memoryStatusDot),
-html.rd #headerAnnounceBtn > span:not(#announceStatusDot),
-html.rd #headerInstallBtn > span { display: none !important; }
+html.rd #headerAnnounceBtn > span:not(#announceStatusDot) { display: none !important; }
 
 html.rd #headerMemoryBtn,
-html.rd #headerAnnounceBtn,
-html.rd #headerInstallBtn {
+html.rd #headerAnnounceBtn {
     width: 34px !important;
     min-width: 34px;
     padding: 0 !important;
@@ -332,11 +330,10 @@ html.rd .rd-rail-avatar img {
     }
 }
 
-/* 会话人设入口（右上角模型胶囊）只在对话界面显示：首页、回忆各页、
-   设置 / 成就 / 市场这些整页下没有"当前对话"的语境，摆在那里会让人
-   不知道自己在设置哪一段。窄屏本就整条隐藏，这条只管宽屏。 */
+/* 会话人设入口（右上角模型胶囊）：对话内点击打开会话人设；首页无当前对话时保留胶囊，
+   点击改走模型设置。回忆各页与整页弹层仍隐藏，避免让人以为在设置某一段对话。窄屏整条隐藏。 */
 @media (min-width: 981px) {
-    html.rd #chatHeader:not(.is-conv) #rdModelPill,
+    html.rd #chatHeader.is-pages #rdModelPill,
     html.rd body.rd-page-overlay-open #rdModelPill {
         display: none !important;
     }

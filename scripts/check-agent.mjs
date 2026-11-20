@@ -161,7 +161,9 @@ async function caseContinue(c) {
     // 判据用白名单而非数量：数量断言会误伤新增合法路径，也挡不住等量替换。
     const ALLOWED_CONTINUE_SITES = [
         { re: /insertAgentResult\(resultText, \{ continueLoop: true, asContext: true \}\)/, label: '文件操作成功' },
-        { re: /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true \}\)/, label: '手机操作成功' },
+        { re: /insertAgentResult\(m, \{ continueLoop: true, asContext: true, progress: false \}\)/, label: '重复动作被拦（让模型换策略）' },
+        { re: /insertAgentResult\(nodeRef\.error, \{ continueLoop: true, asContext: true, progress: false \}\)/, label: '元素引用过期 / 未找到（让模型重读）' },
+        { re: /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true, progress, observation: true, currentScreen, step: stepNo, summary: stepSummary \}\)/, label: '手机操作成功' },
         { re: /insertAgentResult\('命令执行结果：\\n' \+ text, \{ continueLoop: true, asContext: true \}\)/, label: '电脑命令成功' },
         { re: /insertAgentResult\(text, \{ continueLoop: true, asContext: true \}\)/, label: '浏览器操作成功' },
         // 联网搜索与浏览器共用同一插入形态，这条登记保持"新增成功路径必须显式登记"纪律。
@@ -185,8 +187,8 @@ async function caseContinue(c) {
     c.ok(/insertAgentResult\(resultText, \{ continueLoop: true, asContext: true \}\)/.test(html),
         '文件操作成功处开启续跑');
     c.ok(/const \w+ = await execPhoneOperation\(parsed\);/.test(html)
-        && /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true \}\)/.test(html),
-        '手机操作成功处开启续跑');
+        && /insertAgentResult\(opResult, \{ continueLoop: true, asContext: true, progress, observation: true, currentScreen, step: stepNo, summary: stepSummary \}\)/.test(html),
+        '手机操作成功处开启续跑（并带上"是否真的推进"的 progress）');
     // 成功结果只做上下文不进气泡：可见插入会让同一件事出现两次、且排在正文前。
     c.ok(/asContext === true/.test(insertFn) && /if \(asContext\) msg\.hidden = true;/.test(insertFn),
         '★ 成功结果标记 hidden（只进过程区，不占聊天气泡）');
@@ -211,7 +213,8 @@ async function caseContinue(c) {
         '★ 用户亲手拒绝/停止的结果只进过程区（不再复述他刚做的决定）',
         missingDecided.length ? '漏了：' + missingDecided.join('、') : '');
     const MUST_STAY_VISIBLE = [
-        { re: /insertAgentResult\('手机操作失败：' \+ [^;]*\);/, label: '手机操作失败' },
+        // 失败可能先经 agentSessionRecordFailure 路由：会话模式回灌子代理，一体模式仍落 insertAgentResult 可见气泡。
+        { re: /(?:insertAgentResult|agentSessionRecordFailure)\('手机操作失败：' \+ [^;]*\);/, label: '手机操作失败' },
         { re: /insertAgentResult\('操作失败：' \+ shortReason/, label: '文件操作失败' },
     ];
     const hiddenFailures = MUST_STAY_VISIBLE.filter((d) => !d.re.test(html)).map((d) => d.label);
@@ -226,14 +229,14 @@ async function caseContinue(c) {
     const loopFn = extractFn('continueAgentLoop');
     c.ok(!/AGENT_CONTINUE_MAX_STEPS/.test(html), '★ 续跑不做步数硬限制（AGENT_CONTINUE_MAX_STEPS 这类常量不应残留）');
     c.ok(/AGENT_STALL_FUSE/.test(loopFn), '续跑有"连续无进展"熔断');
-    const capBlock = loopFn.match(/if \(agentStalledSteps >= AGENT_STALL_FUSE\)[\s\S]*?\n {8}\}/);
+    const capBlock = loopFn.match(/if \(agentStalledSteps >= AGENT_STALL_FUSE\)[\s\S]*?\n {4}\}/);
     c.ok(!!capBlock, '找得到熔断分支');
     c.ok(!!capBlock && !/continueLoop: true/.test(capBlock[0]),
         '熔断时的提示不开启续跑（否则"熔断→插提示→又调度→又熔断"无限循环）');
     c.ok(!!capBlock && /\breturn;/.test(capBlock[0]),
         '熔断后立即 return（不再发起请求）');
-    c.ok(!!capBlock && /rt\.endRun\(\)/.test(capBlock[0]),
-        '熔断时收起运行状态条（否则状态条会一直挂着）');
+    c.ok(!!capBlock && /(agentFinishRun\('fused'\)|rt\.endRun\(\))/.test(capBlock[0]),
+        '熔断时收尾并收起运行状态条（否则状态条会一直挂着）');
     c.ok(/agentStalledSteps = 0/.test(insertFn) && /agentStalledSteps \+= 1/.test(insertFn),
         '★ 熔断计数按"有没有进展"记：成功清零、其余累加（判据是 continueLoop）');
 
@@ -257,12 +260,15 @@ async function caseContinue(c) {
     c.ok(/resetAgentContinueBudget\(\)/.test(handleFn),
         '每条新的用户消息都重置预算（否则整个会话共享 8 步，用完永远不再续跑）');
 
-    c.ok(/const hasMoreOps = \/\\\[操作\[:：\]\/\.test/.test(loopFn),
-        '用**同步**判断回复里有没有操作标签（drive() 是异步的，靠定时器判断会误判）');
-    c.ok(/if \(hasMoreOps[\s\S]{0,300}?drive\(raw \|\| ''\);[\s\S]{0,80}?return;/.test(loopFn),
+    c.ok(/const hasMoreOps = agentTagKeepsRunning\(rawText\);/.test(loopFn),
+        '用**同步**判断回复里有没有会续跑的标签（drive() 是异步的，靠定时器判断会误判）');
+    c.ok(/const hasAnyTags = \/\\\[操作\[:：\]\/\.test\(rawText\)/.test(loopFn),
+        '纯表现标签（通话 / 记忆等）单独识别（它们不会产生下一步结果）');
+    c.ok(/hasMoreOps && window\.ElainaTags/.test(loopFn) && /drive\(rawText\)/.test(loopFn)
+        && /return;\s*\/\/ 后续由新一轮结果接力/.test(loopFn),
         '有后续操作时 return，交给下一轮 insertAgentResult 接力');
-    c.ok(/rt\.endRun\(\);\s*\n\s*\}/.test(loopFn),
-        '没有操作标签时才 endRun（AI 认为任务完成）');
+    c.ok(/agentFinishRun\('completed'/.test(loopFn),
+        '没有操作标签时走收尾总结（AI 认为任务完成）');
 
     // 四之二、续跑请求失败不得被当成"任务完成"：失败时 raw 被吞成空串，空串走 endRun
     //    → 浮层收起、对话零提示、熔断计数也不涨。
@@ -284,16 +290,16 @@ async function caseContinue(c) {
     }
     // 自动重试一次：后台网络抖动/限流是最常见的失败原因，一次重试就能救回来
     {
-        // 判据放宽到"调用点带上 AGENT_CONTINUE_PROMPT，后面还可以跟别的实参"——
+        // 判据放宽到"调用点带上续跑提示词，后面还可以跟别的实参"——
         // 工具通道会在这句后面再传一组请求选项（见 agent.js 的 agentToolOptions）。
-        const calls = (loopFn.match(/callAI\(AGENT_CONTINUE_PROMPT/g) || []).length;
+        const calls = (loopFn.match(/callAI\(continuePrompt/g) || []).length;
         c.ok(calls >= 2, '★ 续跑失败会**自动重试一次**（抖动/限流能自愈）', `callAI 调用点 ${calls} 处`);
         c.ok(/await new Promise\(\(r\) => setTimeout\(r, \d+\)\)/.test(loopFn),
             '★ 重试前先等一会儿（立刻重试往往撞上同一个瞬时故障）');
     }
     c.ok(/续跑失败/.test(loopFn) && /没有\*\*完成|没有完成/.test(loopFn),
         '★★ 失败时如实告知（明确写"任务没有完成"，不让用户以为做完了）');
-    c.ok(/\{ continueLoop: false \}/.test(loopFn.split('if (continueError) {')[1]?.slice(0, 1200) || ''),
+    c.ok(/continueLoop: false/.test(loopFn.split('if (continueError) {')[1]?.slice(0, 1200) || ''),
         '★ 失败说明不触发续跑（否则会绕过它自己的重试预算、变成反复失败刷屏）');
     {
         const errBlock = loopFn.slice(loopFn.indexOf('let continueError = null;'), loopFn.indexOf('if (continueError) {'));
@@ -326,13 +332,15 @@ async function caseContinue(c) {
     const failFn = extractFn('explainAgentFailure');
     c.ok(/callAI\(prompt/.test(failFn), '失败路径仍然会调 callAI（AI 自己解释+纠正）');
 
-    // 续跑渲染漏了 commitAiMessageOnce 的几步（尤其 removeThinkingMessage）：
-    //    "正在想"气泡挂着压住新回复，看起来像没回。
-    c.ok(/removeThinkingMessage\(\)/.test(loopFn),
-        '续跑渲染前移除"正在想"气泡（不移除会一直挂着，回复看起来没出现）');
-    c.ok(/state\.currentConversationId === conv\.id && !state\.notesMode && !state\.diaryMode/.test(loopFn),
+    // 续跑收尾渲染漏了 removeThinkingMessage 的几步："正在想"气泡挂着压住新回复，看起来像没回。
+    // 渲染逻辑已集中到 appendAgentVisibleMessage（完成与停止共用），判据改看那里。
+    const appendFn = extractFn('appendAgentVisibleMessage');
+    c.ok(/removeThinkingMessage\(\)/.test(appendFn),
+        '收尾渲染前移除"正在想"气泡（不移除会一直挂着，回复看起来没出现）');
+    c.ok(/state\.currentConversationId === conv\.id && !state\.notesMode && !state\.diaryMode/.test(appendFn),
         '渲染前判当前会话与 notes/diary 模式（与 commitAiMessageOnce 一致）');
-    c.ok(/!document\.getElementById\(`msg-\$\{safeAttrId\(aiMessage\.id\)\}`\)/.test(loopFn),
+    c.ok(/!document\.getElementById\('msg-' \+ safeAttrId\(msg\.id\)\)/.test(appendFn)
+        || /!document\.getElementById\(`msg-\$\{safeAttrId\(msg\.id\)\}`\)/.test(appendFn),
         '渲染前防重复插入同一节点（幂等）');
     c.ok(/state\.voiceState = 'idle'/.test(loopFn), '续跑后把语音状态复位');
     c.ok(/updateUI\(\)/.test(loopFn), '续跑后刷新 UI');
@@ -427,13 +435,30 @@ async function caseContinue(c) {
     c.ok(/getElementById\(`msg-\$\{safeAttrId\(id\)\}`\)\) return false;/.test(voiceSrc2),
         '★★ 已经显示过的那句话不删（不篡改用户刚读到的内容）');
 
-    // 续跑提示词必须要求"接着上一句讲"，否则模型重新开场、同一件事被交代两遍。
+    // 先做再统一说：中间正文不逐条发给用户，只在任务完成 / 停止时写一条总结。
+    c.ok(/const suppressReply = repliedToolCalls\.length > 0 \|\| hasTagOps \|\| nudged;/.test(voiceSrc2),
+        '★★ 有动作 / 需要催办时中间正文不外发');
+    c.ok(/const shouldPersistReply = !suppressReply \|\| repliedToolCalls\.length > 0;/.test(voiceSrc2),
+        '★★ 中间正文不落库；工具调用消息例外（协议要求成对）');
+    c.ok(/if \(suppressReply\) \{[\s\S]{0,240}?commitAiMessageOnce\(\);[\s\S]{0,40}?return;/.test(voiceSrc2),
+        '★★ 中间正文不配音（用户看不到过程话）');
+    c.ok(/function agentFinishRun\(/.test(agentSrc2), '★★ 有统一的运行收尾入口');
+    c.ok(/agentFinishRun\('completed'/.test(agentSrc2), '★★ 任务完成走收尾总结');
+    const runtimeSrc = readWebFile('js/agent-runtime.js');
+    c.ok(/agentFinishRun\('stopped'\)/.test(runtimeSrc), '★★ 用户停止也走收尾总结');
+    c.ok(/function appendAgentVisibleMessage\(/.test(agentSrc2), '★★ 收尾只写一条可见消息');
+    c.ok(/agentFinishRun\('fused'/.test(agentSrc2) && /agentFinishRun\('error'/.test(agentSrc2),
+        '★★ 熔断 / 续跑失败也有收尾总结');
+    c.ok(/function bringAppToFront\(/.test(agentSrc2) && /\.bringToFront\(\)/.test(agentSrc2),
+        '★★ 任务结束自动回到应用');
+
+    // 续跑提示词：执行期只发标签，收尾用 [完成] 写一段，不再承接不可见的中间话。
     const continuePrompt = (agentSrc2.split('const AGENT_CONTINUE_PROMPT')[1] || '').split('let agentContinueUsed')[0];
-    c.ok(/衔接上一句/.test(continuePrompt),
-        '★★ 续跑提示词要求"接着上一句讲"（否则会重新开场）');
-    c.ok(/不要重新开场/.test(continuePrompt), '★★ 明确禁止重新开场/复述任务');
-    c.ok(/中间的一步/.test(continuePrompt),
-        '★★ 说明"只是中间一步就别收尾说话，直接输出下一步操作"');
+    c.ok(/\[完成\]/.test(continuePrompt),
+        '★★ 续跑提示词给出明确的收尾标记 [完成]');
+    c.ok(/不要写任何旁白|不要写任何旁白、解释或安抚/.test(continuePrompt),
+        '★★ 明确禁止执行期旁白（用户看不到）');
+    c.ok(/一段/.test(continuePrompt), '★★ 收尾要求一段总结，不是一条条发');
 
     // runToolCalls 把返回值 `ok` 写进过程行：成功路径也必须返回结果对象，
     //    否则模型收到"没有返回结果"、ok 行被覆盖成 error。判据查函数有无返回值。
@@ -1105,11 +1130,11 @@ async function caseStrictRoute(c) {
         const facts = [
             [/if \(strict\) \{/, 'strict 分流块'],
             [/ID_ACCESSIBILITY\.equals\(preferred\)[\s\S]{0,400}runOnAccessibility\(action, args, false\);/, 'strict+无障碍 → 直接走无障碍'],
-            [/ID_MODULE\.equals\(preferred\)/, 'strict+模块 分支'],
+            [/ShellBackends\.Executor strictBackend = backgroundById\(preferred\);/, 'strict+后台 分支（Shizuku / Root / 模块）'],
             [/运行方式参数无法识别/, 'strict+未知值 → 如实报错'],
             [/if \(!strict\s*[\s\S]{0,220}"手机输入"\.equals\(action\)/, '中文输入兜底带 !strict（route 的 ① 依赖它）'],
-            [/if \(accessibilityCannotDo\(action, args\) && moduleExecutor\.available/, '非 strict 的互通换路（route 的 ③ 依赖它）'],
-            [/ShellBackends\.Executor\[\] order = \{ moduleExecutor \}/, '自动挑选的候选只有模块（route 的 ④ 依赖它）'],
+            [/if \(accessibilityCannotDo\(action, args\) && swap != null\)/, '非 strict 的互通换路（route 的 ③ 依赖它）'],
+            [/ShellBackends\.Executor\[\] order = \{ shizukuExecutor, rootExecutor, moduleExecutor \}/, '自动挑选的候选是 Shizuku → Root → 模块（route 的 ④ 依赖它）'],
         ];
         for (const [re, label] of facts) {
             c.ok(re.test(plugin), `源码仍具备：${label}`);
@@ -1118,7 +1143,8 @@ async function caseStrictRoute(c) {
         const cannotDoBlock = plugin.slice(
             plugin.indexOf('private static boolean accessibilityCannotDo('),
             plugin.indexOf('private static JSObject annotateBackendSwap('));
-        const mirrored = ['手机命令'];
+        // 「手机命令」不在这里：后台方式也不开放任意命令，换过去只会再失败一次
+        const mirrored = [];
         for (const act of mirrored) {
             c.ok(cannotDoBlock.includes('"' + act + '"'),
                 `镜像里当作"无障碍做不到"的「${act}」仍在原生清单里`);
@@ -1130,8 +1156,14 @@ async function caseStrictRoute(c) {
             '未同步: ' + unknown.join('、'));
     }
 
-    /** 模拟 runAction 路由决策；返回 'accessibility'|'module'|'fail'|'auto:<id>'，分支顺序对照源码。 */
-    function route({ action, args, preferred, strict, accRunning, modAvailable }) {
+    /**
+     * 模拟 runAction 路由决策；返回 'accessibility'|'shizuku'|'root'|'module'|'fail'|'auto:<id>'，分支顺序对照源码。
+     *
+     * @param bg 后台可用集合（Shizuku / Root / 模块里哪些就绪）
+     */
+    function route({ action, args, preferred, strict, accRunning, bg }) {
+        const available = bg || [];
+        const autoPick = ['shizuku', 'root', 'module'].find((id) => available.includes(id)) || '';
         // ① 中文输入的"改走无障碍"兜底
         if (!strict && action === '手机输入' && /[^\x00-\x7F]/.test(args) && accRunning) {
             return 'accessibility';
@@ -1139,59 +1171,71 @@ async function caseStrictRoute(c) {
         // ② strict 分流
         if (strict) {
             if (preferred === 'accessibility') return 'accessibility';      // 做不到也如实报，不换路
-            if (preferred === 'module') return modAvailable ? 'module' : 'fail';
+            if (['shizuku', 'root', 'module'].includes(preferred)) {
+                return available.includes(preferred) ? preferred : 'fail';
+            }
             return 'fail';                                                   // 未知值：不猜
         }
         // ③ preferred 是无障碍
         if (preferred === 'accessibility') {
-            const cannotDo = ['手机命令'].includes(action);
-            if (cannotDo && modAvailable) return 'auto:module';               // 互通自动换路
+            // 「手机命令」不在清单里：后台也不开放命令，换过去只是再失败一次
+            const cannotDo = ['手机按键'].includes(action) && !['返回', '主页', '最近任务', '4', '3', '187'].includes(String(args).trim());
+            if (cannotDo && autoPick) return 'auto:' + autoPick;               // 互通自动换路
             return 'accessibility';
         }
-        // ④ 自动挑选（候选只有 module）
-        if (modAvailable) return 'module';
+        // ④ 自动挑选（候选 Shizuku → Root → 模块）
+        if (autoPick) return autoPick;
         return accRunning ? 'accessibility' : 'fail';                         // 兜底走无障碍
     }
 
     {
-        const r = route({ action: '手机打开', args: 'tv.danmaku.bili', preferred: 'accessibility', strict: true, accRunning: true, modAvailable: true });
-        c.ok(r === 'accessibility', '★★ 「手机打开」+ 选前台 → 走无障碍（如实报"做不到"），**不**换模块', `实际=${r}`);
-        const r2 = route({ action: '手机命令', args: 'ls', preferred: 'accessibility', strict: true, accRunning: true, modAvailable: true });
-        c.ok(r2 === 'accessibility', '★★ 「手机命令」+ 选前台 → 走无障碍（不换模块）', `实际=${r2}`);
-        const r3 = route({ action: '手机点击', args: '100 200', preferred: 'accessibility', strict: true, accRunning: true, modAvailable: true });
+        const r = route({ action: '手机打开', args: 'tv.danmaku.bili', preferred: 'accessibility', strict: true, accRunning: true, bg: ['module'] });
+        c.ok(r === 'accessibility', '★★ 「手机打开」+ 选前台 → 走无障碍（如实报"做不到"），**不**换后台', `实际=${r}`);
+        const r2 = route({ action: '手机命令', args: 'ls', preferred: 'accessibility', strict: true, accRunning: true, bg: ['module'] });
+        c.ok(r2 === 'accessibility', '★★ 「手机命令」+ 选前台 → 走无障碍（不换后台）', `实际=${r2}`);
+        const r3 = route({ action: '手机点击', args: '100 200', preferred: 'accessibility', strict: true, accRunning: true, bg: ['module'] });
         c.ok(r3 === 'accessibility', '「手机点击」+ 选前台 → 无障碍', `实际=${r3}`);
-        const r4 = route({ action: '手机查看界面', args: '', preferred: 'accessibility', strict: true, accRunning: true, modAvailable: true });
+        const r4 = route({ action: '手机查看界面', args: '', preferred: 'accessibility', strict: true, accRunning: true, bg: ['module'] });
         c.ok(r4 === 'accessibility', '「手机查看界面」+ 选前台 → 无障碍', `实际=${r4}`);
     }
 
     {
-        const r = route({ action: '手机点击', args: '1 2', preferred: 'module', strict: true, accRunning: true, modAvailable: true });
-        c.ok(r === 'module', '「手机点击」+ 选后台 → 模块', `实际=${r}`);
-        const r2 = route({ action: '手机输入', args: '你好世界', preferred: 'module', strict: true, accRunning: true, modAvailable: true });
-        c.ok(r2 === 'module', '★★ 中文输入 + 选后台 → 仍走模块（不被"改走无障碍"兜底抢走）', `实际=${r2}`);
-        const r3 = route({ action: '手机点击', args: '1 2', preferred: 'module', strict: true, accRunning: true, modAvailable: false });
-        c.ok(r3 === 'fail', '★ 选后台但模块不可用 → 明确失败（不静默回落无障碍）', `实际=${r3}`);
+        const r = route({ action: '手机点击', args: '1 2', preferred: 'module', strict: true, accRunning: true, bg: ['module'] });
+        c.ok(r === 'module', '「手机点击」+ 选后台模块 → 模块', `实际=${r}`);
+        const rShizuku = route({ action: '手机点击', args: '1 2', preferred: 'shizuku', strict: true, accRunning: true, bg: ['shizuku', 'module'] });
+        c.ok(rShizuku === 'shizuku', '★ 「手机点击」+ 选后台 Shizuku → Shizuku（不被模块抢走）', `实际=${rShizuku}`);
+        const rRoot = route({ action: '手机点击', args: '1 2', preferred: 'root', strict: true, accRunning: false, bg: ['root'] });
+        c.ok(rRoot === 'root', '★ 「手机点击」+ 选后台 Root → Root（不需要无障碍）', `实际=${rRoot}`);
+        const r2 = route({ action: '手机输入', args: '你好世界', preferred: 'module', strict: true, accRunning: true, bg: ['module'] });
+        c.ok(r2 === 'module', '★★ 中文输入 + 选后台 → 仍走后台（不被"改走无障碍"兜底抢走）', `实际=${r2}`);
+        const r3 = route({ action: '手机点击', args: '1 2', preferred: 'module', strict: true, accRunning: true, bg: [] });
+        c.ok(r3 === 'fail', '★ 选后台但该后端不可用 → 明确失败（不静默回落无障碍）', `实际=${r3}`);
     }
 
     {
-        const r = route({ action: '手机命令', args: 'ls', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: true });
-        c.ok(r === 'auto:module', '★ 非 strict + 无障碍做不到 + 模块可用 → 自动换模块（互通仍生效）', `实际=${r}`);
-        const r1b = route({ action: '手机打开', args: 'pkg', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: false });
+        const r = route({ action: '手机按键', args: '音量加', preferred: 'accessibility', strict: false, accRunning: true, bg: ['module'] });
+        c.ok(r === 'auto:module', '★ 非 strict + 无障碍做不到（非三键按键）+ 后台可用 → 自动换后台（互通仍生效）', `实际=${r}`);
+        const rCmd = route({ action: '手机命令', args: 'ls', preferred: 'accessibility', strict: false, accRunning: true, bg: ['module'] });
+        c.ok(rCmd === 'accessibility', '★ 非 strict + 「手机命令」→ 仍走无障碍（后台也不开放命令，不换路）', `实际=${rCmd}`);
+        const r1b = route({ action: '手机打开', args: 'pkg', preferred: 'accessibility', strict: false, accRunning: true, bg: [] });
         c.ok(r1b === 'accessibility', '★ 「手机打开」无障碍自己就能做（不再换路、不判失败）', `实际=${r1b}`);
-        const r2 = route({ action: '手机点击', args: '1 2', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: true });
+        const r2 = route({ action: '手机点击', args: '1 2', preferred: 'accessibility', strict: false, accRunning: true, bg: ['module'] });
         c.ok(r2 === 'accessibility', '非 strict + 无障碍做得到 → 走无障碍（不无谓换路）', `实际=${r2}`);
-        // 非 strict 时中文输入仍走无障碍（命令族不支持非 ASCII）
-        const r3 = route({ action: '手机输入', args: '中文', preferred: 'accessibility', strict: false, accRunning: true, modAvailable: true });
+        // 非 strict 时中文输入仍走无障碍（后台的 input text 也不支持非 ASCII）
+        const r3 = route({ action: '手机输入', args: '中文', preferred: 'accessibility', strict: false, accRunning: true, bg: ['module'] });
         c.ok(r3 === 'accessibility', '非 strict + 中文输入 → 无障碍（原来的兜底仍在）', `实际=${r3}`);
-        const r4 = route({ action: '手机点击', args: '1 2', preferred: 'module', strict: false, accRunning: false, modAvailable: true });
+        const r4 = route({ action: '手机点击', args: '1 2', preferred: 'module', strict: false, accRunning: false, bg: ['module'] });
         c.ok(r4 === 'module', '非 strict + 默认模块 → 模块', `实际=${r4}`);
+        // 自动挑选的顺序：Shizuku 优先于 Root，Root 优先于模块
+        const rOrder = route({ action: '手机点击', args: '1 2', preferred: '', strict: false, accRunning: false, bg: ['root', 'module'] });
+        c.ok(rOrder === 'root', '★ 自动挑选按 Shizuku → Root → 模块 的顺序', `实际=${rOrder}`);
     }
 
     {
-        const r = route({ action: '手机打开', args: 'pkg', preferred: 'accessibility', strict: true, accRunning: true, modAvailable: true });
+        const r = route({ action: '手机打开', args: 'pkg', preferred: 'accessibility', strict: true, accRunning: true, bg: ['module'] });
         c.ok(r !== 'module' && r !== 'auto:module',
-            '★★ 选前台 + 无障碍做不到 → 绝不落到模块（这正是真机上那个 bug）', `实际=${r}`);
-        const r2 = route({ action: '手机输入', args: '中文', preferred: 'module', strict: true, accRunning: true, modAvailable: true });
+            '★★ 选前台 + 无障碍做不到 → 绝不落到后台（这正是真机上那个 bug）', `实际=${r}`);
+        const r2 = route({ action: '手机输入', args: '中文', preferred: 'module', strict: true, accRunning: true, bg: ['module'] });
         c.ok(r2 !== 'accessibility',
             '★★ 选后台 + 中文输入 → 绝不被改到无障碍', `实际=${r2}`);
     }
@@ -1522,9 +1566,9 @@ async function caseOps(c) {
         [agentSrc, 'async function runToolCalls(', 'agent.js 有 runToolCalls（执行工具调用）'],
         [voiceSrc, 'agentToolOptions()', 'voice.js 用共享构造器取"这一轮的工具选项"'],
         [voiceSrc, 'runToolCalls(repliedToolCalls', 'voice.js 在回复带 tool_calls 时执行它们'],
-        [voiceSrc, 'if (!repliedToolCalls.length) window.ElainaTags.drive(response)',
+        [voiceSrc, 'window.ElainaTags.drive(response)',
             '★ 一回合只走一条通道：有工具调用就不再解析标签（两条都跑＝同一个动作执行两次）'],
-        [agentSrc, 'raceAgentDeadline(callAI(AGENT_CONTINUE_PROMPT, agentToolOpt)',
+        [agentSrc, 'raceAgentDeadline(callAI(continuePrompt, agentToolOpt)',
             '★ 续跑也带工具（不带的话多步任务到第二步就没工具可用了），且整次调用套了定时器死线'],
         [agentSrc, 'raw = await callAI(prompt, agentToolOpt || undefined)',
             '★ 失败解释也带工具（它常被用来"换个路径再试一次"）'],
@@ -1681,6 +1725,23 @@ async function casePromptTiers(c) {
         '回滚拼接路径也带层级标签');
     c.ok(roleplay.indexOf('promptTier(1, PROMPT_TIER_RULES)') < roleplay.indexOf('buildCharacterSystemMessages(card, { tiered: true })'),
         '层级规则在角色设定之前，且不依赖消息位置生效');
+
+    // 回复语言跟随用户：角色卡与历史对话的语言不得锁死输出语言（英文提问曾一律回中文）。
+    c.ok(config.includes('【回复语言】') && /回复语言跟随\*\*用户当前这条消息\*\*/.test(config),
+        '★ 核心协议（1 级）声明回复语言跟随用户当前消息');
+    const core = config.match(/const ROLEPLAY_CORE_PROTOCOL = `([\s\S]*?)`;/);
+    c.ok(Boolean(core) && !/只使用[^，。]*中文回复/.test(core[1]),
+        '★ 核心协议里没有「只用中文回复」这类绝对规定');
+    const defaultCard = config.match(/const DEFAULT_CHARACTER_CARD = \{[\s\S]*?\n\};/);
+    c.ok(Boolean(defaultCard) && !/只使用[^，。]*简体中文回复/.test(defaultCard[0]),
+        '★ 默认角色卡不再绝对锁定中文输出（改为默认中文 + 跟随用户语言）');
+    c.ok(/叙述语言跟随用户输入的语言/.test(roleplay),
+        '第三人称 GM 提示词也跟随用户语言');
+    c.ok(!/全部以中文进行输出/.test(roleplay) && !/THINKING_LANGUAGE_PROMPT/.test(roleplay)
+        && !/思维模式要求/.test(roleplay),
+        '★ 思考语言要求已整条移除（不再干预思维链用哪种语言）');
+    c.ok(!/完成中文回复后|只翻译中文正文/.test(roleplay),
+        '★ 日语朗读稿指令不再假定正文是中文');
 }
 
 // 12. 手机操作的真机问题：打开错应用 / 两条进度条 / 停止卡在「停止中」。
@@ -1695,8 +1756,8 @@ async function casePhoneAgentFixes(c) {
     c.ok(/resolvePhoneOpenTarget\(parsed\.args\)/.test(phone), '「手机打开」执行前先解析目标');
     c.ok(/function verifyPhoneOpenTarget\(/.test(phone), '打开后核对前台应用');
     c.ok(/verifyPhoneOpenTarget\(openPkg\)/.test(phone), '核对结果回灌给模型（打开错了不能当成成功）');
-    c.ok(/lastUsedBackendId === 'accessibility'/.test(phone),
-        '只对无障碍后端核对（模块跑在虚拟副屏上，物理屏前台不是它）');
+    c.ok(/backendOperatesPhysicalScreen\(/.test(phone),
+        '按"是否操作物理屏"判断要不要核对前台（虚拟副屏上的应用本来就不在物理屏）');
     c.ok(/应用名或包名/.test(phone), '错误提示告诉模型可以直接写应用名');
 
     // 两条进度条：系统悬浮条在用时，应用内状态条不渲染。
@@ -1718,10 +1779,130 @@ async function casePhoneAgentFixes(c) {
         '停止会唤醒在途等待');
     c.ok(/function waitStopped\(/.test(rt), '提供可赛跑的「被停止」信号');
     c.ok(/function raceAgentStop\(/.test(cont), '模型调用与停止信号赛跑');
-    c.ok(/raceAgentStop\(\s*raceAgentDeadline\(callAI\(AGENT_CONTINUE_PROMPT/.test(cont),
+    c.ok(/raceAgentStop\(\s*raceAgentDeadline\(callAI\(continuePrompt/.test(cont),
         '续跑的两次尝试都走赛跑');
     c.ok(/if \(staleRun\(\)\) return;/.test(cont),
         '★ 迟到的旧回复按运行代号作废（停止后 / 新一轮开始后都不再执行）');
+}
+
+// 12.5 后台运行方式（Shizuku / Root / 模块）：前端两层选择、能力文案、白名单，
+//      以及原生侧的 holder / 授权通道 / 命令通道不开放。
+//      单独成一个用例：casePhone 在没有 mods/live2d 时整段跳过，会让这些断言在本地永远不跑。
+async function caseBackgroundBackends(c) {
+    const backend = readWebFile('js/agent-backend.js');
+    const phone = readWebFile('js/agent-phone.js');
+    const runtime = readWebFile('js/agent-runtime.js');
+    const data = readWebFile('js/data.js');
+    const html = readFrontend();
+
+    // 一、注册表：四个端点，前台一个、后台三个。
+    c.ok(/id: 'accessibility'[^}]*kind: 'foreground'/.test(backend), '无障碍标为前台');
+    for (const id of ['shizuku', 'root', 'module']) {
+        c.ok(new RegExp("id: '" + id + "'[^}]*kind: 'background'").test(backend), `${id} 标为后台`);
+    }
+    c.ok(/function backendKindOf\(/.test(backend) && /function backendDisplayName\(/.test(backend),
+        '有 kind / 展示名 helper（面板与摘要共用同一份判断）');
+    c.ok(/function readyBackgroundBackends\(/.test(backend), '有"已就绪的后台端点"清单');
+    c.ok(/BACKEND_GROUPS/.test(backend) && /data-backend-group/.test(backend),
+        '★ 面板分「前台运行 / 后台运行」两层');
+    c.ok(/AGENT_BACKEND_SETUP/.test(backend) && /requestShizukuPermission/.test(backend) && /requestRootPermission/.test(backend),
+        'Shizuku / Root 各有真实授权入口（不是只给说明文字）');
+    c.ok(/backendProbeBtn/.test(backend) && /probeBackendDisplay/.test(backend)
+        && /由于系统限制/.test(backend),
+        '★ 有「检测副屏」按钮 + 简短文案（能否可用随 ROM 变化，授权后真建一次确认）');
+
+    // 二、白名单：data.js 的迁移列表必须认得新 id，否则用户的选择每次启动都会被重置。
+    c.ok(/\[[^\]]*'accessibility'[^\]]*'shizuku'[^\]]*'root'[^\]]*'module'[^\]]*\]\.includes\(state\.settings\.agentBackend\)/.test(data),
+        '★ data.js 的 agentBackend 白名单含 shizuku / root');
+
+    // 三、运行方式选择器：两层，后台多选一。
+    c.ok(/function readyBackgroundChoices\(/.test(phone), '有"就绪的后台候选"清单');
+    c.ok(/altValue: 'background'/.test(phone), '★ 第一层弹窗的「后台运行」不再写死某个后端');
+    c.ok(/options: backgrounds\.map/.test(phone), '★ 后台有多个候选时用多选列表（N 选 1）');
+    c.ok(/if \(backgrounds\.length === 1\) return backgrounds\[0\]\.id;/.test(phone),
+        '只有一个后台候选时不弹第二层');
+    c.ok(/function isKnownBackendId\(/.test(phone) && /isKnownBackendId\(runModeDecision\)/.test(phone),
+        '★ backend 参数按"是不是合法 id"透传（不再只认 accessibility/module）');
+    c.ok(/function backendOperatesPhysicalScreen\(/.test(phone), '前台核对按"是否操作物理屏"判断');
+
+    // 四、能力文案：多后台就绪时如实说明"先选前台/后台"，命令面按可用后端算。
+    c.ok(/const ready = AGENT_BACKENDS\.filter\(\(b\) => backendIsReady\(b\.id\)\)/.test(backend),
+        '★ 能力文案读全部后端的状态，不再只读两个');
+    c.ok(/const canFullKeys = backgroundReady\.length > 0/.test(backend), '按键面按"有没有后台端点"分档');
+    c.ok(/「手机命令」不开放/.test(backend) && /「手机命令」这个版本不开放/.test(phone),
+        '★ 提示词与执行闸都明确「手机命令」不开放');
+
+    // 五、看画面按钮：只有模块有实时副屏流。
+    c.ok(/effective === 'module'/.test(runtime), '★ 「看画面」仍只对模块显示（Shizuku/Root 走手机截图）');
+    c.ok(/function syncAgentKeepAlive\(/.test(runtime), '后台会话有保活开关（切走后 agent 循环不被冻结）');
+
+    // 六、原生：holder / 授权 / 命令通道。
+    if (!existsSync(PLUGIN_JAVA)) {
+        console.log('  --   跳过原生断言：没有 dist/Android 的 ElainaShellPlugin.java');
+        return;
+    }
+    const plugin = readFileSync(PLUGIN_JAVA, 'utf8');
+    const manifest = readFileSync(MANIFEST, 'utf8');
+    const holder = path.join(JAVA_DIR, 'DisplayHolder.java');
+    const shizuku = path.join(JAVA_DIR, 'ShizukuBridge.java');
+    const rootBridge = path.join(JAVA_DIR, 'RootBridge.java');
+    const agentService = path.join(JAVA_DIR, 'ElainaAgentService.java');
+    for (const file of [holder, shizuku, rootBridge, agentService]) {
+        c.ok(existsSync(file), '存在 ' + path.basename(file));
+    }
+
+    c.ok(/ID_SHIZUKU = "shizuku"/.test(plugin) && /ID_ROOT = "root"/.test(plugin), '原生有 shizuku / root 的 id 常量');
+    c.ok(/result\.put\(ID_SHIZUKU,/.test(plugin) && /result\.put\(ID_ROOT,/.test(plugin),
+        '★ status() 输出四个后端的键（前端按 id 读）');
+    c.ok(/public void probeBackground\(/.test(plugin), '★ 有 probeBackground：真建一次副屏，把结果原样告诉用户');
+    c.ok(/explainHolderHint/.test(plugin), '建屏失败原因要翻译成可执行的下一步');
+    c.ok(/ShellBackends\.Executor\[\] order = \{ shizukuExecutor, rootExecutor, moduleExecutor \}/.test(plugin),
+        '自动挑选顺序：Shizuku → Root → 模块');
+
+    c.ok(/moe\.shizuku\.manager\.permission\.API_V23/.test(manifest), 'Manifest 声明了 Shizuku 授权权限');
+    c.ok(/rikka\.shizuku\.ShizukuProvider/.test(manifest), 'Manifest 注册了 ShizukuProvider（授权通道）');
+    // Root holder 走命令 / 结果文件 + token（RootBridge / RootHolderMain），不再声明 Binder Provider；
+    // 多一个 exported Provider 就是多一处对外攻击面。
+    c.ok(!/\.RootBridgeProvider/.test(manifest), 'Manifest 不声明已废弃的 RootBridgeProvider（Root 走文件桥）');
+    c.ok(/\.ElainaAgentService/.test(manifest) && /specialUse/.test(manifest), '后台保活服务以 specialUse 前台服务声明');
+
+    if (existsSync(holder)) {
+        const holderSrc = readFileSync(holder, 'utf8');
+        c.ok(/ImageReader\.newInstance/.test(holderSrc), '★ 副屏帧走 ImageReader（screencap -d 抓不到虚拟屏）');
+        c.ok(/acquireLatestImage/.test(holderSrc) && /startDrain/.test(holderSrc),
+            '★ 持续排空 ImageReader（不排空会让副屏冻结）');
+        c.ok(/getPackageName\(\)\s*\{\s*return pkg;/.test(holderSrc) && /com\.android\.shell/.test(holderSrc),
+            '★ 冒充 com.android.shell 的上下文（否则 packageName must match the calling uid）');
+        c.ok(/FLAG_TRUSTED/.test(holderSrc) && /FLAG_OWN_FOCUS/.test(holderSrc) && /FLAG_STEAL_TOP_FOCUS_DISABLED/.test(holderSrc),
+            '虚拟屏 flags 按 SDK 分层（trusted / 独立焦点）');
+        c.ok(/已经在显示/.test(holderSrc), '★ 启动前检查"一个应用只能在一个屏"');
+        c.ok(/am start --display/.test(holderSrc) && /input -d /.test(holderSrc), '动作定向到副屏（--display / -d）');
+        c.ok(/SAFE_PACKAGE/.test(holderSrc) && /SAFE_COMPONENT/.test(holderSrc)
+            && /包名格式不合法/.test(holderSrc) && /启动组件格式不合法/.test(holderSrc),
+            '★★ 包名 / 组件在原生入口过白名单（绕过前端解析器也带不进 shell 元字符）');
+        c.ok(/am start --display[^\n]*-n '"/.test(holderSrc)
+            && /!target\.startsWith\(pkg \+ "\/"\)/.test(holderSrc),
+            '★ 组件用单引号包进 shell，且必须与包名一致（$ 不会被变量展开）');
+        c.ok(/KEYCODE_PASTE|keyevent 279/.test(holderSrc), '非 ASCII 输入走剪贴板粘贴兜底');
+    }
+    if (existsSync(shizuku)) {
+        const src = readFileSync(shizuku, 'utf8');
+        c.ok(/bindUserService/.test(src) && /\.tag\(/.test(src),
+            '★ bindUserService 带显式 tag（不设时 R8 改名会让每次启动都起新进程）');
+        c.ok(/getUid\(\)/.test(src), '状态区分 root 启动与 ADB 启动（uid 0 / 2000）');
+        c.ok(/daemon\(false\)/.test(src), 'holder 不常驻（应用进程退出时跟着退）');
+    }
+    if (existsSync(rootBridge)) {
+        const src = readFileSync(rootBridge, 'utf8');
+        c.ok(/app_process/.test(src) && /--token=/.test(src), 'Root holder 用 su + app_process 启动并带一次性 token');
+        c.ok(/PROBE_TTL_MS/.test(src), '★ su 探测结果有缓存（否则每次刷新状态都弹 root 授权）');
+    }
+    const shellBackends = path.join(JAVA_DIR, 'ShellBackends.java');
+    if (existsSync(shellBackends)) {
+        const src = readFileSync(shellBackends, 'utf8');
+        c.ok(/HolderExecutor/.test(src) && /不执行任意命令/.test(src),
+            '★ 后台 holder 不开放任意命令（命令通道等于把 root 交给模型）');
+    }
 }
 
 // 6.6 API Key 存储：解不开的密文不能被静默删掉，也不能随系统备份搬走。
@@ -1765,6 +1946,582 @@ async function caseByokSecrets(c) {
         '★★ 提示里写明下一步是重填（用户不知道该怎么办等于没提示）');
 }
 
+// 6.7 手机 Agent 闭环：动作后观测、无变化熔断、目标锚定、一次任务只发一段话。
+async function caseAgentLoopQuality(c) {
+    const phone = readWebFile('js/agent-phone.js');
+    const cont = readWebFile('js/agent-continue.js');
+    const voice = readWebFile('js/voice.js');
+    const agentResult = readWebFile('js/agent-result.js');
+    const tools = readWebFile('js/agent-tools.js');
+    const tags = readWebFile('js/agent-tags.js');
+    const core = readWebFile('js/core-config.js');
+    const runtime = readWebFile('js/agent-runtime.js');
+    const java = existsSync(PLUGIN_JAVA) ? readFileSync(PLUGIN_JAVA, 'utf8') : '';
+
+    // 一、动作后必须回灌“界面有没有变”，不能只报“手势发出去了”。
+    c.ok(/function diffUiObservation\(/.test(phone), '有界面快照差异函数');
+    c.ok(/界面没有变化/.test(phone), '无变化有明确文案（模型不能把点空当成功）');
+    c.ok(/function observePhoneActionResult\(/.test(phone), '动作后自动观测');
+    c.ok(/【界面变化】/.test(phone), '差异随结果一起回灌给模型');
+    c.ok(/lastPhoneActionOutcome/.test(phone) && /系统没有再次执行/.test(phone),
+        '★ 同一动作无变化后再次出现会被代码拦下（不靠提示词自觉）');
+    c.ok(/function enqueuePhoneOperation\(/.test(phone) && /phoneOpTail/.test(phone),
+        '★ 手机动作串行执行（一条回复里的多个标签不并发乱序）');
+
+    // 二、“成功但界面没变”不计进展，否则熔断永远不触发。
+    c.ok(/options\.progress === false/.test(agentResult) && /options\.progress === null/.test(agentResult),
+        'insertAgentResult 支持 progress=false / null');
+    c.ok(/const progress = \(observationPlan && observationPlan\.exempt\)[\s\S]{0,420}?screenDiff\.changed === false \? false[\s\S]{0,120}?screenDiff\.changed === true \? true : null/.test(phone),
+        '手机操作把界面差异换算成 progress（未知保持 null，豁免动作算进展）');
+    c.ok(/result\.progress === false/.test(tools) && /result\.progress === null/.test(tools),
+        '工具通道同样按 progress 记熔断（未知不动计数）');
+
+    // 三、任务目标不能被 12 条历史窗口挤掉。
+    c.ok(/state\._agentGoal/.test(voice), '用户原话存进本轮目标');
+    c.ok(/本轮任务目标/.test(cont), '★ 续跑提示词每步都带上目标');
+    c.ok(/已经执行/.test(cont), '续跑提示词带最近执行的步骤（防止反复做同一步）');
+
+    // 四、中间正文不外发；完成 / 停止只发一段总结，并自动回到应用。
+    c.ok(/const suppressReply = repliedToolCalls\.length > 0 \|\| hasTagOps \|\| nudged;/.test(voice),
+        '★ 有动作时中间正文被压住');
+    c.ok(/const shouldPersistReply = !suppressReply \|\| repliedToolCalls\.length > 0;/.test(voice),
+        '中间正文不落库（工具协议消息例外）');
+    c.ok(/function agentFinishRun\(/.test(cont) && /function appendAgentVisibleMessage\(/.test(cont),
+        '有统一的收尾总结入口');
+    c.ok(/agentFinishRun\('completed'/.test(cont), '正常完成走收尾');
+    c.ok(/agentFinishRun\('fused'/.test(cont) && /agentFinishRun\('error'/.test(cont),
+        '熔断 / 续跑失败也走收尾');
+    c.ok(/agentFinishRun\('stopped'\)/.test(runtime), '用户停止也走收尾');
+    c.ok(/function bringAppToFront\(/.test(cont) && /\.bringToFront\(\)/.test(cont) && /public void bringToFront/.test(java),
+        '★ 任务结束自动回到应用（前端调用 + 原生方法都在）');
+    c.ok(/function agentTagKeepsRunning\(/.test(cont) && /打开视频通话/.test(cont),
+        '★ 纯表现标签（通话 / 记忆）不参与中间正文压制（否则用户等不到任何回复）');
+    c.ok(/options\.system !== true/.test(agentResult), '系统催办不算“做成了事”（不污染收尾判据）');
+    c.ok((cont.match(/system: true/g) || []).length >= 2,
+        '★★ 两处系统催办都显式传 system: true（守卫没有调用点等于死代码）');
+    c.ok(/hasCompletion/.test(cont) && /\[完成\]/.test(cont) && /\[完成\]/.test(tags),
+        '★ [完成] 是明确的收尾标记，且会被剥离');
+    c.ok(/不要写任何旁白/.test(cont), '提示词禁止执行期旁白');
+
+    // 五、文风：少用括号动作，改用语气词。
+    c.ok(/【表达方式】/.test(core) && /摇了摇头/.test(core) && /语气词/.test(core),
+        '核心协议要求少用括号动作描写、用语气词表达');
+
+    // 六、视觉坐标网格的说明必须和实际线距一致（错一倍会偏半格）。
+    c.ok(/每 50px 一条线/.test(phone), '截图网格说明与实际 50px 线距一致');
+
+    // 七、差异函数的行为：无变化 / 新增 / 消失都要判对。
+    const diffSrc = extractFnFrom(phone, 'phoneNodeState') + '\n'
+        + extractFnFrom(phone, 'countPhoneNodes') + '\n'
+        + extractFnFrom(phone, 'phoneNodeLabel') + '\n'
+        + extractFnFrom(phone, 'diffPhoneNodeStates') + '\n'
+        + extractFnFrom(phone, 'diffUiObservation');
+    const sandbox = makeVmSandbox({});
+    vm.runInContext(diffSrc + '\nwindow.__diffUiObservation = diffUiObservation;', sandbox, { filename: 'diffUiObservation.js' });
+    const same = sandbox.__diffUiObservation(
+        { signature: 'a', nodes: [{ label: '发送', id: 'btn_send', x: 1, y: 2 }] },
+        { signature: 'a', nodes: [{ label: '发送', id: 'btn_send', x: 1, y: 2 }] }
+    );
+    c.ok(same.changed === false && /没有变化/.test(same.text), '相同快照判为无变化');
+    const different = sandbox.__diffUiObservation(
+        { signature: 'a', nodes: [{ label: '登录', id: '', x: 1, y: 2 }] },
+        { signature: 'b', nodes: [{ label: '发送', id: '', x: 3, y: 4 }] }
+    );
+    c.ok(different.changed === true && /新增/.test(different.text) && /消失/.test(different.text),
+        '不同快照给出新增 / 消失');
+}
+
+// 6.8 元素引用点击：正常界面优先 #编号 / id，旧编号过期要拒绝。
+async function caseElementRef(c) {
+    const phone = readWebFile('js/agent-phone.js');
+    const backend = readWebFile('js/agent-backend.js');
+    const java = existsSync(PLUGIN_JAVA) && existsSync(path.join(JAVA_DIR, 'ElainaAccessibilityService.java'))
+        ? readFileSync(path.join(JAVA_DIR, 'ElainaAccessibilityService.java'), 'utf8') : '';
+
+    c.ok(/function resolvePhoneNodeRef\(/.test(phone), '有 #编号 / id 解析函数');
+    c.ok(/手机点击 #N|#编号/.test(backend), '提示词教模型优先用 #编号');
+    c.ok(/bounds=/.test(java) && /cls=/.test(java) && /parent=“/.test(java),
+        '原生 dump 输出 bounds / className / 父容器文字');
+    c.ok(/preferredTapPoint\(/.test(java) && /isVisibleToUser\(\)/.test(java),
+        '原生 tap point 优先取内部文字子节点，并过滤不可见节点');
+
+    const sandbox = makeVmSandbox({});
+    vm.runInContext(extractVariable(phone, 'UI_NODE_LINE') + '\n'
+        + extractFnFrom(phone, 'parseUiNodes') + '\nwindow.__parseUiNodes = parseUiNodes;',
+        sandbox, { filename: 'parseUiNodes.js' });
+    const nodes = sandbox.__parseUiNodes(
+        '#2 “发送” id=btn_send cls=Button 可点 bounds=440,1160,640,1240 parent=“张三” [540,1200]');
+    c.ok(nodes.length === 1 && nodes[0].ref === 1 && nodes[0].id === 'btn_send'
+        && nodes[0].className === 'Button' && nodes[0].parent === '张三'
+        && nodes[0].bounds.left === 440 && nodes[0].x === 540,
+        '清单解析保留 ref / bounds / className / 父容器');
+
+    const refSandbox = makeVmSandbox({});
+    refSandbox.currentScreenObservation = {
+        at: Date.now(), stale: false,
+        nodes: nodes.concat([{ ref: 2, label: '取消', id: 'btn_cancel', x: 200, y: 300,
+            bounds: { left: 150, top: 260, right: 250, bottom: 340 } }]),
+    };
+    vm.runInContext(extractFnFrom(phone, 'resolvePhoneNodeRef') + '\n'
+        + extractFnFrom(phone, 'phoneNodeAtPoint') + '\n'
+        + 'window.__resolve = resolvePhoneNodeRef; window.__hit = phoneNodeAtPoint;',
+        refSandbox, { filename: 'phoneRef.js' });
+    const hitRef = refSandbox.__resolve({ action: '手机点击', args: '#1' });
+    c.ok(hitRef && hitRef.point && hitRef.point.x === 540 && hitRef.point.y === 1200,
+        '按 #1 点击命中正确坐标');
+    const hitId = refSandbox.__resolve({ action: '手机点击', args: 'id:btn_cancel' });
+    c.ok(hitId && hitId.point && hitId.point.x === 200, '按 id 点击命中正确坐标');
+    const hitNode = refSandbox.__hit(refSandbox.currentScreenObservation.nodes, 600, 1200);
+    c.ok(hitNode && hitNode.id === 'btn_send', '坐标命中测试找到对应节点');
+    refSandbox.currentScreenObservation.at = Date.now() - 10000;
+    const stale = refSandbox.__resolve({ action: '手机点击', args: '#1' });
+    c.ok(stale && stale.error && /过期/.test(stale.error), '旧 #1 被拒绝（超过有效期）');
+    refSandbox.currentScreenObservation.at = Date.now();
+    refSandbox.currentScreenObservation.stale = true;
+    const stale2 = refSandbox.__resolve({ action: '手机点击', args: '#1' });
+    c.ok(stale2 && stale2.error && /过期|变化/.test(stale2.error), '界面变化后旧 #1 被拒绝');
+}
+
+// 6.9 截图链路降本：普通界面不截图、截图并行取树、多模态主模型直连、缩放后再编码。
+async function caseScreenshotCost(c) {
+    const phone = readWebFile('js/agent-phone.js');
+    c.ok(/function downscaleDataUrl\(/.test(phone), '有截图缩放函数');
+    c.ok(/const scaled = await downscaleDataUrl\(picture, 1120\)/.test(phone)
+        && /describeImageWithVision\(prompt, await downscaleDataUrl\(picture, 1120\)\)/.test(phone),
+        '标注后的截图缩到长边 1120 再编码');
+    c.ok(/const dumpPromise = parsed\.action === '手机截图' \? callDeviceQuietly\('手机查看界面'/.test(phone),
+        '截图和控件树并行取');
+    c.ok(/function describePhoneScreenshot\(res, fallbackText, knownDumpText\)/.test(phone)
+        && /if \(!dumpText\)/.test(phone),
+        'describePhoneScreenshot 复用调用方给的控件树，缺了才重新 dump');
+    c.ok(/const mainSupportsImage = verdict === true/.test(phone)
+        && /if \(mainSupportsImage \|\|/.test(phone) && /setPendingAgentImage\(scaled\)/.test(phone),
+        '主模型多模态时直接附图，不再走视觉模型转述');
+    // 普通界面读界面不再因为“节点少”就截图：判据改成覆盖低 / SurfaceView 提示。
+    const stashBlock = phone.slice(phone.indexOf("parsed.action === '手机查看界面' && !phoneVisionModelConfigured()"),
+        phone.indexOf("if (PHONE_SUMMARY_ACTIONS.has(parsed.action)"));
+    c.ok(/screenProfile\(\{ text: verifiedResult, nodes: viewNodes, stable: true \}/.test(stashBlock)
+        && /phoneHasPixelSurface\(profile\) \|\| viewNodes\.length === 0/.test(stashBlock)
+        && !/\.length < 4/.test(stashBlock),
+        '普通界面不触发截图（只对无控件 / SurfaceView 页面自动附图）');
+    c.ok(/每 50px 一条线/.test(phone), '网格说明与实际线距一致');
+}
+
+// 6.10 settle：两次 dump 签名一致才算稳定；不稳定时 changed 只能 unknown。
+async function caseSettle(c) {
+    const phone = readWebFile('js/agent-phone.js');
+    const agentResult = readWebFile('js/agent-result.js');
+    const tools = readWebFile('js/agent-tools.js');
+    c.ok(/function readStableObservation\(/.test(phone), '有 wait-for-stable 观测');
+    c.ok(!/setTimeout\(resolve, 260\)/.test(phone), '不再固定等 260ms');
+    c.ok(/PHONE_OBSERVATION_TTL_MS/.test(phone) && /ensureScreenObservation[\s\S]{0,300}?TTL_MS/.test(phone),
+        '操作前快照有有效期，过期重读');
+    c.ok(/stable: false, text: '画面持续变化/.test(phone), '不稳定时明确输出无法判断');
+    c.ok(/options\.progress === null/.test(agentResult) && /result\.progress === null/.test(tools),
+        'changed:null 不记进展');
+
+    const sandbox = makeVmSandbox({ setTimeout, clearTimeout });
+    vm.runInContext(extractFnFrom(phone, 'sleepMs') + '\n'
+        + extractFnFrom(phone, 'readStableObservation') + '\n'
+        + 'window.__settle = readStableObservation;', sandbox, { filename: 'readStableObservation.js' });
+    sandbox.readUiObservation = () => Promise.resolve({ signature: 'A' });
+    const stable = await sandbox.__settle({ signature: 'A' }, { pollMs: 1, timeoutMs: 30, firstDelayMs: 0 });
+    c.ok(stable.stable === true, '两帧一致返回 stable:true');
+    let n = 0;
+    sandbox.readUiObservation = () => Promise.resolve({ signature: 'S' + (n++) });
+    const unstable = await sandbox.__settle(null, { pollMs: 1, timeoutMs: 15, firstDelayMs: 0 });
+    c.ok(unstable.stable === false, '持续变化返回 stable:false');
+}
+
+// 6.11 历史压缩：只留一份当前界面，旧观察压成一行历史。
+async function caseHistoryCompaction(c) {
+    const agentResult = readWebFile('js/agent-result.js');
+    const tools = readWebFile('js/agent-tools.js');
+    const cont = readWebFile('js/agent-continue.js');
+    const phone = readWebFile('js/agent-phone.js');
+    c.ok(/function compactAgentObservations\(/.test(agentResult), '有旧观察压缩函数');
+    c.ok(/options\.observation === true/.test(agentResult) && /msg\.currentScreen = options\.currentScreen === true/.test(agentResult),
+        'insertAgentResult 支持 observation / currentScreen');
+    c.ok(/meta\.observation === true/.test(tools) && /currentScreen/.test(tools),
+        '工具通道也带当前界面标记');
+    c.ok(/当前界面｜第 '\s*\+/.test(agentResult) && /｜历史】/.test(agentResult),
+        '新观察标当前界面，旧观察标历史');
+    c.ok(/只有标着「当前界面」/.test(cont), '提示词说明旧坐标不可用');
+    c.ok(/observation: true, currentScreen, step: stepNo, summary: stepSummary/.test(phone),
+        '手机操作把步骤 / 摘要 / 当前界面标记交给观察消息');
+
+    const sandbox = makeVmSandbox({});
+    vm.runInContext(extractFnFrom(agentResult, 'compactAgentObservations')
+        + '\nwindow.__compact = compactAgentObservations;', sandbox, { filename: 'compactAgentObservations.js' });
+    const messages = [
+        { role: 'ai', kind: 'agent-observation', step: 3, currentScreen: true,
+            text: '【AI 操作结果｜当前界面｜第 3 步】\n一大段完整 dump', summary: '第 3 步：读取界面（12 个元素）' },
+        { role: 'user', text: '用户消息' },
+    ];
+    sandbox.__compact(messages);
+    c.ok(messages[0].currentScreen === false && /｜历史】/.test(messages[0].text)
+        && /第 3 步：读取界面/.test(messages[0].text) && !/完整 dump/.test(messages[0].text),
+        '旧完整 dump 被压成一行历史');
+    c.ok(messages[1].text === '用户消息', '非观察消息不被改写');
+}
+
+// 6.12 控件清单增强：状态 / 父容器 / 分页 / 同名区分。
+async function caseClipList(c) {
+    const phone = readWebFile('js/agent-phone.js');
+    const sandbox = makeVmSandbox({});
+    vm.runInContext(extractVariable(phone, 'UI_NODE_LINE') + '\n'
+        + extractFnFrom(phone, 'parseUiNodes') + '\n'
+        + extractFnFrom(phone, 'phoneNodeState') + '\n'
+        + extractFnFrom(phone, 'phoneNodeDisp') + '\n'
+        + extractFnFrom(phone, 'parseUiMeta') + '\n'
+        + extractFnFrom(phone, 'phoneDumpMeta') + '\n'
+        + extractFnFrom(phone, 'summarizeUiDumpForModel') + '\n'
+        + 'window.__parse = parseUiNodes; window.__disp = phoneNodeDisp; window.__sum = summarizeUiDumpForModel;'
+        + ' window.__meta = phoneDumpMeta;',
+        sandbox, { filename: 'clipList.js' });
+
+    const lines = ['# 概况 控件覆盖=38% 文字=12 可滑=1'];
+    for (let i = 1; i <= 45; i++) {
+        lines.push('#' + i + ' “按钮' + i + '” id=btn_' + i
+            + ' cls=Button 可点 bounds=' + (10 + i) + ',100,' + (100 + i) + ',180 [50,140]');
+    }
+    lines.push('#46 “发送” id=btn_send cls=Button 可点 bounds=440,1160,640,1240 parent=“张三” [540,1200]');
+    lines.push('#47 “发送” id=btn_send2 cls=Button 可点 bounds=440,1460,640,1540 parent=“李四” [540,1500]');
+    lines.push('#48 “WiFi” id=switch_wifi cls=Switch 可点 已选 bounds=100,300,300,380 [200,340]');
+    const dump = lines.join('\n');
+
+    const page1 = sandbox.__sum(dump, 1);
+    c.ok(/#1 /.test(page1) && /#40 /.test(page1) && /还有 8 个/.test(page1)
+        && /\[操作:手机查看界面 2\]/.test(page1), '第一页 40 条 + 分页提示');
+    const page2 = sandbox.__sum(dump, 2);
+    c.ok(/#41 /.test(page2) && /#45 /.test(page2), '第二页从 #41 继续');
+    c.ok(/\[在：张三\]/.test(page2) && /\[在：李四\]/.test(page2),
+        '同名按钮带父容器文字可区分');
+    c.ok(/WiFi[\s\S]{0,80}已选/.test(page2), '开关状态进入清单');
+    c.ok(/按钮1[\s\S]{0,80}\(50,140\)/.test(page1), '清单带坐标');
+
+    // 「当前应用」进摘要首行：执行者靠它判断自己在哪，不必每步额外查设备信息
+    const linesWithFg = ['# 概况 前台=设置（com.android.settings） 屏幕=900x1600 控件覆盖=38% 文字=12 可滑=1'];
+    for (let i = 1; i <= 3; i++) {
+        linesWithFg.push('#' + i + ' “条目' + i + '” id=item_' + i
+            + ' cls=TextView 可点 bounds=10,100,400,180 [' + (50 + i) + ',140]');
+    }
+    const pageFg = sandbox.__sum(linesWithFg.join('\n'), 1);
+    c.ok(/^当前应用：设置（com\.android\.settings）/.test(pageFg),
+        '★ 摘要第一行写明当前应用（每步不必再查手机设备信息）');
+    const metaFg = sandbox.__meta(linesWithFg.join('\n'));
+    c.ok(metaFg.foreground && metaFg.foreground.pkg === 'com.android.settings'
+        && metaFg.screen && metaFg.screen.width === 900 && metaFg.screen.height === 1600,
+        '概况行解析出前台应用与物理屏幕尺寸');
+}
+
+// 6.13 区域级观测：screenProfile + 动作落点，不再用 canvasLike / 节点数阈值。
+async function caseRegionObservation(c) {
+    const phone = readWebFile('js/agent-phone.js');
+    c.ok(/function screenProfile\(/.test(phone), '有 screenProfile');
+    c.ok(/function actionNeedsPixelObservation\(/.test(phone), '有动作落点判定');
+    c.ok(/function regionPointToScreen\(/.test(phone), '有 region offset → 屏幕坐标映射');
+    c.ok(!/canvasLike/.test(phone), '不再使用 canvasLike 二选一');
+    c.ok(!/imageBase64\s*!==|imageBase64\s*===/.test(phone), '不再用 base64 字节相等判断变化');
+
+    const src = [
+        extractVariable(phone, 'SCREEN_GRID'),
+        extractFnFrom(phone, 'parseUiMeta'),
+        extractFnFrom(phone, 'inferScreenSize'),
+        extractFnFrom(phone, 'markOccupiedGrid'),
+        extractFnFrom(phone, 'largestEmptyRect'),
+        extractFnFrom(phone, 'screenProfile'),
+        extractFnFrom(phone, 'clampRegion'),
+        extractFnFrom(phone, 'phoneNodeAtPoint'),
+        extractFnFrom(phone, 'phoneHasPixelSurface'),
+        extractFnFrom(phone, 'actionNeedsPixelObservation'),
+        extractFnFrom(phone, 'regionPointToScreen'),
+        'window.__profile = screenProfile; window.__plan = actionNeedsPixelObservation;'
+            + 'window.__map = regionPointToScreen;',
+    ].join('\n');
+    const sandbox = makeVmSandbox({});
+    sandbox.lastScreenSize = { width: 1080, height: 2400 };
+    vm.runInContext(src, sandbox, { filename: 'screenProfile.js' });
+    const node = (ref, x, y, extra = {}) => ({
+        ref, label: '按钮' + ref, id: 'btn_' + ref, x, y,
+        bounds: { left: x - 40, top: y - 30, right: x + 40, bottom: y + 30 },
+        clickable: true, scrollable: false, editable: false, checked: null, enabled: true,
+        focused: false, className: 'Button', ...extra,
+    });
+
+    const shell = [node(1, 100, 100), node(2, 300, 100), node(3, 500, 100),
+        node(4, 700, 100), node(5, 900, 100)];
+    const gameProfile = sandbox.__profile({ nodes: shell, text: '' }, sandbox.lastScreenSize);
+    const boardClick = sandbox.__plan({ action: '手机点击', args: '540 1200' }, gameProfile, { nodes: shell });
+    c.ok(boardClick.mode === 'region', '游戏壳控件多，但点棋盘走像素区域');
+    const shellClick = sandbox.__plan({ action: '手机点击', args: '100 100' }, gameProfile, { nodes: shell });
+    c.ok(shellClick.mode === 'controls' && shellClick.secondCheck === false,
+        '点壳控件走控件签名，不额外截图');
+
+    const normal = [node(1, 540, 1200)];
+    const normalProfile = sandbox.__profile({ nodes: normal, text: '' }, sandbox.lastScreenSize);
+    const normalClick = sandbox.__plan({ action: '手机点击', args: '540 1200' }, normalProfile, { nodes: normal });
+    c.ok(normalClick.mode === 'controls', '普通按钮走控件签名');
+
+    const dialog = [node(1, 400, 1800), node(2, 680, 1800)];
+    const dialogProfile = sandbox.__profile({ nodes: dialog, text: '' }, sandbox.lastScreenSize);
+    const dialogClick = sandbox.__plan({ action: '手机点击', args: '400 1800' }, dialogProfile, { nodes: dialog });
+    c.ok(dialogClick.mode === 'controls', '两按钮弹窗不被判画布');
+
+    const mixedText = '# 概况 控件覆盖=5% 文字=2 可滑=0 画布提示=SurfaceView\n';
+    const mixedProfile = sandbox.__profile({ nodes: [node(1, 100, 100)], text: mixedText }, sandbox.lastScreenSize);
+    const videoClick = sandbox.__plan({ action: '手机点击', args: '540 1200' }, mixedProfile, { nodes: [node(1, 100, 100)] });
+    c.ok(mixedProfile.surfaceHints.length > 0 && videoClick.mode === 'region',
+        '混合页面 / 视频区域走像素');
+    const nativeText = '# 概况 前台=消消乐（com.demo.game） 屏幕=1080x2400 控件覆盖=42% 文字=17 可滑=2 画布提示=SurfaceView,TextureView\n';
+    const nativeProfile = sandbox.__profile({ nodes: shell, text: nativeText }, sandbox.lastScreenSize);
+    c.ok(nativeProfile.surfaceHints.length === 2 && Math.abs(nativeProfile.coverage - 0.42) < 1e-6,
+        '原生概况行（前台 / 屏幕在前）也能取到覆盖与画布提示');
+    const surfaceHit = sandbox.__plan({ action: '手机点击', args: '100 100' }, mixedProfile, { nodes: [node(1, 100, 100)] });
+    c.ok(surfaceHit.mode === 'controls' && surfaceHit.secondCheck === true
+        && surfaceHit.rect && surfaceHit.rect.w > 0 && surfaceHit.rect.h > 0,
+        '命中控件但页面有画布时，二次确认计划必须带截图区域（否则取图恒 null）');
+    const mapped = sandbox.__map({ meta: { regionX: 100, regionY: 200, regionW: 280, regionH: 280, imageWidth: 560, imageHeight: 560 } }, 50, 50);
+    c.ok(mapped.x === 125 && mapped.y === 225, 'region 坐标映射回屏幕坐标');
+}
+
+// 6.14 可观测性：每动作模型调用 / 无变化占比 / 设备耗时 / 完成率。
+async function caseMetrics(c) {
+    const cont = readWebFile('js/agent-continue.js');
+    const phone = readWebFile('js/agent-phone.js');
+    c.ok(/function agentRunNoteMetric\(/.test(cont) && /function agentMetricsSnapshot\(/.test(cont),
+        '有运行度量函数');
+    c.ok(/modelPerAction/.test(cont) && /noChangeRatio/.test(cont) && /avgDeviceMs/.test(cont)
+        && /completionRate/.test(cont), '汇总包含模型调用 / 无变化 / 耗时 / 完成率');
+    c.ok(/window\.__agentMetrics = snapshot/.test(cont) && /运行汇总/.test(cont),
+        '度量只写日志与 window，不进聊天');
+    c.ok(/agentRunMetrics\.modelCalls \+= 1/.test(cont), '每次模型调用都计数');
+    c.ok(/agentRunNoteMetric\(\{/.test(phone) && /deviceMs: Date\.now\(\) - deviceStartedAt/.test(phone),
+        '手机动作记录设备耗时 / 观测方式');
+
+    const sandbox = makeVmSandbox({});
+    vm.runInContext(extractVariable(cont, 'agentRunMetrics') + '\n'
+        + extractVariable(cont, 'agentLifetimeStats') + '\n'
+        + extractFnFrom(cont, 'agentRunNoteMetric') + '\n'
+        + extractFnFrom(cont, 'agentMetricsSnapshot') + '\n'
+        + 'window.__metrics = agentRunMetrics; window.__note = agentRunNoteMetric;'
+        + ' window.__snap = agentMetricsSnapshot;',
+        sandbox, { filename: 'agentMetrics.js' });
+    sandbox.__metrics.startedAt = Date.now() - 1000;
+    sandbox.__note({ deviceMs: 100, mode: 'controls', changed: true });
+    sandbox.__note({ deviceMs: 50, mode: 'region', changed: false });
+    sandbox.__metrics.modelCalls = 2;
+    const snap = sandbox.__snap('completed');
+    c.ok(snap.actions === 2 && snap.deviceMs === 150 && snap.changed === 1
+        && snap.noChange === 1 && snap.modelPerAction === 1
+        && snap.modes.controls === 1 && snap.modes.region === 1,
+        '度量数值正确（动作 / 耗时 / 变化 / 每动作调用）');
+}
+
+// 6.15 无障碍优先批次：窗口开关 / 事件 settle / 输入校验 / 遮挡 / 长按 / 截图缩放。
+async function caseA11yUpgrade(c) {
+    const a11yJava = existsSync(path.join(JAVA_DIR, 'ElainaAccessibilityService.java'))
+        ? readFileSync(path.join(JAVA_DIR, 'ElainaAccessibilityService.java'), 'utf8') : '';
+    const pluginJava = existsSync(PLUGIN_JAVA) ? readFileSync(PLUGIN_JAVA, 'utf8') : '';
+    const artifactsJava = existsSync(path.join(JAVA_DIR, 'DeviceArtifacts.java'))
+        ? readFileSync(path.join(JAVA_DIR, 'DeviceArtifacts.java'), 'utf8') : '';
+    const a11yXml = existsSync(path.join(ANDROID_ROOT, 'android', 'app', 'src', 'main', 'res', 'xml', 'elaina_accessibility.xml'))
+        ? readFileSync(path.join(ANDROID_ROOT, 'android', 'app', 'src', 'main', 'res', 'xml', 'elaina_accessibility.xml'), 'utf8') : '';
+    const phone = readWebFile('js/agent-phone.js');
+    const backend = readWebFile('js/agent-backend.js');
+
+    // 一、XML：getWindows() 的开关必须打开，否则选窗口 / 遮挡检测静默退化。
+    c.ok(/flagRetrieveInteractiveWindows/.test(a11yXml),
+        '★★ 无障碍声明包含 flagRetrieveInteractiveWindows（getWindows 依赖它）');
+
+    // 二、事件驱动 settle + 快照失效。
+    c.ok(/isUiQuiet\(/.test(a11yJava) && /TYPE_WINDOW_CONTENT_CHANGED/.test(a11yJava),
+        '★ 服务记录界面变化事件（安静判定）');
+    c.ok(/notifyListeners\("a11yUiChanged"/.test(pluginJava) && /setUiChangeListener\(/.test(pluginJava),
+        '界面变化事件经插件转发到前端');
+    c.ok(/dev\.addListener\('a11yUiChanged'[\s\S]{0,120}?currentScreenObservation\.stale = true/.test(phone),
+        '前端收到事件即把观察快照标 stale');
+    c.ok(/const quiet = await waitUiQuiet\(\)/.test(phone), 'settle 先等事件安静再读界面');
+
+    // 三、输入读回校验 + 粘贴兜底。
+    c.ok(/target\.refresh\(\)/.test(a11yJava) && /读回一致/.test(a11yJava),
+        '★ 输入后读回校验（静默输入失败不再被当成成功）');
+    c.ok(/ACTION_PASTE/.test(a11yJava) && /setPrimaryClip/.test(a11yJava),
+        'SET_TEXT 被拒时剪贴板粘贴兜底');
+
+    // 四、点击遮挡 + 长按 + 失败语义化。
+    c.ok(/obstructionAt\(/.test(a11yJava) && /被其他窗口遮挡/.test(a11yJava),
+        '★ 点击前做遮挡检测（弹窗 / 悬浮球不再假装点到了）');
+    c.ok(/longPress\(int x, int y, int durationMs\)/.test(a11yJava) && /durationMs >= 400/.test(pluginJava),
+        '手机点击第三参数 = 长按毫秒（与模块后端对齐）');
+    c.ok(/不要按原坐标重试/.test(a11yJava), '手势失败文案语义化（引导重读界面）');
+
+    // 五、native 截图缩放 + region 坐标换算。
+    c.ok(/SCREENSHOT_MAX_SIDE = 1120/.test(a11yJava) && /createScaledBitmap/.test(a11yJava),
+        '无障碍截图长边压到 1120（物理尺寸仍回传，前端网格不受影响）');
+    c.ok(/readRegion\(byte\[\] jpeg, int x, int y, int w, int h, int screenW, int screenH\)/.test(artifactsJava),
+        'readRegion 支持缩放比换算（物理坐标 → 图内像素）');
+    c.ok(/readRegion\(jpeg, p\[0\], p\[1\], p\[2\], p\[3\], 0, 0\)/.test(pluginJava),
+        '模块整屏截图未缩放，按 1:1 裁剪');
+    c.ok(/照网格标签读数即可/.test(artifactsJava),
+        '截图说明兼容网格标注（不再和“要乘 scaleX”打架）');
+
+    // 六、提示词：长按用法。
+    c.ok(/手机点击 x y \[毫秒\]/.test(backend), '提示词声明长按写法');
+}
+
+// 6.16 子代理会话：独立上下文 / 双向通道 / 报告写回与角色转述 / 生命周期守卫。
+async function caseAgentSession(c) {
+    const session = readWebFile('js/agent-session.js');
+    const cont = readWebFile('js/agent-continue.js');
+    const phone = readWebFile('js/agent-phone.js');
+    const voice = readWebFile('js/voice.js');
+    const tags = readWebFile('js/agent-tags.js');
+    const access = readWebFile('js/agent-access.js');
+    const runtime = readWebFile('js/agent-runtime.js');
+    const chat = readWebFile('js/chat.js');
+    const indexHtml = readFrontend();
+
+    // 一、接线：脚本加载 + 循环分支 + 手机动作路由。
+    c.ok(/agent-session\.js/.test(indexHtml), 'agent-session.js 已加载');
+    c.ok(/if \(typeof agentSessionActive === 'function' && agentSessionActive\(\)\) \{\s*\n\s*return agentSessionStep\(rt, staleRun\);/.test(cont),
+        '★ 续跑循环里子代理会话走独立分支');
+    c.ok(/if \(typeof agentSessionStart === 'function'\) agentSessionStart\(state\._agentGoal\);/.test(phone),
+        '★ 手机动作实际执行前启动会话（主对话只派发不执行）');
+    c.ok(/if \(agentSessionActive\(\)\) \{[\s\S]{0,160}?agentSessionAddObservation\(opResult/.test(phone),
+        '★ 会话模式观察进子代理上下文，不写主对话');
+    const agentCallFn = extractFnFrom(chat, 'callAgentSessionAI');
+    c.ok(/function callAgentSessionAI\(/.test(chat) && /callChatAPI\(messages,/.test(agentCallFn)
+        && !/buildLayeredRoleplayMessages/.test(agentCallFn),
+        '★★ 子代理模型调用不经角色提示词构建（上下文分离的落点）');
+
+    // 二、简报：目标 / 相关记忆 / 最近对话 / 主对话备注 / 求助通道 / 技术性总结。
+    c.ok(/## 相关经历/.test(session) && /getRelatedMemories\(goal\)/.test(session), '简报带相关长期记忆');
+    c.ok(/## 最近对话/.test(session), '简报带最近对话背景');
+    c.ok(/## 主对话备注/.test(session) && /state\._agentDispatchReply/.test(session),
+        '简报带主对话派发时交代的背景');
+    c.ok(/\[操作:问主代理 你的问题\]/.test(session) && /AGENT_SESSION_ASK_LIMIT/.test(session),
+        '简报教求助通道与次数上限');
+    c.ok(/技术性总结/.test(session) && /不进行角色扮演/.test(session), '简报声明执行者边界与收尾格式');
+
+    // 三、双向通道：问主代理 / steering。
+    c.ok(/if \(\/\^问主代理\/\.test\(name\)\)/.test(tags), '标签分发识别问主代理');
+    c.ok(/agentAskMain\(raw\)/.test(access), 'agentActions 挂载求助处理');
+    c.ok(/async function agentSessionAskMain\(/.test(session) && /向你求助/.test(session),
+        '求助经主模型（带完整记忆）回答');
+    c.ok(/【主对话答复】/.test(session), '答复作为观察注入子代理上下文');
+    c.ok(/agentRunMetrics\.modelCalls \+= 1/.test(session), '求助也计入模型调用');
+    c.ok(/raceAgentDeadline\(callAI\(prompt, askOptions\)/.test(session)
+        && /deadlineMs: AGENT_CONTINUE_CALL_DEADLINE_MS/.test(session),
+        '★★ ask_main 与续跑同一套死线，慢网关不会把会话挂住');
+    c.ok(/ask_main 缺少 question 参数/.test(session) && /void agentSessionAskMain\(q\)/.test(session),
+        '★★ 空 question 留下观察并调度下一步（不静默卡死）');
+    c.ok(/操作子代理正在运行/.test(voice), '★ 子代理运行中的用户消息会带 steering 通知给主对话');
+    c.ok(/state\._agentDispatchReply = aiMessage\.text/.test(voice) && /state\._agentDispatchReply = text/.test(cont),
+        '两条通道都捕获派发回复');
+
+    // 四、生命周期：报告写回 + 角色转述 + 守卫。
+    c.ok(/【子代理执行报告】/.test(session), '收尾生成执行报告');
+    c.ok(/agentSessionTeardown\(reason\)/.test(cont) && /你派出的操作子代理已经执行完毕/.test(session),
+        '★ 报告写回主对话 + 主模型角色转述（临时会话删除，报告喂记忆）');
+    c.ok(/raceAgentDeadline\(callAI\(relayPrompt, relayOptions\)/.test(session)
+        && /relayText === AGENT_STOPPED/.test(session),
+        '★★ 完成转述有死线且能被停止打断');
+    c.ok(/if \(typeof agentSessionActive === 'function' && agentSessionActive\(\)\) \{\s*\n\s*state\._agentNarrationStreak = 0;\s*\n\s*return;/.test(cont),
+        '★ 子代理运行中聊天消息不重置熔断 / 目标');
+    c.ok(/if \(typeof agentSessionActive === 'function' && agentSessionActive\(\)\) return;/.test(runtime),
+        '★ beginBatch 不打断子代理（不解禁停止 / 不动代号）');
+
+    // 六、工具调用：子代理在支持 function calling 的供应商上走原生工具（标签退为兜底）。
+    c.ok(/function agentSessionTools\(/.test(session) && /agentSessionExecutionOps\(\)/.test(session)
+        && /const AGENT_SESSION_EXEC_NS = \['phone', 'file', 'pc'\]/.test(session),
+        '★ 会话工具清单从 ElainaOps 注册表单一来源取执行型操作（phone / file / pc）');
+    c.ok(/options\.tools = agentSessionTools\(\)/.test(session)
+        && !/shouldTeachTags/.test(session),
+        '★ 子代理始终传 tools（不再按 shouldTeachTags 门控）');
+    c.ok(/const repliedToolCalls = \(options\.replyInfo && Array\.isArray\(options\.replyInfo\.toolCalls\)\)/.test(session)
+        && /void enqueuePhoneOperation\(rawArg\)/.test(session),
+        '工具调用经 enqueuePhoneOperation 执行（与标签同一执行层）');
+    c.ok(/toolName === 'ask_main'/.test(session) && /void agentSessionAskMain\(q\)/.test(session),
+        'ask_main 作为会话工具（主对话工具清单没有它，避免角色自问自答）');
+    c.ok(/name: 'ask_main'/.test(session), 'ask_main 是会话专属工具定义');
+
+    // 七、VM 行为：简报组装（记忆 + 最近对话 + 备注 + 求助说明）。
+    const sandbox = makeVmSandbox({ state: { _agentDispatchReply: '上次玩到第 12 关，这次接着打' } });
+    sandbox.window = sandbox;
+    sandbox.getCurrentConversation = () => ({ messages: [
+        { role: 'user', text: '帮我打消消乐过到15关' },
+        { role: 'ai', text: '好呀，上次我们一起卡在第12关了' },
+    ] });
+    sandbox.getRelatedMemories = () => [{ date: '2026-11-10', content: '一起玩了消消乐，卡在第 12 关' }];
+    sandbox.agentPhoneSkillText = () => '# Agent 能力：手机操作';
+    sandbox.window.ElainaTags = { strip: (t) => String(t || '') };
+    vm.runInContext(extractVariable(session, 'AGENT_SESSION_EXEC_NS') + '\n'
+        + extractFnFrom(session, 'agentSessionExecutionOps') + '\n'
+        + extractVariable(session, 'AGENT_SESSION_RECENT_CHAT') + '\n'
+        + extractVariable(session, 'AGENT_SESSION_ASK_LIMIT') + '\n'
+        + extractFnFrom(session, 'agentSessionBriefing') + '\n'
+        + 'window.__briefing = agentSessionBriefing;', sandbox, { filename: 'agentSessionBriefing.js' });
+    const briefing = sandbox.__briefing('玩消消乐过到15关');
+    c.ok(/任务目标（用户原话）/.test(briefing) && /玩消消乐过到15关/.test(briefing), '简报带任务目标');
+    c.ok(/2026-11-10: 一起玩了消消乐/.test(briefing), '简报带相关记忆');
+    c.ok(/用户: 帮我打消消乐/.test(briefing) && /AI: 好呀/.test(briefing), '简报带最近对话');
+    c.ok(/主对话备注（角色派发任务时交代的背景）/.test(briefing) && /上次玩到第 12 关/.test(briefing),
+        '简报带主对话交代的背景');
+    c.ok(/\[操作:问主代理/.test(briefing) && /最多问 3 次/.test(briefing), '简报教求助通道与上限');
+    c.ok(/不进行角色扮演/.test(briefing), '简报声明执行者边界');
+
+    // 八、PC 并入会话：执行器入口启动会话 / 结果路由进会话 / 失败解释与熔断记账单源。
+    const files = readWebFile('js/agent-files.js');
+    const browser = readWebFile('js/agent-browser.js');
+    const search = readWebFile('js/agent-search.js');
+    const tools = readWebFile('js/agent-tools.js');
+    c.ok((files.match(/if \(typeof agentSessionStart === 'function'\) agentSessionStart\(state\._agentGoal\);/g) || []).length === 2
+        && /if \(typeof agentSessionStart === 'function'\) agentSessionStart\(state\._agentGoal\);/.test(browser)
+        && /if \(typeof agentSessionStart === 'function'\) agentSessionStart\(state\._agentGoal\);/.test(search),
+        '★ 四个 PC 执行器入口启动会话（与手机侧同款；标签 / 工具 / 会话三条通道都覆盖）');
+    c.ok(/op\.ns === 'file' \|\| op\.ns === 'pc'/.test(session)
+        && /void ElainaOps\.invoke\(toolName, toolArgs, \{ access: currentAgentAccess\(\) \}\);/.test(session),
+        '★ 会话步把 file / pc 工具调用路由回 ElainaOps（观察由执行器进会话）');
+    c.ok(/function agentSessionRouteResult\(/.test(session)
+        && /agentSessionRouteResult\(/.test(files) && /agentSessionRouteResult\(/.test(browser)
+        && /agentSessionRouteResult\(/.test(search),
+        '★ 执行器结果出口统一收口：会话模式观察进会话（含紧凑摘要回主对话协议对）');
+    c.ok(/!routed && ownTrace\) await explainAgentFailure/.test(files)
+        && /!routed && ownTrace\) await explainAgentFailure/.test(browser)
+        && /!routed && ownTrace\) await explainAgentFailure/.test(search),
+        '失败解释只在一体模式让角色开口（会话模式重试由会话自己的循环承担）');
+    c.ok(/agentSessionRecordFailure\(/.test(files) && /agentSessionRecordFailure\(/.test(access),
+        '被拒 / 取消出口经 agentSessionRecordFailure（会话→观察 / 一体→主对话）');
+    c.ok(/routedToSession/.test(tools) && /op\.ns === 'phone' \|\| op\.ns === 'file' \|\| op\.ns === 'pc'/.test(tools),
+        '★ runToolCalls 熔断记账单源化（会话模式不双份计数）');
+    c.ok(/function agentSessionContinuePrompt\(/.test(session) && /agentSessionContinuePrompt\(\)/.test(session),
+        '会话续跑指令按会话工具收窄（界面坐标规则只在带手机操作时附加）');
+
+    // 九、VM 行为（PC）：简报按可用操作组装 PC 手册，不带手机坐标规则。
+    const pcSandbox = makeVmSandbox({});
+    pcSandbox.window = pcSandbox;
+    pcSandbox.ElainaOps = {
+        availableOps: () => [
+            { name: 'web_search', tool: 'web_search', ns: 'pc' },
+            { name: 'file_ls', tool: 'list_files', ns: 'file' },
+            { name: 'app_memory', tool: 'organize_memory', ns: 'app' },
+        ],
+        manualFor: (name) => (name === 'web_search' ? '# Agent 能力：联网搜索' : ''),
+    };
+    vm.runInContext(extractVariable(session, 'AGENT_SESSION_EXEC_NS') + '\n'
+        + extractFnFrom(session, 'agentSessionExecutionOps') + '\n'
+        + extractVariable(session, 'AGENT_SESSION_RECENT_CHAT') + '\n'
+        + extractVariable(session, 'AGENT_SESSION_ASK_LIMIT') + '\n'
+        + extractFnFrom(session, 'agentSessionBriefing') + '\n'
+        + 'window.__pcBriefing = agentSessionBriefing;', pcSandbox, { filename: 'agentSessionBriefingPc.js' });
+    const pcBriefing = pcSandbox.__pcBriefing('查一下今天的天气写进桌面备忘');
+    c.ok(/# 操作子代理任务简报/.test(pcBriefing) && /# Agent 能力：联网搜索/.test(pcBriefing),
+        'PC 简报带通用标题与可用操作的说明书（app 命名空间不进会话手册）');
+    c.ok(/## PC 操作注意/.test(pcBriefing), 'PC 简报带 PC 专属注意事项');
+    c.ok(!/手机查看界面/.test(pcBriefing), 'PC 简报不带手机坐标规则');
+}
+
 const only = process.argv[2];
 const allCases = [
     { name: '三档 AI 权限', fn: caseAccess },
@@ -1780,6 +2537,17 @@ const allCases = [
     { name: 'Agent 纯解析函数（agent-parse.js）', fn: caseAgentParse },
     { name: '提示词层级', fn: casePromptTiers },
     { name: '手机操作真机问题', fn: casePhoneAgentFixes },
+    { name: '后台运行方式', fn: caseBackgroundBackends },
+    { name: '手机 Agent 闭环与收尾', fn: caseAgentLoopQuality },
+    { name: '元素引用点击', fn: caseElementRef },
+    { name: '截图链路降本', fn: caseScreenshotCost },
+    { name: 'settle 稳定帧', fn: caseSettle },
+    { name: '历史压缩', fn: caseHistoryCompaction },
+    { name: '控件清单增强', fn: caseClipList },
+    { name: '区域级观测', fn: caseRegionObservation },
+    { name: '运行可观测性', fn: caseMetrics },
+    { name: '无障碍优先批次', fn: caseA11yUpgrade },
+    { name: '子代理会话', fn: caseAgentSession },
 ];
 const cases = only ? allCases.filter((x) => x.name.includes(only)) : allCases;
 

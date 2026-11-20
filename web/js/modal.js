@@ -129,6 +129,52 @@ function renderModalPresets(elements, presets, useEditor) {
     }
 }
 
+/**
+ * N 选 1 列表（后台运行要选 Shizuku / Root / 模块）。
+ *
+ * <p>为什么不用确认键 + 单选：手机上先点一项再点确定是两次点击，而第一次点击还可能落在
+ * 遮罩上把弹窗关掉；选中即完成既少一步，也不会"看着选好了却没生效"。
+ * 不可选项（state 非 ready）保留在列表里并写明原因 —— 藏起来用户会以为这个方式不存在。
+ */
+function renderModalOptions(elements, options, finish, stopBubble) {
+    const box = elements.customModalOptions;
+    if (!box) return;
+    const list = Array.isArray(options) ? options : [];
+    box.classList.toggle('hidden', !list.length);
+    box.textContent = '';
+    if (!list.length) return;
+    for (const opt of list) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'rounded-2xl border px-4 py-3 text-left transition';
+        btn.style.borderColor = 'var(--rd-border)';
+        btn.style.background = 'var(--rd-surface-2)';
+        const disabled = opt.disabled === true;
+        if (disabled) {
+            btn.style.opacity = '.6';
+            btn.disabled = true;
+        }
+        const title = document.createElement('div');
+        title.className = 'text-sm font-semibold text-ink';
+        title.textContent = opt.label || String(opt.value || '');
+        btn.appendChild(title);
+        if (opt.hint) {
+            const hint = document.createElement('div');
+            hint.className = 'text-[11px] leading-relaxed mt-1';
+            hint.style.color = disabled ? 'var(--rd-warn)' : 'var(--rd-text-3)';
+            hint.textContent = opt.hint;
+            btn.appendChild(hint);
+        }
+        if (!disabled) {
+            btn.addEventListener('click', (event) => {
+                if (stopBubble) stopBubble(event);
+                finish(opt.value);
+            });
+        }
+        box.appendChild(btn);
+    }
+}
+
 /** 输入态的键盘提交：多行 / 编辑器里 Enter 换行、Ctrl/Cmd+Enter 提交；单行 Enter 提交。 */
 function bindModalInputKeys(elements, { input, multiline, useEditor, readValue, activeInput, finish }) {
     if (!input) return;
@@ -166,6 +212,9 @@ function openCustomModal(opts, done) {
         multiline = false, rows = 8,
         editor = false, language = 'json', presets = null,
         extraAction = null,
+        // N 选 1 列表：[{ value, label, hint }]。给了它就不显示确定键 —— 选中即完成，
+        // 否则用户得先选一项再点确定，两下点击里第一下还可能被遮罩吃掉。
+        options = null,
         // 可选第三键：altText 非空就显示、点了 resolve 成 altValue。手机操作「运行方式」是三选一，而取消键还会被"点遮罩 / 关弹窗"触发 —— 把"后台"绑到取消上，用户手指一滑点到遮罩就等于默默用了后台。
         altText = '', altValue = 'alt' } = opts;
     elements.customModalTitle.textContent = title;
@@ -237,6 +286,11 @@ function openCustomModal(opts, done) {
 
     elements.customModalCancelBtn.onclick = (event) => { stopBubble(event); finish(input ? null : false); };
     elements.customModalAltBtn.onclick = (event) => { stopBubble(event); finish(altValue); };
+
+    // 选项列表要在 finish 就绪之后渲染：点中一项直接 finish(值)，不经过确定键。
+    renderModalOptions(elements, options, finish, stopBubble);
+    // 有选项列表时确定键没有意义（选中即完成），藏掉避免"点了确定却什么也没选"。
+    elements.customModalConfirmBtn.classList.toggle('hidden', Array.isArray(options) && options.length > 0);
 
     elements.customModalConfirmBtn.onclick = (event) => {
         stopBubble(event);

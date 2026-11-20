@@ -108,6 +108,8 @@ func (s *Server) handleAgentWrite(w http.ResponseWriter, r *http.Request) {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "不允许写") {
 			status = http.StatusBadRequest
+		} else if strings.Contains(err.Error(), "保护范围") {
+			status = http.StatusForbidden
 		}
 		writeJSON(w, status, map[string]any{"ok": false, "path": resolved, "message": err.Error()}, nil)
 		return
@@ -149,6 +151,8 @@ func (s *Server) handleAgentDelete(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusNotFound
 		} else if strings.Contains(err.Error(), "不能删除") {
 			status = http.StatusBadRequest
+		} else if strings.Contains(err.Error(), "保护范围") {
+			status = http.StatusForbidden
 		}
 		writeJSON(w, status, map[string]any{"ok": false, "path": resolved, "message": err.Error()}, nil)
 		return
@@ -204,18 +208,10 @@ func (s *Server) handleAgentExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cwd := ""
-	if raw := strings.TrimSpace(stringField(body, "cwd")); raw != "" {
-		resolved, err := s.agent.Resolve(raw)
-		if err == nil {
-			// 与读侧同一禁区：shell 以 data/ 为工作目录时，相对路径就能摸到密钥文件。
-			err = s.agent.CheckReadable(resolved)
-		}
-		if err != nil {
-			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "message": "工作目录无效"}, nil)
-			return
-		}
-		cwd = resolved
+	cwd, err := s.agent.ResolveWorkingDir(stringField(body, "cwd"))
+	if err != nil {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "message": "工作目录无效：" + err.Error()}, nil)
+		return
 	}
 
 	result := pccmd.Run(command, stringField(body, "shell"), cwd, pccmd.Timeout)

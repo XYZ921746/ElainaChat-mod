@@ -240,6 +240,7 @@ async function caseModsCore(c) {
         if (srv) srv.stop();
         tmp.cleanup();
     }
+
 }
 
 // 2. 插件 id 归一化 + 依赖可解析性 —— 钉住「资源包装了等于没装」。
@@ -258,6 +259,7 @@ function avatarZip(version = '1.0.0', declaredId = 'elaina-avatar') {
         { name: 'img/p_calm.png', data: 'PNGDATA' },
     ]);
 }
+
 
 async function caseModId(c) {
     const tmp = tempDirFactory('elaina-modid-');
@@ -1660,7 +1662,7 @@ async function caseModHostApi(c) {
                     box.appendChild(b);
                 },
             });
-            // ★ 每项级插槽：注册时还没有消息，所以这里"什么都不挂"是正常的 ——
+            // 每项级插槽：注册时还没有消息，所以这里"什么都不挂"是正常的 ——
             //   真正渲染发生在宿主渲染每条消息时（见 host-slots.js 的说明）
             host.slot('chat.message.actions', {
                 id: 'msg',

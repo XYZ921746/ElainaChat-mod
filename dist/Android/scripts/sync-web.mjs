@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// ==================== 打包模式开关 ====================
+// 打包模式开关
 //
 // 三种模式（越往下越"轻"）：
 //
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 // 环境变量 `SKIP_LIVE2D_MODELS=1` 等价于 `--no-models`（CI 里方便）。
 //
 // ⚠️ 必须定义在**使用之前**（下面 collectModFiles 调用时会读 `lite`）——
-//    之前放在文件后半段，导致 `lite is not defined`。
+//    若放在调用之后，`lite` 还未定义，直接 `lite is not defined`。
 //
 // ⚠️ 跳过时还要**清掉安卓工程里已有的资源**，否则上一次带资源的同步残留
 //    会继续被打进 APK —— 那样"跳过"就名不副实了。
@@ -29,20 +29,15 @@ const skipModels = lite
     || process.argv.includes('--no-models')
     || String(process.env.SKIP_LIVE2D_MODELS || '') === '1';
 
-// ★ 2026-10（新）：插件**源码**也不再打进 APK（`--with-mods` 才带）。
+// 插件**源码**默认不进 APK（`--with-mods` 才带）。
 //
-//   为什么改：与电脑版**全新 clone** 对齐 —— 仓库的 .gitignore 本来就排除了
-//   web/mods/（2026-10 起"仓库只推软件本体"），也就是说电脑版 fresh clone
-//   同样没有任何插件，全靠应用内「上传安装」补齐。
-//   而 APK 之前把开发机 web/mods/ 里的 6 个插件源码镜像了进去 ——
-//   那是"跟着开发副本走"的惯性，不是设计：它让手机端比电脑版 fresh clone
-//   **多**出一份插件，两端反而不一致。
+//   原因：与电脑版 fresh clone 对齐 —— 仓库的 .gitignore 排除了 web/mods/，
+//   电脑版全新 clone 同样没有任何插件，全靠应用内「上传安装」补齐
+//   （原生接口，见 core.js 的 nativePluginsFetch）。APK 若把开发机的
+//   插件源码镜像进去，手机端就会比电脑版 fresh clone **多**出一份插件，
+//   两端反而不一致。
 //
-//   用户决定（2026-10）：**完全纯净** —— APK 不带任何插件，
-//   与电脑版 fresh clone 完全一致；插件一律走「应用内上传安装」
-//   （原生接口，见 core.js 的 nativePluginsFetch）。
-//
-//   兼容：`--with-mods` 恢复旧行为（把插件源码打进去）。
+//   兼容：`--with-mods` 把插件源码打进去。
 //   环境变量 WITH_BUNDLED_MODS=1 等价（CI 里方便）。
 const withMods = process.argv.includes('--with-mods')
     || String(process.env.WITH_BUNDLED_MODS || '') === '1';
@@ -52,25 +47,25 @@ const withMods = process.argv.includes('--with-mods')
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDirectory, '..', '..', '..');
 const sourceRoot = path.join(projectRoot, 'web');
-// ★★ 2026-10：插件根目录从 `web/mods/` 搬到**项目根** `mods/`（与 data/ 平级）。
-//   它**不在** sourceRoot 下，所以下面所有读插件的地方都改用这个常量。
+// 插件根目录是**项目根** `mods/`（与 data/ 平级）。
+//   它**不在** sourceRoot 下，所以下面所有读插件的地方都走这个常量。
 const modsSourceRoot = path.join(projectRoot, 'mods');
 // 安卓原生工程与前端同步产物都住在 dist/Android/ 下（Capacitor 的 www/ 也在这里）。
 // 它随仓库入库，因为原生代码是应用的一部分、不是可丢弃的构建产物；SDK / NDK / node_modules
 // 这类工具链仍留在仓库外，由 .gitignore 排除。
 const androidAppRoot = path.join(projectRoot, 'dist', 'Android');
 const androidWebRoot = path.join(androidAppRoot, 'www');
-// 旧 Node 手机端入口（web/nodejs/）曾经落在 assets/ 根下；APK 的服务端换成 Go 后
-// 不再打包它，这个路径只用于同步时清理历史残留 —— 旧副本留在工程里会被 cap sync
-// 继续打进 APK（死文件，还让排查的人以为手机上仍跑 Node）。
+// web/nodejs/ 不随 APK 打包（服务端是 Go 单文件）；这个路径只用于同步时清理
+// 它在 assets/ 下的残留副本 —— 残留留在工程里会被 cap sync 继续打进 APK
+// （死文件，还让排查的人以为手机上仍跑 Node）。
 const androidAssetsRoot = path.join(androidAppRoot, 'android', 'app', 'src', 'main', 'assets');
 const nodeHostDestRoot = path.join(androidAssetsRoot, 'nodejs');
 const modelsSourceRoot = path.join(modsSourceRoot, 'live2d-models', 'models');
-// ★ APK 里的落地路径**不变**：仍是 www/live2d/models/。
-//   为什么不变：模型 URL（`/live2d/models/<名>/…`）是前端与 AI 提示词里都在用的约定，
+// APK 里的落地路径固定为 www/live2d/models/。
+//   原因：模型 URL（`/live2d/models/<名>/…`）是前端与 AI 提示词里都在用的约定，
 //   也是 core.js 的播种逻辑与 check-bundled-models 的判据。
-//   只有**仓库里的源位置**从 web/live2d/models/ 搬到了 mod 目录下（资源与代码分开），
-//   打包产物这一侧完全不需要跟着动 —— 改这一行就够，不必碰任何运行时代码。
+//   仓库里的**源位置**在 mod 目录下（资源与代码分开），打包产物这一侧
+//   完全不需要跟着动 —— 改这一行就够，不必碰任何运行时代码。
 const modelsDestRoot = path.join(androidWebRoot, 'live2d', 'models');
 
 // 同步到安卓 www 的文件（覆盖整个定制版 Web 前端）
@@ -81,31 +76,27 @@ const modelsDestRoot = path.join(androidWebRoot, 'live2d', 'models');
 // 塞进用户安装包。安卓工程里的旧副本由下面"源仓库已没有它 → 删"那一步清掉。
 const filesToCopy = [
     ['index.html', 'index.html'],
-    // Live2D 视频通话已搬成插件（web/mods/live2d/）：整棵 mods/ 由下面那段自动收走，
+    // Live2D 视频通话由插件（web/mods/live2d/）提供：整棵 mods/ 由下面那段自动收走，
     // 不需要在这里逐条列出。
-    ['vendor/tailwind.js', 'vendor/tailwind.js'],
-    // ★★ 2026-10（用户决定，覆盖上一版）：**Live2D 引擎不进 APK**。
+    // **Live2D 引擎不进 APK**：引擎是 **live2d-models 插件的一部分**，
+    //   随插件包分发（pack-assets 只排除 models/，vendor/ 会打进 zip），
+    //   装好插件就由插件自己那份引擎工作。
     //
-    //   上一版把这三个库列在这里，理由是"APK 没有服务端，/live2d/vendor/ 必然 404，
-    //   插件会回落到宿主 /vendor/，所以宿主得带一份"。现在改成：引擎是
-    //   **live2d-models 插件的一部分**，随插件包分发（pack-assets 只排除 models/，
-    //   vendor/ 会打进 zip），装好插件就由插件自己那份引擎工作。
-    //
-    //   ⚠️ 于是 APK 上跑视频通话的**前提**变成两条，缺一不可：
+    //   ⚠️ APK 上跑视频通话的**前提**两条，缺一不可：
     //      ① 已安装 live2d-models 插件；
     //      ② 插件的 ensureEngine() 能从**插件自己目录**取引擎，而不是只认宿主
-    //         /vendor/（那份已经不在了）—— 见 mods/live2d-models/index.js 的
+    //         /vendor/（APK 不带宿主那份）—— 见 mods/live2d-models/index.js 的
     //         vendorFallbackBase 与注入循环里的 native 回落分支。
     //      两边是**一套改动**，别只改一边，否则视频通话只会报"引擎脚本加载失败"。
     //
-    //   这三个文件在源仓库里当然还留着（电脑版要用），所以下面那套"源里没有 → 删"
+    //   这三个文件在源仓库里还留着（电脑版要用），所以下面那套"源里没有 → 删"
     //   的过期清理抓不到它们 —— 必须显式清（见 HOST_FILES_NOT_IN_APK）。
     // LaTeX 渲染（消息里的 $公式$ 靠它；Markdown 由宿主渲染器负责，不需要第三方库）
     ['vendor/katex/katex.min.js', 'vendor/katex/katex.min.js'],
     ['vendor/katex/katex.min.css', 'vendor/katex/katex.min.css'],
 ];
 
-// ★ 不再随 APK 分发、但要**从安卓工程里清掉**的宿主文件（引擎归 live2d-models 插件，
+// 不再随 APK 分发、但要**从安卓工程里清掉**的宿主文件（引擎归 live2d-models 插件，
 //   见上面那段说明）。源仓库里还留着它们（电脑版要用），所以不能靠"源里没有 → 删"。
 const HOST_FILES_NOT_IN_APK = [
     'vendor/live2dcubismcore.min.js',
@@ -138,7 +129,7 @@ for (const rel of (await collectFontFiles(path.join(sourceRoot, 'vendor', 'katex
 //
 // 为什么要自动：这些文件是 index.html 用 <script src="/js/xxx.js"> 引用的，漏同步一个
 // 就会在 APK 里 404 → 页面白屏，而且 Web 版一切正常、只有装机才暴露，极难查。
-// 之前手写清单时，每加一个前端脚本都得记得回来改这里 —— 这个"记得"迟早会失效。
+// 手写清单则每加一个前端脚本都得记得回来改这里 —— 这个"记得"迟早会失效。
 //
 // 只收 .js（含子目录），跳过隐藏文件与 .map。
 async function collectJsFiles(dir, prefix = '') {
@@ -162,7 +153,7 @@ for (const rel of jsFiles) {
     filesToCopy.push(['js/' + rel, 'js/' + rel]);
 }
 
-// ==================== mod（插件）====================
+// mod（插件）
 //
 // 为什么要打包进 APK：APK 里**没有服务端**，也就没有"扫描目录自动解压 zip"
 // 那条路（浏览器无法列目录，服务端才有这个能力）。所以安卓端的 mod 只能
@@ -184,9 +175,9 @@ for (const rel of jsFiles) {
  * 字体），按 `img/` 目录排除更稳，也不会误伤将来别的资源目录 ——
  * 需要时把目录名加进 LITE_SKIP_DIRS 即可。
  *
- * ★★ 2026-10 修：`models` 必须也在跳过名单里。
+ * `models` 必须也在跳过名单里。
  *    模型有**两套路径**，容易只想到一套：
- *      ① www/live2d/models/                     ← 旧的落地位置（给 APK 播种用）
+ *      ① www/live2d/models/                     ← 落地位置（给 APK 播种用）
  *      ② www/mods/live2d-models/models/         ← 插件目录下的源位置
  *    实测只清 ① 时，② 里 33.75MB 的模型照样被打进 APK，
  *    纯净版仍是 **47MB**（应为 ~10MB）。两个都要跳过。
@@ -243,7 +234,7 @@ for (const rel of cssFiles) {
 
 // 自带音频（web/audio/ 下）—— 与 js/、css/ 同理自动发现。
 //
-// ★★ 2026-10 补：漏了这里，手机端的 MiMo TTS「内置样本」直接失效。
+// 手机端的 MiMo TTS「内置样本」依赖这里：漏收会让样本直接失效。
 //   软件自带的伊蕾娜日语参考样本是 `web/audio/mimo-elaina-jp.m4a`（454KB），
 //   前端从 `/audio/mimo-elaina-jp.m4a` 直接 fetch（见 settings.js 的
 //   loadBuiltinMimoCloneSample）。电脑端有 serve.mjs 把 URL 映射到 web/audio/，
@@ -251,7 +242,7 @@ for (const rel of cssFiles) {
 //   「内置样本加载失败，请手动选择参考音频」，且切到 voiceclone 时的自动补样也失效。
 //   只在装机后才暴露（电脑端一切正常），所以同样不能写死清单、得自动收全。
 //
-// ★--lite 也**不**跳过它：这是程序本体的一部分（与模型/图片那类扩展包资源不同），
+// --lite 也**不**跳过它：这是程序本体的一部分（与模型/图片那类扩展包资源不同），
 //   体积只有几百 KB。
 async function collectFilesUnder(dir, prefix = '') {
     const out = [];
@@ -273,9 +264,9 @@ for (const rel of audioFiles) {
     filesToCopy.push(['audio/' + rel, 'audio/' + rel]);
 }
 
-// 应用图标与 PWA 清单（web/icons/、web/manifest.webmanifest）—— 同理自动发现。
+// 应用图标（web/icons/）—— 同理自动发现。
 //
-// ★★ 2026-10 补：漏了这里，APK 里没有 /icons/ 目录，侧栏左上角的应用图片
+// APK 里没有 /icons/ 目录的话，侧栏左上角的应用图片
 //   （index.html 的 `<img src="/icons/icon-192.png">`）与 favicon 全部 404 ——
 //   表现为「安卓版左上角应用图片未生效」。电脑端有 serve.mjs 把 URL 映射到
 //   web/icons/，手机端没有服务端 —— 文件必须在 www/ 里。
@@ -290,7 +281,7 @@ if (existsSync(path.join(sourceRoot, 'manifest.webmanifest'))) {
 }
 
 // 插件源码：默认**不**打进 APK（与电脑版 fresh clone 一致，见顶部 `withMods` 的说明）。
-// `--with-mods` 时仍收集（旧行为），`--lite` 时资源已被 collectModFiles 自己跳过。
+// `--with-mods` 时仍收集，`--lite` 时资源已被 collectModFiles 自己跳过。
 const modFiles = withMods ? (await collectModFiles(modsSourceRoot, '', lite)).sort() : [];
 for (const rel of modFiles) {
     filesToCopy.push(['mods/' + rel, 'mods/' + rel]);
@@ -300,7 +291,7 @@ for (const rel of modFiles) {
 // 否则上一次带资源同步的文件会继续留在 www/ 里被打进 APK，
 // "跳过资源"就名不副实了。（只清资源目录，不动插件代码。）
 //
-// ★★ 2026-10 修：原先只清 `www/`，**漏了 `cap sync` 的产物目录** ——
+// 只清 `www/` 不够，**还要清 `cap sync` 的产物目录** ——
 //    `android/app/src/main/assets/public/`。
 //    实测：`--lite` 同步后 `www/live2d` 已经是 0 个文件，
 //    但 `assets/public/live2d` 还留着 96 个、`mods/*/img` 还留着 40 个，
@@ -340,11 +331,11 @@ if (lite) {
     }
 }
 
-// ★ `--with-mods` **没开**时，把安卓工程里残留的**整个 mods/ 目录**清掉。
+// `--with-mods` **没开**时，把安卓工程里残留的**整个 mods/ 目录**清掉。
 //
 //   上面的 lite 清理只动资源子目录（img/models），插件代码会留着 ——
 //   那是 `--lite` 的语义（代码进包、资源走扩展包）。
-//   但 2026-10 起默认语义变成了"**完全纯净**"（与电脑版 fresh clone 一致：
+//   默认语义则是"**完全纯净**"（与电脑版 fresh clone 一致：
 //   APK 里没有任何插件，全靠应用内安装），所以插件代码也要清。
 //   仍是两处都清（www/ + cap 产物目录），理由见上面 LITE_CLEAN_ROOTS 的注释。
 if (!withMods) {
@@ -360,9 +351,9 @@ if (!withMods) {
     }
 }
 
-// ★★ 2026-10：把"不再随 APK 分发"的宿主文件从安卓工程里清掉（正常与纯净模式都清）。
+// 把"不再随 APK 分发"的宿主文件从安卓工程里清掉（正常与纯净模式都清）。
 //   判据不是"源仓库里没有"（这几个文件在 web/vendor 里还在，电脑版要用），
-//   而是一张**显式名单** —— 引擎已归 live2d-models 插件。不清的话，上一次同步留下的
+//   而是一张**显式名单** —— 引擎由 live2d-models 插件提供。不清的话，上一次同步留下的
 //   旧副本会被 cap sync 继续打进 APK，"不带引擎"就名不副实。
 {
     let removed = 0;
@@ -386,10 +377,10 @@ for (const [src, dest] of filesToCopy) {
     await copyFile(path.join(sourceRoot, src), destPath);
 }
 
-// ==================== 本地 Go 服务端（交叉编译到 jniLibsServer/）====================
+// 本地 Go 服务端（交叉编译到 jniLibsServer/）
 //
 // 手机端的服务端是静态编译的 Go 单文件，Java 服务进程从 nativeLibraryDir 直接 exec。
-// 不再复制 web/nodejs：那是已退役的 Node 入口，留在 assets 里只会被 cap sync 打进包。
+// 不复制 web/nodejs：手机端不用 Node 入口，留在 assets 里只会被 cap sync 打进包。
 {
     // 与 app/build.gradle 的 buildLocalServer 是同一个开关（默认开）。
     const localServer = !['0', 'false'].includes(String(process.env.ELAINA_LOCAL_SERVER || 'true').toLowerCase());
@@ -495,22 +486,22 @@ function findNdkRoot() {
     return '';
 }
 
-// ★★ 清掉"宿主已删、安卓工程里还留着"的旧文件（2026-10 新增）。
+// 清掉"宿主已删、安卓工程里还留着"的旧文件。
 //
 //   为什么必须有这一步：这个脚本只**复制**，从不**删除**。所以源仓库里删掉一个
 //   宿主文件后，安卓工程里的旧副本会一直留着 —— 而 `cap sync` 会把它一起打进
-//   APK。实测踩到：`web/live2d-video.js` 早已随"Live2D 搬成插件"删除
-//   （源文件不存在、index.html 也不引用它），但 `assets/public/live2d-video.js`
+//   APK。实测案例：`web/live2d-video.js`（源文件不存在、index.html 也不引用它），
+//   但 `assets/public/live2d-video.js`
 //   仍在 APK 里 —— 一份**永远不会被加载**的死代码，白占体积，还会让排查的人
 //   以为 Live2D 仍是宿主实现。
 //
-//   ★ 判据：**源仓库里没有这个文件** → 过期，删。
+//   判据：**源仓库里没有这个文件** → 过期，删。
 //     不能用"不在 filesToCopy 里"当判据 —— filesToCopy 是"要同步什么"的清单，
-//     不是"宿主需要什么"的权威清单（它刻意略过 mods/ 等，由别的段落负责）。
-//     我第一版就是这么写的，结果把 `vendor/live2dcubismcore.min.js` 等三个文件
-//     也删了 —— 而它们**确实还在** web/vendor/ 下，且是 APK 上 Live2D 的引擎
+//     不是"宿主需要什么"的权威清单（它刻意略过 mods/ 等，由别的段落负责）：
+//     按它判会把 `vendor/live2dcubismcore.min.js` 等三个文件
+//     一并删掉 —— 而它们**确实还在** web/vendor/ 下，且是 APK 上 Live2D 的引擎
 //     来源（插件的 /live2d/vendor/ 在 APK 上没有服务端可映射，靠 /vendor/ 兜底）。
-//     那次误删会被 cap sync 打进 APK，表现为"视频通话打不开"。
+//     误删的文件会被 cap sync 打进 APK，表现为"视频通话打不开"。
 //
 //   ⚠️ 只动 www/，**不动** cap 产物目录（assets/public/）：那个目录整体由
 //      `cap sync` 覆盖式生成，我们在这里删它反而可能与 sync 的行为打架。
@@ -523,7 +514,7 @@ function findNdkRoot() {
     for (const rel of await walk(androidWebRoot).catch(() => [])) {
         const norm = rel.replace(/\\/g, '/');
         if (skipPrefix.some((p) => norm.startsWith(p))) continue;
-        // ★ 关键判据：源仓库里还有这个文件吗？有就说明它**没被删**，不能动。
+        // 关键判据：源仓库里还有这个文件吗？有就说明它**没被删**，不能动。
         let existsInSource = false;
         try {
             await stat(path.join(sourceRoot, rel));
@@ -544,9 +535,9 @@ if (jsFiles.length) console.log(`  frontend scripts: ${jsFiles.map((f) => 'js/' 
 if (modFiles.length) console.log(`  mods: ${modFiles.length} files`);
 if (cssFiles.length) console.log(`  css: ${cssFiles.map((f) => 'css/' + f).join(', ')}`);
 if (audioFiles.length) console.log(`  audio: ${audioFiles.map((f) => 'audio/' + f).join(', ')}`);
-if (iconFiles.length) console.log(`  icons: ${iconFiles.map((f) => 'icons/' + f).join(', ')} + manifest.webmanifest`);
+if (iconFiles.length) console.log(`  icons: ${iconFiles.map((f) => 'icons/' + f).join(', ')}`);
 
-// ==================== 内置 Live2D 模型 ====================
+// 内置 Live2D 模型
 // 插件资源目录 mods/live2d-models/models/ 下的模型随 APK 分发：复制进安卓工程的 www/live2d/models/，
 // 并生成 manifest.json。APK 里没有服务端，模型没法从接口取，只能打包进去：
 // App 首次启动时按这份清单把模型"种"进应用数据目录（见 core.js 的 seedBundledLive2dModels），
@@ -590,18 +581,18 @@ if (skipModels) {
 
 if (skipModels) {
     // 清掉安卓工程里残留的模型 + 清单，确保它们不会被打进 APK。
-    // ★★ 2026-10 修：原先只清 www/，漏了 cap sync 的产物目录
+    // 只清 www/ 不够，还要清 cap sync 的产物目录
     //    （android/app/src/main/assets/public/live2d/models）—— 那里残留的模型
     //    照样会被打进 APK，实测纯净版仍是 101MB。两个目录都要清。
     const roots = [androidWebRoot];
     if (existsSync(capAssetsRoot)) roots.push(capAssetsRoot);
     for (const root of roots) {
-        // ① 旧的落地位置：<root>/live2d/models/
+        // ① 落地位置：<root>/live2d/models/
         const dest = path.join(root, 'live2d', 'models');
         await rm(dest, { recursive: true, force: true }).catch(() => {});
         await rm(path.join(root, 'live2d', 'models', 'manifest.json'), { force: true }).catch(() => {});
         // ② 插件目录下的源位置：<root>/mods/live2d-models/models/
-        //    ★ 漏了它纯净版就仍是 47MB（实测踩到）—— 模型在这里有整整一套。
+        //    漏了它纯净版就仍是 47MB（实测）—— 模型在这里有整整一套。
         await rm(path.join(root, 'mods', 'live2d-models', 'models'), { recursive: true, force: true }).catch(() => {});
     }
     console.log('  已清空 live2d 模型（www/ + cap 产物目录，两套路径都清，避免上次残留被打进去）');
@@ -610,9 +601,9 @@ if (skipModels) {
 } else {
     // 先算出这次要写进去的完整文件集，再决定删什么。
     //
-    // 原来是先 `rm -rf` 整个 models 目录再重建，但那样一次要删上百个文件，
+    // 不能先 `rm -rf` 整个 models 目录再重建：那样一次要删上百个文件，
     // 会撞上运行环境的批量删除保护（单次超过 50 个直接拒绝），整个 build 失败。
-    // 改成"只删这次不会再写回去的旧文件"：既绕开了这个问题，也不用每次把没变过的模型重删一遍，
+    // 所以"只删这次不会再写回去的旧文件"：既绕开批量删除保护，也不用每次把没变过的模型重删一遍，
     // 而且中途失败不会留下半个空目录。
     const manifestModels = [];
     const desiredFiles = new Set(['manifest.json']);

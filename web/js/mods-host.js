@@ -47,7 +47,7 @@
     let _hostExtras = null;
     function getHostExtras() {
         if (!_hostExtras) {
-            _hostExtras = window.ElainaModsHostExtras({ bindFlatDragSort, host, addContribution });
+            _hostExtras = window.ElainaModsHostExtras({ bindFlatDragSort, host, addContribution, guardModAsync });
         }
         return _hostExtras;
     }

@@ -265,17 +265,44 @@ func WriteIndex(modsDir string, modules []Module) error {
 }
 
 // 服务端插件可声明的能力名。新增能力必须同时更新 开发文档.md 表 A23 与 Node 宿主的清单，
-// 否则同一个 manifest 在两边会得到不同结论。
+// 否则同一个 manifest 在两边会得到不同结论。清单里只收 ctx 上真有对应成员的能力 ——
+// 声明了却拿不到 API 的“死能力”会让作者误以为已授权（net-outbound 就曾这样挂着，ctx 上没有任何网络成员）。
 var capabilityNames = map[string]bool{
 	"route-register": true,
 	"upload-write":   true,
 	"static-read":    true,
 	"host-utils":     true,
-	"net-outbound":   true,
 	"fs-read":        true,
 	"fs-write":       true,
 	"exec":           true,
 	"zip":            true,
+}
+
+// HasRiskyCapability 报告这个插件在服务端声明了会越过「插件目录」这条边界的命令执行能力。
+// fs-read / fs-write 经 jsapi.safePath 限制在插件自己目录内；exec 却是完整 shell ——
+// 这一档需要用户在「设置 → 插件」里**显式**打开，manifest 的 defaultEnabled 不算授权。
+// 前端 mods-api.js 的 RISKY_SERVER_CAPS 必须与之一致。
+func HasRiskyCapability(m Module) bool {
+	caps := serverCapabilitiesOf(m)
+	for _, c := range caps {
+		if c == "exec" {
+			return true
+		}
+	}
+	return false
+}
+
+func serverCapabilitiesOf(m Module) []string {
+	if len(m.Server) == 0 {
+		return nil
+	}
+	var raw struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(m.Server, &raw); err != nil {
+		return nil
+	}
+	return raw.Capabilities
 }
 
 func isSafeRelDir(rel string) bool {

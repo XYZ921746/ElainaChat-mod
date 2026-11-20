@@ -1,9 +1,9 @@
-/* 插件系统 —— 非 core 的 host API 能力组：openFolder / dragSort / theme / achievements，依赖由 mods.js 的 getHostExtras() 注入。 */
+/* 插件系统 —— 非 core 的 host API 能力组：openFolder / dragSort / theme / achievements / agentTools，依赖由 mods.js 的 getHostExtras() 注入。 */
 (function () {
     'use strict';
 
     window.ElainaModsHostExtras = function (deps) {
-        const { bindFlatDragSort, host, addContribution } = deps || {};
+        const { bindFlatDragSort, host, addContribution, guardModAsync } = deps || {};
 
     function openFolderHostApi({ manifest }) {
         return {
@@ -168,6 +168,77 @@
         };
     }
 
-        return { openFolderHostApi, dragSortHostApi, themeHostApi, achievementsHostApi, desktopWindowHostApi, appUiHostApi };
+    /* `host.agentTools.register(spec, exec)` —— 把一个工具注册进 Agent 工具注册表（ElainaOps），模型可以像调
+     * 内置工具一样调它。通道完全开放（不设确认层，安装即信任），本层负责三件事：
+     * ① spec 预校验并给出可读 reason；② exec 过 guardModAsync 进该插件的故障预算（反复炸自动停用）；
+     * ③ 贡献生命周期：停用摘除工具（模型工具清单里消失）、重新启用挂回（工厂不重跑）、卸载真删。 */
+    function agentToolsHostApi({ manifest, name: regName, log }) {
+        const label = String((manifest && manifest.name) || manifest.id || regName || '');
+        /** localName → { spec, exec, tool }；activate 挂回时按这份重挂，不依赖插件再次调用 register */
+        const registered = new Map();
+        let contributionAdded = false;
+        const bridge = () => {
+            try { return host().agentTools; } catch (e) { return null; }
+        };
+
+        const attachAll = () => {
+            const b = bridge();
+            if (!b) return;
+            for (const item of registered.values()) {
+                try {
+                    if (typeof ElainaOps !== 'undefined' && ElainaOps.get(item.tool)) continue;   // 已挂上（幂等）
+                    const r = b.register(manifest.id, regName, label, item.spec, item.exec);
+                    if (!r.ok) log('warn', '工具 ' + item.tool + ' 挂回失败：' + (r.reason || ''));
+                } catch (e) { /* 单个工具挂不回不影响其它 */ }
+            }
+        };
+        const detachAll = () => {
+            const b = bridge();
+            if (!b) return;
+            for (const item of registered.values()) {
+                try { b.unregister(item.tool); } catch (e) { /* 忽略 */ }
+            }
+        };
+        const disposeAll = () => { detachAll(); registered.clear(); };
+
+        return {
+            agentTools: {
+                /**
+                 * 注册一个 Agent 工具。
+                 * @param {object} spec `{ name, desc, schema?, manual? }` —— name 为 ASCII snake_case；
+                 *   desc 是发给模型的描述。manual 可选 string|()=>string，agent_help 里下发。
+                 * @param {Function} exec `(args, ctx) => {ok, text}|string`，ctx = `{ access, traceItem }`。
+                 * @returns `{ ok, tool, name, unregister() }` 或 `{ ok:false, reason }`。
+                 */
+                register(spec, exec) {
+                    const b = bridge();
+                    if (!b) return { ok: false, reason: '宿主没有 agentTools 桥（版本过旧或脚本未加载）' };
+                    const s = (spec && typeof spec === 'object') ? spec : {};
+                    const localName = String(s.name || '').trim();
+                    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(localName)) {
+                        return { ok: false, reason: '工具名必须是 ASCII snake_case（字母开头）：' + localName };
+                    }
+                    if (!String(s.desc || '').trim()) return { ok: false, reason: '工具必须带 desc（模型靠它决定要不要调）' };
+                    if (typeof exec !== 'function') return { ok: false, reason: '工具必须带执行函数' };
+                    // 异常进本插件故障预算；确认门与结果归一化由桥补（guard 的兜底返回值已满足归一化形状）
+                    const guarded = (args, ctx) => guardModAsync(
+                        manifest.id, '插件工具 ' + localName + ' 执行',
+                        () => exec(args, ctx),
+                        { ok: false, text: '插件工具执行失败：' + localName + '（原因已记到插件卡片）' },
+                    );
+                    const handle = b.register(manifest.id, regName, label, s, guarded);
+                    if (!handle.ok) return handle;
+                    registered.set(localName, { spec: s, exec: guarded, tool: handle.tool });
+                    if (!contributionAdded) {
+                        addContribution(manifest.id, { activate: attachAll, deactivate: detachAll, dispose: disposeAll });
+                        contributionAdded = true;
+                    }
+                    return handle;
+                },
+            },
+        };
+    }
+
+        return { openFolderHostApi, dragSortHostApi, themeHostApi, achievementsHostApi, desktopWindowHostApi, appUiHostApi, agentToolsHostApi };
     };
 })();

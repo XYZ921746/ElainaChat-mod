@@ -1,28 +1,20 @@
 // 把打包产物上传到 GitHub Releases（建 Release + 传附件），不依赖 gh CLI。
-//
 // ── 为什么用 curl 而不是 Node fetch ──────────────────────────────────────
-//
 // 本机 Node 的 fetch 报 `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`（Node 不自带系统 CA 库，
 // 而这个仓库没有配 NODE_EXTRA_CA_CERTS）。curl 用系统证书库，实测正常。
-//
 // `--ssl-no-revoke` 是给中间人加速器（hosts 把 github 指向本机代理）留的：
 // 它只跳过"查吊销列表"，证书链本身仍然校验 —— 与 `-k` / `rejectUnauthorized:false`
 // 不是一回事。没有加速器的机器上这个参数也无害。
-//
 // ── 凭据从哪来 ───────────────────────────────────────────────────────────
-//
 // 从 git 的凭据管理器读（`git credential fill`），不把 token 写进命令行历史。
 // 读到的 token 必须**缓存**：一次上传会发 4+ 个请求，逐个去读会反复唤醒
 // 凭据管理器、反复弹登录框（用户明明早就登录了）。
 // 另外 `git credential fill` 不能设 timeout —— 凭据管理器首次响应可能要几十秒，
 // 超时会被误报成"拿不到 token"。只保留 `GIT_TERMINAL_PROMPT=0` 防真挂起。
-//
 // ── 用法 ─────────────────────────────────────────────────────────────────
-//
 //   node scripts/upload-release.mjs --tag v2.1.1 --notes notes.md \
 //        --assets dist/Elinachat-mod-2.1.1.apk,dist/Windows/out/elaina-Setup.exe
 //   node scripts/upload-release.mjs --tag v2.1.1 --notes notes.md --dry-run
-//
 //   不带 --assets 时从 dist/ 收集 *.apk / *.zip / *.exe。
 //   Release 已存在则复用；同名附件先删再传（否则 GitHub 返回 422）。
 import { execFileSync } from 'node:child_process';
@@ -131,7 +123,7 @@ function contentTypeFor(name) {
     return 'application/octet-stream';
 }
 
-// ============================================================ 收集产物
+// 收集产物
 const files = [];
 if (assetsArg) {
     for (const rel of assetsArg.split(',').map((s) => s.trim()).filter(Boolean)) {
@@ -184,7 +176,7 @@ console.log(`    ${'合计'.padEnd(46)} ${(totalSize / 1048576).toFixed(2)} MB`)
 
 if (dryRun) { console.log('\n（试运行结束，未上传）'); process.exit(0); }
 
-// ============================================================ 找或建 Release
+// 找或建 Release
 console.log('\n── 查找 Release ──');
 const rel = api('GET', `/repos/${repo}/releases/tags/${tag}`);
 let release = null;
@@ -207,7 +199,7 @@ if (rel.status === 200) {
     process.exit(1);
 }
 
-// ============================================================ 传附件
+// 传附件
 console.log('\n── 上传附件 ──');
 let uploaded = 0, failed = 0;
 for (const f of files) {

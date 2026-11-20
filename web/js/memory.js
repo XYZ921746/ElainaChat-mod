@@ -41,7 +41,7 @@ function loadMemoryCore() {
     memoryCoreSnapshotIds(state.memoryCore);
 }
 
-/* ── 记忆权威（M2b）────────────────────────────────────────────────────
+/* 记忆权威
    服务端 SQLite（/api/memory/core）是记忆正文的唯一权威：页面从零开始，
    canonical 数据（条目带 id）由 refreshMemoryCore() 异步拉取；保存走 POST core：
    整类目替换 + dropIds（前端 diff 上一份 canonical 算出的删除清单），服务端事务内
@@ -177,7 +177,7 @@ async function saveMemoryCore() {
     console.warn('[记忆] 记忆库不可用，本轮改动只保留在页面');
 }
 
-/* ── 记忆暂存：服务端拒收窗口内改动的跨刷新保险 ─────────────────────────
+/* 记忆暂存：服务端拒收窗口内改动的跨刷新保险
    Store 此刻同样不可用（权威在同一台服务上），帮不上忙，所以走 Store.rawStage
    落 localStorage（全库的 localStorage 访问收在存储层内，业务层只经这组方法）。
    暂存只装「从未成功推上服务端」的改动：保存失败即写入、保存成功即清空，

@@ -38,14 +38,14 @@ import java.util.concurrent.TimeUnit;
  * 之所以仍放在独立进程：它要长期跑、要能被 START_STICKY 重建；与 WebView 分进程后，
  * 服务重启不会把整个界面带走，崩溃也只影响这一半能力（页面会自动回落原生实现）。
  *
- * <p>★ 与主进程的边界：
+ * <p>与主进程的边界：
  * <ul>
  *   <li>**控制面** = {@link Messenger}（本类 {@link #incoming}）：开始 / 停止 / 查状态。</li>
  *   <li>**数据面** = Go 服务自己监听的 {@code 127.0.0.1:<port>}，WebView 直接 fetch。
  *       本类**不转发**业务流量。</li>
  * </ul>
  *
- * <p>★ 端口：Go 侧以 0 号端口监听（内核分配），把真实端口写进
+ * <p>端口：Go 侧以 0 号端口监听（内核分配），把真实端口写进
  * {@code cacheDir/elaina-server.port}；本类轮询这个文件后通过 Messenger 推给主进程。
  * 不用 SharedPreferences 传端口：MODE_MULTI_PROCESS 在 API 23+ 已废弃、各进程有独立缓存。
  */
@@ -61,7 +61,7 @@ public class ElainaNodeService extends Service {
     /** 启动等端口文件的上限。Go 是本地进程，正常几百毫秒内就能写完。 */
     private static final long READY_TIMEOUT_MS = 20000L;
 
-    // ==================== 前台服务 ====================
+    // 前台服务
 
     /**
      * 渠道 id。**一旦发布就不要改** —— 改了会多出一个新渠道，
@@ -77,7 +77,7 @@ public class ElainaNodeService extends Service {
      */
     private static final String NOTIFICATION_TEXT = "ElainaChat 正在运行中，请勿关闭";
 
-    // ==================== Messenger 协议 ====================
+    // Messenger 协议
 
     /** client → service：启动本地服务（幂等）。 */
     public static final int MSG_START = 1;
@@ -96,7 +96,7 @@ public class ElainaNodeService extends Service {
     /** 当前客户端。单客户端模型：每次收到客户端消息就用它的 replyTo 刷新。 */
     private static volatile Messenger sClient = null;
 
-    // ==================== 运行状态（仅本进程可见） ====================
+    // 运行状态（仅本进程可见）
 
     private static volatile int readyPort = -1;
     private static volatile long readyAt = 0L;
@@ -144,7 +144,7 @@ public class ElainaNodeService extends Service {
         super.onDestroy();
     }
 
-    // ==================== Messenger ====================
+    // Messenger
 
     private final Messenger incoming = new Messenger(new Handler(Looper.getMainLooper()) {
         @Override
@@ -257,7 +257,7 @@ public class ElainaNodeService extends Service {
         }
     }
 
-    // ==================== 前台通知 ====================
+    // 前台通知
 
     private void createChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return;
@@ -303,7 +303,7 @@ public class ElainaNodeService extends Service {
         }
     }
 
-    // ==================== Go 服务启动 ====================
+    // Go 服务启动
 
     private void runServer() {
         try {

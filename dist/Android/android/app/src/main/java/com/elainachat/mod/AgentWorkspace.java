@@ -21,9 +21,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 手机的「文件访问」能力（★ 2026-10 新增）。
+ * 手机的「文件访问」能力。
  *
- * <p>用户要求："添加文件访问通过手机权限让 ai 有 agent 工作区…"。所以有两层：
+ * <p>文件访问分两层：
  *
  * <ol>
  *   <li><b>Agent 工作区</b>（{@code agent-workspace/}，应用私有目录下）——
@@ -33,7 +33,7 @@ import java.util.List;
  *       **持久化 URI**。AI 可以读写那个文件夹内的文件。随时可在设置里取消。</li>
  * </ol>
  *
- * <p>★★ 为什么不做"整个手机存储随便读"：
+ * <p>为什么不做"整个手机存储随便读"：
  *   那需要 {@code MANAGE_EXTERNAL_STORAGE}（所有文件访问权限）。它会被应用商店
  *   直接拒审，对用户来说也是"给了就收不回"的授权。SAF 的粒度是"一个文件夹"，
  *   用户可以精确控制给哪个目录、也能随时收回 —— 代价只是多一次选择操作。
@@ -96,7 +96,7 @@ final class AgentWorkspace {
         }
     }
 
-    // ==================== 工作区 ====================
+    // 工作区
 
     private File workspaceRoot() {
         File base = context.getExternalFilesDir(null);
@@ -129,7 +129,7 @@ final class AgentWorkspace {
         return target;
     }
 
-    // ==================== 授权文件夹（SAF） ====================
+    // 授权文件夹（SAF）
 
     private Uri authorizedTreeUri() {
         String raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -240,7 +240,7 @@ final class AgentWorkspace {
         return false;
     }
 
-    // ==================== 列出 ====================
+    // 列出
 
     private String listFiles(String args) {
         String raw = String.valueOf(args == null ? "" : args).trim();
@@ -305,7 +305,7 @@ final class AgentWorkspace {
         }
     }
 
-    // ==================== 读 ====================
+    // 读
 
     private String readFile(String args) {
         String raw = String.valueOf(args == null ? "" : args).trim();
@@ -364,7 +364,7 @@ final class AgentWorkspace {
         }
     }
 
-    // ==================== 写 ====================
+    // 写
 
     /**
      * 写入。AI 的写法是 {@code [操作:手机写文件 路径|内容]}，
@@ -449,7 +449,7 @@ final class AgentWorkspace {
         return current;
     }
 
-    // ==================== 删 ====================
+    // 删
 
     private String deleteFile(String args) {
         String raw = String.valueOf(args == null ? "" : args).trim();
@@ -496,7 +496,7 @@ final class AgentWorkspace {
         return target.delete();
     }
 
-    // ==================== 工具 ====================
+    // 工具
 
     private static String cleanRelative(String rawPath) {
         String rel = String.valueOf(rawPath == null ? "" : rawPath).trim().replace('\\', '/');
@@ -534,7 +534,7 @@ final class AgentWorkspace {
         return "application/octet-stream";
     }
 
-    // ==================== 授权文件夹的存取（供插件方法调用） ====================
+    // 授权文件夹的存取（供插件方法调用）
 
     static void saveAuthorizedFolder(Context context, Uri uri, String name) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

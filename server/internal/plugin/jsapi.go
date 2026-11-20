@@ -15,6 +15,8 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"elainachat/server/internal/fsx"
+
 	"github.com/dop251/goja"
 )
 
@@ -99,6 +101,14 @@ func (b *ctxBuilder) need(cap, what string) {
 // safePath 把插件给的路径限制在插件目录内。这是 ctx.fs 的边界：
 // 收窄 API 的意义就是插件摸不到别人的目录，路径校验不能只写在文档里。
 func (b *ctxBuilder) safePath(raw string) (string, error) {
+	return b.resolvePath(raw, false)
+}
+
+func (b *ctxBuilder) safeWritePath(raw string) (string, error) {
+	return b.resolvePath(raw, true)
+}
+
+func (b *ctxBuilder) resolvePath(raw string, forWrite bool) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", errors.New("路径为空")
 	}
@@ -106,9 +116,18 @@ func (b *ctxBuilder) safePath(raw string) (string, error) {
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(b.dir, target)
 	}
-	rel, err := filepath.Rel(b.dir, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("路径越出了插件目录：%s", raw)
+	outside := func() error { return fmt.Errorf("路径越出了插件目录：%s", raw) }
+	if !fsx.PathInside(target, b.dir) {
+		return "", outside()
+	}
+	var err error
+	if forWrite {
+		err = fsx.WritablePathWithin(target, b.dir)
+	} else {
+		_, err = fsx.ExistingPathWithin(target, b.dir)
+	}
+	if err != nil {
+		return "", outside()
 	}
 	return target, nil
 }
@@ -370,7 +389,7 @@ func (b *ctxBuilder) fsObject() map[string]any {
 		"writeFile": func(raw string, data goja.Value) goja.Value {
 			b.need("fs-write", "ctx.fs.writeFile（写文件）")
 			return promiseSync(vm, func() (any, error) {
-				target, err := b.safePath(raw)
+				target, err := b.safeWritePath(raw)
 				if err != nil {
 					return nil, err
 				}
@@ -390,7 +409,7 @@ func (b *ctxBuilder) fsObject() map[string]any {
 		"mkdir": func(raw string) goja.Value {
 			b.need("fs-write", "ctx.fs.mkdir（建目录）")
 			return promiseSync(vm, func() (any, error) {
-				target, err := b.safePath(raw)
+				target, err := b.safeWritePath(raw)
 				if err != nil {
 					return nil, err
 				}
@@ -404,7 +423,7 @@ func (b *ctxBuilder) fsObject() map[string]any {
 				if err != nil {
 					return nil, err
 				}
-				if target == b.dir {
+				if fsx.PathInside(b.dir, target) {
 					return nil, errors.New("不能删除插件根目录")
 				}
 				return nil, os.RemoveAll(target)
@@ -417,7 +436,7 @@ func (b *ctxBuilder) fsObject() map[string]any {
 				if err != nil {
 					return nil, err
 				}
-				dst, err := b.safePath(to)
+				dst, err := b.safeWritePath(to)
 				if err != nil {
 					return nil, err
 				}

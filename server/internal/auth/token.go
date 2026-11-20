@@ -113,7 +113,6 @@ func writeInstanceFile(path, value string) {
 	_ = os.WriteFile(path, []byte(value), 0o600)
 }
 
-// signToken 生成带签名的凭据。
 func (s *Store) signToken(exp time.Time) (string, error) {
 	payload := tokenPayload{Inst: s.inst.ID, Epoch: s.Epoch(), Exp: exp.UnixMilli()}
 	body, err := json.Marshal(payload)

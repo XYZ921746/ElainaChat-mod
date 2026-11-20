@@ -42,15 +42,9 @@ async function saveSettings(opts) {
         replyDisplayMode,
         // autoMemory / memoryModelPair 由 readProviderSettingsForm 从「对话优化」的记忆下拉读取
         memoryEvery: Math.max(3, Math.min(50, parseInt(elements.settingMemoryEvery.value, 10) || 15)),
-        // 记忆召回的嵌入 / 重排序绑定：控件常驻 DOM，值即事实源；空值 = 该环节不启用。
-        defaultEmbeddingProviderId: (() => {
-            const sel = document.getElementById('settingMemoryEmbeddingProvider');
-            return sel ? sel.value : String(state.settings.defaultEmbeddingProviderId || '');
-        })(),
-        defaultRerankProviderId: (() => {
-            const sel = document.getElementById('settingMemoryRerankProvider');
-            return sel ? sel.value : String(state.settings.defaultRerankProviderId || '');
-        })(),
+        // 记忆召回的嵌入 / 重排序绑定在「模型 → 总览」卡片里切换，那里直接写 state；空值 = 该环节不启用。
+        defaultEmbeddingProviderId: String(state.settings.defaultEmbeddingProviderId || ''),
+        defaultRerankProviderId: String(state.settings.defaultRerankProviderId || ''),
         agentAccess: nextAccess,
         agentPhoneEnabled: document.getElementById('settingAgentPhoneEnabled')?.checked !== false,
         // 判据是 === true：控件不在页面上时按关闭处理，不能用 "!== false" 兜成默认开启。

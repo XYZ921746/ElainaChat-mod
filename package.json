@@ -1,11 +1,12 @@
 {
   "name": "elainachat-mod",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "private": true,
   "license": "GPL-3.0-or-later",
   "scripts": {
     "start": "cd server && go run ./cmd/elaina-server",
     "build:server": "cd server && go build -trimpath -ldflags \"-s -w\" -o bin/elaina-server.exe ./cmd/elaina-server",
+    "build:tailwind": "node scripts/build-tailwind.mjs",
     "check": "node scripts/run-checks.mjs",
     "check:serial": "node scripts/run-checks.mjs --serial",
     "check:fast": "node scripts/run-checks.mjs --only mod"

@@ -136,16 +136,36 @@
         });
     }
 
-    /** 分成「普通扩展」与「前置扩展」两组，顺序保持索引原序：前置默认收起但一直列着 —— 用户要单独装、要确认装没装都得找得到。 */
+    /** 第三方插件：只认商店索引的显式声明（thirdParty === true）——分区与角标都按它走，不做推断：
+     * 推断会把官方插件误划出去，也会给恶意条目留「不声明就混进官方区」的路。 */
+    function isThirdParty(p) {
+        return Boolean(p && p.thirdParty === true);
+    }
+
+    /** 第三方里的「已审核」：同样只认显式声明（reviewed === true）。审核状态与投稿方式一一对应——
+     * 源码 PR 进本仓库 = 合并即审核通过（代码在仓库里可见可审）；只给 release 下载地址 = 未审核。
+     * 客户端按声明展示，不自行推断。 */
+    function isReviewedThirdParty(p) {
+        return isThirdParty(p) && p.reviewed === true;
+    }
+
+    /** 分成「普通扩展 / 前置扩展 / 第三方未审核」三组，顺序保持索引原序：前置与第三方未审核区默认收起但一直列着 ——
+     * 用户要单独装、要确认装没装、要看来源都得找得到。已审核的第三方进普通列表（角标标明，无警告）；
+     * 未审核的进第三方分区：即使它同时满足前置特征。 */
     function splitMarketPlugins(all) {
         var list = Array.isArray(all) ? all : [];
         var normal = [];
         var prereq = [];
+        var third = [];
         for (var i = 0; i < list.length; i++) {
-            if (isPrerequisiteOnly(list[i], list)) prereq.push(list[i]);
+            if (isThirdParty(list[i])) {
+                if (isReviewedThirdParty(list[i])) normal.push(list[i]);
+                else third.push(list[i]);
+            }
+            else if (isPrerequisiteOnly(list[i], list)) prereq.push(list[i]);
             else normal.push(list[i]);
         }
-        return { normal: normal, prereq: prereq };
+        return { normal: normal, prereq: prereq, third: third };
     }
 
 
@@ -164,8 +184,9 @@
         return (v === 'mobile' || v === 'desktop') ? v : 'universal';
     }
 
-    /** 平台筛选：all = 全部（手机设备上除外 —— 电脑插件默认不进手机列表，点「电脑」分类才看得到）。
-        手机 / 电脑分类各自带上通用插件：通用本来就两边可用，单列一个分类只会逼用户先猜该点哪个。 */
+    /** 平台筛选：all = 全部，但手机设备上不列电脑专用插件（点「电脑」分类才看得到）——
+     *  手机装不了 desktop-only 插件，默认列表里混进去只会让用户点了才发现失败。
+     *  手机 / 电脑分类各自带上通用插件：通用本来就两边可用，单列一个分类只会逼用户先猜该点哪个。 */
     function matchesPlatform(p, sel, isMobileDevice) {
         var plat = platformOf(p);
         if (sel === 'all') return !(isMobileDevice && plat === 'desktop');

@@ -55,12 +55,20 @@ function chatModelLabel(provider, model) {
     return ((provider && (provider.name || '').trim()) || '未命名') + ' · ' + String(model || '未选模型');
 }
 
-/** 一级两个下拉的选项清单：每个提供商 × 其勾选的模型。 */
+/** 一级两个下拉的选项清单：每个提供商 × 其勾选的模型。同一对只出现一次（数据里重复勾选过也不重复列出）。 */
 function chatModelPairOptions(providers) {
     const out = [];
+    const seen = new Set();
     providers.forEach((p) => {
         const selected = Array.isArray(p.selectedModels) ? p.selectedModels : [];
-        selected.forEach((m) => out.push({ key: chatModelKey({ providerId: p.id, model: m }), providerId: p.id, model: m, label: chatModelLabel(p, m) }));
+        selected.forEach((raw) => {
+            const model = String(raw == null ? '' : raw).trim();
+            if (!model) return;
+            const key = chatModelKey({ providerId: p.id, model });
+            if (seen.has(key)) return;
+            seen.add(key);
+            out.push({ key, providerId: p.id, model, label: chatModelLabel(p, model) });
+        });
     });
     return out;
 }
@@ -74,26 +82,18 @@ function fillChatProviderSelect(select, pairs, currentKey, emptyLabel) {
         o.textContent = text;
         select.appendChild(o);
     };
+    const seen = new Set();
+    const unique = (Array.isArray(pairs) ? pairs : []).filter((p) => {
+        if (seen.has(p.key)) return false;
+        seen.add(p.key);
+        return true;
+    });
     if (emptyLabel) option('', emptyLabel);
-    if (!pairs.length && !emptyLabel) option('', '尚无可选模型（点「编辑」添加提供商并勾选模型）');
-    pairs.forEach((p) => option(p.key, p.label));
-    select.value = pairs.some((p) => p.key === currentKey) ? currentKey : '';
+    if (!unique.length && !emptyLabel) option('', '尚无可选模型（点「编辑」添加提供商并勾选模型）');
+    unique.forEach((p) => option(p.key, p.label));
+    select.value = unique.some((p) => p.key === currentKey) ? currentKey : '';
     if (select.selectedIndex < 0 && select.options.length) select.selectedIndex = 0;
     return select.value;
-}
-
-/** 回退链的一行：序号 + 「提供商 · 模型」 + 上移/下移/移除。数组顺序即回退顺序。 */
-function buildFallbackChainRow(key, label, index, total) {
-    const row = document.createElement('div');
-    row.className = 'fbc-row';
-    row.setAttribute('data-key', key);
-    row.innerHTML = `
-        <span class="fbc-order">${index + 1}</span>
-        <span class="fbc-copy">${escapeHtml(label)}</span>
-        <button type="button" class="fbc-up btn-secondary text-xs flex-none" title="上移" ${index === 0 ? 'disabled' : ''}>↑</button>
-        <button type="button" class="fbc-down btn-secondary text-xs flex-none" title="下移" ${index === total - 1 ? 'disabled' : ''}>↓</button>
-        <button type="button" class="fbc-remove btn-secondary text-xs flex-none" title="从回退链移除">✕</button>`;
-    return row;
 }
 
 function buildChatProviderBlock(p) {
@@ -213,7 +213,7 @@ function renderChatProviderModels(block, p) {
 }
 
 /** 对话类渲染入口：提供商列表（左栏）+ 提供商卡片（右栏编辑态）。
- *  默认模型/回退/图片转述属于使用配置，在「模型 → 使用偏好」（renderChatBindings 渲染）。 */
+ *  默认模型/回退/图片转述的绑定在「模型 → 总览」卡片里，这里只做 state 归一与卡片刷新。 */
 function renderChatProviderSettings() {
     renderChatProviderList();
     renderChatProviderCard();
@@ -241,60 +241,27 @@ function renderChatProviderList() {
     );
 }
 
-/** 「能力 → 对话模型选择」分区的回填：默认模型 / 失败回退 / 图片转述。下拉候选与链条里的失效对在这里收敛。 */
+/** 对话绑定的状态归一：默认模型 / 回退链里失效的对清掉，再刷新总览的图片转述提示。
+ *  控件本体在总览卡片里（自绘下拉 + 回退 chips），这里只负责把 state 收敛到当前提供商库。 */
 function renderChatBindings() {
     const s = state.settings;
     const providers = Array.isArray(s.chatProviders) ? s.chatProviders : [];
     if (!Array.isArray(s.fallbackChatModels)) s.fallbackChatModels = [];
     const pairs = chatModelPairOptions(providers);
-    const defaultKey = fillChatProviderSelect(
-        document.getElementById('defaultChatModelSelect'),
-        pairs,
-        chatModelKey(s.defaultChatModel)
-    );
-    const chosen = pairs.find((p) => p.key === defaultKey) || null;
-    s.defaultChatModel = chosen
-        ? { providerId: chosen.providerId, model: chosen.model }
-        : { providerId: '', model: '' };
-    const chain = (Array.isArray(s.fallbackChatModels) ? s.fallbackChatModels : [])
-        .filter((pair) => pairs.some((p) => p.key === chatModelKey(pair)));
-    s.fallbackChatModels = chain;
     const defaultKeyStr = chatModelKey(s.defaultChatModel);
-    const chainBox = document.getElementById('fallbackChainList');
-    chainBox.innerHTML = '';
-    if (!chain.length) {
-        const empty = document.createElement('p');
-        empty.className = 'text-[11px] text-dim';
-        empty.textContent = '未设置回退。默认模型失败时将直接报错。';
-        chainBox.appendChild(empty);
-    } else {
-        chain.forEach((pair, i) => chainBox.appendChild(
-            buildFallbackChainRow(chatModelKey(pair), chatModelLabel(chatProviderById(pair.providerId), pair.model), i, chain.length)
-        ));
+    // 只在"有候选但对不上"时清掉：一家都没配时保留原值，避免设置尚未加载完就把绑定写成空。
+    if (pairs.length && !pairs.some((p) => p.key === defaultKeyStr)) {
+        s.defaultChatModel = { providerId: '', model: '' };
     }
-    // 摘要只显示第一个回退模型；第 2 个及之后的在 details 编辑里看（与 AstrBot 的紧凑行一致）
-    const firstEl = document.getElementById('fallbackChainFirst');
-    if (firstEl) firstEl.textContent = chain.length ? chatModelLabel(chatProviderById(chain[0].providerId), chain[0].model) : '未设置回退';
-    const moreEl = document.getElementById('fallbackChainMore');
-    if (moreEl) moreEl.textContent = chain.length > 1 ? '＋' + (chain.length - 1) + ' 个' : '';
-    const addSel = document.getElementById('fallbackAddSelect');
-    const addBtn = document.getElementById('fallbackAddBtn');
-    const candidates = pairs.filter((p) => p.key !== defaultKeyStr && !chain.some((c) => chatModelKey(c) === p.key));
-    addSel.innerHTML = '';
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = candidates.length ? '添加回退模型…' : '没有可添加的模型';
-    addSel.appendChild(placeholder);
-    candidates.forEach((p) => {
-        const o = document.createElement('option');
-        o.value = p.key;
-        o.textContent = p.label;
-        addSel.appendChild(o);
-    });
-    addSel.value = '';
-    addSel.disabled = !candidates.length;
-    addBtn.disabled = !candidates.length;
-    fillVisionModelPairOptions();
+    const seenFallback = new Set();
+    s.fallbackChatModels = (Array.isArray(s.fallbackChatModels) ? s.fallbackChatModels : [])
+        .filter((pair) => {
+            const key = chatModelKey(pair);
+            if (!pairs.some((p) => p.key === key)) return false;
+            if (seenFallback.has(key)) return false;
+            seenFallback.add(key);
+            return true;
+        });
     updateVisionMainModelHint();
 }
 
@@ -310,7 +277,7 @@ function renderChatProviderCard() {
     box.appendChild(buildChatProviderBlock(prov));
 }
 
-// ==================== 「列表 → 详情」通用外壳 ====================
+// 「列表 → 详情」通用外壳
 // 对话 / 语音输出 / 语音输入 / 图片转述都是"先选一个服务商、再配置它"，
 //   共用同一套列表行与详情页，免得每个分栏各长一套长得不一样的控件。
 
@@ -375,7 +342,7 @@ function fillProvList(box, items, onPick, newLabel, onNew) {
     }
 }
 
-// ---------- 文字转语音 / 语音转文字 / 嵌入 / 重排序：动态提供商「列表 → 详情」 ----------
+// 文字转语音 / 语音转文字 / 嵌入 / 重排序：动态提供商「列表 → 详情」
 // 与对话模型同一套契约：每类一个提供商数组 + 默认指向；预设协议只在「＋新增」时作为模板出现，
 // 列表本身只显示已添加的实例。Key 统一走 getProviderSecret / setProviderSecret（chatProviderKeys 通道）。
 
@@ -420,7 +387,7 @@ function newProviderId(prefix) {
     return 'prov_' + prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
 }
 
-// ---------- 协议自动识别 ----------
+// 协议自动识别
 // 用户只填地址 / Key / 模型，协议由探测结果决定：
 //   对话类只查 GET /models（不计费）；TTS/ASR 按地址域名即时识别（未知地址回落通用协议）；
 //   嵌入/重排序只有一种协议，无需检测。
@@ -435,7 +402,7 @@ function newProviderId(prefix) {
 // 返回 200 且有非空 data[] 才算命中；401/403 记为"端点存在但 Key 被拒"（不立即定案，
 // 因为先鉴权后路由的网关对任何路径都回 401）；404 与网络失败算端点不存在。
 // 两家都取不到时按常见度取证据（OpenAI 兼容优先）。
-// model 参数保留只为兼容调用方签名：列表接口不需要模型名，探测也不再发对话请求。
+// model 参数保留只为兼容调用方签名：列表接口不需要模型名，探测也不发对话请求。
 async function detectChatProtocolForCreate(baseUrl, apiKey) {
     // 用户可能把整条端点粘进来（…/v4/chat/completions）：先剥掉功能段再拼候选。
     const base = stripChatFunctionSuffix(baseUrl);
@@ -514,7 +481,7 @@ function renderProviderListPage(listBoxId, providers, defaultId, opts) {
 /** 栏头「＋ 新增」按钮统一为打开新建弹窗，无本地态要同步；保留函数作显式入口。 */
 function syncModelAddButtons() {}
 
-// ----- 文字转语音 -----
+// 文字转语音
 
 function renderTtsProviderPage(resetView) {
     if (resetView) { ttsProviderEditingId = ''; ttsProviderDetailOpen = false; }
@@ -699,7 +666,7 @@ async function testTtsProviderDraft() {
     });
 }
 
-// ----- 语音转文字 -----
+// 语音转文字
 
 function renderAsrProviderPage(resetView) {
     if (resetView) { asrProviderEditingId = ''; asrProviderDetailOpen = false; }
@@ -871,7 +838,7 @@ async function testAsrProviderDraft() {
     });
 }
 
-// ----- 嵌入 / 重排序（共用一套单协议列表：接口地址 / Key / 模型 + 获取模型 + 测试）-----
+// 嵌入 / 重排序（共用一套单协议列表：接口地址 / Key / 模型 + 获取模型 + 测试）
 
 function renderSimpleProviderPage(kind, resetView) {
     const isEmbedding = kind === 'embedding';
@@ -902,9 +869,6 @@ function renderSimpleProviderPage(kind, resetView) {
             fillSimpleProviderDetail(kind, prov);
         }
     }
-    // 增删 / 改默认都走这里：「能力 → 记忆与检索」那两个下拉必须跟着变，
-    // 否则分栏切过去显示的还是旧绑定，用户以为改没生效。
-    fillMemoryBindingSelects();
 }
 
 function fillSimpleProviderDetail(kind, prov) {
@@ -1059,12 +1023,6 @@ async function testRerankProviderDraft() {
     });
 }
 
-/** 图片转述候选按当前对话模型库重建；开不用开关——选中即用、选空即停。 */
-function renderVisionProviderPage() {
-    fillVisionModelPairOptions();
-    updateVisionMainModelHint();
-}
-
 /** 只按名字做一个弱判断，用于把提示说具体；真正结论仍以模型实测缓存为准。 */
 function visionModelLooksMultimodal(model) {
     const name = String(model || '').toLowerCase();
@@ -1072,21 +1030,21 @@ function visionModelLooksMultimodal(model) {
     return /(gpt-4o|gpt-4\.1|gpt-5|\bo[34]\b|gemini|claude-3|claude-4|qwen[^\s]*vl|qwen2\.5-vl|qwen3-vl|glm-4v|glm-4\.5v|pixtral|llava|internvl|minicpm-v|vision|multimodal)/.test(name);
 }
 
-/** 提示条跟着「默认模型」走：已知能识图时明确劝退，普通情况保留通用说明。 */
+/** 提示条跟着「默认模型」走：只有已知能识图时才提醒（平时不占卡片高度）。 */
 function updateVisionMainModelHint(modelOverride) {
     const el = document.getElementById('visionMainModelHint');
     if (!el) return;
     let model = modelOverride == null ? '' : String(modelOverride);
     if (modelOverride == null) {
-        try { model = String(activeChatSettings().model || ''); } catch (e) { /* 模型层未就绪时保留通用文案 */ }
+        try { model = String(activeChatSettings().model || ''); } catch (e) { /* 模型层未就绪时按未知处理 */ }
     }
     let verdict = null;
     try { if (typeof cachedModelImageVerdict === 'function') verdict = cachedModelImageVerdict(); } catch (e) { /* 缓存不可读时按未知处理 */ }
     const strong = verdict === true || visionModelLooksMultimodal(model);
     el.classList.toggle('set-note-warn', strong);
     el.innerHTML = strong
-        ? '当前默认模型「' + escapeHtml(model || '默认模型') + '」本来就支持查看图片，建议不要打开这个开关。'
-        : '主模型本来就支持查看图片时，建议不要打开这个开关；纯文本模型才需要接一个视觉模型。';
+        ? '当前默认模型「' + escapeHtml(model || '默认模型') + '」本来就支持查看图片，建议保持「不使用」。'
+        : '';
 }
 
 /** 进模型页时把全部二级编辑态清掉（编辑状态不跨访问、不跨分类保留）。 */
@@ -1098,7 +1056,7 @@ function resetModelProviderPages() {
     renderRerankProviderPage(false);
 }
 
-// ---------- 模型页：五分类常驻导航 + 左列表右详情双栏 ----------
+// 模型页：五分类常驻导航 + 左列表右详情双栏
 // 「模型」是设置面板之外的顶层页面（与记忆页同级）：顶部分类胶囊常驻（对话 / 语音转文字 /
 // 文字转语音 / 嵌入 / 重排序）；宽屏左栏列表、右栏详情 —— 未选中时给占位符，
 // 对话类的右栏默认是默认模型与回退设置。窄屏上下堆叠。
@@ -1182,7 +1140,7 @@ function syncModelPageVisibility() {
             body.classList.toggle('is-detail', detailShown);
             if (modelTab) modelTab.classList.toggle('is-detail', detailShown);
             // 从列表下钻时把内容滚回顶部，否则详情会停在上一次列表的滚动位置。
-            if (detailShown && !wasDetail && window.innerWidth <= 980) {
+            if (detailShown && !wasDetail && isMobile()) {
                 const content = document.getElementById('settingsContent');
                 if (content) content.scrollTop = 0;
             }
@@ -1201,10 +1159,6 @@ function renderModelPage() {
     syncModelViewPanes();
     if (modelSectionView === 'overview') {
         renderModelOverview();
-        return;
-    }
-    if (modelSectionView === 'prefs') {
-        renderChatBindings();
         return;
     }
     if (modelSectionView === 'add') {
@@ -1263,9 +1217,10 @@ function openModelPageForAnchor(anchorId) {
         asrProviderHome: ['providers', 'asr'],
         embeddingProviderHome: ['providers', 'embedding'],
         rerankProviderHome: ['providers', 'rerank'],
-        settingChatModel: ['prefs', ''],
-        settingThinkingEffort: ['prefs', ''],
-        modelGenerationSection: ['prefs', ''],
+        settingThinkingEffort: ['overview', ''],
+        modelGenerationSection: ['overview', ''],
+        conversationTuningSection: ['overview', ''],
+        memoryRecallSection: ['overview', ''],
         modelOverviewCards: ['overview', '']
     };
     const target = map[anchorId];
@@ -1337,14 +1292,14 @@ function describeModelOverview() {
     return total + ' 个提供商 · ' + configured + ' / 5 类已配置';
 }
 
-// ---------- 模型三段式：总览 / 我的模型 / 使用偏好 ----------
-// 总览只负责“用谁”，我的模型负责“连接与编辑”，添加是独立弹窗；三段共用一份 state，避免同一绑定出现两套入口各自为政。
+// 模型两段式：总览 / 我的模型
+// 总览负责“用谁”与“怎么用”（绑定卡片 + 生成参数 + 对话与联网），我的模型负责“连接与编辑”，添加是独立弹窗；
+// 两段共用一份 state，避免同一绑定出现两套入口各自为政。
 let modelSectionView = 'overview';
 let modelFilter = 'chat';
 const MODEL_VIEW_PANES = Object.freeze({
     overview: 'modelOverviewPane',
     providers: 'modelProvidersPane',
-    prefs: 'modelPrefsPane',
     add: 'modelAddPane'
 });
 
@@ -1425,7 +1380,7 @@ function syncModelViewPanes() {
             pane.setAttribute('aria-hidden', on ? 'false' : 'true');
         }
     });
-    // 添加只属于「我的模型」：总览只做绑定，使用偏好只调参数，页头不再常驻添加入口。
+    // 添加只属于「我的模型」：总览只做绑定与偏好，页头不放添加入口。
     const addBtn = document.getElementById('modelAddModelBtn');
     if (addBtn) addBtn.classList.toggle('hidden', modelSectionView !== 'providers');
     // 手机顶栏要跟着当前子页写标题；属性变化同时触发 mobile-shell 的观察者。
@@ -1436,7 +1391,7 @@ function syncModelViewPanes() {
 function renderModelFilterNav() {
     const box = document.getElementById('modelFilterNav');
     if (!box) return;
-    // 不再保留「全部」聚合视图：五类在同一张卡里各占一段，越加越长；一次只看一类更清楚。
+    // 五类在同一张卡里各占一段会越加越长；一次只看一类更清楚，故不设聚合视图。
     box.innerHTML = MODEL_SECTION_ENTRIES.map((entry) => {
         const count = modelProviderList(entry.key).length;
         return '<button type="button" class="model-filter-btn' + (modelFilter === entry.key ? ' is-active' : '') + '"'
@@ -1487,6 +1442,9 @@ function renderModelOverview() {
     const chatPickerOptions = pairs.length
         ? pairs.map((pair) => ({ value: pair.key, label: pair.label, selected: pair.key === currentKey }))
         : [{ value: '', label: '未启用', selected: true }];
+    // 库里已有模型但默认对已失效（提供商被删 / 模型取消勾选）时给一条显式的「未指定」，
+    // 不能让下拉标签悄悄显示第一家 —— 那会让人以为已经在用它。
+    if (pairs.length && !chatPair) chatPickerOptions.unshift({ value: '', label: '未指定', selected: true });
     const chatPickerLabel = (chatPickerOptions.find((o) => o.selected) || chatPickerOptions[0]).label;
 
     const chain = (Array.isArray(s.fallbackChatModels) ? s.fallbackChatModels : [])
@@ -1494,8 +1452,14 @@ function renderModelOverview() {
     const fallbackChips = chain.map((pair, index) => {
         const key = chatModelKey(pair);
         const provider = chatProviders.find((p) => p.id === pair.providerId);
+        // 顺序即回退优先级：两枚小箭头直接改顺序，比"删掉再添加"少一步，也不把编辑器再开一份。
+        const moveBtns = chain.length > 1
+            ? '<button type="button" class="mo-fb-move" data-mo-fallback-up="' + escapeHtml(key) + '" aria-label="上移回退模型"' + (index === 0 ? ' disabled' : '') + '>↑</button>'
+                + '<button type="button" class="mo-fb-move" data-mo-fallback-down="' + escapeHtml(key) + '" aria-label="下移回退模型"' + (index === chain.length - 1 ? ' disabled' : '') + '>↓</button>'
+            : '';
         return '<span class="mo-fb-chip"><span class="mo-fb-num">' + (index + 1) + '</span>'
             + escapeHtml(chatModelLabel(provider, pair.model))
+            + moveBtns
             + '<button type="button" class="mo-fb-x" data-mo-fallback-remove="' + escapeHtml(key) + '" aria-label="移除回退模型">×</button></span>';
     }).join('');
     const fallbackCandidates = pairs.filter((pair) => pair.key !== currentKey && !chain.some((c) => chatModelKey(c) === pair.key));
@@ -1548,7 +1512,7 @@ function renderModelOverview() {
         const pickerLabel = (pickerOptions.find((o) => o.selected) || pickerOptions[0]).label;
         // 不管有没有可选提供商，这一格都保留：空的时候它就是一条「未启用」，仍可点开。
         const control = modelPickerHtml(kind, pickerLabel, pickerOptions, '切换' + entry.name);
-        // 一家都没有时状态交给下拉里的「未启用」，不再额外挂一枚「未配置」角标。
+        // 一家都没有时状态交给下拉里的「未启用」，不额外挂「未配置」角标。
         const status = current ? '已配置' : (list.length || chatFallbackOptions.length ? '未启用' : '');
         const modelText = current ? escapeHtml(current.model || current.name || '未命名') : (list.length || chatFallbackOptions.length ? '未启用' : '');
         return '<div class="mo-card">'
@@ -1566,10 +1530,31 @@ function renderModelOverview() {
     const configured = MODEL_SECTION_ENTRIES.filter((entry) => modelCurrentProvider(entry.key)).length;
     const total = MODEL_SECTION_ENTRIES.reduce((n, entry) => n + modelProviderList(entry.key).length, 0);
 
+    // 图片转述：候选与「默认模型」同一份（提供商 × 已勾选模型），选中即用、选空即停，不单独造开关。
+    // 停用时即使还留着 providerId / 模型也不显示成已配置 —— 生效判据是 visionEnabled（visionConfigured）。
+    const visionKey = s.visionEnabled === true ? currentVisionPairKey() : '';
+    const visionPairs = visionModelPairOptions();
+    const visionOptions = [{ value: '', label: '不使用图片转述', selected: !visionKey }]
+        .concat(visionPairs.map((o) => ({ value: o.key, label: o.label, selected: o.key === visionKey })));
+    const visionPickerLabel = (visionOptions.find((o) => o.selected) || visionOptions[0]).label;
+    const visionPair = visionPairs.find((o) => o.key === visionKey) || null;
+    const visionProvider = visionPair && visionPair.providerId !== LEGACY_VISION_PROVIDER
+        ? chatProviders.find((p) => p.id === visionPair.providerId) : null;
+    const visionCard = '<div class="mo-card">'
+        + '<div class="mo-card-head"><span class="mo-kind-dot" aria-hidden="true">视</span><span class="mo-kind-label">图片转述</span>'
+        + '<span class="mo-status' + (visionPair ? '' : ' is-empty') + '">' + (visionPair ? '已配置' : '未启用') + '</span></div>'
+        + '<div class="mo-card-body"><div class="mo-main">'
+        + '<div class="mo-model">' + (visionPair ? escapeHtml(visionPair.model || visionPair.label) : '不使用') + '</div>'
+        + '<div class="mo-sub">' + (visionPair
+            ? escapeHtml((visionProvider ? (visionProvider.name || '未命名') : '独立地址') + ' · 主模型不能识图时替它看图')
+            : '纯文本主模型才需要接一个视觉模型') + '</div>'
+        + '</div><div class="mo-control">' + modelPickerHtml('vision', visionPickerLabel, visionOptions, '切换图片转述模型') + '</div></div>'
+        + '<div id="visionMainModelHint" class="mo-vision-hint"></div></div>';
+
     box.innerHTML = '<div class="mo-overview-head"><span class="mo-overview-title">当前使用</span>'
         + '<span class="mo-overview-meta">' + total + ' 个提供商 · ' + configured + ' / 5 类已配置</span></div>'
         + '<div class="mo-grid">'
-        + '<div class="mo-card mo-card-wide">'
+        + '<div class="mo-card">'
         + '<div class="mo-card-head"><span class="mo-kind-dot" aria-hidden="true">' + escapeHtml(modelAddKindAvatar('chat')) + '</span><span class="mo-kind-label">对话</span>'
         + (chatPair ? '<span class="mo-status">已配置</span>' : (pairs.length ? '<span class="mo-status is-empty">未指定</span>' : '')) + '</div>'
         + '<div class="mo-card-body"><div class="mo-main">'
@@ -1581,7 +1566,9 @@ function renderModelOverview() {
         + '<div class="mo-fallback"><span class="mo-fb-label">失败回退</span>'
         + (fallbackChips || '<span class="mo-fb-empty">未设置，默认模型失败时不会自动切换</span>')
         + fallbackAdd + '</div></div>'
+        + visionCard
         + cards + '</div>';
+    updateVisionMainModelHint();
     renderModelSectionTabs();
 }
 
@@ -1606,7 +1593,7 @@ function setModelEditingId(kind, id) {
 function ensureModelProviderSelection() {
     if (modelSectionView !== 'providers') return;
     // 窄屏是“一步一屏”：进「我的模型」先看列表，右栏详情只在点行之后出现；自动选中会把列表直接顶掉。
-    if (window.innerWidth <= 980) return;
+    if (isMobile()) return;
     const filterKind = modelFilter;
     if (filterKind) {
         modelSectionPage = filterKind;
@@ -1641,7 +1628,7 @@ function setModelSectionView(view) {
         commitSimpleProviderDetail('rerank');
     }
     modelSectionView = view;
-    if (view === 'providers' && window.innerWidth <= 980) {
+    if (view === 'providers' && isMobile()) {
         clearModelEditingState();
         modelSectionPage = modelFilter;
     }
@@ -1649,12 +1636,11 @@ function setModelSectionView(view) {
     renderModelSectionTabs();
     if (view === 'providers') {
         renderModelPage();
-    } else if (view === 'prefs') {
-        renderChatBindings();
-        if (typeof syncThinkingModeControls === 'function') syncThinkingModeControls();
-        if (typeof syncSamplingControls === 'function') syncSamplingControls(null, true);
     } else {
         renderModelOverview();
+        // 生成参数卡在总览页内：进页就同步开关与滑杆的显隐，不等用户滚到那里才刷新。
+        if (typeof syncThinkingModeControls === 'function') syncThinkingModeControls();
+        if (typeof syncSamplingControls === 'function') syncSamplingControls(null, true);
     }
     const content = document.getElementById('settingsContent');
     if (content) content.scrollTop = 0;
@@ -1687,10 +1673,26 @@ async function applyModelBinding(kind, value) {
         s.defaultEmbeddingProviderId = String(value || '');
     } else if (kind === 'rerank') {
         s.defaultRerankProviderId = String(value || '');
+    } else if (kind === 'vision') {
+        // 选中即用、选空即停；「独立地址」是 visionModelPairOptions 里的保留键，
+        // 它没有 providerId，地址 / Key / 模型沿用单独填写的那份，不能按"空 = 不使用"清掉。
+        const pair = parseChatModelKey(value);
+        if (pair.providerId === LEGACY_VISION_PROVIDER) {
+            // 独立地址那条只带模型名：清掉 providerId 才会走 visionBaseUrl / visionApiKey。
+            s.visionEnabled = true;
+            s.visionProviderId = '';
+        } else if (pair.providerId && pair.model) {
+            s.visionEnabled = true;
+            s.visionProviderId = pair.providerId;
+            s.visionModel = pair.model;
+        } else {
+            s.visionEnabled = false;
+            s.visionProviderId = '';
+            s.visionModel = '';
+        }
     }
     // 先把旧控件同步到新值，再保存：saveSettings 会从这些 DOM 读回，晚一步就会把旧值写回去。
     renderChatBindings();
-    if (kind === 'embedding' || kind === 'rerank') fillMemoryBindingSelects();
     renderModelOverview();
     await saveSettings({ silent: true });
 }
@@ -1716,8 +1718,21 @@ async function removeModelFallback(key) {
     renderModelOverview();
     await saveSettings({ silent: true });
 }
-// ---------- 添加模型：独立三步页 ----------
-// 添加不再借“新建提供商”弹窗：类型 → 服务商 → 连接，三步各自只问一件事；协议在第三步自动识别。
+
+/** 回退顺序 = 数组顺序；delta 为 -1 上移、1 下移。 */
+async function moveModelFallback(key, delta) {
+    const s = state.settings;
+    const chain = Array.isArray(s.fallbackChatModels) ? s.fallbackChatModels.slice() : [];
+    const i = chain.findIndex((c) => chatModelKey(c) === key);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= chain.length) return;
+    [chain[i], chain[j]] = [chain[j], chain[i]];
+    s.fallbackChatModels = chain;
+    renderModelOverview();
+    await saveSettings({ silent: true });
+}
+// 添加模型：独立三步页
+// 添加不经“新建提供商”弹窗：类型 → 服务商 → 连接，三步各自只问一件事；协议在第三步自动识别。
 const MODEL_ADD_CHAT_PRESETS = [
     { id: 'deepseek', name: 'DeepSeek', url: 'https://api.deepseek.com/v1', model: 'deepseek-chat', models: ['deepseek-chat', 'deepseek-reasoner'], protocol: 'openai-compatible' },
     { id: 'silicon', name: '硅基流动', url: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-72B-Instruct', models: ['Qwen/Qwen2.5-72B-Instruct', 'deepseek-ai/DeepSeek-V3'], protocol: 'openai-compatible' },
@@ -2109,7 +2124,6 @@ async function createModelFromAdd() {
         else if (s.kind === 'asr') settings.defaultAsrProviderId = newId;
         else if (s.kind === 'embedding') settings.defaultEmbeddingProviderId = newId;
         else settings.defaultRerankProviderId = newId;
-        if (s.kind === 'embedding' || s.kind === 'rerank') fillMemoryBindingSelects();
         void saveSettings({ silent: true });
     }
     modelAddState = null;
@@ -2169,8 +2183,8 @@ async function fetchModelAddModels() {
     }
 }
 
-// ---------- 设置二级页：整块替换分栏内容 ----------
-// 供应商配置不再在卡片里原地展开，而是移到 #settingsSubpage 占满内容区；
+// 设置二级页：整块替换分栏内容
+// 供应商配置放到 #settingsSubpage 占满内容区，不在卡片里原地展开；
 // 返回时把节点移回它原来的位置，卡片恢复成列表。
 let settingsSubpageNode = null;
 let settingsSubpageOrigin = null;
@@ -2332,7 +2346,7 @@ function addChatProvider(formatId, initial = {}) {
 
 function readChatProvidersFromDom() {
     // 右栏正显示某家的卡片时把它写回 state，再整体读出来。
-    //   （刻意不再"逐个 DOM 块合并"：每多开一个页面就得同步一条，正是漏字段的来源。）
+    //   （刻意不做"逐个 DOM 块合并"：每多开一个页面就得同步一条，正是漏字段的来源。）
     commitChatProviderDetail();
     const s = state.settings;
     return {
@@ -2344,12 +2358,8 @@ function readChatProvidersFromDom() {
 function readProviderSettingsForm() {
     // 旧的单模型三件套（apiFormat/baseUrl/model/apiKey）已不是表单字段，只作迁移源，原样带过。
     const chat = readChatProvidersFromDom();
-    const visionPairSelect = document.getElementById('settingVisionModelPair');
-    const visionPair = visionPairSelect ? parseChatModelKey(visionPairSelect.value) : { providerId: '', model: '' };
-    const isLegacyVision = Boolean(visionPairSelect && visionPair.providerId === LEGACY_VISION_PROVIDER);
     const memoryModelSelect = document.getElementById('settingMemoryModel');
-    // 默认/回退的 DOM 现在在「模型」顶层页里：元素在就以 DOM 为准（比 state 新），
-    // 元素不在（模型页没进出过）保留 state。
+    // 默认模型 / 回退 / 图片转述的控件在总览卡片里，选中即写 state（不经过原生表单），这里直接读 state。
     // 语音四类的详情页正开着时，先把 DOM 草稿写回提供商对象；数组本体随下面的 ...state.settings 带过。
     commitTtsProviderDetail();
     commitAsrProviderDetail();
@@ -2360,27 +2370,13 @@ function readProviderSettingsForm() {
         apiProvider: DEFAULT_SETTINGS.apiProvider,
         chatProviders: chat.providers,
         chatProviderKeys: chat.keys,
-        defaultChatModel: document.getElementById('defaultChatModelSelect')
-            ? parseChatModelKey(document.getElementById('defaultChatModelSelect')?.value)
-            : (state.settings.defaultChatModel || { providerId: '', model: '' }),
-        fallbackChatModels: document.getElementById('fallbackChainList')
-            ? Array.from(document.querySelectorAll('#fallbackChainList .fbc-row'))
-                .map((row) => parseChatModelKey(row.getAttribute('data-key')))
-                .filter((p) => p.providerId && p.model)
-            : (Array.isArray(state.settings.fallbackChatModels) ? state.settings.fallbackChatModels : []),
-        // 不再是开关：下拉选了模型 = 开，选「不使用」= 关（显式清绑定）；下拉不在 DOM 里时保留 state。
+        defaultChatModel: state.settings.defaultChatModel || { providerId: '', model: '' },
+        fallbackChatModels: Array.isArray(state.settings.fallbackChatModels) ? state.settings.fallbackChatModels : [],
+        // 开关由下拉表达：选了模型 = 开，选「不使用」= 关（显式清绑定）。
         // 「独立地址」是下拉里的保留项：它没有 providerId，不能按"空 = 不使用"处理，否则升级后第一次保存就把它静默关掉。
-        visionEnabled: visionPairSelect
-            ? (isLegacyVision || Boolean(visionPair.providerId && visionPair.model))
-            : (state.settings.visionEnabled === true),
-        visionProviderId: isLegacyVision
-            ? ''
-            : (visionPairSelect ? visionPair.providerId : String(state.settings.visionProviderId || '')),
-        visionModel: isLegacyVision
-            ? String(state.settings.visionModel || '')
-            : (visionPairSelect
-                ? visionPair.model
-                : String(state.settings.visionModel || '')),
+        visionEnabled: state.settings.visionEnabled === true,
+        visionProviderId: String(state.settings.visionProviderId || ''),
+        visionModel: String(state.settings.visionModel || ''),
         visionBaseUrl: String(state.settings.visionBaseUrl || ''),
         visionApiKey: String(state.settings.visionApiKey || ''),
         // 记忆整理三态：off = 关闭；'' = 沿用当前对话模型；具体键 = 单独指定的整理模型。控件缺失时保留 state，不误关记忆。
@@ -2463,31 +2459,30 @@ function currentVisionPairKey() {
     return hit ? hit.key : '';
 }
 
-function fillVisionModelPairOptions() {
-    const pairs = visionModelPairOptions();
-    fillChatProviderSelect(
-        document.getElementById('settingVisionModelPair'),
-        pairs,
-        currentVisionPairKey(),
-        '不使用图片转述'
-    );
-}
-
-/** 记忆整理模型下拉：off = 关闭；'' = 沿用当前对话模型；其余 = 「对话模型」已勾选的提供商 × 模型。 */
+/** 记忆整理模型下拉：off = 关闭；'' = 沿用当前对话模型；其余 = 「对话模型」已勾选的提供商 × 模型。
+ *  与「沿用当前对话模型」等价的那一对不单列 —— 同一个模型在同一只下拉里出现两次会被当成重复项。 */
 function fillMemoryModelSelect() {
     const select = document.getElementById('settingMemoryModel');
     if (!select) return;
     select.innerHTML = '';
+    const seen = new Set();
     const option = (value, text) => {
+        const v = String(value == null ? '' : value);
+        if (seen.has(v)) return;
+        seen.add(v);
         const o = document.createElement('option');
-        o.value = value;
+        o.value = v;
         o.textContent = text;
         select.appendChild(o);
     };
     option('off', '关闭');
     option('', '沿用当前对话模型');
     const s = state.settings;
-    chatModelPairOptions(Array.isArray(s.chatProviders) ? s.chatProviders : []).forEach((p) => option(p.key, p.label));
+    const defaultKey = chatModelKey(s.defaultChatModel);
+    chatModelPairOptions(Array.isArray(s.chatProviders) ? s.chatProviders : []).forEach((p) => {
+        if (defaultKey !== '|' && p.key === defaultKey) return;
+        option(p.key, p.label);
+    });
     if (!s.autoMemory) {
         select.value = 'off';
         return;
@@ -2496,52 +2491,6 @@ function fillMemoryModelSelect() {
     // 请求侧 memoryChatSettings 也按同一口径回落，下次保存顺手把失效对清掉。
     const key = s.memoryModelPair ? chatModelKey(s.memoryModelPair) : '';
     select.value = Array.from(select.options).some((o) => o.value === key) ? key : '';
-}
-
-/** 记忆召回的嵌入 / 重排序绑定：选项来自各自分类的提供商池，写入的是总览绑定同一个键。
-    空值 = 该环节不启用（与 defaultEmbeddingProviderId 的既有语义一致），不额外造开关。 */
-function fillMemoryBindingSelects() {
-    const s = state.settings;
-    const fill = (selectId, hintId, kind, keyName) => {
-        const select = document.getElementById(selectId);
-        if (!select) return;
-        const list = Array.isArray(s[kind + 'Providers']) ? s[kind + 'Providers'] : [];
-        const head = select.querySelector('option[value=""]');
-        const emptyText = head ? head.textContent : '不使用';
-        select.innerHTML = '';
-        const add = (value, text) => {
-            const o = document.createElement('option');
-            o.value = value;
-            o.textContent = text;
-            select.appendChild(o);
-        };
-        add('', emptyText);
-        list.forEach((p) => add(p.id, (p.name || '未命名') + (p.model ? ' · ' + p.model : '')));
-        // 对话模型兜底只留一个「沿用当前对话使用的模型」：具体是哪一对由会话绑定或默认模型在请求时解析，不再逐项钉死。
-        const chatPairs = chatModelPairOptions(Array.isArray(s.chatProviders) ? s.chatProviders : []);
-        if (chatPairs.length) add(chatCurrentBindingValue(), '沿用当前对话使用的模型');
-        const current = String(s[keyName] || '');
-        // 旧配置里的 chat:<provider>:<model> 钉死绑定不再出现在下拉里，但不能因此把它重置成空：
-        // 那会在下次保存设置时静默丢掉用户原来的选择。
-        if (isChatModelBinding(current) && !Array.from(select.options).some((o) => o.value === current)) {
-            const parsed = typeof parseChatModelBinding === 'function' ? parseChatModelBinding(current) : null;
-            add(current, parsed ? '沿用 ' + parsed.providerId + ' · ' + parsed.model : '沿用旧对话模型绑定');
-        }
-        select.value = Array.from(select.options).some((o) => o.value === current) ? current : '';
-        const hint = document.getElementById(hintId);
-        if (hint) {
-            hint.textContent = isChatModelBinding(current)
-                ? (kind === 'embedding'
-                    ? '当前用对话模型做关键词兜底（本地哈希，不逐条发请求）；效果不如专用嵌入模型。'
-                    : '当前用对话模型代替重排序，效果与成本都不如专用重排序模型。')
-                : (list.length
-                    ? ''
-                    : '还没有' + (kind === 'embedding' ? '嵌入' : '重排序') + '提供商 → 去「模型 → '
-                        + (kind === 'embedding' ? '嵌入' : '重排序') + '」添加一个，或从下拉里选对话模型兜底');
-        }
-    };
-    fill('settingMemoryEmbeddingProvider', 'memoryEmbeddingHint', 'embedding', 'defaultEmbeddingProviderId');
-    fill('settingMemoryRerankProvider', 'memoryRerankHint', 'rerank', 'defaultRerankProviderId');
 }
 
 /** 图片转述实际用的地址 / Key / 模型：取选中的对话模型提供商；未选中（或缺模型）时走单独填写的地址与 Key。 */
@@ -2572,7 +2521,6 @@ function visionConfigured() {
 }
 
 function fillVisionSettings() {
-    fillVisionModelPairOptions();
     updateVisionMainModelHint();
 }
 
@@ -2790,45 +2738,6 @@ function applyChatProviderEditorToState() {
 }
 
 function bindChatProviderSettingsUI() {
-    // 对话：右栏默认视图（默认模型 / 回退链）的操作。
-    const bindings = document.getElementById('chatBindingSection');
-    if (bindings) {
-        bindings.addEventListener('click', async (ev) => {
-            const s = state.settings;
-            if (ev.target.closest('#fallbackAddBtn')) {
-                const sel = document.getElementById('fallbackAddSelect');
-                const key = sel.value;
-                if (!key) return;
-                const pair = parseChatModelKey(key);
-                const already = (s.fallbackChatModels || []).some((c) => chatModelKey(c) === key);
-                if (!pair.providerId || !pair.model || already) return;
-                s.fallbackChatModels = [...(s.fallbackChatModels || []), pair];
-                renderChatBindings();
-                await saveSettings({ silent: true });
-                return;
-            }
-            const fRow = ev.target.closest('.fbc-row');
-            if (fRow) {
-                const key = fRow.getAttribute('data-key');
-                const chain = [...(s.fallbackChatModels || [])];
-                const i2 = chain.findIndex((c) => chatModelKey(c) === key);
-                if (i2 < 0) return;
-                if (ev.target.closest('.fbc-up') && i2 > 0) {
-                    [chain[i2 - 1], chain[i2]] = [chain[i2], chain[i2 - 1]];
-                } else if (ev.target.closest('.fbc-down') && i2 < chain.length - 1) {
-                    [chain[i2 + 1], chain[i2]] = [chain[i2], chain[i2 + 1]];
-                } else if (ev.target.closest('.fbc-remove')) {
-                    chain.splice(i2, 1);
-                } else {
-                    return;
-                }
-                s.fallbackChatModels = chain;
-                renderChatBindings();
-                await saveSettings({ silent: true });
-            }
-        });
-    }
-
     // 对话：右栏卡片上的操作（获取模型 / 手动加模型 / 测试 / 删除）。
     const card = document.getElementById('chatProviderCard');
     if (card) {
@@ -2938,6 +2847,10 @@ function bindChatProviderSettingsUI() {
     document.getElementById('modelOverviewCards')?.addEventListener('click', (ev) => {
         const rm = ev.target.closest('[data-mo-fallback-remove]');
         if (rm) { void removeModelFallback(rm.getAttribute('data-mo-fallback-remove')); return; }
+        const up = ev.target.closest('[data-mo-fallback-up]');
+        if (up) { void moveModelFallback(up.getAttribute('data-mo-fallback-up'), -1); return; }
+        const down = ev.target.closest('[data-mo-fallback-down]');
+        if (down) { void moveModelFallback(down.getAttribute('data-mo-fallback-down'), 1); return; }
         const toggle = ev.target.closest('.mo-picker-btn');
         if (toggle) {
             const picker = toggle.closest('.mo-picker');
@@ -2969,7 +2882,7 @@ function bindChatProviderSettingsUI() {
         if (ev.key === 'Escape') closeModelPickers();
     });
 
-    // 添加模型页：三步内的点击与表单输入。协议识别复用 detect* 函数，不再经过旧弹窗。
+    // 添加模型页：三步内的点击与表单输入。协议识别复用 detect* 函数，不经弹窗。
     document.getElementById('modelAddBackBtn')?.addEventListener('click', () => closeModelAddPage());
     document.getElementById('modelAddBody')?.addEventListener('click', (ev) => {
         const kindBtn = ev.target.closest('[data-ma-kind]');
@@ -3025,14 +2938,6 @@ function bindChatProviderSettingsUI() {
         openModelAddPage(btn.getAttribute('data-model-add') || '');
     });
 
-    // 默认模型换了，图片转述的候选与「原模型能识图」提示同步刷新。
-    document.getElementById('defaultChatModelSelect')?.addEventListener('change', () => {
-        fillVisionModelPairOptions();
-        // 这里读 DOM 而不是 activeChatSettings()：自动保存有 300ms 防抖，state 此刻还是旧模型。
-        const pair = parseChatModelKey(document.getElementById('defaultChatModelSelect')?.value);
-        updateVisionMainModelHint(pair.model);
-    });
-
     // 文字转语音 / 语音转文字 / 嵌入 / 重排序：详情的返回与操作按钮。
     document.getElementById('ttsProviderBack')?.addEventListener('click', () => backToTtsProviderList());
     document.getElementById('asrProviderBack')?.addEventListener('click', () => backToAsrProviderList());
@@ -3047,7 +2952,7 @@ function bindChatProviderSettingsUI() {
 
     // 视口宽度变化时重跑双栏显隐同步（窄屏由 CSS 堆叠，这里维持分类导航与节点显隐一致）。
     try {
-        const modelMq = window.matchMedia('(max-width: 980px)');
+        const modelMq = window.matchMedia('(max-width: ' + MOBILE_BREAKPOINT + 'px)');
         if (modelMq && modelMq.addEventListener) modelMq.addEventListener('change', () => syncModelPageVisibility());
     } catch (e) { /* 老 WebView 没有 addEventListener 时只在切栏时同步 */ }
 

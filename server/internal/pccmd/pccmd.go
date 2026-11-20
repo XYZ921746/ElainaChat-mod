@@ -62,6 +62,10 @@ var dangerousRules = []rule{
 	{mustRe(`(?i)\b(iex|Invoke-Expression|Start-Process)\b`), "动态执行代码或启动进程"},
 	{mustRe(`(?i)\b(EncodedCommand|-enc\b|-e\s+[A-Za-z0-9+/=]{40,})`), "执行 Base64 编码的命令（常用于隐藏意图）"},
 	{mustRe(`(?i)\|\s*(bash|sh|zsh|powershell|pwsh|cmd|iex|Invoke-Expression)\b`), "把内容通过管道直接交给解释器执行"},
+	// 目录联接 / 符号链接把别的目录包装成普通路径：AI 先建联接、再操作「联接里的文件」，
+	// 路径形状就与目标目录不相干了（agent 包的写保护按真实路径判，这里是同一道边界的前置闸）。
+	{mustRe(`(?i)\bmklink\b`), "创建目录联接 / 符号链接（可把受保护目录包装成普通路径）"},
+	{mustRe(`(?i)-ItemType\s+(Junction|SymbolicLink|HardLink)\b`), "创建目录联接 / 符号链接（PowerShell）"},
 	{mustRe(`(?i)\b(mkfs|fdisk|dd)\b`), "磁盘底层操作"},
 	{mustRe(`(?i)\bchkdsk\b.*\/f`), "修复磁盘（会改动文件系统）"},
 	{mustRe(`(?i)\b(netsh|ipconfig)\b.*\b(set|release|renew|reset)\b`), "修改网络配置"},

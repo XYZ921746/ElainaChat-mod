@@ -73,7 +73,7 @@ function parsePhoneOperation(text) {
 function describePhoneOperation(parsed) {
     const a = parsed.args;
     switch (parsed.action) {
-        case '手机点击': return a ? '点击坐标：' + a : '点击（没有给出坐标）';
+        case '手机点击': return a ? ('点击坐标：' + a + (parsed.resolvedRef ? '（来自 ' + parsed.resolvedRef + '）' : '')) : '点击（没有给出坐标）';
         case '手机滑动': return a ? '滑动：' + a : '滑动（没有给出坐标）';
         case '手机输入': return a ? '要输入的文字：' + a : '输入（没有给出文字）';
         case '手机按键': return a ? '按键：' + a : '按键（没有给出键名）';

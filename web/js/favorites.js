@@ -184,7 +184,7 @@ function enterNotesMode() {
     state.diaryMode = false;
     // 与 enterDiaryMode 同一条约束：三个整页互斥，状态和页面一起切。
     state.memoryPageMode = false;
-    if (window.matchMedia('(max-width: 980px)').matches) {
+    if (isMobile()) {
         // 窄屏也能在两栏之间切换，所以不强制切回「消息收藏」，只把按钮状态对齐当前栏（否则进出一次按钮与内容就对不上）。
         document.querySelectorAll('.notes-tab').forEach(btn => {
             const active = btn.dataset.tab === state.notesTab;

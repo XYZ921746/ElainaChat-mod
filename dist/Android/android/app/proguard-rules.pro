@@ -33,6 +33,12 @@
 #    MainActivity、各原生插件、无障碍服务都在这包下。
 -keep class com.elainachat.mod.** { *; }
 
+# 1b) Shizuku / Sui 的 API 类：ShizukuProvider 与 UserService 都按类名跨进程装配，
+#     混淆后会表现为"授权了但绑不上 holder"。
+-keep class rikka.shizuku.** { *; }
+-keep class rikka.sui.** { *; }
+-keep class moe.shizuku.** { *; }
+
 # 2) 所有 Capacitor 插件基类的子类 + @CapacitorPlugin 注解 + @PluginMethod 方法
 -keep public class * extends com.getcapacitor.Plugin { *; }
 -keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }

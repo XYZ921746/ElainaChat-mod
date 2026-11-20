@@ -361,7 +361,7 @@ function toggleAnnouncePanel() {
     else closeAnnouncePanel();
 }
 
-/** 启动时接入公告：拉一次、刷新胶囊（**不再自动弹窗**，见 openServerAnnouncement 的说明） */
+/** 启动时接入公告：拉一次、刷新胶囊，不自动弹窗（见 openServerAnnouncement 的说明） */
 function startAnnouncements() {
     void loadAnnouncements();
 }

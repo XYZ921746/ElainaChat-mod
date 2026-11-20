@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"elainachat/server/internal/agent"
@@ -149,6 +152,116 @@ func TestModIndexStaysNoStore(t *testing.T) {
 	var doc map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("插件清单不是合法 JSON：%v", err)
+	}
+}
+
+// 前端页面地址没有对应文件，必须回退发应用外壳：刷新 /notes/、/store/ 才不会掉回首页。
+func TestAppRoutesServeAppShell(t *testing.T) {
+	s := newStaticTestServer(t, map[string]string{"index.html": "<html>shell</html>"})
+	for _, path := range []string{
+		"/", "/chat/", "/notes/", "/memory/", "/diary/", "/settings/",
+		"/settings/model/", "/achievements/", "/store/",
+		// /web 前缀是站内别名：从这类地址进入时，后续页面与刷新都保留前缀。
+		"/web", "/web/", "/web/chat/", "/web/store/", "/web/settings/model/",
+	} {
+		rec := staticRequest(s, http.MethodGet, path, "", "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s 应 200，实际 %d", path, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "shell") {
+			t.Errorf("%s 应返回 index.html，实际 %q", path, rec.Body.String())
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+			t.Errorf("%s 的 Content-Type 应为 text/html，实际 %q", path, ct)
+		}
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Errorf("%s 的 Cache-Control 应为 no-cache，实际 %q", path, cc)
+		}
+	}
+}
+
+// 回退只认页面路由：拼错的静态资源、未知分栏和未知目录仍要 404，不能被一份 HTML 掩盖。
+func TestUnknownPathsStayNotFound(t *testing.T) {
+	s := newStaticTestServer(t, map[string]string{"index.html": "<html>shell</html>"})
+	for _, path := range []string{
+		"/foo/", "/web/foo/", "/settings/unknown/", "/settings/unknown/extra/",
+		"/notes/extra/", "/js/missing.js", "/store/missing.png",
+	} {
+		rec := staticRequest(s, http.MethodGet, path, "", "")
+		// 403 也算合格：%2e%2e 解码后是 .. 段，被路径守卫先一步拦下（比 404 更严，同样没发首页）。
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusForbidden {
+			t.Errorf("%s 应 404（或路径守卫的 403），实际 %d（%q）", path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), "shell") {
+			t.Errorf("%s 不应拿到应用外壳，实际 %q", path, rec.Body.String())
+		}
+	}
+}
+
+func TestIsAppRoute(t *testing.T) {
+	yes := []string{"/", "/chat", "/notes/", "/settings", "/settings/log/", "/store/", "/web/store/", "/web"}
+	no := []string{"/foo", "/webfoo", "/settings/nope/", "/notes/x/", "/js/app.js"}
+	for _, p := range yes {
+		if !isAppRoute(p) {
+			t.Errorf("%s 应识别为应用页面", p)
+		}
+	}
+	for _, p := range no {
+		if isAppRoute(p) {
+			t.Errorf("%s 不应识别为应用页面", p)
+		}
+	}
+}
+
+// 中间目录是链接时，末级文件本身不是链接；只对末级 Lstat 的检查会放过目录外文件。
+func TestStaticRejectsIntermediateDirectoryLink(t *testing.T) {
+	s := newStaticTestServer(t, map[string]string{"index.html": "shell"})
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("outside secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	makeStaticDirLink(t, filepath.Join(s.cfg.WebRoot, "linked"), outside)
+	if rec := staticRequest(s, http.MethodGet, "/linked/secret.txt", "", ""); rec.Code == http.StatusOK {
+		t.Errorf("web/ 中间目录链接泄漏了外部文件：%q", rec.Body.String())
+	}
+
+	modDir := filepath.Join(s.cfg.ModsDir, "demo")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	makeStaticDirLink(t, filepath.Join(modDir, "linked"), outside)
+	if rec := staticRequest(s, http.MethodGet, "/mods/demo/linked/secret.txt", "", ""); rec.Code == http.StatusOK {
+		t.Errorf("/mods/ 中间目录链接泄漏了外部文件：%q", rec.Body.String())
+	}
+}
+
+// HEAD 只发头部：流式文件必须保留 Content-Length，但不得写正文。
+func TestStaticHeadHasNoBody(t *testing.T) {
+	s := newStaticTestServer(t, map[string]string{"js/app.js": "console.log(1)"})
+	rec := staticRequest(s, http.MethodHead, "/js/app.js", "", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HEAD 应 200，实际 %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD 不应返回正文，实际 %q", rec.Body.String())
+	}
+	if rec.Header().Get("Content-Length") == "" {
+		t.Error("HEAD 应保留 Content-Length")
+	}
+}
+
+func makeStaticDirLink(t *testing.T, link, target string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err == nil {
+			return
+		} else if err := os.Symlink(target, link); err != nil {
+			t.Skipf("无法创建目录链接：%v（%s）", err, out)
+		}
+		return
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("无法创建目录链接：%v", err)
 	}
 }
 

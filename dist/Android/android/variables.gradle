@@ -13,6 +13,7 @@ ext {
     androidxJunitVersion = '1.2.1'
     androidxEspressoCoreVersion = '3.6.1'
     cordovaAndroidVersion = '10.1.1'
-    // ★ 2026-10：shizukuVersion 已删除 —— Shizuku 后端整体移除，
-    //   dev.rikka.shizuku 的两个依赖也一并从 app/build.gradle 去掉了。
+    // Shizuku API：后台运行的授权层。Sui 与 Shizuku 共用同一套 API，
+    // 应用侧只写一份；这里只用 api + provider 两个依赖，不引入 Shizuku 管理器的任何代码。
+    shizukuVersion = '13.1.5'
 }

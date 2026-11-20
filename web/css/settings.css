@@ -28,7 +28,7 @@ html.rd #settingsOverlay #settingsPanel {
     overflow: hidden;
 }
 
-/* ---------- 左侧：品牌 + 分区导航 ---------- */
+/* 左侧：品牌 + 分区导航 */
 
 html.rd #settingsOverlay #settingsTopBar {
     grid-column: 1;
@@ -231,6 +231,7 @@ html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-capability"] {
 html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-mods"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linejoin='round'%3E%3Cpath d='M10 4h4v3a2 2 0 104 0h2v4h-3a2 2 0 100 4h3v4h-4v-3a2 2 0 10-4 0v3H8v-4H5a2 2 0 100-4h3V8H4V4h6z'/%3E%3C/svg%3E"); }
 html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-advanced"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Crect x='5' y='10' width='14' height='10' rx='3'/%3E%3Cpath d='M8 10V7a4 4 0 018 0v3'/%3E%3C/svg%3E"); }
 html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-log"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='M5 6h14M5 12h14M5 18h9'/%3E%3C/svg%3E"); }
+html.rd #settingsOverlay .settings-tab-btn[data-settings-tab="tab-timers"] { --set-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='8.4'/%3E%3Cpath d='M12 7.5V12l3 2'/%3E%3C/svg%3E"); }
 
 html.rd #settingsOverlay .settings-rail-foot {
     flex: none;
@@ -320,7 +321,7 @@ html.rd #settingsOverlay .ext-nav-btn {
 html.rd #settingsOverlay .ext-nav-btn:hover { background: var(--rd-hover) !important; color: var(--rd-text) !important; }
 html.rd #settingsOverlay .ext-nav-btn.is-active { color: var(--rd-accent) !important; font-weight: 600; }
 
-/* ---------- 右侧：内容区 ---------- */
+/* 右侧：内容区 */
 
 html.rd #settingsOverlay #settingsContent {
     grid-column: 2;
@@ -521,6 +522,21 @@ html[data-theme="dark"] #settingsOverlay #settingsContent select,
 html.rd[data-theme="dark"] #settingsPanel select.modal-input,
 html.rd[data-theme="dark"] #conversationPromptOverlay select.modal-input {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b6ac98' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") !important;
+}
+
+/* 插件市场平台筛选：和搜索框同排，保持紧凑；市场弹层不在 #settingsContent 内，选择器不能依赖它。 */
+html.rd select.market-platform-select {
+    flex: 0 0 76px !important;
+    width: 76px !important;
+    min-width: 76px !important;
+    max-width: 76px !important;
+    height: 28px !important;
+    min-height: 28px !important;
+    padding: 0 20px 0 7px !important;
+    border-radius: 8px !important;
+    font-size: 11px !important;
+    background-position: right 5px center !important;
+    background-size: 11px 11px !important;
 }
 
 /* 开关（两套标记：设置页的 .mod-switch 与外观卡的 .switch） */
@@ -962,7 +978,7 @@ html.rd #settingsOverlay #settingsContent #chatCardPane .prov-detail-head { disp
 html.rd #settingsOverlay #settingsContent .prov-section { margin: 0; }
 html.rd #settingsOverlay #settingsContent .prov-detail { padding: 0 !important; }
 
-/* 详情表单不再套一层卡：输入项直接落在右栏背景上，和左侧列表同属一张外卡。 */
+/* 详情表单不套一层卡：输入项直接落在右栏背景上，和左侧列表同属一张外卡。 */
 html.rd #settingsOverlay #settingsContent .chat-provider-card {
     padding: 0 !important;
     border: 0 !important;
@@ -970,18 +986,6 @@ html.rd #settingsOverlay #settingsContent .chat-provider-card {
     background: transparent !important;
 }
 html.rd #settingsOverlay #settingsContent .cpc-grid { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px !important; }
-html.rd #settingsOverlay #settingsContent .fbc-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    border: 1px solid var(--rd-border);
-    border-radius: 10px;
-    background: var(--rd-surface-2);
-}
-html.rd #settingsOverlay #settingsContent .fbc-order { display: grid; place-items: center; width: 20px; height: 20px; flex: none; border-radius: 6px; background: var(--rd-accent-soft); color: var(--rd-accent); font-size: 10px; font-weight: 700; }
-html.rd #settingsOverlay #settingsContent .fbc-copy { flex: 1; min-width: 0; color: var(--rd-text-2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html.rd #settingsOverlay #settingsContent .fbc-row .btn-secondary { min-height: 28px; padding: 0 8px !important; font-size: 10px !important; }
 
 
 /* 能力 / 高级里的说明块 */
@@ -1234,7 +1238,7 @@ html.rd #settingsOverlay #tab-mods .ext-panel { flex: none; }
 /* 聊天主体字号略提一档，避免整页都是 11px 的碎字 */
 html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
 
-/* ---------- 窄屏：整页单列 ---------- */
+/* 窄屏：整页单列 */
 
 @media (max-width: 980px) {
     html.rd #settingsOverlay,
@@ -1300,6 +1304,17 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
     }
     html.rd #settingsOverlay #settingsContent > .settings-tab-panel,
     html.rd #settingsOverlay #settingsSubpage { max-width: none; }
+    /* 二级页的标题由顶栏承担、返回由顶栏 ← 承担（先退二级页再关设置），
+       页内「← 返回 分区名」整行收起 —— 否则同一屏出现两个返回、三层标题。 */
+    html.rd #settingsOverlay #settingsSubpageHead { display: none !important; }
+    /* 搬进二级页的分区自己就是一张卡（#settingsSubpage > section 有完整卡面），
+       容器这层外壳撤掉，否则「我的数据 / 访问密码」这类子页会出现卡里套卡的两层壳。 */
+    html.rd #settingsOverlay #settingsContent #settingsSubpage.settings-card {
+        padding: 0 !important;
+        border: 0 !important;
+        background: transparent !important;
+        box-shadow: none !important;
+    }
 
     html.rd #settingsOverlay .settings-page-head {
         padding: 2px 2px 12px;
@@ -1309,6 +1324,8 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
     html.rd #settingsOverlay .settings-page-eyebrow,
     html.rd #settingsOverlay .settings-page-head h1 { display: none !important; }
     html.rd #settingsOverlay .settings-page-head > p:last-child { margin-top: 0; font-size: 11.5px; color: var(--rd-text-3); }
+    /* 手机顶栏已有页名：没有副标题的页头（外观/角色/高级/日志）整个收起，不占一段空白。 */
+    html.rd #settingsOverlay .settings-page-head:not(:has(.settings-page-sub)) { display: none !important; }
 
     html.rd #settingsOverlay #settingsContent .settings-tab-panel > section,
     html.rd #settingsOverlay #settingsContent .settings-tab-panel > div.mb-4,
@@ -1363,7 +1380,6 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
         margin-top: 10px;
     }
     html.rd #settingsOverlay .rd-display-card .set-row > .segmented,
-    html.rd #settingsOverlay .rd-display-card .set-row > .fbc-editor,
     html.rd #settingsOverlay .rd-display-card .set-row > .mod-switch { margin-top: 10px; }
     html.rd #settingsOverlay .rd-display-card .copy b { font-size: 12.5px; }
     html.rd #settingsOverlay .rd-display-card .segmented button { padding: 0 9px !important; font-size: 11px !important; }
@@ -1419,7 +1435,7 @@ html.rd #settingsOverlay #settingsContent .text-xs { font-size: 12px; }
 }
 html.rd .settings-tab-panel.settings-panel-in { animation: settings-panel-in var(--motion-base) var(--ease-out-soft) both; }
 
-/* ---------- 权限与自动化卡：内部分区的层次 ---------- */
+/* 权限与自动化卡：内部分区的层次 */
 /* 定时任务 / AI 权限 / 手机操作 / 浏览器原本是分栏的直接子节点，各自占满一行；
    收进同一张卡后要自己拉开层次，否则四个标题会读成四张没边框的卡。 */
 html.rd #settingsOverlay #settingsContent #agentAutomationCard > section + section {
@@ -1427,16 +1443,56 @@ html.rd #settingsOverlay #settingsContent #agentAutomationCard > section + secti
     padding-top: 16px;
     border-top: 1px solid var(--rd-border);
 }
+/* 分区标题只做小号分组标签：卡标题已经是 14.5px 主标题，分区再同等醒目会把层级拉平。 */
 html.rd #settingsOverlay #settingsContent #agentAutomationCard > section > .modal-label {
-    font-size: 12px;
-    margin-bottom: 8px;
-}
-/* 卡内已有一个 ✦ 主色标题，分区标题的主色星号降为弱化色，避免四个同级主色抢层级。 */
-html.rd #settingsOverlay #settingsContent #agentAutomationCard > section > .modal-label .text-accent {
+    margin: 0 0 7px !important;
+    padding: 0 !important;
+    border-bottom: 0 !important;
     color: var(--rd-text-3) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: .08em;
+}
+html.rd #settingsOverlay #settingsContent #agentAutomationCard > section > .modal-label .text-accent {
+    display: none !important;
 }
 
-/* ---------- 模型三段式：总览 / 我的模型 / 使用偏好 ---------- */
+/* AI 权限：四档从四张大卡收成四行单选 —— 名字 + 一行后果，选中行亮底，不再一档一张大卡占半屏。 */
+html.rd #settingsOverlay #settingsContent .access-list { display: flex; flex-direction: column; }
+html.rd #settingsOverlay #settingsContent .access-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background .15s;
+}
+html.rd #settingsOverlay #settingsContent .access-row:hover { background: var(--rd-hover); }
+html.rd #settingsOverlay #settingsContent .access-row:has(input:checked) { background: var(--rd-accent-soft); }
+html.rd #settingsOverlay #settingsContent .access-row input { flex: none; margin-top: 2px; }
+html.rd #settingsOverlay #settingsContent .access-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+html.rd #settingsOverlay #settingsContent .access-copy b { color: var(--rd-text); font-size: 12.5px; font-weight: 600; }
+html.rd #settingsOverlay #settingsContent .access-copy > span { color: var(--rd-text-3); font-size: 11px; line-height: 1.5; }
+
+/* 角色页：人设与世界观合成一张卡，卡内的「人设 / 角色设定卡 / 世界观卡」降为分组标签。 */
+html.rd #settingsOverlay #settingsContent #characterCard > section > .modal-label,
+html.rd #settingsOverlay #settingsContent #characterCard > section > div > .modal-label {
+    margin: 0 0 7px !important;
+    padding: 0 !important;
+    border-bottom: 0 !important;
+    color: var(--rd-text-3) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: .08em;
+}
+html.rd #settingsOverlay #settingsContent #characterCard > section > .modal-label .text-accent,
+html.rd #settingsOverlay #settingsContent #characterCard > section > div > .modal-label .text-accent {
+    display: none !important;
+}
+html.rd #settingsOverlay #settingsContent #characterCard > section + section { margin-top: 18px; }
+
+/* 模型三段式：总览 / 我的模型 / 使用偏好 */
 /* 模型页要放下“列表 + 详情”两栏，900px 会把地址与模型名折断；只在模型分栏放宽，其它页仍是单栏阅读宽度。 */
 html.rd #settingsOverlay #settingsContent #tab-model.active-panel { max-width: 1120px; }
 
@@ -1735,11 +1791,37 @@ html.rd #settingsOverlay .mo-fb-x {
     cursor: pointer;
 }
 html.rd #settingsOverlay .mo-fb-x:hover { color: var(--rd-danger); }
+html.rd #settingsOverlay .mo-fb-move {
+    padding: 2px;
+    border: 0;
+    background: transparent;
+    color: var(--rd-text-3);
+    font: inherit;
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+}
+html.rd #settingsOverlay .mo-fb-move:hover:not(:disabled) { color: var(--rd-accent); }
+html.rd #settingsOverlay .mo-fb-move:disabled { opacity: .3; cursor: default; }
 html.rd #settingsOverlay .mo-fb-empty { color: var(--rd-text-3); font-size: 11px; }
+html.rd #settingsOverlay .mo-vision-hint {
+    margin-top: 10px;
+    color: var(--rd-text-3);
+    font-size: 11px;
+    line-height: 1.6;
+}
+html.rd #settingsOverlay .mo-vision-hint:empty { display: none; }
+html.rd #settingsOverlay .mo-vision-hint.set-note-warn {
+    padding: 6px 9px;
+    border-radius: 8px;
+    color: var(--rd-text-2);
+}
+/* 总览卡片与下方「生成参数 / 对话与联网」两块之间留出与卡片间距一致的呼吸。 */
+html.rd #settingsOverlay #settingsContent #tab-model #modelOverviewCards { margin-bottom: 16px; }
 html.rd #settingsOverlay .mo-picker-fb { width: 170px; flex: none; }
 html.rd #settingsOverlay .mo-picker-btn-sm { height: 28px; padding: 0 9px; border-radius: 8px; font-size: 11px; }
 
-/* 模型双栏不再内部滚动：嵌套滚动条是设置页最明显的“割裂感”来源之一。 */
+/* 模型双栏不内部滚动：嵌套滚动条是设置页最明显的“割裂感”来源之一。 */
 html.rd #settingsOverlay #settingsContent #modelPageBody {
     height: auto;
     min-height: 420px;
@@ -1774,9 +1856,9 @@ html.rd #settingsOverlay #settingsContent #modelPaneList { width: 300px; }
     html.rd #settingsOverlay .model-filter-btn { flex: none; }
 }
 
-/* ---------- 手机模型页：一屏只做一件事 ---------- */
+/* 手机模型页：一屏只做一件事 */
 @media (max-width: 980px) {
-    /* 顶栏已经写着当前子页，页内不再重复大标题、说明与全宽添加按钮。 */
+    /* 顶栏已经写着当前子页，页内不重复大标题、说明与全宽添加按钮。 */
     html.rd #settingsOverlay #settingsContent #tab-model .model-page-head { display: none !important; }
 
     /* 总览：一张卡 + 行间细线，选择器放在右侧，先把「用谁」扫完再动手。 */
@@ -1851,14 +1933,14 @@ html.rd #settingsOverlay #settingsContent #modelPaneList { width: 300px; }
     html.rd #settingsOverlay #settingsContent #tab-model.is-detail .prov-detail-head { display: none !important; }
     html.rd #settingsOverlay #settingsContent #tab-model.is-detail .model-pane-detail { padding: 0 !important; }
 
-    /* 使用偏好：说明文字收紧，卡片别一层套一层。 */
-    html.rd #settingsOverlay #settingsContent #tab-model #modelPrefsPane > section { padding: 16px 14px !important; }
-    html.rd #settingsOverlay #settingsContent #tab-model #modelPrefsPane .rd-field-hint { font-size: 10.5px; line-height: 1.55; }
+    /* 总览下挂的偏好卡：说明文字收紧，卡片别一层套一层。 */
+    html.rd #settingsOverlay #settingsContent #tab-model #modelOverviewPane > section { padding: 16px 14px !important; }
+    html.rd #settingsOverlay #settingsContent #tab-model #modelOverviewPane .rd-field-hint { font-size: 10.5px; line-height: 1.55; }
 }
 /* 宽屏的模型详情是右栏常驻，不需要“返回列表”；窄屏才用返回键在列表/详情间下钻。 */
 @media (min-width: 981px) {
     html.rd #settingsOverlay #settingsContent #modelPaneDetail .prov-back { display: none !important; }
-    /* 宽屏右栏不再把输入框拉到 800px：表单与说明保持一臂长的阅读宽度，居中作为独立配置面板。 */
+    /* 宽屏右栏不把输入框拉到 800px：表单与说明保持一臂长的阅读宽度，居中作为独立配置面板。 */
     html.rd #settingsOverlay #settingsContent #modelPaneDetail > section,
     html.rd #settingsOverlay #settingsContent #modelPaneDetail > .prov-detail { max-width: 720px; margin-left: auto; margin-right: auto; }
 }
@@ -1896,7 +1978,7 @@ html.rd #settingsOverlay #settingsContent #tab-model .model-view-pane:not(.hidde
     html.rd #settingsOverlay #settingsContent #tab-model .model-view-pane:not(.hidden) { animation: none; }
 }
 
-/* ---------- 添加模型：独立三步页 ---------- */
+/* 添加模型：独立三步页 */
 html.rd #settingsOverlay #settingsContent #tab-model.is-add .model-page-head,
 html.rd #settingsOverlay #settingsContent #tab-model.is-add .model-section-tabs { display: none !important; }
 
@@ -2070,7 +2152,7 @@ html.rd #settingsOverlay .model-add-check { display: inline-flex; align-items: c
 html.rd #settingsOverlay .model-add-check input { accent-color: var(--rd-accent); }
 
 @media (max-width: 980px) {
-    /* 顶栏已经写着「添加模型」并接管返回，页内不再重复大标题与返回键。 */
+    /* 顶栏已经写着「添加模型」并接管返回，页内不重复大标题与返回键。 */
     html.rd #settingsOverlay .model-add-head { display: block; padding: 0 2px 8px; margin-bottom: 0; border-bottom: 0; }
     html.rd #settingsOverlay .model-add-head h1,
     html.rd #settingsOverlay .model-add-head .settings-page-eyebrow,

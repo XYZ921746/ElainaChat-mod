@@ -130,6 +130,13 @@
         var platBadge = (plat === 'universal') ? ''
             : badge(plat === 'desktop' ? '电脑' : '手机', 'accent');
         var kindBadge = badge(p.kind === 'resource' ? '公共资源' : '界面', 'neutral');
+        // 来源角标三态：官方（没写 thirdParty）/ 第三方·已审核（thirdParty + reviewed）/
+        // 第三方·未审核（thirdParty 但没有 reviewed）。只认索引显式声明，不做推断。
+        var sourceBadge = !isThirdParty(p)
+            ? badge('官方', 'accent', '由 ElainaChat Mod 维护')
+            : (isReviewedThirdParty(p)
+                ? badge('第三方·已审核', 'ok', '源码 PR 进本仓库，合并即审核通过')
+                : badge('第三方·未审核', 'warn', '只有 release 下载地址，源码未进仓库，请谨慎使用'));
         var verBadge = p.version ? '<span class="text-[10px] text-dim ml-1">v' + esc(p.version) + '</span>' : '';
         var stateBadge = (st === 'installed')
             ? badge('已安装', 'ok')
@@ -146,7 +153,7 @@
               + '<div class="flex items-start gap-2">'
                 + '<div class="min-w-0 flex-1">'
                   + '<span class="text-xs font-semibold text-ink">' + esc(p.name || p.id) + '</span>'
-                  + verBadge + platBadge + kindBadge + stateBadge
+                  + verBadge + platBadge + kindBadge + sourceBadge + stateBadge
                   + '<div class="text-[11px] text-dim leading-relaxed mt-0.5">' + md(p.description) + '</div>'
                   + depLine
                 + '</div>'
@@ -164,7 +171,7 @@
         return el ? String(el.value || '').trim().toLowerCase() : '';
     }
 
-    /** 设备判定沿用 core.js 的 IS_MOBILE_DEVICE（APK 恒为手机）；guarded 引用，脚本被单独裁剪时不炸。 */
+    /** 设备本身是不是手机；用 IS_MOBILE_DEVICE 而不是窗口宽度，电脑上把窗口拖窄不该变成手机。 */
     function marketIsMobile() {
         return typeof IS_MOBILE_DEVICE !== 'undefined' && !!IS_MOBILE_DEVICE;
     }
@@ -172,49 +179,46 @@
     /** 平台分类筛选：all / mobile / desktop，单选；打开市场重置，不跨次记忆。 */
     var marketPlatform = 'all';
 
-    /** 分类 chips 是静态 HTML，不随列表重渲，aria-pressed 要单独同步。 */
-    function syncMarketPlatformPills() {
-        var group = $('marketPlatformPills');
-        if (!group) return;
-        var btns = group.querySelectorAll('button[data-platform]');
-        for (var i = 0; i < btns.length; i++) {
-            btns[i].setAttribute('aria-pressed', btns[i].getAttribute('data-platform') === marketPlatform ? 'true' : 'false');
-        }
+    /** 下拉是静态 HTML，不随列表重渲，选中项要单独同步。 */
+    function syncMarketPlatformSelect() {
+        var select = $('marketPlatformSelect');
+        if (select) select.value = marketPlatform;
     }
 
     /** 只认三个合法值，其余归 all（防自定义索引或传参带脏值）。 */
     function setMarketPlatform(v) {
         marketPlatform = (v === 'mobile' || v === 'desktop') ? v : 'all';
-        syncMarketPlatformPills();
+        syncMarketPlatformSelect();
         renderMarketList();
     }
 
     /** 命中 id / 名字 / 说明 / 依赖：用户常按“能干什么”搜，只匹配名字太窄。 */
-    /** 前置扩展区展开态：只存内存，同一次打开里搜索不把它重置。 */
-    var marketPrereqOpen = false;
+    /** 分区展开态：只存内存，同一次打开里搜索不把它重置。 */
+    var marketSectionOpen = { prereq: false, third: false };
 
     /** 分区标题：点标题展开/收起 */
-    function marketSectionHead(count, note) {
-        var caret = marketPrereqOpen ? '▾' : '▸';
-        return '<button type="button" id="marketPrereqToggle" class="w-full flex items-baseline gap-2 pt-2 text-left"'
-            + ' aria-expanded="' + (marketPrereqOpen ? 'true' : 'false') + '"'
-            + ' title="前置扩展默认收起；点一下展开">'
-            + '<span class="text-[11px] font-semibold text-dim">前置扩展</span>'
+    function marketSectionHead(secId, title, count, note) {
+        var open = marketSectionOpen[secId] === true;
+        var caret = open ? '▾' : '▸';
+        return '<button type="button" id="' + secId + 'Toggle" class="w-full flex items-baseline gap-2 pt-2 text-left"'
+            + ' aria-expanded="' + (open ? 'true' : 'false') + '"'
+            + ' title="' + title + '默认收起；点一下展开">'
+            + '<span class="text-[11px] font-semibold text-dim">' + title + '</span>'
             + '<span class="text-[10px] text-dim">' + count + ' 个 · ' + esc(note) + '</span>'
-            + '<span class="ml-auto text-[10px] text-dim" data-prereq-caret>' + caret + '</span>'
+            + '<span class="ml-auto text-[10px] text-dim" data-sec-caret>' + caret + '</span>'
             + '</button>';
     }
 
-    function bindPrereqToggle(box) {
-        var btn = box.querySelector('#marketPrereqToggle');
-        var body = box.querySelector('#marketPrereqBody');
+    function bindSectionToggle(box, secId) {
+        var btn = box.querySelector('#' + secId + 'Toggle');
+        var body = box.querySelector('#' + secId + 'Body');
         if (!btn || !body) return;
         btn.addEventListener('click', function () {
-            marketPrereqOpen = !marketPrereqOpen;
-            body.classList.toggle('hidden', !marketPrereqOpen);
-            btn.setAttribute('aria-expanded', marketPrereqOpen ? 'true' : 'false');
-            var c = btn.querySelector('[data-prereq-caret]');
-            if (c) c.textContent = marketPrereqOpen ? '▾' : '▸';
+            marketSectionOpen[secId] = !(marketSectionOpen[secId] === true);
+            body.classList.toggle('hidden', !marketSectionOpen[secId]);
+            btn.setAttribute('aria-expanded', marketSectionOpen[secId] ? 'true' : 'false');
+            var c = btn.querySelector('[data-sec-caret]');
+            if (c) c.textContent = marketSectionOpen[secId] ? '▾' : '▸';
         });
     }
 
@@ -229,35 +233,44 @@
         var byPlatform = function (p) { return matchesPlatform(p, marketPlatform, isMobile) && matchesQuery(p, q); };
         var normal = groups.normal.filter(byPlatform);
         var prereq = groups.prereq.filter(byPlatform);
-        var hit = normal.length + prereq.length;
-        // 手机端「全部」视图藏着电脑插件时要点名，否则用户会以为商店只有眼前这几个
-        var hiddenDesktop = 0;
-        if (isMobile && marketPlatform === 'all') {
-            for (var i = 0; i < all.length; i++) if (platformOf(all[i]) === 'desktop') hiddenDesktop++;
-        }
-        var desktopNote = hiddenDesktop ? ' 另有 ' + hiddenDesktop + ' 个电脑插件在手机上不显示，点「电脑」分类查看。' : '';
+        var third = groups.third.filter(byPlatform);
+        var hit = normal.length + prereq.length + third.length;
 
         if (!hit) {
             var why = q ? '没有匹配「' + esc(q) + '」的扩展包。' : '这个分类下暂无扩展包。';
             box.innerHTML = '<div class="text-[11px] text-dim">' + why + '</div>';
-            setHint('共 ' + all.length + ' 个扩展包，当前筛选出 0 个。换个分类或换个词试试。' + desktopNote, 'text-dim');
+            setHint('共 ' + all.length + ' 个扩展包，当前筛选出 0 个。换个分类或换个词试试。', 'text-dim');
             return;
         }
         // 入场动画只在打开市场后的首次渲染播一次：搜索框每敲一键都重渲列表，逐卡重播会闪成一片。
         var animate = marketEntrancePending;
         marketEntrancePending = false;
         box.innerHTML = normal.map(function (p) { return marketCard(p, installed, animate); }).join('')
+            // 第三方未审核分区紧跟普通列表：只给 release 下载地址的投稿要有稳定的位置与醒目的警告，不能混进官方列表
+            + (third.length
+                ? marketSectionHead('marketThird', '第三方插件（未审核）', third.length, '只有 release 下载地址 · 源码未进仓库')
+                    + '<div id="marketThirdBody" class="space-y-2' + (marketSectionOpen.third ? '' : ' hidden') + '">'
+                    + '<div class="text-[11px] leading-relaxed rounded-lg px-3 py-2 text-warn"'
+                    + ' style="background:rgba(208,168,60,.08);border:1px solid rgba(208,168,60,.35)">'
+                    + '⚠️ 此分区插件<strong>未经审核</strong>（作者只提交了 release 下载地址，源码不在本仓库），请谨慎下载使用。'
+                    + '安装即信任它的代码与其注册的 AI 工具。源码 PR 进仓库的投稿已审核，带「第三方·已审核」角标，在普通列表。'
+                    + '</div>'
+                    + third.map(function (p) { return marketCard(p, installed, animate); }).join('')
+                    + '</div>'
+                : '')
             + (prereq.length
-                ? marketSectionHead(prereq.length, '被界面类扩展包按依赖自动带入，不用单独安装')
-                    + '<div id="marketPrereqBody" class="space-y-2' + (marketPrereqOpen ? '' : ' hidden') + '">'
+                ? marketSectionHead('marketPrereq', '前置扩展', prereq.length, '被界面类扩展包按依赖自动带入，不用单独安装')
+                    + '<div id="marketPrereqBody" class="space-y-2' + (marketSectionOpen.prereq ? '' : ' hidden') + '">'
                     + prereq.map(function (p) { return marketCard(p, installed, animate); }).join('')
                     + '</div>'
                 : '');
-        bindPrereqToggle(box);
+        bindSectionToggle(box, 'marketPrereq');
+        bindSectionToggle(box, 'marketThird');
         setHint('共 ' + all.length + ' 个扩展包'
             + (q ? '，筛选出 ' + hit + ' 个' : '')
+            + (!q && third.length ? '（其中 ' + third.length + ' 个来自第三方未审核分区）' : '')
             + (!q && prereq.length ? '（其中 ' + prereq.length + ' 个是前置扩展）' : '')
-            + '。' + desktopNote + '装完回到「插件」栏打开开关才会生效。（源：' + marketIndexUrl() + '）',
+            + '。装完回到「插件」栏打开开关才会生效。（源：' + marketIndexUrl() + '）',
             'text-dim');
     }
 
@@ -594,7 +607,7 @@
         if (!overlay) return;
         marketEntrancePending = true;
         marketPlatform = 'all';
-        syncMarketPlatformPills();
+        syncMarketPlatformSelect();
         openOverlayPanel(overlay);
         try { if (typeof syncSidePanelForView === 'function') syncSidePanelForView(); } catch (e) { /* 忽略 */ }
         dlDismissed = false;   // 进市场 = 想管下载，收起态要解开
@@ -622,11 +635,9 @@
         // 搜索：本地过滤，索引与已装状态已在内存
         $('marketSearch')?.addEventListener('input', function () { renderMarketList(); });
 
-        // 分类 chips：与安装按钮同一套事件委托，单选切换后重渲列表
-        $('marketPlatformPills')?.addEventListener('click', function (ev) {
-            var btn = ev.target && ev.target.closest ? ev.target.closest('button[data-platform]') : null;
-            if (!btn) return;
-            setMarketPlatform(btn.getAttribute('data-platform'));
+        // 平台下拉：单选切换后重渲列表
+        $('marketPlatformSelect')?.addEventListener('change', function () {
+            setMarketPlatform(this.value);
         });
 
         $('marketUrlSave')?.addEventListener('click', function () {
@@ -650,7 +661,12 @@
             void installFromMarket(p, btn);
         });
 
-        $('modsMarketBtn')?.addEventListener('click', openMarket);
+        // 走公开接口而不是闭包里的原函数：路由层包的是 ElainaMarket.open/close，
+        // 绕过去时地址栏不会变成 /store/（关闭时也不会回到进入前的页面）。
+        $('modsMarketBtn')?.addEventListener('click', function () {
+            if (window.ElainaMarket && typeof window.ElainaMarket.open === 'function') window.ElainaMarket.open();
+            else openMarket();
+        });
 
         // 下载悬浮窗：停止/卸载/单行移除/清空/收起/折叠，同样用事件委托（行是整批重建的）
         var dlPanel = $('marketDlPanel');
@@ -672,13 +688,17 @@
             });
         }
 
-        // 关闭：✕ / 点遮罩 / Esc，与其它弹窗同一套习惯
-        $('marketClose')?.addEventListener('click', closeMarket);
+        // 关闭：✕ / 点遮罩 / Esc，与其它弹窗同一套习惯。统一走公开接口，路由层才能同步地址。
+        function closeFromUi() {
+            if (window.ElainaMarket && typeof window.ElainaMarket.close === 'function') window.ElainaMarket.close();
+            else closeMarket();
+        }
+        $('marketClose')?.addEventListener('click', closeFromUi);
         var overlay = $('marketOverlay');
         if (overlay) {
-            overlay.addEventListener('click', function (e) { if (e.target === overlay) closeMarket(); });
+            overlay.addEventListener('click', function (e) { if (e.target === overlay) closeFromUi(); });
             document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeMarket();
+                if (e.key === 'Escape' && !overlay.classList.contains('hidden')) closeFromUi();
             });
         }
     }

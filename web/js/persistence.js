@@ -182,7 +182,10 @@ function migrateLegacyChatProviderSettings() {
         if (!Array.isArray(p.selectedModels)) {
             p.selectedModels = String(p.model || '').trim() ? [String(p.model).trim()] : [];
         }
+        // 模型名去空白、去重：同一对重复勾选会让所有「提供商 × 模型」下拉出现两个一样的选项。
+        p.selectedModels = Array.from(new Set(p.selectedModels.map((m) => String(m || '').trim()).filter(Boolean)));
         if (!Array.isArray(p.models)) p.models = [];
+        p.models = Array.from(new Set(p.models.map((m) => String(m || '').trim()).filter(Boolean)));
     });
     // 默认模型按「提供商×模型」对指向；旧的卡级 id 迁移成对。
     const validPair = (pair) => {
@@ -277,6 +280,32 @@ async function migrateLegacyTtsAsrProviders() {
         }
         s.asrProviders = list;
         s.asrProviderMigrated = true;
+    }
+    // 上面的迁移只认「有旧 API Key」的配置：没填 Key 时 ttsProviders 一直是空，
+    // 模型页据此把文字转语音显示为「去我的模型添加」，MiMo 的模型 / 参考音频字段整块隐藏，用户点不到。
+    // 空列表自愈：按当前 ttsProvider 指向的协议合成一个可编辑条目（Key 稍后在详情页填）。
+    // 独立标记只跑一次：用户之后主动删掉这个条目想禁用 TTS 时，不该每次启动又被建回来。
+    if (s.ttsProviderRepaired !== true) {
+        if (!Array.isArray(s.ttsProviders)) s.ttsProviders = [];
+        if (!s.ttsProviders.length) {
+            const active = String(s.ttsProvider || '').trim();
+            const presetId = active === 'openai' ? 'openai-tts' : active;
+            const preset = TTS_PROTOCOL_PRESETS.find((p) => p.id === presetId);
+            if (preset) {
+                const id = 'prov_tts_' + preset.id;
+                s.ttsProviders.push({
+                    id,
+                    name: preset.name,
+                    apiFormat: preset.id,
+                    baseUrl: String(preset.baseUrl || ''),
+                    model: String(preset.model || ''),
+                    voice: String(preset.voice || ''),
+                    voiceDesignPrompt: ''
+                });
+                s.defaultTtsProviderId = id;
+            }
+        }
+        s.ttsProviderRepaired = true;
     }
     // 合成结果只在这一刻完整：立刻把 Key 写进密钥库、设置（含迁移标记）写进设置包，之后不再重迁。
     // inline：本函数跑在回填流程内部，等待回填会变成自己等自己。

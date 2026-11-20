@@ -34,16 +34,15 @@ public class ByokSecretsPlugin extends Plugin {
     /**
      * 允许存进密钥库的键名白名单。
      *
-     * <p>★★ 2026-10 修：原来只列了 4 个老键（apiKey / minimaxApiKey / dashscopeApiKey /
-     * doubao*），而前端 {@code web/js/app-01-core.js} 的 {@code API_SECRET_NAMES} 后来又
-     * 新增了 4 个 —— 两边一旦脱节就是这个后果：{@link #setSecret} 直接
+     * <p>与前端 {@code web/js/core.js} 的 {@code API_SECRET_NAMES} 一一对应 ——
+     * 两边一旦脱节就是这个后果：{@link #setSecret} 直接
      * {@code reject("Unsupported secret name")}，{@link #getSecret} 同理，
      * 于是前端 {@code loadApiSecrets()} 读不到值、把内存里的 Key 覆盖成空串：
      * <b>用户在设置里填好的 Key，退出应用再进来就没了</b>（实测只影响
      * asrApiKey / mimoApiKey / mimoTtsApiKey / openaiTtsApiKey 这四个）。
      *
      * <p>⚠️ 加前端密钥名时必须同步加到这里，两边必须一一对应。
-     * 前端那份在 {@code web/js/app-01-core.js} 的 {@code API_SECRET_NAMES}。
+     * 前端那份在 {@code web/js/core.js} 的 {@code API_SECRET_NAMES}。
      */
     private static final Set<String> ALLOWED_NAMES = Collections.unmodifiableSet(
         new HashSet<>(Arrays.asList(
@@ -54,7 +53,7 @@ public class ByokSecretsPlugin extends Plugin {
             "searchApiKey_tavily", "searchApiKey_custom",
             // 多提供商对话模型的 Key 集合（JSON 串：{ providerId: apiKey }），与前端 API_SECRET_NAMES 对应
             "chatProviderKeys",
-            // 旧版遗留（前端已不再使用），留着只为兼容老数据里的值
+            // 前端已不再使用，留着只为兼容老数据里的值
             "doubaoApiKey", "doubaoToken"
         ))
     );

@@ -18,7 +18,7 @@ const (
 )
 
 // handleMemory 是记忆索引的 HTTP 面。索引是派生数据：这里只负责存取，
-// 建索引/裁剪/召回仍在页面侧（M2a 不改变现有召回链路）。
+// 建索引/裁剪/召回仍在页面侧。
 func (s *Server) handleMemory(w http.ResponseWriter, r *http.Request) {
 	if s.memory == nil {
 		writeJSON(w, http.StatusNotImplemented, map[string]any{
@@ -229,7 +229,7 @@ func (s *Server) handleMemoryReset(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": n}, nil)
 }
 
-// handleMemoryItemsUpsert 批量写结构化记忆条目（M2a 里它是 Store 的派生索引）。
+// handleMemoryItemsUpsert 批量写结构化记忆条目。
 func (s *Server) handleMemoryItemsUpsert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "message": "只支持 POST"}, nil)

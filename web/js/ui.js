@@ -1,11 +1,20 @@
 /* 界面：收藏 / 语笺 / 弹窗 / 会话 / 侧边栏 / 消息渲染 */
 
+// 手机 / 桌面共用同一份 DOM 响应式呈现，宽度判断只允许走这一个入口
+// （check-mobile 会拦裸写的 innerWidth / matchMedia 断点）；
+// 断点改动时 JS 这边与各覆盖层 CSS 的 max-width: 980px 媒体查询必须一起改。
+const MOBILE_BREAKPOINT = 980;
+function isMobile() {
+    return window.innerWidth <= MOBILE_BREAKPOINT;
+}
+
 // 日志（设置里的独立分栏）：日志不是页面模式，由 shell.js 的 switchSettingsTab() 经 LogViewer.open()/close() 显隐；关设置时 settings.js 也会顺带关掉它。
 
 function showInitialState() {
     state.notesMode = false;
     state.diaryMode = false;
     state.memoryPageMode = false;
+
     elements.settingsOverlay.classList.add('hidden');
     elements.settingsOverlay.classList.remove('flex');
     elements.chatHeader.classList.remove('hidden');
@@ -450,7 +459,7 @@ function aiAvatarInnerHtml() {
         const ch = String(bound.name || '').trim().slice(0, 1) || '伊';
         return '<span class="ai-av-letter">' + escapeHtml(ch) + '</span>';
     }
-    return '<img src="/icons/icon-192.png" alt="" draggable="false">';
+    return '<img src="/icons/icon-512.png" alt="" draggable="false">';
 }
 
 /** 没有自定义头像时编辑器预览用的回落：绑卡首字 / 软件图标。 */
@@ -463,7 +472,7 @@ function conversationBotAvatarFallbackHtml(conv) {
         const ch = String(bound.name || '').trim().slice(0, 1) || '伊';
         return '<span class="conversation-bot-initial">' + escapeHtml(ch) + '</span>';
     }
-    return '<img src="/icons/icon-192.png" alt="" draggable="false">';
+    return '<img src="/icons/icon-512.png" alt="" draggable="false">';
 }
 
 /** 消息行根节点上的身份标记：rd 主题据此画头像（自定义图片 / 绑卡首字 / 图标）。 */
@@ -502,7 +511,7 @@ function conversationAvatarMarkup(conv) {
         const ch = String(bound.name || '').trim().slice(0, 1) || '伊';
         return '<span class="conv-avatar-chip">' + escapeHtml(ch) + '</span>';
     }
-    return '<img class="conv-avatar-img" src="/icons/icon-192.png" alt="" draggable="false">';
+    return '<img class="conv-avatar-img" src="/icons/icon-512.png" alt="" draggable="false">';
 }
 
 /** 保存会话人设后，把当前对话里的消息头像 / 说话人名字 / 两侧列表就地刷新。 */

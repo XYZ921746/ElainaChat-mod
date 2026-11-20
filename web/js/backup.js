@@ -155,7 +155,6 @@ async function exportDataBackup() {
             // 与日志导出同一条路径：原生 SAF「创建文档」选择器，用户自己定存到哪。
             // 不写死 Documents 的原因：备份动辄 20MB+，用户常常要存到 U 盘 / 网盘目录 / 电脑共享盘，
             // 固定目录在 scoped storage 下还未必可写。
-            //
             // 走分块接口而不是一次性传：Capacitor bridge 对单次调用有大小上限，
             // 20MB 备份序列化成 base64 是 27MB，一次传过去会被截断。
             const cap = window.Capacitor;
@@ -228,7 +227,7 @@ async function exportDataBackup() {
             setDataHint('导出失败：服务端返回了空内容。若装了迅雷/FDM，请先关掉它的浏览器扩展再试。', true);
             return;
         }
-        // 文件名走自定义头（后端不再发 Content-Disposition，避免被下载器识别成下载）
+        // 文件名走自定义头（后端不发 Content-Disposition，避免被下载器识别成下载）
         let name = res.headers.get('X-Backup-Filename') || '';
         if (!name) {
             const cd = res.headers.get('Content-Disposition') || '';

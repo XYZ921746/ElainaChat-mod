@@ -1,19 +1,52 @@
 // Agent 实现方式 / 后端选择：AGENT_BACKENDS / 后端探测 / 状态面板 / 手机与命令能力提示词；依赖 agent-phone.js 的 deviceBridge 与宿主 state / 弹窗（运行时才调用）。
 'use strict';
 
-// 实现方式（后端选择）：入口在「设置 → 能力 → 手机操作」（手机上侧边栏一收起就进不去），面板是独立弹窗 #backendPanel。只保留无障碍 + 模块两个端点；白名单在 data.js 的迁移里有一份镜像，改这里必须同步改那边，否则老用户选的 shizuku/root 会被当成合法值留下。
+// 实现方式（后端选择）：入口在「设置 → 能力 → 手机操作」（手机上侧边栏一收起就进不去），面板是独立弹窗 #backendPanel。前台只有一个端点（无障碍），后台有三个端点（Shizuku / Root / 模块）；白名单在 data.js 的迁移里有一份镜像，改这里必须同步改那边，否则新选的 id 会在下次启动时被重置。
 const AGENT_BACKENDS = [
     {
-        id: 'accessibility', name: '无障碍', tag: '免 root',
+        id: 'accessibility', name: '无障碍', tag: '免 root', kind: 'foreground',
         desc: '用系统自带的无障碍服务点击、输入、读取界面。不用装任何东西，门槛最低；中文输入也只有它能可靠做到。截图（看图）需要 Android 11 及以上；Android 10 及以下只能读界面与点击、滑动、输入。',
         need: '系统设置 → 无障碍里开启本应用的服务'
     },
     {
-        id: 'module', name: '模块', tag: '需要 KernelSU',
-        desc: '刷入系统模块，后台静默操作：不抢前台、不被后台清理打断，能力最强。',
+        id: 'shizuku', name: 'Shizuku', tag: '免 root / 需激活', kind: 'background',
+        desc: '通过 Shizuku 授权，在本机创建独立副屏：AI 在副屏操作，不抢你正在用的屏幕。非 root 可用；非 root 设备重启后要重新激活 Shizuku。由于系统限制，只有部分系统版本能正常使用——授权成功后点下方「检测副屏」确认这台设备行不行。',
+        need: '安装 Shizuku 并完成激活（无线调试或 root 启动）'
+    },
+    {
+        id: 'root', name: 'Root', tag: '需要 root', kind: 'background',
+        desc: '用 root 权限创建独立副屏：不抢前台，Android 15 QPR2 / 16 都能用。需要手机已 root（Magisk / KernelSU / APatch），并在 root 管理器里给本应用授权。',
+        need: '在 root 管理器里给本应用授予 su 权限'
+    },
+    {
+        id: 'module', name: '模块', tag: '需要 KernelSU', kind: 'background',
+        desc: '刷入 agent-mobile-use 系统模块，后台静默操作：不抢前台、不被后台清理打断。模块自带本地网关（默认 127.0.0.1:3070）。',
         need: '刷入 KernelSU 模块（本机 3070 端口有服务）'
     }
 ];
+
+/** 后端属于前台还是后台；没登记的一律按前台处理，避免面板把未知项吞掉。 */
+function backendKindOf(id) {
+    const found = AGENT_BACKENDS.find((b) => b.id === id);
+    return found ? found.kind : 'foreground';
+}
+
+/** 给设置摘要 / 面板标题用的完整名称：前台运行 · 无障碍、后台运行 · Root。 */
+function backendDisplayName(id) {
+    const found = AGENT_BACKENDS.find((b) => b.id === id);
+    if (!found) return '';
+    return (found.kind === 'background' ? '后台运行' : '前台运行') + ' · ' + found.name;
+}
+
+/** 探测结果是否已明确就绪；checking / unavailable / 缺项都按未就绪。 */
+function backendIsReady(id) {
+    return Boolean(backendStatus[id] && backendStatus[id].state === 'ready');
+}
+
+/** 当前探测结果里已经就绪的后台端点（按 AGENT_BACKENDS 的顺序）。 */
+function readyBackgroundBackends() {
+    return AGENT_BACKENDS.filter((b) => b.kind === 'background' && backendIsReady(b.id));
+}
 
 // 每个实现方式对应的「去设置 / 请求权限」引导。plugin/method 指向原生插件 ElainaDevice 上的真实方法：在场就真跳转、真弹授权框，返回的说明会直接展示给用户；插件不在（网页版）时退化成说明文字，两种情况都给出可执行的下一步。
 const AGENT_BACKEND_SETUP = {
@@ -28,16 +61,41 @@ const AGENT_BACKEND_SETUP = {
             '各厂商路径：小米在「更多设置 → 无障碍」；华为 / 荣耀在「辅助功能 → 无障碍」；OPPO / 一加在「系统设置 → 无障碍」。'
         ].join('\n')
     },
+    shizuku: {
+        label: '去授权 Shizuku',
+        plugin: 'ElainaDevice', method: 'requestShizukuPermission',
+        guide: [
+            '1. 安装 Shizuku（应用商店或 Shizuku 官网）。',
+            '2. 打开 Shizuku，按它的引导完成激活：',
+            '   · 未 root：开发者选项 → 无线调试 → 配对，然后在 Shizuku 里启动；',
+            '   · 已 root：在 Shizuku 里选择「通过 root 启动」。',
+            '3. 回到本应用，点「去授权 Shizuku」，在弹窗里允许。',
+            '4. 回来点「重新检测」。',
+            '',
+            '说明：非 root 设备重启后需要重新激活 Shizuku。由于系统限制，目前只有部分系统版本能正常建副屏 —— 授权成功后回到这里，点面板底部的「检测副屏」确认这台设备行不行。'
+        ].join('\n')
+    },
+    root: {
+        label: '去授权 Root',
+        plugin: 'ElainaDevice', method: 'requestRootPermission',
+        guide: [
+            '1. 确认手机已 root（Magisk / KernelSU / APatch），并装好对应的管理器。',
+            '2. 点「去授权 Root」，在 root 管理器弹窗里允许本应用。',
+            '3. 回来点「重新检测」。',
+            '',
+            'Root 方式会在后台启动一个常驻 holder 进程创建副屏；不需要装 Shizuku 或模块。'
+        ].join('\n')
+    },
     module: {
         label: '怎么刷模块',
         guide: [
-            '模块方式需要先在手机上刷入 KernelSU 模块，它会提供一个本地服务（默认 127.0.0.1:3070）。',
+            '模块方式需要先在手机上刷入 KernelSU 模块 agent-mobile-use，它会提供一个本地服务（默认 127.0.0.1:3070）。',
             '',
             '1. 确认手机已刷 KernelSU 并装好管理器',
             '2. 刷入模块后重启手机',
             '3. 回来点「重新检测」，状态会变成「已就绪」',
             '',
-            '刷上之后 AI 可以后台静默操作手机，不抢占你正在用的界面，是几种方式里体验最好的。',
+            '刷上之后 AI 可以在独立副屏上后台操作，不抢占你正在用的界面。',
             '如果模块用的不是 3070 端口，需要改网关地址（目前只能改代码里的默认值）。'
         ].join('\n')
     }
@@ -60,117 +118,112 @@ function backendNameOf(id) {
 function agentPhoneSkillText() {
     if (!deviceBridge()) return '';
     const enabled = state.settings.agentPhoneEnabled !== false;
-    // 不要求设置里预先选好实现方式：只要总开关开着、且至少一条路就绪，这一轮就可能操作手机（两路都就绪时会先弹窗问前台还是后台）；若在 backend 为空时注入「未启用、不要输出标签」，模型在还没选默认方式时会彻底不试，而弹窗机制恰恰是为这种状态准备的。
-    const accReady = backendStatus.accessibility && backendStatus.accessibility.state === 'ready';
-    const modReady = backendStatus.module && backendStatus.module.state === 'ready';
+    // 不要求设置里预先选好实现方式：只要总开关开着、且至少一条路就绪，这一轮就可能操作手机（多条路就绪时会先弹窗问前台还是后台）；若在 backend 为空时注入「未启用、不要输出标签」，模型在还没选默认方式时会彻底不试，而弹窗机制恰恰是为这种状态准备的。
+    const ready = AGENT_BACKENDS.filter((b) => backendIsReady(b.id));
     const chosen = currentBackendId();
-    const effective = (chosen === 'accessibility' && accReady) ? 'accessibility'
-        : (chosen === 'module' && modReady) ? 'module'
-            : (accReady ? 'accessibility' : (modReady ? 'module' : ''));
-    const backend = effective;
-    const bothReady = accReady && modReady;
-    if (!enabled || !backend) {
+    let effective = (chosen && backendIsReady(chosen)) ? chosen : '';
+    if (!effective) {
+        const foreground = ready.find((b) => b.kind === 'foreground');
+        const background = ready.find((b) => b.kind === 'background');
+        effective = foreground ? foreground.id : (background ? background.id : '');
+    }
+    if (!enabled || !effective) {
         return '# Agent Skill：手机操作（当前未启用）\n'
             + '这台设备支持手机操作，但用户还没有在「设置 → 能力 → 手机操作」里选好「实现方式」'
             + (enabled ? '' : '，或「允许 AI 操作手机」总开关是关闭的') + '。\n'
-            + '因此你现在**不能**操作手机，也**不要**输出 [操作:手机…] 标签（会被系统直接拒绝，等于白说）。\n'
+            + '因此你现在**不能**操作手机，也**不要**尝试调用 phone_action 工具。\n'
             + '如果用户希望你操作手机，请如实说明还没有启用，并引导他去「设置 → 能力 → 手机操作」'
             + '点「选择实现方式」选一种（无障碍门槛最低），并确认「允许 AI 操作手机」已勾选。';
     }
-    // 能力清单必须按实现方式区分：无障碍做不到「手机打开」与「手机命令」（原生层会明确回失败）。但两路互通：只要另一种方式也可用，能力面就是两者的并集（原生会在首选做不到时自动换路）；写成「⛔ 不支持」会让模型自我审查，明明能做到却回「我做不到」。
-    const isAccessibility = backend === 'accessibility';
-    // backendStatus 是 detectBackend 的探测结果；还在 checking 时按「不可用」处理 —— 宁可保守，等探测完再放开能力面。
-    // 两种方式都能「打开应用」（无障碍走系统启动 intent，模块走命令族），所以这一条不再按后端分档；
-    // 只有任意命令（手机命令）仍然只有命令族能做。
-    const otherId = isAccessibility ? 'module' : 'accessibility';
-    const otherReady = Boolean(backendStatus[otherId] && backendStatus[otherId].state === 'ready');
-    const canCommand = !isAccessibility || otherReady;
+    // 能力清单必须按实现方式区分：只有无障碍时不能发任意按键；有后台端点时按键面是全的。多条路都就绪时，能力面是并集（原生会在首选做不到时按用户选择换路）；写成「⛔ 不支持」会让模型自我审查，明明能做到却回「我做不到」。
+    const backgroundReady = ready.filter((b) => b.kind === 'background');
+    const canFullKeys = backgroundReady.length > 0;
+    const choiceNeeded = ready.length > 1;
     // 提示词只留「索引 + 一句话用法」：标签清单 + 能力边界 + 反幻觉一句。详细用法（坐标怎么取、输入中文怎么处理、哪些操作问不问用户、工作区路径规则）移到注册表里 phone 的说明书，由 agent_help 用到时才下发。
+    // 工具导向：phone_action 的 raw 参数就是操作原文（格式由工具 schema 描述），提示词只写策略与规则。
     const lines = [
         '# Agent 能力：手机操作（当前方式：'
-            + (bothReady ? '无障碍 / 模块（每次操作前由用户选）' : backendNameOf(backend)) + '）',
-        '你可以操作这台安卓手机：读取界面、点击、滑动、输入文字、按键、截图'
-            + (canCommand ? '、打开应用、执行命令' : '、打开应用') + '。',
-        '可用标签（写在回复正文里，标签不会显示给用户）：',
-        '· [操作:手机状态] —— 查询设备与当前后端状态',
-        '· [操作:手机查看界面] —— 读取当前屏幕的控件树（含控件文字与可点击坐标）',
-        '· [操作:手机截图] —— 截屏（需在「设置 → 模型 → 对话模型 → 图片转述」配好多模态模型，否则拿不到画面内容）',
-        '· [操作:手机点击 x y] —— 点击坐标，例如 [操作:手机点击 540 1200]',
-        '· [操作:手机滑动 x1 y1 x2 y2 [时长毫秒]] —— 例如 [操作:手机滑动 540 1600 540 800 300]',
-        '· [操作:手机输入 文字] —— 向当前获得焦点的输入框输入文字',
-        '· [操作:手机按键 返回|主页|回车|菜单|音量上|音量下] —— 按系统键',
-        '· [操作:手机等待 毫秒] —— 等界面加载完再继续',
-        '· [操作:手机打开 应用名或包名] —— 启动应用。写应用名就行（如 [操作:手机打开 哔哩哔哩]），系统会按已安装应用解析成包名；已知包名时也可以直接写（如 [操作:手机打开 tv.danmaku.bili]）',
+            + (choiceNeeded ? '前台 / 后台由用户选' : backendNameOf(effective)) + '）',
+        '通过 **phone_action** 工具操作这台安卓手机：读取界面、点击、滑动、输入文字、按键、截图、打开应用。',
+        '工具的 raw 参数是操作原文（如「手机点击 540 1200」「手机查看界面」「手机输入 你好」），'
+            + '系统解析并执行后把结果回灌给你。',
+        '',
+        '**可用操作**：',
+        '· 手机状态 —— 查询设备与当前后端状态',
+        '· 手机查看界面 —— 读取当前屏幕的控件树（含控件文字、可点击坐标与 #编号）',
+        '· 手机截图 —— 截屏（需配置好多模态模型，否则拿不到画面内容）',
+        '· 手机点击 x y [毫秒] —— 点击坐标；第三个参数 ≥400 表示长按',
+        '· 手机滑动 x1 y1 x2 y2 [时长毫秒] —— 滑动',
+        '· 手机输入 文字 —— 向当前获得焦点的输入框输入文字',
+        '· 手机按键 返回|主页|回车|菜单|音量上|音量下 —— 按系统键',
+        '· 手机等待 毫秒 —— 等界面加载完再继续',
+        '· 手机打开 应用名或包名 —— 启动应用（写应用名就行，系统会解析成包名）',
     ];
-    if (!canCommand) {
-        lines.push('· 按键只支持「返回 / 主页 / 最近任务」三个，其它按键需要「模块」方式（其余能力不受影响）。');
+    if (!canFullKeys) {
+        lines.push('按键只支持「返回 / 主页 / 最近任务」三个；要发其他按键，需要先选「后台运行」（Shizuku / Root / 模块）。');
     }
-    // 手机命令两种方式现在都做不到，所以能力面上彻底不列它；但仍留一句明确的「不支持」：模型可能从历史对话或用户的话里猜到标签名，点明不支持能让它当场改口给替代方案，而不是输出一条注定失败的命令。
-    lines.push('· ⛔ **不支持** [操作:手机命令] —— 两种方式都做不到：'
-        + '无障碍方式不执行任意命令；「模块」方式在新版里移除了 shell 直通端点（/api/shell）。'
-        + '需要跑系统命令请改用电脑端，不要在回复里假装执行了。');
-    if (bothReady) {
-        // 两路都就绪 → 系统会在真正操作屏幕前弹窗让用户选前台/后台；必须告诉模型，否则它会自己反问用户或以为得先回设置里选。
-        lines.push('· ⚙️ 这台设备**两种方式都可用**：每次要操作屏幕前，系统会先请用户选择'
-            + '「前台运行（无障碍·看得见 AI 操作）」还是「后台运行（模块·静默不抢屏幕）」。'
-            + '你照常输出标签即可 —— 不用自己选，也不要问用户这件事。'
-            + '（读取信息、工作区文件、等待不需要选。）');
+    if (choiceNeeded) {
+        lines.push('⚙️ 这台设备有多条可用路径：每次要操作屏幕前，系统会先请用户选择前台 / 后台；后台再选 Shizuku / Root / 模块。你照常调用工具即可。');
     }
     lines.push(
-        '· [操作:手机列出文件 [路径]] —— 列出 Agent 工作区或已授权文件夹里的内容',
-        '· [操作:手机读文件 路径] —— 读取文本文件内容',
-        '· [操作:手机写文件 路径|内容] —— 写入文件（工作区内直接写；工作区外需用户已授权该文件夹）',
-        '· [操作:手机删除文件 路径] —— 删除文件或目录（⚠️ 不可恢复）',
+        '⚠️ 「手机命令」不开放：后台方式的系统命令只用于内部动作（启动应用、点击、读界面），不要输出手机命令标签。'
+    );
+    lines.push(
+        '· 手机列出文件 [路径] —— 列出 Agent 工作区或已授权文件夹里的内容',
+        '· 手机读文件 路径 —— 读取文本文件内容',
+        '· 手机写文件 路径|内容 —— 写入文件（工作区内直接写；工作区外需用户已授权该文件夹）',
+        '· 手机删除文件 路径 —— 删除文件或目录（⚠️ 不可恢复）',
         '',
         '【可读取的信息】',
         ...phoneReadSkillLines(),
         '需要用户先在系统里授予对应权限；**没有授权时会明确报「没有权限」** —— 那时如实告诉用户去开启，'
-            + '不要假装读到了。**列表里没出现的项**表示用户已在设置里关闭，**不要**尝试输出它（会被直接拒绝）。',
+            + '不要假装读到了。',
         '通知、短信、通讯录、日历是用户的**隐私数据**：只在真的需要时读，不要在回复里罗列无关细节。',
         '',
-        '用法：一次只做一步，**先看再点、点完再确认** —— 不知道屏幕上有什么时先 [操作:手机查看界面]，'
-            + '**不要凭猜测点坐标**；每次点击 / 滑动 / 输入之后都要再 [操作:手机查看界面] 确认界面变了，'
-            + '没变就换控件或重读，不要在同一坐标上反复点。能按 id 点就写 [操作:手机按键 id:<资源id>]。'
-            + '读不懂界面时用 [操作:手机截图]（会给画面描述 + 可点元素编号与坐标，照着坐标点，别从图片估像素）。'
-            + '⚠️ 游戏这类**没有控件树**的画面例外：一步一动要隔一次模型调用，太慢 —— '
-            + '可以一次连发「[操作:手机滑动 …] → [操作:手机等待 800] → [操作:手机截图]」，把确认并进同一步；'
-            + '连发前目标坐标必须来自上一张截图（照网格读），同一坐标连发两次都没反应就停下重新看画面，不要原地重试。'
-            + '⚠️ 用户让你操作手机（或说「继续」「接着玩」）而你还没做完时，这条回复**必须**带着下一步的'
-            + ' [操作:…] 标签 —— 只写「好的我会继续盯着」却不发标签，什么都不会发生，任务就停在那了；'
-            + '每条回复要么带标签，要么明确说明做不了的原因。'
-            + '⚠️ 玩有画面的游戏按这个循环走：手机打开 <应用名> → 手机截图（看画面拿到坐标）→ 按画面选一处可消除的位置 → '
-            + '手机滑动 x1 y1 x2 y2 → 手机截图确认结果 → 继续下一步，直到过关或用完步数。'
+        '用法：一次只做一步，**先看再点、点完再确认** —— 不知道屏幕上有什么时先调「手机查看界面」，'
+            + '**不要凭猜测点坐标**；每次点击 / 滑动 / 输入之后，系统会把这一步的【界面变化】一并回灌，'
+            + '**不需要**为了确认再单独读一次界面；变化里说「界面没有变化」就换控件或重读，不要在同一坐标上反复点。'
+            + '⚠️ 正常界面**优先用元素引用**：清单里的 #编号 在 raw 里写「手机点击 #12」，'
+            + '或「手机按键 id:<资源id>」；像素坐标只用于清单里没有目标、画布 / 游戏区域。'
+            + '编号只对最近一次界面清单有效，界面变化后要重新查看界面。'
+            + '⚠️ 执行期间**不要写解说、旁白或安抚** —— 这些中间话不会发给用户；'
+            + '任务完成或确定做不成时，用 [完成] 开头写**一段**总结，不要再调用工具；'
+            + '总结里不要写括号动作（如（摇了摇头）（叹了口气）），情绪用自然语气词表达。'
+            + '读不懂界面时调「手机截图」（会给画面描述 + 可点元素编号与坐标，照着坐标点，别从图片估像素）。'
+            + '⚠️ 清单会标注控件覆盖与无控件区域：目标在可读控件上直接用 #编号 / id；'
+            + '落在无控件 / 混合区域时，再调「手机截图」看画面并按网格读坐标。'
+            + '结果里说「画面持续变化，无法判断」时**不要猜**变化，先等一秒或重新截图。'
+            + '⚠️ 用户让你操作手机（或说「继续」「接着玩」）而你还没做完时，每次回复**必须**调用 phone_action —— '
+            + '只写「好的我会继续盯着」不调工具，什么都不会发生，任务就停在那了。'
+            + '⚠️ 玩有画面的游戏按这个循环走：打开应用 → 截图（看画面拿到坐标）→ 按画面选一处可消除的位置 → '
+            + '滑动 → 看回灌里的【界面变化 / 画面变化】→ 继续下一步，直到过关或用完步数。'
             + '⚠️ 打开应用**不要凭记忆猜包名**：不确定就写应用名，系统会按已安装应用解析；'
-            + '不要在应用列表里挑一个名字相近的包 —— 那会打开**另一个**应用。'
             + '打开后系统会核对前台，回灌里说「前台是 X，不是你要打开的 Y」就说明没打开成功，'
-            + '别当成已打开，先 [操作:手机应用列表] 确认准确名称再重试。'
+            + '别当成已打开，先调「手机应用列表」确认准确名称再重试。'
             + '⚠️ **消除类游戏的棋盘只能「滑动」不能「点击」**：滑动把方块换到相邻格，点击什么都不会发生。'
-            + '看到是棋盘/方块画面时，输出的一定是 [操作:手机滑动 起点x 起点y 终点x 终点y]（相邻两格，距离约一格宽）；'
-            + '点击只用来按按钮（登录、跳过、确定这类）。'
             + '⚠️ 坐标必须取**格子的正中心**：这类棋盘每格只有 80-100px 宽，差半格就点到隔壁格上，交换就落空了。'
             + '读坐标时先看清目标格的四条边，取中点；滑动的起点和终点都取格心，距离约 90px。'
-            + '⚠️ 滑之前先在画面里找**确实能连成 3 个同色**的一对：把某个方块和它上/下/左/右的邻居交换，'
-            + '看交换后那一行或那一列是否会出现 3 个同色。只滑这种配对；连不成 3 个的交换会被游戏弹回，白费时间。'
-            + '如果连续两步操作后步数/分数都没变，说明你滑的配对无效 —— 换**另一对**，不要在同一处反复滑。'
-            + '中途**不要**切回聊天应用；如果你发现当前看到的是本应用自己的界面，用 手机打开 把目标应用调回前台再接着做。'
-            + '读到的控件清单是给你判断用的内部信息，**不要把清单原文 / id / 坐标原样贴给用户**，要说明就用自己的话概括。'
+            + '⚠️ 滑之前先在画面里找**确实能连成 3 个同色**的一对；连不成 3 个的交换会被游戏弹回。'
+            + '如果连续两步操作后步数/分数都没变，换**另一对**，不要在同一处反复滑。'
+            + '中途**不要**切回聊天应用。'
+            + '读到的控件清单是给你判断用的内部信息，**不要把清单原文 / id / 坐标原样贴给用户**。'
             + '回灌里说「不支持」就是当前方式的能力边界，**不要重复尝试**，'
-            + '改用别的方式或如实告诉用户。⚠️ 只有真的输出了标签（或工具调用）才会执行，'
+            + '改用别的方式或如实告诉用户。⚠️ 只有真的调用了工具才会执行，'
             + '结果一律以系统回灌为准 —— **绝不编造**"我已经点了/已经打开了/操作成功"。'
     );
     return lines.join('\n');
 }
 
 /** 「读取信息」能力清单。能不能真读到由系统权限决定（没给权限时原生层会如实回"没有权限"并告诉用户去哪开），
- *  所以清单本身不再按开关裁剪 —— 少列一项就等于让模型以为"没这个能力"，而用户其实随时可以在系统里授予。 */
+ *  所以清单本身不按开关裁剪 —— 少列一项就等于让模型以为"没这个能力"，而用户其实随时可以在系统里授予。 */
 function phoneReadSkillLines() {
     return [
-        '· [操作:手机应用列表] —— 已安装应用的包名与应用名（想启动某个应用但不知道包名时用它）',
-        '· [操作:手机通知] —— 最近收到的通知（哪个应用、标题、内容）',
-        '· [操作:手机设备信息] —— 电量、网络、前台应用等当前状态',
-        '· [操作:手机短信 [条数]] —— 最近短信',
-        '· [操作:手机通讯录 [关键词]] —— 联系人（可带姓名关键词筛选）',
-        '· [操作:手机日历 [天数]] —— 近期日程',
+        '· 手机应用列表 —— 已安装应用的包名与应用名',
+        '· 手机通知 —— 最近收到的通知（哪个应用、标题、内容）',
+        '· 手机设备信息 —— 电量、网络、系统版本等设备概况（"我在哪个应用"看读界面的第一行，不必查它）',
+        '· 手机短信 [条数] —— 最近短信',
+        '· 手机通讯录 [关键词] —— 联系人',
+        '· 手机日历 [天数] —— 近期日程',
     ];
 }
 
@@ -268,7 +321,7 @@ function syncBackendSummary() {
     }
     if (!summary) return;
     if (!chosen) {
-        summary.textContent = '还没有选择实现方式，AI 现在不能操作手机。点下面的「选择实现方式」选一种。';
+        summary.textContent = '还没有选择运行方式，AI 现在不能操作手机。点下面的「选择实现方式」先选前台或后台。';
         summary.style.color = 'var(--rd-warn)';
         return;
     }
@@ -277,7 +330,7 @@ function syncBackendSummary() {
     const checking = !st || st.state === 'checking';
     const stateWord = checking ? '检测中' : (ready ? '已就绪' : '现在还不能用');
     const detail = st && st.text ? '：' + st.text : '';
-    summary.textContent = '当前实现方式：' + backendNameOf(chosen) + '（' + stateWord + detail + '）';
+    summary.textContent = '当前运行方式：' + backendDisplayName(chosen) + '（' + stateWord + detail + '）';
     summary.style.color = ready ? 'var(--rd-ok)' : 'var(--rd-warn)';
 }
 
@@ -356,37 +409,65 @@ function escapeBackendText(value) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+/** 面板当前展开的是哪一组：前台 / 后台。只影响面板视图，不写设置。 */
+let backendPanelGroup = '';
+
+const BACKEND_GROUPS = [
+    { id: 'foreground', name: '前台运行', hint: '在你正在用的屏幕上操作（无障碍）' },
+    { id: 'background', name: '后台运行', hint: '独立副屏，不抢你正在用的屏幕' }
+];
+
+function backendCardHtml(b, cur) {
+    const active = b.id === cur;
+    const setup = AGENT_BACKEND_SETUP[b.id];
+    const st = backendStatus[b.id];
+    // 状态说明来自原生层（「还没授权，点请求 root 授权」这种），必须显示出来 —— 手机上没法 hover，只给个「不可用」用户不知道该做什么。
+    const detail = (st && st.state !== 'checking' && st.text) ? escapeBackendText(st.text) : '';
+    const detailColor = (st && st.state === 'ready') ? 'var(--rd-ok)' : 'var(--rd-warn)';
+    // 用 div 而不是 button：卡片里还要放「去设置」按钮，而 button 不能嵌套 button
+    return '<div data-backend="' + b.id + '" role="button" tabindex="0"'
+        + ' class="backend-card w-full text-left rounded-2xl border px-4 py-3 transition cursor-pointer' + (active ? ' is-active' : '') + '"'
+        + ' style="border-color:' + (active ? 'var(--rd-accent-border)' : 'var(--rd-border)') + ';background:' + (active ? 'var(--rd-accent-soft)' : 'var(--rd-surface-2)') + '">'
+        + '<div class="flex items-center gap-2">'
+        + '<span class="text-sm font-semibold text-ink">' + b.name + '</span>'
+        + '<span style="font-size:10px;color:var(--rd-accent);background:var(--rd-accent-soft);padding:2px 6px;border-radius:7px;white-space:nowrap">' + b.tag + '</span>'
+        + '<span class="ml-auto">' + backendStatusBadge(st) + '</span>'
+        + '</div>'
+        + (detail ? '<p class="text-[11px] mt-1 leading-relaxed" style="color:' + detailColor + '">' + detail + '</p>' : '')
+        + '<p class="text-[11px] text-dim mt-1 leading-relaxed">' + b.desc + '</p>'
+        + '<div class="flex items-center gap-2 mt-1">'
+        + '<span class="text-[11px] text-dim leading-relaxed flex-1">需要：' + b.need + '</span>'
+        + (setup ? '<button type="button" data-backend-setup="' + b.id + '" class="btn-secondary text-[11px] flex-shrink-0" style="padding:3px 10px">' + setup.label + '</button>' : '')
+        + '</div>'
+        + (active ? '<p class="text-[11px] font-semibold mt-1" style="color:var(--rd-accent)">当前使用</p>' : '')
+        + '</div>';
+}
+
 function renderBackendList() {
     const box = document.getElementById('backendList');
     if (!box) return;
     const cur = currentBackendId();
+    if (!backendPanelGroup) backendPanelGroup = cur ? backendKindOf(cur) : 'foreground';
     const tip = cur ? '' :
-        '<p class="text-[11px] leading-relaxed mb-2" style="color:var(--rd-warn);background:var(--rd-warn-bg);border:1px solid var(--rd-warn-border);border-radius:12px;padding:8px 12px">还没有选择实现方式，AI 现在不能操作手机。选一种即可启用（需要该方式在你这台设备上可用）。</p>';
-    box.innerHTML = tip + AGENT_BACKENDS.map((b) => {
-        const active = b.id === cur;
-        const setup = AGENT_BACKEND_SETUP[b.id];
-        const st = backendStatus[b.id];
-        // 状态说明来自原生层（「还没授权，点请求 root 授权」这种），必须显示出来 —— 手机上没法 hover，只给个「不可用」用户不知道该做什么。
-        const detail = (st && st.state !== 'checking' && st.text) ? escapeBackendText(st.text) : '';
-        const detailColor = (st && st.state === 'ready') ? 'var(--rd-ok)' : 'var(--rd-warn)';
-        // 用 div 而不是 button：卡片里还要放「去设置」按钮，而 button 不能嵌套 button
-        return '<div data-backend="' + b.id + '" role="button" tabindex="0"'
-            + ' class="backend-card w-full text-left rounded-2xl border px-4 py-3 transition cursor-pointer' + (active ? ' is-active' : '') + '"'
+        '<p class="text-[11px] leading-relaxed mb-2" style="color:var(--rd-warn);background:var(--rd-warn-bg);border:1px solid var(--rd-warn-border);border-radius:12px;padding:8px 12px">还没有选择运行方式，AI 现在不能操作手机。先选「前台运行」或「后台运行」，再选具体方式。</p>';
+    const groupBar = '<div class="flex gap-2 mb-2">' + BACKEND_GROUPS.map((g) => {
+        const active = g.id === backendPanelGroup;
+        return '<button type="button" data-backend-group="' + g.id + '" class="flex-1 rounded-2xl border px-3 py-2 text-left transition"'
             + ' style="border-color:' + (active ? 'var(--rd-accent-border)' : 'var(--rd-border)') + ';background:' + (active ? 'var(--rd-accent-soft)' : 'var(--rd-surface-2)') + '">'
-            + '<div class="flex items-center gap-2">'
-            + '<span class="text-sm font-semibold text-ink">' + b.name + '</span>'
-                    + '<span style="font-size:10px;color:var(--rd-accent);background:var(--rd-accent-soft);padding:2px 6px;border-radius:7px;white-space:nowrap">' + b.tag + '</span>'
-            + '<span class="ml-auto">' + backendStatusBadge(st) + '</span>'
-            + '</div>'
-            + (detail ? '<p class="text-[11px] mt-1 leading-relaxed" style="color:' + detailColor + '">' + detail + '</p>' : '')
-            + '<p class="text-[11px] text-dim mt-1 leading-relaxed">' + b.desc + '</p>'
-            + '<div class="flex items-center gap-2 mt-1">'
-            + '<span class="text-[11px] text-dim leading-relaxed flex-1">需要：' + b.need + '</span>'
-            + (setup ? '<button type="button" data-backend-setup="' + b.id + '" class="btn-secondary text-[11px] flex-shrink-0" style="padding:3px 10px">' + setup.label + '</button>' : '')
-            + '</div>'
-            + (active ? '<p class="text-[11px] font-semibold mt-1" style="color:var(--rd-accent)">当前使用</p>' : '')
-            + '</div>';
-    }).join('');
+            + '<span class="text-sm font-semibold text-ink">' + g.name + '</span>'
+            + '<span class="block text-[10px] text-dim mt-0.5">' + g.hint + '</span>'
+            + '</button>';
+    }).join('') + '</div>';
+    const list = AGENT_BACKENDS.filter((b) => b.kind === backendPanelGroup);
+    box.innerHTML = tip + groupBar + list.map((b) => backendCardHtml(b, cur)).join('');
+    box.querySelectorAll('[data-backend-group]').forEach((el) => {
+        el.addEventListener('click', () => {
+            const group = el.getAttribute('data-backend-group');
+            if (!group || group === backendPanelGroup) return;
+            backendPanelGroup = group;
+            renderBackendList();
+        });
+    });
     box.querySelectorAll('[data-backend]').forEach((el) => {
         const id = el.getAttribute('data-backend');
         el.addEventListener('click', (e) => {
@@ -404,12 +485,19 @@ function renderBackendList() {
         });
     });
     const curEl = document.getElementById('backendCurrent');
-    if (curEl) curEl.textContent = cur ? backendNameOf(cur) : '尚未选择';
+    if (curEl) curEl.textContent = cur ? backendDisplayName(cur) : '尚未选择';
+    // 「检测副屏」只在后台分组、且当前选中后台方式时出现：前台无障碍没有"建屏"这回事。
+    const probeBtn = document.getElementById('backendProbeBtn');
+    if (probeBtn) {
+        const show = backendPanelGroup === 'background' && cur && backendKindOf(cur) === 'background';
+        probeBtn.classList.toggle('hidden', !show);
+    }
 }
 
 function selectBackend(id) {
     if (!AGENT_BACKENDS.some((b) => b.id === id)) return;
     state.settings.agentBackend = id;
+    backendPanelGroup = backendKindOf(id);
     persistSettings();
     syncBackendSummary();
     renderBackendList();
@@ -512,6 +600,45 @@ document.getElementById('settingBrowserRefreshBtn')?.addEventListener('click', (
     if (typeof refreshBrowserStatus === 'function') void refreshBrowserStatus();
 });
 document.getElementById('backendRefresh')?.addEventListener('click', () => { void refreshBackendStatus(); });
+// 「检测副屏」：真建一次副屏，把这台设备能不能后台运行的原话告诉用户。
+// 状态卡片只能写"可能不可用"——能否建 trusted 屏随版本与 ROM 变化，只有真试一次才算数。
+let backendProbeBusy = false;
+document.getElementById('backendProbeBtn')?.addEventListener('click', () => { void probeBackendDisplay(); });
+
+async function probeBackendDisplay() {
+    if (backendProbeBusy) return;
+    const dev = deviceBridge();
+    if (!dev || typeof dev.probeBackground !== 'function') return;
+    const chosen = currentBackendId();
+    const target = (chosen && backendKindOf(chosen) === 'background')
+        ? chosen
+        : (readyBackgroundBackends()[0] || {}).id || '';
+    if (!target) {
+        await showCustomAlert('先在上方选一个后台方式（Shizuku / Root），再点「检测副屏」。', '检测副屏');
+        return;
+    }
+    backendProbeBusy = true;
+    const btn = document.getElementById('backendProbeBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '检测中…'; }
+    try {
+        const res = await dev.probeBackground({ backend: target });
+        const text = String((res && res.text) || '未知结果');
+        backendStatus[target] = { state: (res && res.available) ? 'ready' : 'unavailable', text };
+        renderBackendList();
+        syncBackendSummary();
+        await showCustomAlert(text, (res && res.available) ? '副屏可用' : '副屏不可用');
+    } catch (e) {
+        await showCustomAlert('检测失败：' + ShellDescribeError(e), '检测副屏');
+    } finally {
+        backendProbeBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = '检测副屏'; }
+    }
+}
+
+function ShellDescribeError(e) {
+    const message = e && e.message ? e.message : String(e);
+    return message.length > 200 ? message.slice(0, 200) + '…' : message;
+}
 syncBackendSummary();
 // 预热「这台电脑的真实位置」（桌面 / 文档 / 下载…）。服务端要起一次 PowerShell 读注册表，大约一两秒；提前拉一次，用户真让 AI 操作文件时提示词里就已带着真实路径。
 // 等 DOMContentLoaded 再发：这次探测要用的 fetchWithTimeout 定义在 voice.js（排在 agent.js 之后），此刻调用会在发请求前抛错并被 catch 吞掉；DCL 时整条链路都就绪。

@@ -84,11 +84,12 @@ function fillSettingsForm() {
     if (cloneInput) cloneInput.value = '';
     updateMimoTtsCloneSampleStatus();
     fillMemoryModelSelect();
-    fillMemoryBindingSelects();
     elements.settingMemoryEvery.value = state.settings.memoryEvery || 15;
     document.querySelectorAll('input[name="agentAccess"]').forEach(r => {
         r.checked = (r.value === currentAgentAccess());
     });
+    // 完全访问的后果清单跟着档位走：初始回填后同步一次显隐（切档的监听在 agent-permissions.js）。
+    if (typeof syncFullAccessWarning === 'function') syncFullAccessWarning();
     const phoneToggle = document.getElementById('settingAgentPhoneEnabled');
     if (phoneToggle) phoneToggle.checked = state.settings.agentPhoneEnabled !== false;
     const browserToggle = document.getElementById('settingAgentBrowserEnabled');

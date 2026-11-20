@@ -11,11 +11,14 @@
     // 剥掉标签，返回给用户看的正文。剥离只留这一份：分散在多处会出现某个标签在 A 处被剥、在 B 处漏出来。
     function strip(text) {
         let out = String(text == null ? '' : text);
+        // [完成] 是收尾标记（不带动作用途），单独剥：它没有冒号，走不了下面的 name:value 正则。
+        out = out.replace(/\[完成(?::[^\]]*)?\]/g, '');
         for (const name of TAG_NAMES) {
             out = out.replace(new RegExp('\\[' + name + '[:：][^\\]]*\\]', 'g'), '');
         }
         // 未闭合的标签（输出被截断 / 忘了收尾 ]）匹配不上上面那条，整块会原样显示并存进聊天记录；与 sanitizeStreamingPreviewText 同判据，从开标签截到文末，只认 TAG_NAMES。
         out = out.replace(new RegExp('\\[(?:' + TAG_NAMES.join('|') + ')[:：][\\s\\S]*$'), '');
+        out = out.replace(/\[完成[^\]]*$/, '');
         return out.trim();
     }
 
@@ -88,6 +91,8 @@
         if (/^(浏览器|网页|打开网址)/.test(name)) return void callAction('agentBrowserOperation', name);
         // 搜索必须排在文件分支之前并锚定开头，否则「查看文件 搜索记录.txt」会被这里吃掉。
         if (/^(搜索|搜一下|联网搜索|查一下)/.test(name)) return void callAction('agentWebSearchOperation', name);
+        // 问主代理：子代理向主对话求助（需要记忆 / 偏好 / 主观判断的事），必须排在手机分支之前不冲突（锚定开头）
+        if (/^问主代理/.test(name)) return void callAction('agentAskMain', name);
         if (/^(手机|设备)/.test(name)) return void callAction('agentPhoneOperation', name);
         if (/^(电脑命令|执行命令|运行命令|电脑执行)/.test(name)) return void callAction('agentCommandOperation', name);
         // 删除必须排在下面的文件分支之前：文件分支的词眼很宽（「查看文件」等），顺序反了会把删除正文吃掉一半。

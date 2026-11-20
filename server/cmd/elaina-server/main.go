@@ -49,6 +49,31 @@ func main() {
 	log := logx.New(cfg.LogDir, cfg.LogToFile)
 	defer log.Close()
 
+	// 桌面端先预留监听再迁移数据：重复双击的第二个实例在这一步就失败退出，
+	// 不会先改认证文件、迁移 Store、打开 SQLite 之后才发现端口被占。
+	// 服务模式由 Java 侧保证单实例，保持原路径（端口 0 由内核分配）。
+	var mux *httpapi.Mux
+	if !cfg.ServiceMode {
+		var listenErr error
+		mux, listenErr = httpapi.Listen(cfg, log, cfg.Port)
+		if listenErr != nil {
+			if cfg.Port > 0 && isOurInstance(cfg.Port) {
+				port := cfg.Port
+				if mux != nil {
+					port = mux.Port()
+				}
+				openBrowser("http://127.0.0.1:" + strconv.Itoa(port))
+				log.Infof("Core", "已有实例在 %d 端口运行，已打开浏览器并退出", port)
+				os.Exit(exitAlreadyRunning)
+			}
+			log.Criticalf("Core", "CRITICAL: 端口 %d 已被其它程序占用，服务没有启动\n"+
+				"  cause: another process is bound to this port\n"+
+				"  fix: 关掉占用它的程序（netstat -ano | findstr :%d 可查 PID），\n"+
+				"       或改 data/config.json 里的 port 换一个端口后重试", cfg.Port, cfg.Port)
+			os.Exit(1)
+		}
+	}
+
 	// 配置文件样例只在不存在时写：全注释，不改变任何默认值。
 	if !cfg.ServiceMode {
 		if err := config.EnsureSample(config.ConfigPath(cfg.DataDir)); err != nil {
@@ -58,7 +83,7 @@ func main() {
 
 	resetPassword := hasArg(os.Args[1:], "--reset-password")
 	if resetPassword {
-		// sessions.json 是旧版本的会话表，新版本不再产生它；留着只会让用户以为会话还在。
+		// 会话不落 sessions.json（原因见 token.go 顶部说明）；这个残留文件留着只会让用户以为会话还在。
 		for _, name := range []string{"auth.json", "sessions.json"} {
 			_ = os.Remove(filepath.Join(cfg.DataDir, name))
 		}
@@ -113,7 +138,7 @@ func main() {
 	} else if len(moved) > 0 {
 		log.Infof("Store", "数据已迁移到分类存储：%s", strings.Join(moved, "、"))
 	}
-	// 手机旧版把聊天数据写在 Capacitor 的 filesDir/store.json（不是 Go 的 DATA_DIR）。
+	// 待并入的聊天数据在 Capacitor 的 filesDir/store.json（不是 Go 的 DATA_DIR）。
 	// 这里在插件与记忆装载前把它一次性并进 Go store，之后 /api/store 与 /api/data/* 才是同一份数据。
 	// prune 必须等记忆回补跑完：备份文件是已升级设备上旧记忆的唯一出处，先删就找不回来了。
 	migrateLegacyMobileStore(cfg, dataStore, log)
@@ -155,8 +180,6 @@ func main() {
 	}
 
 	var port int
-	var mux *httpapi.Mux
-	alreadyRunning := false
 	if cfg.ServiceMode {
 		// 手机端：端口交给内核挑（0），拿到真实端口后写 PortFile 给 Java 服务进程。
 		mux, err = httpapi.ListenAndServe(cfg, log, authStore, server, nil, 0)
@@ -167,13 +190,17 @@ func main() {
 		}
 		port = mux.Port()
 	} else {
-		port, mux, alreadyRunning = listenOnConfiguredPort(cfg, log, authStore, server, cert)
-	}
-	if alreadyRunning {
-		openBrowser("http://127.0.0.1:" + strconv.Itoa(port))
-		log.Infof("Core", "已有实例在 %d 端口运行，已打开浏览器并退出", port)
-		closeMemoryIndex(memIndex)
-		os.Exit(exitAlreadyRunning)
+		// 监听已在最前面预留：这里只需开始分发请求。预留失败在上方已处理。
+		if mux == nil {
+			closeMemoryIndex(memIndex)
+			os.Exit(1)
+		}
+		if err := mux.Start(authStore, server, cert); err != nil {
+			log.Criticalf("Core", "CRITICAL: failed to start listener: %v", err)
+			closeMemoryIndex(memIndex)
+			os.Exit(1)
+		}
+		port = mux.Port()
 	}
 	if mux == nil {
 		closeMemoryIndex(memIndex)
@@ -206,7 +233,7 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				// 会话不再有内存表可清：过期由 token 自身的 exp 判定，这里只需清理登录失败记录。
+				// 会话过期由 token 自身的 exp 判定（没有内存会话表可清），这里只需清理登录失败记录。
 				guard.Prune()
 			case <-done:
 				return
@@ -239,26 +266,6 @@ func main() {
 // 「端口文件已就位而内容是空/半截」的窗口。
 func writePortFileAtomic(path string, port int) error {
 	return fsx.WriteFileAtomic(path, []byte(strconv.Itoa(port)), 0o600)
-}
-
-// listenOnConfiguredPort 只绑配置里的那一个端口。端口是用户写在 data/config.json 的约定：
-// 自动往上找会让「我改了端口怎么还连不上」和检查脚本的固定端口断言都失效。
-// 绑不上时先认一认占用者是不是本项目实例——重复双击不该起第二个服务；
-// 是别的程序就明说端口被占，并给出改端口的位置。
-func listenOnConfiguredPort(cfg *config.Config, log *logx.Logger, authStore *auth.Store, handler http.Handler, cert *tlsutil.Info) (int, *httpapi.Mux, bool) {
-	mux, err := httpapi.ListenAndServe(cfg, log, authStore, handler, cert, cfg.Port)
-	if err == nil {
-		// port 填 0 时由系统分配，真实端口只有监听之后才知道。
-		return mux.Port(), mux, false
-	}
-	if cfg.Port > 0 && isOurInstance(cfg.Port) {
-		return cfg.Port, nil, true
-	}
-	log.Criticalf("Core", "CRITICAL: 端口 %d 已被其它程序占用，服务没有启动\n"+
-		"  cause: another process is bound to this port\n"+
-		"  fix: 关掉占用它的程序（netstat -ano | findstr :%d 可查 PID），\n"+
-		"       或改 data/config.json 里的 port 换一个端口后重试", cfg.Port, cfg.Port)
-	return cfg.Port, nil, false
 }
 
 // isOurInstance 的判据是 /api/server-info 的应答形状，只连回环地址。
@@ -557,8 +564,8 @@ func loadPlugins(cfg *config.Config, log *logx.Logger, dataStore *store.Store) *
 		log.Warnf("Mod", "写入插件清单失败：%v", err)
 	}
 
-	// 手机旧版把启用状态放在 Capacitor 的 filesDir/store.json；迁移后该文件会被改名，
-	// 之后统一从 Go store 读。标记存在时即使改名失败也不再读旧文件，否则旧的整份状态会盖住新值。
+	// 手机端的启用状态源文件在 Capacitor 的 filesDir/store.json；并入完成后该文件会被改名，
+	// 之后统一从 Go store 读。标记存在时即使改名失败也不读它，否则旧的整份状态会盖住新值。
 	state := map[string]string{}
 	stateLoaded := false
 	mobileMarker := filepath.Join(cfg.DataDir, "main", ".mobile-store-migrated")
@@ -588,6 +595,12 @@ func loadPlugins(cfg *config.Config, log *logx.Logger, dataStore *store.Store) *
 		case "1":
 			return true
 		case "0":
+			return false
+		}
+		// 高危能力（exec）不吃 manifest 的 defaultEnabled：用户的"显式开过"才是授权的凭据。
+		// 第三方 zip 在 manifest 里写 defaultEnabled:true + exec 会绕过前端开启前的确认弹窗 ——
+		// 前端 loadOne 已经拦一道，服务端这里必须再拦一道（前端拦的话 server.mjs 照样起来执行了）。
+		if plugin.HasRiskyCapability(m) {
 			return false
 		}
 		return m.DefaultEnabled
@@ -628,13 +641,13 @@ func openBrowser(url string) {
 	_ = cmd.Process.Release()
 }
 
-// 记忆库的落盘位置。M2b 起它是记忆权威，必须住在 data/main/（派生缓存目录 data/cache/
+// 记忆库的落盘位置。它是记忆权威，必须住在 data/main/（派生缓存目录 data/cache/
 // 的语义是「可随时整删、导入后清空」，权威放那里等于用户导入一次备份就丢掉全部记忆）。
 func memoryDBPath(cfg *config.Config) string {
 	return filepath.Join(cfg.DataDir, "main", "memory", "index.db")
 }
 
-// relocateMemoryDB 把 M1/M2a 时代留在 data/cache/ 的库搬到新位置。
+// relocateMemoryDB 把残留在 data/cache/ 的记忆库搬到 data/main/ 的权威位置。
 // 只在目标不存在时搬：新库里已经有数据的优先。旧库是派生数据，残留无害。
 func relocateMemoryDB(cfg *config.Config, log *logx.Logger) string {
 	newPath := memoryDBPath(cfg)

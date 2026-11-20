@@ -17,14 +17,14 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * 通知读取（★ 2026-10 新增）。
+ * 通知读取。
  *
  * <p>为什么需要一个 Service：Android 不允许应用"直接读通知" —— 唯一的合法途径是
  * 申请**通知使用权**（Notification Listener），系统会在用户授权后把通知投递进来。
  * 所以这个类本质是一个"接收 + 缓存"的服务，{@link DeviceInfoReader} 只负责把
  * 缓存里的内容交给 AI。
  *
- * <p>★★ 隐私边界（这是整个功能里最敏感的一项）：
+ * <p>隐私边界（这是整个功能里最敏感的一项）：
  * <ul>
  *   <li>通知里可能是验证码、私聊内容、银行提醒 —— 它是本功能里隐私密度最高的一类。</li>
  *   <li>用户可以在「设置 → 能力 → 手机操作 → 读取信息」里单独关掉"通知内容"，
@@ -97,7 +97,7 @@ public class ElainaNotificationListener extends NotificationListenerService {
         // 用户划掉通知不做处理：缓存的是"来过什么"，不是"当前通知栏里有什么"。
     }
 
-    // ==================== 给 DeviceInfoReader 用 ====================
+    // 给 DeviceInfoReader 用
 
     /** 最近的通知（新的在后）。 */
     static List<String> recentLines() {

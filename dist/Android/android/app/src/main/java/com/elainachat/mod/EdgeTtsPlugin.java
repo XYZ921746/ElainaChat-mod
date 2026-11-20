@@ -104,7 +104,7 @@ public class EdgeTtsPlugin extends Plugin {
         }, "edge-tts-probe").start();
     }
 
-    // ==================== 内部实现 ====================
+    // 内部实现
 
     private static byte[] doSynthesize(String text, String voice, String rate, String volume, int timeoutMs)
         throws Exception {
@@ -156,7 +156,7 @@ public class EdgeTtsPlugin extends Plugin {
 
     private static MiniWebSocket openSocket(int timeoutMs) throws Exception {
         Map<String, String> headers = new LinkedHashMap<>();
-        // ★ 这几个头就是成败关键：少了 User-Agent，服务端直接 403
+        // 这几个头就是成败关键：少了 User-Agent，服务端直接 403
         headers.put("Origin", "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
         headers.put("User-Agent", UA);
         headers.put("Pragma", "no-cache");

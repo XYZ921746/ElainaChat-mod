@@ -356,7 +356,10 @@ function renderTurnProcess() {
     const trace = activeTurnTrace;
     if (!trace) return;
 
-    const showReasoning = Boolean(state.settings.thinkingMode);
+    // 显示跟随**数据**而不是开关：有的网关强制思考（设置里关着也会回 reasoning），
+    // 有的服务商忽略开启请求（开着也不回）—— 界面该如实反映真实发生的事，而不是复读设置。
+    const thinkingRequested = Boolean(state.settings.thinkingMode);
+    const showReasoning = thinkingRequested || String(trace.reasoning || '').trim().length > 0;
 
     const anchorId = activeTurnAnchorId ? `turn-process-${safeAttrId(activeTurnAnchorId)}` : 'turn-process-active';
     let host = document.getElementById(anchorId);
@@ -477,7 +480,6 @@ function rebuildTurnProcess(host, entries) {
 }
 
 function updateTurnProcessRows(host, entries, prev) {
-    // 快路径：只动「变了」的行
     const children = host.children;
     for (let i = 0; i < entries.length; i++) {
         const entry = entries[i];

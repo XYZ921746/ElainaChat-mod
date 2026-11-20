@@ -1,5 +1,5 @@
 /* 记忆索引：向量嵌入（本文件上半）与结构化条目（下半，memory_items + FTS5）。
-   两者都优先落到 Go 服务端的 SQLite 索引（/api/memory/*），这样不再受 Store 单键 8MB 上限约束；
+   两者都优先落到 Go 服务端的 SQLite 索引（/api/memory/*），这样不受 Store 单键 8MB 上限约束；
    服务端不可用（APK 没起本地服务 / 索引损坏）时，向量走原 Store 键回退，
    结构化条目则整段跳过 —— 它是纯补充候选，缺了不该改变任何既有召回结果。
    为什么存 int8：向量是纯派生数据，定点量化足够 top-K 排序，体积只有 Float32 的四分之一。
@@ -467,7 +467,7 @@ async function loadMemoryVectorIndex() {
 }
 
 function saveMemoryVectorIndex() {
-    // 远端可用时不再写整份 JSON；批内新增由 memoryVectorFlushRemote 增量上传。
+    // 远端可用时不写整份 JSON；批内新增由 memoryVectorFlushRemote 增量上传。
     if (memoryVectorRemoteState === 'available') return;
     if (!memoryVectorIndex) return;
     try {
@@ -822,8 +822,8 @@ function getMemoryVectorScoreMap(queryText) {
     return map;
 }
 
-/* ── 结构化记忆索引 ─────────────────────────────────────────────────────
-   M2b 起记忆正文以服务端 SQLite（memory_items）为权威，六类目的读写走
+/* 结构化记忆索引
+   记忆正文以服务端 SQLite（memory_items）为权威，六类目的读写走
    /api/memory/core（见 memory.js）；这里只剩检索面：/api/memory/search 作为
    关键词召回的补充候选。任何失败都静默回退，不留新的 Store 键。 */
 const MEMORY_ITEMS_API_BASE = '/api/memory';

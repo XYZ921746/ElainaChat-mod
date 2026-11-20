@@ -19,6 +19,7 @@ import (
 	"elainachat/server/internal/auth"
 	"elainachat/server/internal/browser"
 	"elainachat/server/internal/config"
+	"elainachat/server/internal/fsx"
 	"elainachat/server/internal/lanshare"
 	"elainachat/server/internal/logx"
 	"elainachat/server/internal/mcp"
@@ -56,7 +57,7 @@ type Server struct {
 	closeOnce   sync.Once
 	startedAt   time.Time
 
-	configPasswordManaged bool
+	configPasswordManaged atomic.Bool
 	configPath            string
 
 	allowedHosts map[string]struct{}
@@ -64,6 +65,10 @@ type Server struct {
 
 	execMu        sync.Mutex
 	execApprovals map[string]execApproval
+
+	// passwordMu 覆盖「写配置 → 换内存认证 → 吊销会话 → 发新会话」全过程：
+	// 任何一步并发交错都会让内存密码与磁盘密码分叉，或把另一个请求的新会话吊销掉。
+	passwordMu sync.Mutex
 }
 
 // execApproval 是危险命令的一次性批准凭据：服务端签发、绑定命令全文、过期作废。
@@ -78,25 +83,25 @@ const execApprovalTTL = 2 * time.Minute
 
 func New(cfg *config.Config, log *logx.Logger, authStore *auth.Store, guard *auth.Guard, cert *tlsutil.Info, dataStore *store.Store, pluginHost *plugin.Host, relayHandler *relay.Handler, agentHandler *agent.Handler) *Server {
 	s := &Server{
-		cfg:          cfg,
-		log:          log,
-		auth:         authStore,
-		guard:        guard,
-		cert:         cert,
-		store:        dataStore,
-		plugins:      pluginHost,
-		packages:     packages.New(cfg.ModsDir, cfg.SkillsDir, log),
-		relay:        relayHandler,
-		agent:        agentHandler,
-		mcp:          mcp.NewRegistry(log),
-		browser:      browser.New(log, os.Getenv("ELAINA_BROWSER_HEADLESS") == "1"),
-		storeHub:     newStoreHub(),
+		cfg:           cfg,
+		log:           log,
+		auth:          authStore,
+		guard:         guard,
+		cert:          cert,
+		store:         dataStore,
+		plugins:       pluginHost,
+		packages:      packages.New(cfg.ModsDir, cfg.SkillsDir, log),
+		relay:         relayHandler,
+		agent:         agentHandler,
+		mcp:           mcp.NewRegistry(log),
+		browser:       browser.New(log, os.Getenv("ELAINA_BROWSER_HEADLESS") == "1"),
+		storeHub:      newStoreHub(),
 		execApprovals: make(map[string]execApproval),
-		update:       updatecheck.New(os.Getenv("ELAINA_UPDATE_REPO"), ""),
-		closing:      make(chan struct{}),
-		allowedHosts: buildAllowedHosts(cfg),
-		serviceMode:  cfg.ServiceMode,
-		startedAt:    time.Now(),
+		update:        updatecheck.New(os.Getenv("ELAINA_UPDATE_REPO"), ""),
+		closing:       make(chan struct{}),
+		allowedHosts:  buildAllowedHosts(cfg),
+		serviceMode:   cfg.ServiceMode,
+		startedAt:     time.Now(),
 	}
 	// 共享导出与普通导出共用 buildBackupWithSecrets：手机端 Key 只在 Keystore 里，
 	// 开启共享时页面经 X-Elaina-Secrets 头交上来，lanshare 存在内存里再交给这里。
@@ -115,7 +120,7 @@ func (s *Server) SetShutdown(fn func()) { s.shutdown = fn }
 
 // SetConfigPasswordManaged 由入口注入：密码当前保存在 data/config.json
 // （启动时带了 password，或界面改密后已写入）。状态接口据此回给设置页。
-func (s *Server) SetConfigPasswordManaged(v bool) { s.configPasswordManaged = v }
+func (s *Server) SetConfigPasswordManaged(v bool) { s.configPasswordManaged.Store(v) }
 
 // SetConfigPath 由入口注入：界面改密要把新密码写进 data/config.json，得知道它在哪。
 func (s *Server) SetConfigPath(path string) { s.configPath = path }
@@ -131,6 +136,11 @@ func (s *Server) SetMemoryIndex(index *memoryindex.Store) { s.memory = index }
 func (s *Server) BeginShutdown() {
 	s.closeOnce.Do(func() {
 		close(s.closing)
+		if s.mcp != nil {
+			// MCP 子进程与远程会话不会自己退出：SSE 收尾后 http.Server.Shutdown
+			// 也不会取消仍在执行的 handler，必须在这里显式停掉全部客户端。
+			s.mcp.Stop("")
+		}
 		if s.lan != nil {
 			s.lan.Close()
 		}
@@ -284,12 +294,17 @@ func (s *Server) handle(w *logWriter, r *http.Request) {
 	}
 
 	if pathname == "/login" {
+		// next 只在站内应用页之间传递：登录后回到刷新前的页面，而不是永远落回首页。
+		next := safeNextPath(r.URL.Query().Get("next"))
 		if s.isAuthenticated(r) || !s.auth.HasAccessPassword() {
-			// 无密码态没有登录页：闸门未启用，回首页即可。
-			redirect(w, "/", "")
+			// 无密码态没有登录页：闸门未启用，回首页（或 next 指定的页面）即可。
+			if next == "" {
+				next = "/"
+			}
+			redirect(w, next, "")
 			return
 		}
-		s.renderLogin(w)
+		s.renderLogin(w, next)
 		return
 	}
 
@@ -313,7 +328,12 @@ func (s *Server) handle(w *logWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		redirect(w, "/login", "")
+		target := "/login"
+		// 只给应用页面带 next：静态资源 / API / favicon 登录后跳过去没有意义。
+		if (r.Method == http.MethodGet || r.Method == http.MethodHead) && pathname != "/" && isAppRoute(pathname) {
+			target += "?next=" + url.QueryEscape(r.URL.RequestURI())
+		}
+		redirect(w, target, "")
 		return
 	}
 
@@ -614,7 +634,7 @@ func (s *Server) isAuthenticated(r *http.Request) bool {
 	if !s.auth.HasAccessPassword() {
 		// 无密码态不设闸门：谁都能过。端口对谁可达由监听地址决定（config.json 的
 		// host，默认只绑回环），在无密码时把监听开到外部是管理人员自己的选择，
-		// 这里不再用登录页挡第二道——无密码态连登录页都不存在。
+		// 无密码态没有第二道闸——连登录页都不存在。
 		return true
 	}
 	return s.hasValidSession(r)
@@ -741,7 +761,7 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 		"isDefaultPassword":       isDefault,
 		"passwordHint":            hint,
 		"authFile":                authFile,
-		"passwordManagedByConfig": s.configPasswordManaged,
+		"passwordManagedByConfig": s.configPasswordManaged.Load(),
 	}, nil)
 }
 
@@ -762,17 +782,31 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "message": res.Message}, nil)
 		return
 	}
+	// 整个改密是一个串行事务：并发请求各自「读旧配置→写新配置→换内存」会
+	// 互相覆盖，且后者的 ClearSessions 会把前者刚签发的新会话吊销掉。
+	s.passwordMu.Lock()
+	defer s.passwordMu.Unlock()
+
 	// 持久形态是 data/config.json 的 password 字段：先写文件再改内存，写失败就整体不动。
-	// 成功后旧密码文件（auth.json / 遗留位置）由 SetPasswordInMemory 删除，config 成为唯一权威。
+	// 配置快照用于回滚：配置写成功而后续步骤失败时，接口必须报错且磁盘/内存仍认旧密码，
+	// 不能留下「报错但密码已换」的半事务。
+	configSnapshot, snapshotErr := os.ReadFile(s.configPath)
+	if snapshotErr != nil && !os.IsNotExist(snapshotErr) {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "读取 data/config.json 失败：" + snapshotErr.Error()}, nil)
+		return
+	}
 	if err := config.SetConfigPassword(s.configPath, next); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "写入 data/config.json 失败：" + err.Error()}, nil)
 		return
 	}
 	if err := s.auth.SetPasswordInMemory(next); err != nil {
+		s.restoreConfigSnapshot(configSnapshot, snapshotErr)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "保存密码失败：" + err.Error()}, nil)
 		return
 	}
 	if err := s.auth.ClearSessions(); err != nil {
+		// 密码已成功更新，只是旧会话清理失败：如实告知，不再回滚密码。
+		s.SetConfigPasswordManaged(true)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "message": "密码已更新，但旧会话清理失败，请重新登录"}, nil)
 		return
 	}
@@ -791,6 +825,20 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		"minLength": auth.PwdMinLen,
 		"token":     token,
 	}, nil, s.sessionCookie(token, r, auth.SessionTTL))
+}
+
+// restoreConfigSnapshot 把改密前读到的配置原样写回：内存换新失败时，
+// 磁盘不能停留在「已是新密码」的状态。快照不存在说明配置本来就没有，
+// 恢复动作就是删掉刚写出的文件。
+func (s *Server) restoreConfigSnapshot(snapshot []byte, notExisted error) {
+	if notExisted != nil {
+		_ = os.Remove(s.configPath)
+		return
+	}
+	if len(snapshot) == 0 {
+		return
+	}
+	_ = fsx.WriteFileAtomic(s.configPath, snapshot, 0o600)
 }
 
 // handleShareLogin 只给共享临时监听用：校验本实例的访问密码。

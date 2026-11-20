@@ -15,17 +15,17 @@ import java.nio.charset.StandardCharsets;
 /**
  * 手机操作的执行后端。
  *
- * <p>★★ 2026-10 收敛为**一个**命令族后端（原先是四个）：
+ * <p>三条后台路径，能力来源不同：
  * <ul>
- *   <li>{@link ModuleExecutor} —— KernelSU 模块提供的本机 HTTP 网关</li>
+ *   <li>{@link ShizukuExecutor} —— Shizuku / Sui 授权，shell 或 root uid 的常驻 holder；</li>
+ *   <li>{@link RootExecutor} —— {@code su} 起出来的 uid 0 holder；</li>
+ *   <li>{@link ModuleExecutor} —— agent-mobile-use 模块的本机 HTTP 网关。</li>
  * </ul>
  * 无障碍后端不走这里（它直接调系统 API，见 {@link ElainaAccessibilityService}）。
  *
- * <p>删掉的是 <b>Shizuku 与 Root</b>：两者本质是同一件事（adb / su 级权限），
- * 共同代价是"每次重启要重新授权""授权即全局生效"。用户要的是两个端点 ——
- * 门槛最低（无障碍）与能力最强（模块），中间那两条路不值得各自维护一套。
- * 删除后命令族只剩模块一条，{@link PhoneCommand} 的 {@code forModule} 分支
- * 也成了唯一分支。
+ * <p>为什么 Shizuku / Root 的 {@code run} 不执行命令：它们的能力是**语义动作**
+ * （启动应用 / 点击 / 截图），命令通道不开放 —— 那等于把 root 执行权交给模型。
+ * 动作走 {@link HolderExecutor} 的专用方法，见 {@code ElainaShellPlugin} 的 runOnHolder。
  */
 final class ShellBackends {
 
@@ -49,7 +49,103 @@ final class ShellBackends {
         ShellProcess.Result run(Context context, String command, int timeoutMs);
     }
 
-    // ==================== KernelSU 模块网关 ====================
+    /** 后台 holder 后端（Shizuku / Root）的公共面：动作是语义的，不是命令字符串。 */
+    abstract static class HolderExecutor implements Executor {
+        @Override
+        public ShellProcess.Result run(Context context, String command, int timeoutMs) {
+            // 命令通道不开放：模型能发任意命令等于把 root 交出去。
+            // 动作请走 ElainaShellPlugin.runOnHolder（启动 / 点击 / 截图 / 读界面）。
+            return new ShellProcess.Result(-1, "", "这条后台方式不执行任意命令；"
+                + "需要操作手机请用「手机打开 / 手机点击 / 手机滑动 / 手机输入 / 手机按键」。", false);
+        }
+    }
+
+    // Shizuku
+
+    /**
+     * Shizuku / Sui：授权后由 UserService 在 shell 或 root uid 里持有副屏。
+     *
+     * <p>能否建 **trusted** 副屏取决于系统是否给 {@code com.android.shell} 留了
+     * {@code ADD_TRUSTED_DISPLAY} 权限 —— 随 Android 版本与 ROM 变化，不能按版本写死。
+     * 所以这里不做任何版本判断，可用性一律以运行时探测（{@code probeBackground} /
+     * {@link DisplayHolder#createDisplay}）的结果为准，失败时把原因翻译成可执行的下一步。
+     * root 启动（uid 0）与 Sui 不受 shell 权限这条限制。
+     */
+    static final class ShizukuExecutor extends HolderExecutor {
+        private final ShizukuBridge bridge;
+
+        ShizukuExecutor(Context context) {
+            this.bridge = ShizukuBridge.get(context);
+        }
+
+        @Override
+        public String id() {
+            return "shizuku";
+        }
+
+        @Override
+        public String label() {
+            return "Shizuku";
+        }
+
+        @Override
+        public boolean available(Context context) {
+            // 只「服务在」不算可用：没授权时选它，每个动作都会在 holder 那一步失败。
+            // 状态卡片的 detail 仍会说明「已运行但未授权」，用户知道下一步点哪。
+            return bridge.serviceAlive() && bridge.granted();
+        }
+
+        @Override
+        public String detail(Context context) {
+            return bridge.describe(context);
+        }
+
+        ShizukuBridge bridge() {
+            return bridge;
+        }
+    }
+
+    // Root
+
+    /**
+     * Root：{@code su} 起一个 uid 0 的 holder。
+     *
+     * <p>与 Shizuku 的区别只有授权来源：不走 Shizuku 的 Binder，也不需要装任何管理器之外的东西。
+     * 它不受 Android 15 QPR2 移除 shell 权限的影响（uid 0 直接过校验）。
+     */
+    static final class RootExecutor extends HolderExecutor {
+        private final RootBridge bridge;
+
+        RootExecutor(Context context) {
+            this.bridge = RootBridge.get(context);
+        }
+
+        @Override
+        public String id() {
+            return "root";
+        }
+
+        @Override
+        public String label() {
+            return "Root";
+        }
+
+        @Override
+        public boolean available(Context context) {
+            return bridge.available(context);
+        }
+
+        @Override
+        public String detail(Context context) {
+            return bridge.detail(context);
+        }
+
+        RootBridge bridge() {
+            return bridge;
+        }
+    }
+
+    // KernelSU 模块网关
 
     /**
      * 走 KernelSU 模块提供的本机 HTTP 网关。
@@ -70,7 +166,7 @@ final class ShellBackends {
         /** 运行模式：idle / background / foreground。见 {@link #ensureMode} 的说明 */
         static final String PATH_MODE = "/api/mode";
 
-        // ── 模块的复合动作端点 ──
+        // 模块的复合动作端点
         //
         // 为什么用 JSON 端点而不是 vd 命令族（`vd tap` / `vd set_value` …）：
         //   · 参数是 JSON，**不需要拼 shell 字符串** —— 中文、引号、$ 等特殊字符

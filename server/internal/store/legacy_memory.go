@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// 本文件是 M2b 的记忆迁移接口：SQLite 升为记忆权威后，Store 里的六类目 JSON
+// 本文件是记忆的迁移接口：记忆权威在 SQLite，Store 里的六类目 JSON
 // （elaina_open_memory_core）只过渡一次。读由这里提供，清理也在这里，
 // 转换与写入在 memoryindex 包（避免包循环，接线在 cmd/elaina-server）。
 

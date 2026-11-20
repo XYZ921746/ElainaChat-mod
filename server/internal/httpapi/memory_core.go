@@ -9,7 +9,7 @@ import (
 	"elainachat/server/internal/memoryindex"
 )
 
-// handleMemoryCore 是 M2b 的记忆读写面：GET 还原六类目，PUT 整类目替换 + 显式删除。
+// handleMemoryCore 是记忆的读写面：GET 还原六类目，PUT 整类目替换 + 显式删除。
 // 权威在 SQLite；页面拿到的这份就是它投影出来的 canonical 形状（条目带 id，
 // 前端据此算 dropIds 与逐条删除）。
 

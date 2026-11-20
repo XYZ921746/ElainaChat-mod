@@ -8,13 +8,9 @@ import java.util.concurrent.TimeUnit;
 /**
  * 执行一个外部进程并把结果收回来。
  *
- * <p>★ 2026-10：原先有两个使用者（Root 的 {@code su -c} 与 Shizuku 的 UserService），
- * 两者都已删除。现在只有 {@link ShellBackends.ModuleExecutor} 的网关探测
- * 与本机的 {@code uiautomator} 兜底路径会用到它。
- *
  * <p>保持"只用 java.io / java.nio，不碰需要 Context 的 Android API"这条约束 ——
- * 它当初是为了让代码能在别的进程里跑（Shizuku 的 UserService），
- * 现在虽然那个场景没了，但这条约束让本类可以独立测试，继续守着。
+ * 它让本类可以跑在 Root 的 {@code su -c} 与 Shizuku 的 UserService 这类
+ * 宿主进程里，也让本类可以独立测试。
  */
 final class ShellProcess {
 

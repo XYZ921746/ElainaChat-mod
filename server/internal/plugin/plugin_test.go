@@ -287,3 +287,18 @@ func TestRunBoundedInterruptsInfiniteLoop(t *testing.T) {
 		t.Fatalf("中断残留把下一次调用杀掉了：%v", err)
 	}
 }
+
+func TestHasRiskyCapability(t *testing.T) {
+	if HasRiskyCapability(Module{ID: "a", Dir: "a"}) {
+		t.Fatal("无 server 段不应被判高危")
+	}
+	if HasRiskyCapability(Module{ID: "b", Dir: "b", Server: json.RawMessage(`{"capabilities":["route-register","fs-read","fs-write"]}`)}) {
+		t.Fatal("仅目录内能力不应判高危")
+	}
+	if !HasRiskyCapability(Module{ID: "c", Dir: "c", Server: json.RawMessage(`{"capabilities":["exec"]}`)}) {
+		t.Fatal("声明 exec 应判高危")
+	}
+	if HasRiskyCapability(Module{ID: "d", Dir: "d", Server: json.RawMessage(`not json`)}) {
+		t.Fatal("坏 JSON 应安全降级为不高危")
+	}
+}

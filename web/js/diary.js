@@ -192,11 +192,11 @@ function closeDiaryDetail() {
 
 function enterDiaryMode() {
     state.diaryMode = true;
+    // 每次进入都从"显示全部"开始：筛选是当次浏览的临时状态，不该跨次留存（否则下次打开日记会以为只剩那一段）。
+    state.diaryFilterConvId = '';
     state.notesMode = false;
     // 语笺 / 日记 / 记忆是三个互斥的整页：只改状态不藏页面，上一个页面会留在下面（从记忆切日记时两页会一起出现），所以状态与 class 要一起收。
     state.memoryPageMode = false;
-    // 每次进入都从"显示全部"开始：筛选是当次浏览的临时状态，不该跨次留存（否则下次打开日记会以为只剩那一段）。
-    state.diaryFilterConvId = '';
     elements.initialState.classList.add('hidden');
     elements.conversationHistory.classList.add('hidden');
     elements.inputBar.classList.add('hidden');

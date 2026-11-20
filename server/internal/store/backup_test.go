@@ -72,7 +72,10 @@ func TestExportImportRoundTrip(t *testing.T) {
 		}
 	}
 
-	parsed := ParseBackup(files)
+	parsed, err := ParseBackup(files)
+	if err != nil {
+		t.Fatalf("ParseBackup: %v", err)
+	}
 	for _, key := range []string{CharacterListKey, ConversationKey, MemoryKey, SettingsKey} {
 		if _, ok := parsed[key]; !ok {
 			t.Errorf("ParseBackup 缺少键 %s", key)
@@ -303,7 +306,7 @@ func TestExportWithSecretsReachesDesktop(t *testing.T) {
 	s, _ := newStoreWithData(t)
 	// 设备 data/ 里本来没有密钥表（APK 的真实形态）。
 	blob, err := s.ExportZipWithSecrets(nil, nil, map[string]string{
-		"chatProviderKeys": `{"prov_1":"sk-FROM-PHONE"}`,
+		"chatProviderKeys":    `{"prov_1":"sk-FROM-PHONE"}`,
 		"searchApiKey_tavily": "tvly-FROM-PHONE",
 	})
 	if err != nil {
@@ -313,7 +316,10 @@ func TestExportWithSecretsReachesDesktop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
-	parsed := ParseBackup(files)
+	parsed, err := ParseBackup(files)
+	if err != nil {
+		t.Fatalf("ParseBackup: %v", err)
+	}
 	secrets := parsed[SecretsKey]
 	if !strings.Contains(secrets, "sk-FROM-PHONE") || !strings.Contains(secrets, "tvly-FROM-PHONE") {
 		t.Fatalf("备份的密钥表里应带上手机侧 Key：%s", secrets)
@@ -341,7 +347,11 @@ func TestExportWithSecretsReachesDesktop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read again: %v", err)
 	}
-	if !strings.Contains(ParseBackup(files2)[SecretsKey], "sk-FROM-PHONE") {
+	parsed2, err := ParseBackup(files2)
+	if err != nil {
+		t.Fatalf("ParseBackup: %v", err)
+	}
+	if !strings.Contains(parsed2[SecretsKey], "sk-FROM-PHONE") {
 		t.Fatal("电脑端再次导出时 Key 不应丢失")
 	}
 }
@@ -361,8 +371,12 @@ func TestExportWithSecretsKeepsExistingEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
+	parsed3, err := ParseBackup(files)
+	if err != nil {
+		t.Fatalf("ParseBackup: %v", err)
+	}
 	var secrets map[string]string
-	if err := json.Unmarshal([]byte(ParseBackup(files)[SecretsKey]), &secrets); err != nil {
+	if err := json.Unmarshal([]byte(parsed3[SecretsKey]), &secrets); err != nil {
 		t.Fatalf("密钥表不是合法 JSON：%v", err)
 	}
 	if secrets["apiKey"] != "sk-NEW" {
@@ -405,8 +419,8 @@ func TestImportKeepsChatProviderKeysRoundTrip(t *testing.T) {
 	s, _ := newStoreWithData(t)
 	providerKeys := mustJSON(t, map[string]string{"prov_a": "sk-ALIYUN", "prov_b": "sk-DEEPSEEK"})
 	secrets := mustJSON(t, map[string]string{
-		"apiKey":            "sk-FLAT",
-		"chatProviderKeys":  providerKeys,
+		"apiKey":              "sk-FLAT",
+		"chatProviderKeys":    providerKeys,
 		"searchApiKey_custom": "sk-SEARCH",
 	})
 	if _, err := s.MergeAndSave(map[string]*string{SecretsKey: &secrets}); err != nil {
@@ -423,7 +437,11 @@ func TestImportKeepsChatProviderKeysRoundTrip(t *testing.T) {
 		t.Fatalf("Read: %v", err)
 	}
 	dst, _ := newStoreWithData(t)
-	if _, err := dst.ImportBackup(ParseBackup(files), "merge"); err != nil {
+	parsed, err := ParseBackup(files)
+	if err != nil {
+		t.Fatalf("ParseBackup: %v", err)
+	}
+	if _, err := dst.ImportBackup(parsed, "merge"); err != nil {
 		t.Fatalf("ImportBackup: %v", err)
 	}
 

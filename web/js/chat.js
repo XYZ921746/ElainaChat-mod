@@ -161,6 +161,60 @@ async function callAI(text, options = {}, settings = null) {
     return reply;
 }
 
+/**
+ * 子代理专用的模型调用：与 callAI 共享供应商管线（采样 / 预算 / 死线 / 工具回填），
+ * 但**不经过角色提示词构建** —— 消息由 agent-session 自行组装（简报 + 会话历史），
+ * 这是"操作上下文与角色上下文分离"的落点。图片不支持的降级与空输出重试同 callAI。
+ */
+async function callAgentSessionAI(messages, options = {}, settings = null) {
+    const convSettings = conversationChatSettings(getCurrentConversation());
+    let reply;
+    try {
+        reply = await withChatDeadline(callChatAPI(messages, {
+            thinking: Boolean(state.settings.thinkingMode),
+            thinkingEffort: state.settings.thinkingEffort || 'off',
+            ...chatSamplingOpts(),
+            maxTokens: options.maxTokens || AGENT_CONTINUE_OUTPUT_TOKEN_LIMIT,
+            signal: options.signal,
+            tools: options.tools || null,
+            replyInfo: options.replyInfo || null
+        }, (settings || convSettings) || undefined),
+        Number.isFinite(options.deadlineMs) ? options.deadlineMs : AGENT_CONTINUE_CALL_DEADLINE_MS);
+    } catch (err) {
+        const visionUnsupported = /not a multimodal|not multimodal|does not support (image|vision)|vision.*not supported|multimodal model|image.*not supported|不支持.{0,4}图片|无法.{0,4}图片/i
+            .test(String((err && err.message) || err));
+        if (options.imageDataUrl && options.directImage && !options.imageRetried && visionUnsupported) {
+            state._agentImageUnsupported = true;
+            try {
+                if (typeof rememberModelImageVerdict === 'function') {
+                    const eff = settings || convSettings || activeChatSettings();
+                    rememberModelImageVerdict(false, eff.baseUrl, eff.model);
+                }
+            } catch (e) { /* 缓存失败不该挡住回退 */ }
+            return callAgentSessionAI(messages, Object.assign({}, options, {
+                imageDataUrl: '', directImage: false, imageRetried: true,
+            }), settings);
+        }
+        if (err instanceof ClientApiError && err.code === 'EMPTY_MODEL_OUTPUT'
+            && !options.maxTokens && options._emptyOutputRetried !== true) {
+            return callAgentSessionAI(messages, Object.assign({}, options, {
+                maxTokens: EMPTY_OUTPUT_RETRY_TOKEN_LIMIT,
+                _emptyOutputRetried: true,
+            }), settings);
+        }
+        throw err;
+    }
+    if (options.imageDataUrl && options.directImage) {
+        try {
+            if (typeof rememberModelImageVerdict === 'function') {
+                const eff = settings || convSettings || activeChatSettings();
+                rememberModelImageVerdict(true, eff.baseUrl, eff.model);
+            }
+        } catch (e) { /* 缓存失败不该影响回复 */ }
+    }
+    return reply;
+}
+
 // 两段式收在 callAI 内部（它是唯一对话出口）；第一段隐藏、失败原样抛，第二段失败回退第一段，标签从第一段追加到第二段。
 async function generateThirdPersonReply(text, options = {}, settings = null) {
     const gmOptions = { ...options, thirdPerson: true, onDelta: null };
@@ -204,10 +258,6 @@ async function generateThirdPersonReply(text, options = {}, settings = null) {
         const pass2Messages = [
             { role: 'system', content: FIRST_PERSON_CONVERT_PROMPT }
         ];
-        // 第二段是手搭的最小消息数组，不继承全局要求，必须自己再放一次思考语言要求，否则思维链一中一英。
-        if (state.settings.thinkingMode) {
-            pass2Messages.push({ role: 'system', content: THINKING_LANGUAGE_PROMPT });
-        }
         if (options.includeVoiceJp) {
             pass2Messages.push({
                 role: 'system',

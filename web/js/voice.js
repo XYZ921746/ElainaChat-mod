@@ -18,6 +18,34 @@ async function handleUserInput(message, conversation) {
     activeReplyAborts.set(replyTaskKey, replyAbort);
     updateStopButtonVisibility();
     let automaticVoiceMessageKey = '';
+    // 本轮任务目标 = 用户原话（子代理会话简报与续跑提示词都从这里取，一句话派活的目标不能被 12 条窗口挤掉）。
+    // 子代理运行中不改写：这条是 steering 消息，任务目标还是最初派活的那句。
+    if (!(typeof agentSessionActive === 'function' && agentSessionActive())) {
+        state._agentGoal = String(message?.text || '').trim();
+    }
+    // 子代理运行中的用户消息是 steering：主模型要先知道这件事（免得看不见执行过程、又把同一个活派一遍），
+    // 通知以隐藏上下文消息进这次请求，拿到回复就摘掉，不进聊天记录。
+    let steeringMsg = null;
+    if (typeof agentSessionActive === 'function' && agentSessionActive()) {
+        steeringMsg = {
+            id: generateId(),
+            role: 'user',
+            text: '（系统内部通知：操作子代理正在运行（'
+                + (typeof agentSessionStatus === 'function' ? agentSessionStatus() : '执行中') + '）。'
+                + '上面那条用户消息是给正在执行的任务的现场指示；'
+                + '不要重复派发同样的操作，也不要假装任务已经完成 —— 用一两句话回应用户，'
+                + '子代理会按最新指示继续执行。）',
+            timestamp: new Date().toLocaleTimeString(),
+            hidden: true,
+        };
+        conversation.messages.push(steeringMsg);
+    }
+    const removeSteeringNotice = () => {
+        if (!steeringMsg) return;
+        const at = conversation.messages.indexOf(steeringMsg);
+        if (at >= 0) conversation.messages.splice(at, 1);
+        steeringMsg = null;
+    };
     resetAgentContinueBudget();
 
     const t0 = performance.now();
@@ -132,29 +160,26 @@ async function handleUserInput(message, conversation) {
             if (stripped !== response) aiMessage.text = stripped;
             if (!repliedToolCalls.length) window.ElainaTags.drive(response);
         }
+        // 通知只服务这一次请求：拿到回复就摘掉，不让它进聊天记录。
+        removeSteeringNotice();
+        // 派发回复捕获（两条通道之一）：子代理会话的「主对话备注」从这里取。
+        state._agentDispatchReply = aiMessage.text;
         // 只说不做：用户让动手操作手机、模型却只回了叙述 —— 整条链根本没启动。系统侧催一次，
         // 不动提示词结构（完整角色设定与思维链照旧）。
+        let nudged = false;
         if (!repliedToolCalls.length && typeof maybeNudgeSilentAgentTurn === 'function') {
-            try { maybeNudgeSilentAgentTurn(message, response); } catch (e) { /* 催办失败不该影响这一轮 */ }
+            try { nudged = maybeNudgeSilentAgentTurn(message, response) === true; } catch (e) { /* 催办失败不该影响这一轮 */ }
         }
-        if (!repliedToolCalls.length) finishTurnTrace();
-        extractAndCreateTasks(response);
-
-        let textToSpeak = wantsJp ? getJapaneseVoiceText(aiMessage) : response;
-        const prepareVoiceText = async () => {
-            if (!wantsJp || textToSpeak) return;
-            try {
-                textToSpeak = await ensureJapaneseVoiceText(aiMessage);
-                if (textToSpeak) console.log('[TTS] 已生成仅含对白的日语朗读文本');
-                else console.warn('[TTS] 未能生成日语朗读稿，本轮不播放中文兜底');
-            } catch (error) {
-                textToSpeak = '';
-                console.warn('[TTS] 日语翻译失败，本轮不播放中文兜底:', error.message || error);
-            }
-        };
-
-        const presentationMode = state.settings.replyDisplayMode || DEFAULT_SETTINGS.replyDisplayMode;
-        let voiceStarted = false;
+        // 中间正文压制：有动作要执行（工具调用 / 会续跑的操作标签 / 首回合催办）时，这段正文只是过程话 ——
+        // 用户看不到、不落库、不配音，等收尾统一总结。判据与续跑循环共用 agentTagKeepsRunning：
+        // 纯表现标签（通话 / 记忆）不算动作 —— 压住它们用户会等不到任何回复。
+        const hasTagOps = (typeof agentTagKeepsRunning === 'function')
+            ? agentTagKeepsRunning(response)
+            : /\[操作[:：]/.test(response);
+        const suppressReply = repliedToolCalls.length > 0 || hasTagOps || nudged;
+        const shouldPersistReply = !suppressReply || repliedToolCalls.length > 0;
+        // 提交函数必须定义在下面的提前返回之前：const 不提升，放在后面时返回分支会撞 TDZ。
+        // 它只读本轮已确定的 aiMessage / repliedToolCalls，可以安全前移。
         let messageCommitted = false;
         const commitAiMessageOnce = () => {
             if (messageCommitted) return;
@@ -193,6 +218,34 @@ async function handleUserInput(message, conversation) {
                 }
             }
         };
+        // [任务:] 是回复的独立副作用，不属于"正文呈现"：带 [操作:] / 工具调用的回复正文会被
+        // 压制，但顺带安排的定时任务必须照样注册，不能跟着被压制的正文一起丢。
+        extractAndCreateTasks(response);
+        // 中间正文不落库不配音；工具协议消息例外 —— tool_calls 必须与 tool 结果成对落库，
+        // 历史窗口从协议对中间切开时会被严格网关整包拒收。
+        if (suppressReply) {
+            pendingAutomaticVoiceMessageIds.delete(automaticVoiceMessageKey);
+            if (!repliedToolCalls.length) finishTurnTrace();
+            if (shouldPersistReply) commitAiMessageOnce();
+            return;
+        }
+        if (!repliedToolCalls.length) finishTurnTrace();
+
+        let textToSpeak = wantsJp ? getJapaneseVoiceText(aiMessage) : response;
+        const prepareVoiceText = async () => {
+            if (!wantsJp || textToSpeak) return;
+            try {
+                textToSpeak = await ensureJapaneseVoiceText(aiMessage);
+                if (textToSpeak) console.log('[TTS] 已生成仅含对白的日语朗读文本');
+                else console.warn('[TTS] 未能生成日语朗读稿，本轮不播放中文兜底');
+            } catch (error) {
+                textToSpeak = '';
+                console.warn('[TTS] 日语翻译失败，本轮不播放中文兜底:', error.message || error);
+            }
+        };
+
+        const presentationMode = state.settings.replyDisplayMode || DEFAULT_SETTINGS.replyDisplayMode;
+        let voiceStarted = false;
 
         const handleVoiceStart = () => {
             voiceStarted = true;
@@ -286,6 +339,8 @@ async function handleUserInput(message, conversation) {
     } finally {
         // 失败/停止路径只有这里能保证收掉流式预览：漏掉会留下不在 state 里的半截气泡，切会话再回来就变成幽灵内容。
         removeStreamingReplyPreview();
+        // steering 通知只服务一次请求：任何出口都要摘掉，否则会作为幽灵消息留进聊天记录。
+        removeSteeringNotice();
         if (Object.prototype.hasOwnProperty.call(message, 'imageRequestDataUrl')) delete message.imageRequestDataUrl;
         activeReplyTasks.delete(replyTaskKey);
         activeReplyAborts.delete(replyTaskKey);

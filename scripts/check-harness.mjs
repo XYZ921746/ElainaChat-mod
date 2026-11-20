@@ -5,7 +5,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { createServer as createNetServer } from 'node:net';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,20 +56,57 @@ export async function waitServerUp(base, opts = {}) {
     });
 }
 
-// ==================== Go 服务端夹具 ====================
+// Go 服务端夹具
 // 运行时服务端只有一套 Go 实现：需要真实 HTTP 的用例都拉起 server/ 里编译出的二进制。
 // 没装 Go 工具链时 buildGoServer() 返回 null，用例据此按环境性跳过（不判红）。
 
 let goServerBin = null;
 
+/** server/ 里最新的源码改动时间：.go / go.mod / go.sum，跳过 bin/（编译产物不算源码）。
+ *  用来判断 server/bin 下的现成二进制还能不能用 —— 能用就不必再往 temp 里编一份。 */
+function newestServerSourceMtime() {
+    let newest = 0;
+    const walk = (dir) => {
+        for (const item of readdirSync(dir, { withFileTypes: true })) {
+            if (item.name === 'bin') continue;
+            const full = path.join(dir, item.name);
+            if (item.isDirectory()) walk(full);
+            else if (/\.(go|mod|sum)$/.test(item.name)) {
+                const m = statSync(full).mtimeMs;
+                if (m > newest) newest = m;
+            }
+        }
+    };
+    try { walk(path.join(ROOT, 'server')); } catch (e) { return 0; }
+    return newest;
+}
+
 /** 编译（或复用）检查用的 Go 服务端二进制；无 Go 工具链返回 null。构建走 go 缓存，通常一两秒。
- *  spawnSync 会阻塞事件循环，并发模块的首次调用天然串行，不会出现两个 go build 写同一输出。 */
+ *  spawnSync 会阻塞事件循环，并发模块的首次调用天然串行，不会出现两个 go build 写同一输出。
+ *
+ *  临时产物收敛：
+ *  ① 应用自己的二进制（server/bin，启动.bat 的产物）比全部源码新 → 直接复用，一个临时文件都不产生；
+ *  ② 必须现编时编到进程专属临时目录，进程退出自动清掉 —— 每份二进制约 26MB，落在固定目录
+ *     会随检查次数无限累积（实测释放过 18G）。 */
 export function buildGoServer() {
     if (goServerBin && existsSync(goServerBin)) return goServerBin;
     const probe = spawnSync('go', ['version'], { encoding: 'utf8', windowsHide: true });
     if (probe.error || probe.status !== 0) return null;
-    const outDir = path.join(os.tmpdir(), `elaina-check-server-${process.pid}`);
     const ext = process.platform === 'win32' ? '.exe' : '';
+
+    // ① 复用应用自己的二进制：比所有源码新就说明它就是当前代码编出来的。
+    const appBin = path.join(ROOT, 'server', 'bin', 'elaina-server' + ext);
+    if (existsSync(appBin)) {
+        try {
+            if (statSync(appBin).mtimeMs >= newestServerSourceMtime()) {
+                goServerBin = appBin;
+                return goServerBin;
+            }
+        } catch { /* 读不到就按没有处理 */ }
+    }
+
+    // ② 现编一份到进程专属目录；进程退出时清掉（best-effort：子进程还开着 exe 时 Windows 删不动，留着下次清）。
+    const outDir = path.join(os.tmpdir(), `elaina-check-server-${process.pid}`);
     const out = path.join(outDir, 'elaina-server' + ext);
     const res = spawnSync('go', ['build', '-o', out, './cmd/elaina-server'], {
         cwd: path.join(ROOT, 'server'),
@@ -81,6 +118,7 @@ export function buildGoServer() {
         throw new Error('Go 服务端编译失败：\n' + String(res.stdout || '') + String(res.stderr || ''));
     }
     goServerBin = out;
+    process.on('exit', () => { try { rmSync(outDir, { recursive: true, force: true }); } catch { /* 已删/占用就算了 */ } });
     return out;
 }
 
@@ -162,7 +200,7 @@ export async function startGoServer({ env = {}, extraEnv = {}, onOutput } = {}) 
     };
 }
 
-// ==================== zip 造 / 读夹具 ====================
+// zip 造 / 读夹具
 // 只服务测试：手工构造 store（不压缩）zip、读出条目（store 与 deflate 都解）。
 // 产品语义（危险扩展名、路径穿越、体积上限）唯一实现在 server/internal/zipx，这里不重复。
 

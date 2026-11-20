@@ -19,8 +19,8 @@
         var bases = ['https://xyz921746.github.io/web'].concat(MIRROR_PACKAGE_BASES);
         var out = [];
         var push = function (u) { if (u && out.indexOf(u) < 0) out.push(u); };
-        if (lastGoodBase) push(lastGoodBase + '/store/packages/' + file);   // 上次通的排第一
-        push(s);                                                            // 原地址
+        if (lastGoodBase) push(lastGoodBase + '/store/packages/' + file);
+        push(s);
         for (var i = 0; i < bases.length; i++) push(bases[i] + '/store/packages/' + file);
         return out;
     }

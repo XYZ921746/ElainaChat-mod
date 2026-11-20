@@ -103,7 +103,7 @@ func (s *Server) handleMCPTools(w http.ResponseWriter, r *http.Request) {
 	servers := s.mcpServersFromSettings()
 	out := make([]map[string]any, 0, len(servers))
 	for _, def := range servers {
-		tools, errText, err := s.mcp.ListTools(def)
+		tools, errText, err := s.mcp.ListTools(r.Context(), def)
 		entry := map[string]any{"id": def.ID, "name": def.Name, "ok": err == nil, "error": errText}
 		rows := make([]map[string]any, 0, len(tools))
 		for _, t := range tools {
@@ -154,7 +154,7 @@ func (s *Server) handleMCPCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	args, _ := body["arguments"].(map[string]any)
-	result := s.mcp.CallTool(*def, toolName, args)
+	result := s.mcp.CallTool(r.Context(), *def, toolName, args)
 	// 一律 200：ok 在 body 里。工具自身报错是正常结果，模型需要那条具体原因而不是「接口 500」。
 	writeJSON(w, http.StatusOK, map[string]any{"ok": result.OK, "text": result.Text}, nil)
 }
@@ -192,7 +192,7 @@ func (s *Server) handleMCPTest(w http.ResponseWriter, r *http.Request) {
 	// 测试用的临时 id：不与设置里已保存的服务器共用连接，测完立刻停掉。
 	def.ID = "__test__" + def.ID
 	defer func() { s.mcp.Stop(def.ID) }()
-	tools, errText, err := s.mcp.ListTools(def)
+	tools, errText, err := s.mcp.ListTools(r.Context(), def)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "message": firstNonEmpty(errText, err.Error(), "连接失败")}, nil)
 		return

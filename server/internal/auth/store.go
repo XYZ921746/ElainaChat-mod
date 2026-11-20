@@ -1,6 +1,6 @@
 // Package auth 负责访问密码与登录会话。密码记录读 data/auth.json（旧形态）与
 // data/config.json 的 password 字段（新形态）；会话凭据是 HMAC 签名的自包含 token，
-// 不再落 sessions.json —— 原因见 token.go 顶部说明。
+// 会话凭据不落盘，原因见 token.go 顶部说明。
 package auth
 
 import (
@@ -51,7 +51,7 @@ type Store struct {
 
 	inst instanceState
 	// epoch 是吊销代数：改密码时递增，旧 token 因代数不匹配而失效。
-	// 它替代了原先「清空会话表」的做法，且不需要在磁盘上维护一张会过期的表。
+	// 吊销只靠代数比对即可生效，不需要在磁盘上维护一张会过期的表。
 	epoch int64
 
 	auth *Auth
@@ -195,18 +195,20 @@ func (s *Store) SetPassword(next string) error {
 
 // SetPasswordInMemory 只更新内存凭据并删除 auth.json / 旧位置文件，不动会话：
 // 密码的持久形态换成 data/config.json 的 password 字段（由调用方负责写入），
-// 磁盘上不再保留哈希文件；会话的清理由调用方按语义决定（改密清、启动不清）。
+// 磁盘上不保留哈希文件；会话的清理由调用方按语义决定（改密清、启动不清）。
+// 先清理文件、成功后才替换内存记录：反过来时删除失败会返回错误，但新密码
+// 已经生效 —— 接口报错而密码已换，内存与磁盘就分叉了。
 func (s *Store) SetPasswordInMemory(next string) error {
 	a, err := newAuthRecord(next)
 	if err != nil {
 		return err
 	}
-	s.adoptAuthRecord(a)
 	for _, path := range []string{s.authPath, s.legacyPath} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
+	s.adoptAuthRecord(a)
 	return nil
 }
 
@@ -273,4 +275,3 @@ func (s *Store) NewSessionWithTTL(ttl time.Duration) (string, error) {
 func (s *Store) HasValidSession(token string) bool {
 	return s.verifyToken(token) == nil
 }
-

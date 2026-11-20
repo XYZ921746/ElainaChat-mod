@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 )
 
 // 配置文件放在 data/config.json：属于运行期配置，跟着 DATA_DIR 走；
@@ -106,10 +108,51 @@ func LoadPasswordOnly(path string) string {
 	return doc.Password
 }
 
+// configWriteMu 串行化同一进程内对配置文件的读改写：并发改密若各自从旧内容
+// 生成新文档，后写者会丢掉先写者的字段；临时文件用唯一名，写完 fsync 再原子替换。
+var configWriteMu sync.Mutex
+
+func writeConfigAtomic(path string, text []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := file.Name()
+	cleanup := func() { _ = file.Close(); _ = os.Remove(tmp) }
+	if _, err := file.Write(text); err != nil {
+		cleanup()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	var renameErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		renameErr = os.Rename(tmp, path)
+		if renameErr == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_ = os.Remove(tmp)
+	return renameErr
+}
+
 // SetConfigPassword 把 password 写进指定配置文件：已有文件保留其它字段只改这一项；
 // 文件不存在时写最小对象（其余字段走运行时默认，不钉死样例值）。损坏的现有文件
 // 必须报错而不是覆盖 —— 那是用户手写的配置，静默重建等于丢配置。
 func SetConfigPassword(path, password string) error {
+	configWriteMu.Lock()
+	defer configWriteMu.Unlock()
 	doc := map[string]any{}
 	if raw, err := os.ReadFile(path); err == nil {
 		if json.Unmarshal(raw, &doc) != nil || doc == nil {
@@ -123,19 +166,7 @@ func SetConfigPassword(path, password string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	// 先写临时文件再改名：写一半的配置被下一次启动读到，port/https 都可能走默认值。
-	tmp := fmt.Sprintf("%s.%d.tmp", path, os.Getpid())
-	if err := os.WriteFile(tmp, text, 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	return writeConfigAtomic(path, text)
 }
 
 // EnsureSample 在配置文件不存在时写一份默认配置：值就是当前生效的默认设置，开发者按需改。

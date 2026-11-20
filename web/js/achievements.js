@@ -287,8 +287,13 @@
             + '</div>';
         document.body.appendChild(overlay);
 
-        overlay.querySelector('#achCloseBtn').addEventListener('click', close);
-        overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+        // 统一走公开接口：路由层包的是 ElainaAchievements.close，闭包里的 close 会绕过地址同步。
+        function closeFromUi() {
+            if (window.ElainaAchievements && typeof window.ElainaAchievements.close === 'function') window.ElainaAchievements.close();
+            else close();
+        }
+        overlay.querySelector('#achCloseBtn').addEventListener('click', closeFromUi);
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeFromUi(); });
     }
 
     function render() {

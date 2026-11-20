@@ -39,7 +39,7 @@ type Config struct {
 	ConfigFile   string
 
 	// 配置文件里的访问密码：明文只存在于 data/config.json，哈希在内存里派生，
-	// 磁盘上不再有第二份哈希文件（data/auth.json 仅在 config 没写 password 时向下兼容读取）。
+	// data/auth.json 仅在 config 没写 password 时向下兼容读取。
 	Password           string
 	PasswordFromConfig bool
 

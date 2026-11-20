@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// 本文件是 M2b 的权威层：memory_items 从「派生投影」升格为记忆的唯一落盘处。
+// 本文件是记忆的权威层：memory_items 是记忆的唯一落盘处。
 // 六类目（Core）与行（Item）的转换在 core.go，这里只管存取与迁移标记。
 
 type ImportResult struct {
@@ -31,7 +31,7 @@ func checkMeta(raw string) error {
 	return nil
 }
 
-// LoadItems 取全部条目（M2b 起这就是「全部记忆」，量级由六类目自身封顶，不做分页）。
+// LoadItems 取全部条目（这就是「全部记忆」，量级由六类目自身封顶，不做分页）。
 func (s *Store) LoadItems() ([]ItemOut, error) {
 	if !s.available() {
 		return nil, sql.ErrConnDone
@@ -125,7 +125,7 @@ func (s *Store) markHealthy() {
 	s.degraded.Store(false)
 }
 
-// ImportLegacyCore 解析旧版六类目 JSON 并写入。replace 与 ImportCore 相同：
+// ImportLegacyCore 解析 legacy 六类目 JSON 并写入。replace 与 ImportCore 相同：
 // 迁移用 true（权威换代，整库重建），关库期间的回灌用 false（只增改、不删）。
 func (s *Store) ImportLegacyCore(raw []byte, replace bool, reason string) (ImportResult, error) {
 	core, err := ParseCore(raw)
@@ -155,8 +155,8 @@ func (s *Store) ImportCore(core Core, replace bool, reason string) (ImportResult
 			_ = tx.Rollback()
 			return result, err
 		}
-		// 迁移按旧 JSON 的数组顺序重建 created_at：读回的顺序才和旧版一致
-		// （旧版 promise/preference 的提示词截断取的是数组前缀，顺序就是行为）。
+		// 迁移按源 JSON 的数组顺序重建 created_at：读回的顺序才和原数组一致
+		// （legacy promise/preference 的提示词截断取的是数组前缀，顺序就是行为）。
 		base := now
 		for i := range converted.items {
 			converted.items[i].Status = StatusActive
@@ -293,7 +293,7 @@ func clearItemsTx(s *Store, tx *sql.Tx) error {
 	return nil
 }
 
-// ---- 迁移标记（schema_meta）----
+// 迁移标记（schema_meta）
 
 func (s *Store) getMetaFlag(key string) (string, bool, error) {
 	var value string
@@ -330,7 +330,7 @@ func (s *Store) MarkLegacyMigrated() error {
 	return s.setMetaFlag(legacyMarkerKey, time.Now().UTC().Format(time.RFC3339))
 }
 
-// ---- 备份导出 / 导入 ----
+// 备份导出 / 导入
 
 type itemsDump struct {
 	Format  string    `json:"format"`
@@ -339,7 +339,7 @@ type itemsDump struct {
 }
 
 // ExportItems 生成备份里的逻辑导出（data/memory-index/items.json）。
-// 导出走查询而不是拷库文件：不需要一致快照机制，旧版本/Node 版也读得懂内容。
+// 导出走查询而不是拷库文件：不需要一致快照机制，导出内容其他实现（含 Node 版）也读得懂。
 func (s *Store) ExportItems() ([]byte, error) {
 	items, err := s.LoadItems()
 	if err != nil {
@@ -424,7 +424,7 @@ func (s *Store) ImportItemsDump(raw []byte, replace bool, reason string) (Import
 }
 
 // ResetAll 清空整个派生索引（向量 + 记忆条目 + 链接 + 事件）。
-// M2b 之后不再有调用方（导入改为保留 items），保留给「整库重置」类操作。
+// 常规导入路径不经过这里（导入保留 items），保留给「整库重置」类操作。
 func (s *Store) ResetAll() (int, error) {
 	if !s.available() {
 		return 0, sql.ErrConnDone

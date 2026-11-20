@@ -163,7 +163,7 @@ func normalizeCollectionValue(key, raw string) string {
 // 过渡期两边都有值时，已经拆出去的新值不会被 store.json 里的旧值盖回去。
 // 读盘段必须全程持有 writeMu：读文件与盖缓存图章之间若插进一次 Save，
 // 旧数据会被盖上更新的图章当成合法缓存，之后的合并保存就会整份覆盖刚落盘的键
-//（设置与密钥表是整份覆盖，多设备下表现为刚保存的值被静默回滚）。
+// （设置与密钥表是整份覆盖，多设备下表现为刚保存的值被静默回滚）。
 func (s *Store) Load() (map[string]string, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
@@ -185,7 +185,7 @@ func (s *Store) loadLocked() (map[string]string, error) {
 
 	legacy, hasLegacy := s.readStoreFile()
 	if mem, ok := s.readMemory(); ok {
-		// 分类文件可能只写了一半（崩溃/旧版本分类不全）；缺的类目从 store.json 的整份记忆里补，
+		// 分类文件可能只写了一半（崩溃或写入方分类不全）；缺的类目从 store.json 的整份记忆里补，
 		// 不能因为“有一个文件”就把整份旧值丢掉。
 		if hasLegacy && legacy[MemoryKey] != "" {
 			mem = mergeMemoryCategories(mem, legacy[MemoryKey])
@@ -240,7 +240,12 @@ func (s *Store) saveLocked() error {
 		return err
 	}
 	s.recoveredDuringSave = false
+	before := s.snapshotCollectionEntries()
 	if err := s.writeClassified(cache); err != nil {
+		// 进程内已报错的失败写入：新落盘的条目文件是孤儿（索引没更新成功），
+		// 留着会被下一次保存的恢复护栏当成丢失数据回填，等于把用户已收到
+		// 失败答复的补丁悄悄提交。崩溃留下的孤儿没有这份记录，仍走回填。
+		s.rollbackNewCollectionEntries(before)
 		return err
 	}
 	recovered := s.recoveredDuringSave
@@ -265,10 +270,13 @@ func (s *Store) saveLocked() error {
 // MergeAndSave 是 POST /api/store 的核心：只覆盖本次提交的键，nil 表示删除。
 // 删除必须真的从 map 与磁盘上消失，否则「清掉插件失败记录」这类操作永远不生效。
 func (s *Store) MergeAndSave(patch map[string]*string) (int, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
 	s.mu.Lock()
 	if !s.cacheValid || s.cache == nil {
 		s.mu.Unlock()
-		if _, err := s.Load(); err != nil {
+		if _, err := s.loadLocked(); err != nil {
 			return 0, err
 		}
 		s.mu.Lock()
@@ -283,7 +291,8 @@ func (s *Store) MergeAndSave(patch map[string]*string) (int, error) {
 	keys := len(patch)
 	s.mu.Unlock()
 
-	if err := s.Save(); err != nil {
+	if err := s.saveLocked(); err != nil {
+		s.Invalidate()
 		return 0, err
 	}
 	return keys, nil
@@ -531,7 +540,7 @@ func archiveLegacyPath(dataDir, label, from string) error {
 	return os.Rename(from, filepath.Join(root, label))
 }
 
-// ---------- 读写原语 ----------
+// 读写原语
 
 func (s *Store) readStoreFile() (map[string]string, bool) {
 	raw, err := os.ReadFile(s.storeFile)
@@ -885,6 +894,7 @@ func (s *Store) writeCollection(raw, dir, prefix, currentCardID string) bool {
 	}
 	order := make([]string, 0, len(items))
 	keep := make(map[string]struct{}, len(items))
+	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		fields := map[string]json.RawMessage{}
 		trimmed := bytes.TrimSpace(item)
@@ -892,7 +902,13 @@ func (s *Store) writeCollection(raw, dir, prefix, currentCardID string) bool {
 			continue
 		}
 		id := ensureID(fields, prefix)
-		order = append(order, id)
+		// 同一 id 只登记一次：index.order 里出现两次时，重启后两条 order 都指向同一个
+		// 条目文件，读出来是两份相同内容、其中一条的正文永久丢失。
+		// 位置取首次出现，内容仍由后面的写盘覆盖（与逐条写入的最终结果一致）。
+		if _, dup := seen[id]; !dup {
+			seen[id] = struct{}{}
+			order = append(order, id)
+		}
 		keep[id+".json"] = struct{}{}
 		if err := s.writeJSONAtomic(filepath.Join(dir, id+".json"), fields); err != nil {
 			return false
@@ -976,7 +992,7 @@ func (s *Store) collectionReadSuspect(dir string) bool {
 		// 没有 index 但目录里已有条目文件：上一次写入没落完或 index 被删，按可疑处理。
 		entries, readErr := os.ReadDir(dir)
 		if readErr != nil {
-			return false
+			return true
 		}
 		for _, entry := range entries {
 			name := entry.Name()
@@ -997,14 +1013,36 @@ func (s *Store) collectionReadSuspect(dir string) bool {
 	if err != nil {
 		return true
 	}
-	onDisk := 0
+	onDisk := make(map[string]struct{})
 	for _, entry := range entries {
 		name := entry.Name()
 		if strings.HasSuffix(name, ".json") && name != "index.json" {
-			onDisk++
+			id := strings.TrimSuffix(name, ".json")
+			if !safeID.MatchString(id) {
+				return true
+			}
+			onDisk[id] = struct{}{}
 		}
 	}
-	return onDisk > len(idx.Order)
+	indexIDs := make(map[string]struct{}, len(idx.Order))
+	for _, id := range idx.Order {
+		if !safeID.MatchString(id) {
+			return true
+		}
+		if _, duplicate := indexIDs[id]; duplicate {
+			return true
+		}
+		indexIDs[id] = struct{}{}
+		if _, exists := onDisk[id]; !exists {
+			return true
+		}
+	}
+	for id := range onDisk {
+		if _, exists := indexIDs[id]; !exists {
+			return true
+		}
+	}
+	return false
 }
 
 // entryNeedsProtection 报告该条目是否属于「本进程读到过失败」的范畴。
@@ -1263,6 +1301,61 @@ func (s *Store) readMemory() (string, bool) {
 	return string(text), true
 }
 
+// snapshotCollectionEntries 记录两个集合目录里已有的条目文件名，供失败回滚比对。
+// 读不到目录时记 nil（未知）而不是空集合：回滚会把“空快照”当成目录里原本什么都没有，
+// 从而把原有条目误判成本次新写入删掉。
+func (s *Store) snapshotCollectionEntries() map[string]map[string]struct{} {
+	snapshot := make(map[string]map[string]struct{}, 2)
+	for _, dir := range []string{s.convDir, s.charsDir} {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			// 目录不存在 = 确实没有旧条目（空快照安全）；其它读取失败（权限 / IO）时
+			// 记 nil（未知），回滚跳过该目录，免得把原有条目误判成本次新写入删掉。
+			if os.IsNotExist(err) {
+				snapshot[dir] = map[string]struct{}{}
+			} else {
+				snapshot[dir] = nil
+			}
+			continue
+		}
+		names := make(map[string]struct{})
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".json") && name != "index.json" {
+				names[name] = struct{}{}
+			}
+		}
+		snapshot[dir] = names
+	}
+	return snapshot
+}
+
+// rollbackNewCollectionEntries 只删除「本次失败保存新写出的」条目文件：
+// 旧条目在索引写成功前不会被动（删除走回收站，且在索引成功之后），所以这里
+// 不可能碰到用户已有数据；memory 的写入是先解析后落盘，失败时不产生新文件。
+func (s *Store) rollbackNewCollectionEntries(before map[string]map[string]struct{}) {
+	for dir, names := range before {
+		// 快照阶段读不到目录：判断不了哪些文件是本次新写的，宁可不删。
+		if names == nil {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".json") || name == "index.json" {
+				continue
+			}
+			if _, existed := names[name]; existed {
+				continue
+			}
+			_ = os.Remove(filepath.Join(dir, name))
+		}
+	}
+}
+
 func (s *Store) writeClassified(cache map[string]string) error {
 	if raw, ok := cache[MemoryKey]; ok {
 		if !s.writeMemory(raw) {
@@ -1431,7 +1524,7 @@ func (s *Store) stampLocked() string {
 	return strings.Join(parts, ",")
 }
 
-// ---------- 小工具 ----------
+// 小工具
 
 func cloneMap(in map[string]string) map[string]string {
 	if in == nil {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"elainachat/server/internal/fsx"
 	"elainachat/server/internal/plugin"
 )
 
@@ -28,6 +29,41 @@ var contentTypes = map[string]string{
 	".svg":         "image/svg+xml",
 	".mp3":         "audio/mpeg",
 	".m4a":         "audio/mp4",
+}
+
+// 应用页面的路径（前端 router.js 的同一份路由表）。
+// 只有这些路径在文件不存在时才回退发 index.html —— 否则任意拼错的静态资源都会拿到一份 HTML，
+// 浏览器会把它当脚本/样式解析，排查起来比 404 难得多。
+var appRouteSettingsTabs = map[string]bool{
+	"appearance": true,
+	"character":  true,
+	"model":      true,
+	"capability": true,
+	"timers":     true,
+	"mods":       true,
+	"advanced":   true,
+	"log":        true,
+}
+
+// isAppRoute 判断是否前端页面地址。/web 前缀是站内别名：应用本身挂在根路径，
+// 但从 /web/store/ 这类地址进来时整段会话都保留前缀，刷新与前进后退都要能回到同一页。
+func isAppRoute(pathname string) bool {
+	p := pathname
+	switch {
+	case p == "/web":
+		p = "/"
+	case strings.HasPrefix(p, "/web/"):
+		p = strings.TrimPrefix(p, "/web")
+	}
+	p = strings.TrimSuffix(p, "/")
+	switch p {
+	case "", "/chat", "/notes", "/memory", "/diary", "/settings", "/achievements", "/store":
+		return true
+	}
+	if tab, ok := strings.CutPrefix(p, "/settings/"); ok {
+		return tab != "" && !strings.Contains(tab, "/") && appRouteSettingsTabs[tab]
+	}
+	return false
 }
 
 // serveWeb 只发 web/ 下的普通文件。符号链接不跟随：web/ 里的一条软链就能把任意文件读出去。
@@ -52,8 +88,27 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request, pathname strin
 		return true
 	}
 	info, err := os.Lstat(target)
+	if err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+		_, err = fsx.ExistingPathWithin(target, s.cfg.WebRoot)
+	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return false
+		// 文件不存在是页面路由的正常输入；链接或权限错误不能借回退绕过真实路径检查。
+		if err == nil || !os.IsNotExist(err) || !isAppRoute(pathname) || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+			if err != nil && !os.IsNotExist(err) {
+				writePlain(w, http.StatusForbidden, "Forbidden")
+				return true
+			}
+			return false
+		}
+		relative = "index.html"
+		target = filepath.Join(s.cfg.WebRoot, filepath.FromSlash(relative))
+		if !pathInside(target, s.cfg.WebRoot) {
+			return false
+		}
+		info, err = os.Lstat(target)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return false
+		}
 	}
 
 	ctype := contentTypes[strings.ToLower(filepath.Ext(target))]
@@ -63,9 +118,6 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request, pathname strin
 	h := w.Header()
 	h.Set("Content-Type", ctype)
 	h.Set("X-Content-Type-Options", "nosniff")
-	if relative == "sw.js" {
-		h.Set("Service-Worker-Allowed", "/")
-	}
 	if strings.HasPrefix(ctype, "text/html") {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("Referrer-Policy", "no-referrer")
@@ -87,6 +139,9 @@ func (s *Server) serveMods(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	info, err := os.Lstat(target)
+	if err == nil && info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+		_, err = fsx.ExistingPathWithin(target, s.cfg.ModsDir)
+	}
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		writePlain(w, http.StatusNotFound, "Not found")
 		return true
@@ -150,7 +205,9 @@ func streamFile(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	h.Set("Content-Length", strconv.FormatInt(st.Size(), 10))
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, f)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, f)
+	}
 }
 
 // etagMatches 判断 If-None-Match 里是否包含当前 ETag。
@@ -223,9 +280,5 @@ func (s *Server) servePluginStatic(w http.ResponseWriter, r *http.Request, abs, 
 
 // pathInside 用相对路径判越界，而不是字符串前缀：前缀判断在 Windows 上会因大小写与分隔符放行。
 func pathInside(target, root string) bool {
-	rel, err := filepath.Rel(root, target)
-	if err != nil {
-		return false
-	}
-	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
+	return fsx.PathInside(target, root)
 }

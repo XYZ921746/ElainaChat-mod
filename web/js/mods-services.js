@@ -7,7 +7,7 @@
         const contributionSet = deps && deps.contributionSet ? deps.contributionSet : () => new Set();
         const guardMod = deps && deps.guardMod ? deps.guardMod : (id, where, fn, fallback) => { try { return fn(); } catch (e) { return fallback; } };
 
-    /* 插件服务表：name → Map(modId → api)。宿主用 ElainaMods.service(name) 找服务，不再写插件专有全局名（D3）。 */
+    /* 插件服务表：name → Map(modId → api)。宿主用 ElainaMods.service(name) 找服务，不得引用插件专有全局名（D3）。 */
     const services = new Map();
     function registerService(modId, name, api) {
         const key = String(name || '').trim();

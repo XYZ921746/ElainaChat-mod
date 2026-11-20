@@ -1,6 +1,6 @@
 // Package memoryindex 是记忆索引的 SQLite 落盘层。
 //
-// M2b 起它存两类东西：向量（`vectors`）是派生索引，可随时整库重建；
+// 它存两类东西：向量（`vectors`）是派生索引，可随时整库重建；
 // 结构化记忆条目（`memory_items` + FTS5 全文索引 + 链接/事件表）是**记忆正文的唯一权威**，
 // 打开失败绝不能无声重建，必须留证 + 尝试回灌（见 Open 与 cmd/elaina-server 的接线）。
 package memoryindex
@@ -50,6 +50,22 @@ var (
 	ErrSchemaTooNew = errors.New("记忆索引库的 schema 版本高于当前程序支持")
 )
 
+// isCorruptionError 判断打开失败是否为「库内容本身坏了」。只有这一类才允许
+// 留证重建；锁竞争、权限、磁盘 IO 与网络盘错误重建不出好结果，还可能把健康库
+// （或另一实例正在写的库）改名搬走。
+func isCorruptionError(err error) bool {
+	var sqliteErr *sqlite3.Error
+	if errors.As(err, &sqliteErr) {
+		switch sqliteErr.Code() {
+		case sqlite3.CORRUPT, sqlite3.NOTADB:
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "database disk image is malformed") ||
+		strings.Contains(msg, "file is not a database")
+}
+
 // Store 只允许一个连接：SQLite 的写者本来就只能有一个，开多连接只会把
 // busy 重试带进业务层；本应用只有 Go 服务端进程会碰这个文件。
 type Store struct {
@@ -91,6 +107,11 @@ func Open(path string, log *logx.Logger) (*Store, error) {
 	time.Sleep(250 * time.Millisecond)
 	if s, err = openAt(path, log); err == nil {
 		return s, nil
+	}
+	// 只有「库内容本身坏了」才走留证重建：锁竞争、权限、磁盘 IO 重建不出好结果，
+	// 还可能把另一实例正在写的健康库改名搬走。
+	if !isCorruptionError(err) {
+		return nil, fmt.Errorf("打开记忆索引失败: %w", err)
 	}
 	bad := ""
 	if path != ":memory:" {

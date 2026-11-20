@@ -12,8 +12,8 @@
         'elaina_open_conversations',
         'elaina_open_categories',
         'elaina_open_favorites',
-        'elaina_open_liked_quotes',      // 历史键：点赞已下线，保留只为旧数据仍能备份/同步
-        'elaina_open_character_card',    // 当前生效的角色卡（旧格式，仅启动时读取迁移，不再写入）
+        'elaina_open_liked_quotes',      // 点赞已移除；保留该键只为旧数据仍能备份/同步
+        'elaina_open_character_card',    // 角色卡的旧格式键：仅启动时读取迁移，写入走 cards 列表与 current_card
         'elaina_open_character_cards',
         'elaina_open_current_card',
         'elaina_memory_vectors',         // 记忆/对话原文的向量索引（派生数据，可按嵌入模型重建）
@@ -63,15 +63,23 @@
     var eventSource = null;
 
     // 服务不可用期间的写暂存：保存失败的补丁落 localStorage，服务恢复后重放推给服务端。
-    // 暂存只装「服务端拒收期间」的补丁，重放成功即清空；它在拒收窗口内比服务端缓存新，
-    // 重放覆盖同名键是刻意为之。权威永远只有 data/ 一份，暂存是待写队列不是第二权威。
+    // 暂存只装「服务端拒收期间」的补丁，重放成功即清空。权威永远只有 data/ 一份，暂存是待写队列不是第二权威。
     var STAGE_KEY = 'elaina_store_stage';
+
+    // 每个键「服务端确认过的值」：写入成功、读到权威快照、收到远端补丁时更新。
+    // 暂存补丁时把当前基线一并记下，重放前才能判断这条暂存是否已经被别人超越 ——
+    // 只有服务端的值仍等于基线（期间没人写过），暂存才是唯一的新值，重放才是安全的。
+    var synced = Object.create(null);
+
+    function markSynced(key, value) {
+        if (value === null || value === undefined) delete synced[key];
+        else synced[key] = value;
+    }
 
     // 首帧主题快照：只有「主题呈现结果」（模板 / 深浅 / 自定义 CSS 变量），不含设置正文。
     // 它必须能在 index.html 的内联脚本里同步读到 —— 那时 Store 还没求值，读不到 data/，
     // 所以只能落在 localStorage（同步、跨进程保留）。放这里是为了让 localStorage 的访问
     // 全部收在存储层，业务代码（theme.js）只经 Store 暴露的方法。
-    //
     // 为什么不用 sessionStorage：它的寿命是「页面会话」，APK 每次冷启动都是新进程，
     // 于是手机端每次启动都读不到快照，首帧先按默认浅色渲染再切回深色（用户可见的闪烁）。
     var BOOT_THEME_KEY = 'elaina_theme_boot';
@@ -87,18 +95,38 @@
     function stagePatch(patch) {
         try {
             var staged = {};
-            try { staged = JSON.parse(localStorage.getItem(STAGE_KEY) || '{}') || {}; } catch (e) { staged = {}; }
-            for (var k in patch) staged[k] = patch[k];
-            localStorage.setItem(STAGE_KEY, JSON.stringify(staged));
+            var base = {};
+            try {
+                var prev = JSON.parse(localStorage.getItem(STAGE_KEY) || 'null');
+                if (prev && prev.data) { staged = prev.data || {}; base = prev.base || {}; }
+            } catch (e) { staged = {}; base = {}; }
+            for (var k in patch) {
+                staged[k] = patch[k];
+                // 基线只在第一次暂存这个键时记下：那时 synced 里还是服务端认的值。
+                // 之后再暂存同一个键不能刷新基线，否则暂存期间没人写过的判断会失真。
+                if (!Object.prototype.hasOwnProperty.call(base, k)) {
+                    base[k] = Object.prototype.hasOwnProperty.call(synced, k) ? synced[k] : null;
+                }
+            }
+            localStorage.setItem(STAGE_KEY, JSON.stringify({ data: staged, base: base }));
         } catch (e) { /* 隐私模式 / 超配额：只能依赖本页内存的重试 */ }
+    }
+
+    function readStaged() {
+        try {
+            var raw = JSON.parse(localStorage.getItem(STAGE_KEY) || 'null');
+            if (!raw) return null;
+            // 兼容没有 base 的旧格式：当作"基线未知"，重放时按服务端当前值判断。
+            return { data: raw.data || raw, base: raw.base || {} };
+        } catch (e) { return null; }
     }
 
     function clearStagedKeys(keys) {
         try {
-            var staged = JSON.parse(localStorage.getItem(STAGE_KEY) || 'null');
+            var staged = readStaged();
             if (!staged) return;
-            for (var i = 0; i < keys.length; i++) delete staged[keys[i]];
-            if (Object.keys(staged).length) localStorage.setItem(STAGE_KEY, JSON.stringify(staged));
+            for (var i = 0; i < keys.length; i++) { delete staged.data[keys[i]]; delete staged.base[keys[i]]; }
+            if (Object.keys(staged.data).length) localStorage.setItem(STAGE_KEY, JSON.stringify(staged));
             else localStorage.removeItem(STAGE_KEY);
         } catch (e) { /* 忽略 */ }
     }
@@ -107,19 +135,50 @@
         // 写闸门未解除（还没成功加载过权威快照）时不重放：暂存补丁可能在服务端拒收窗口里
         // 混入了派生自空缓存的整表值，先加载后重放。
         if (!everLoaded) return;
-        var staged = null;
-        try { staged = JSON.parse(localStorage.getItem(STAGE_KEY) || 'null'); } catch (e) { staged = null; }
+        var staged = readStaged();
         if (!staged) return;
-        var keys = Object.keys(staged);
+        var keys = Object.keys(staged.data);
         if (!keys.length) { try { localStorage.removeItem(STAGE_KEY); } catch (e) { /* 忽略 */ } return; }
+
+        // 先拿服务端权威值逐键比对基线，只重放「服务端仍停在基线」的键。
+        // 不做这层比对时，一台设备留下的陈旧暂存会在另一台设备写入新值之后把它覆盖回去 ——
+        // 暂存是"待写队列"，它比的是自己离开时的服务端，而不是别人的最新写入。
+        var snapshot = null;
+        try { snapshot = backend.loadAllSync(); } catch (e) { snapshot = null; }
+        if (!snapshot) return;   // 读不到权威就先不重放，下次再试
+
+        var send = {};
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            var serverValue = Object.prototype.hasOwnProperty.call(snapshot, k) ? snapshot[k] : null;
+            var baseValue = Object.prototype.hasOwnProperty.call(staged.base, k) ? staged.base[k] : undefined;
+            // 基线未知（旧格式暂存）：服务端已有值就说明它比暂存新，丢弃。
+            if (baseValue === undefined) {
+                if (serverValue === null) send[k] = staged.data[k];
+                else {
+                    console.warn('[Store] 服务恢复后丢弃暂存键 ' + k + '：基线未知且服务端已有值');
+                    clearStagedKeys([k]);
+                }
+                continue;
+            }
+            if (serverValue === baseValue) send[k] = staged.data[k];
+            else {
+                // 期间有人写过：暂存已过期，丢弃而不是覆盖。丢弃必须留痕 —— 这是用户可感知的
+                // 数据丢失路径，无日志时排查只剩"我的改动去哪了"。
+                console.warn('[Store] 服务恢复后丢弃暂存键 ' + k + '：服务端已有更新的值');
+                clearStagedKeys([k]);
+            }
+        }
+        if (!Object.keys(send).length) return;
+
         fetch((base || '') + '/api/store', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Store-Client': clientId },
-            body: JSON.stringify({ data: staged }),
+            body: JSON.stringify({ data: send }),
         }).then(function (res) {
             if (!res.ok) return; // 服务端仍在拒绝：保留暂存，下次再试
-            applyRemotePatch(staged); // 本页缓存对齐到已推送的值（暂存的值此时才是最新）
-            try { localStorage.removeItem(STAGE_KEY); } catch (e) { /* 忽略 */ }
+            applyRemotePatch(send); // 本页缓存对齐到已推送的值（暂存的值此时才是最新）
+            clearStagedKeys(Object.keys(send));
         }).catch(function () { /* 保留暂存，下次再试 */ });
     }
 
@@ -193,6 +252,10 @@
         for (var k in data) {
             if (typeof data[k] === 'string') cache[k] = data[k];
         }
+        // 权威快照到达即建立基线：这是"服务端认的值"，后续暂存重放拿它比对。
+        for (var k2 in data) {
+            if (isDataKey(k2) && typeof data[k2] === 'string') markSynced(k2, data[k2]);
+        }
     }
 
     // 服务端返回的是完整权威快照：先清掉本地业务键再合并，避免删除的对话/卡片被旧缓存“复活”。
@@ -223,17 +286,14 @@
             save: function (patch) {
                 var body = JSON.stringify({ data: patch });
                 var headers = { 'Content-Type': 'application/json', 'X-Store-Client': clientId };
-                // sendBeacon / keepalive fetch 约 64KB 上限，超过会静默失败（大 base64 样本会让整次写入丢失），大包改走普通 fetch。
+                // keepalive 请求体约 64KB 上限（超限整次写入失败，大 base64 样本会让整次写入丢失），大包改走普通 fetch。
+                //
+                // 不用 sendBeacon：它返回 true 只表示「已入队」，浏览器可以把这条请求压到页面卸载时才真正发出
+                // （实测同一页面同一时刻，beacon 十几秒未送达、keepalive fetch 半秒内落盘）。写入被压后延
+                // 意味着「界面显示已保存」与「数据在盘上」之间有一段谁也不知道多长的窗口，进程被杀就是真丢。
+                // keepalive fetch 同样能在关页面/切后台时发出去，而且能设 X-Store-Client（beacon 设不了，
+                // 自己的改动会被 SSE 广播回来多渲染一次），失败也能进 catch 走暂存。
                 var keepaliveOk = body.length <= 60000;
-                // 小包走 sendBeacon（关页面/切后台也能发出去）；它不能设自定义头，故不带 clientId，自己的改动可能被广播回来。
-                if (keepaliveOk) {
-                    try {
-                        if (navigator.sendBeacon) {
-                            var blob = new Blob([body], { type: 'application/json' });
-                            if (navigator.sendBeacon('/api/store', blob)) return Promise.resolve();
-                        }
-                    } catch (e) { /* 退回 fetch */ }
-                }
                 return fetch('/api/store', {
                     method: 'POST',
                     headers: headers,
@@ -241,6 +301,8 @@
                     keepalive: keepaliveOk,
                 }).then(function (res) {
                     if (res.ok) {
+                        // 写入成功即服务端认了这个值：更新基线，后续暂存重放才有得比。
+                        for (var k in patch) markSynced(k, patch[k]);
                         clearStagedKeys(Object.keys(patch));
                         replayStagedPatch('');
                         return;
@@ -422,6 +484,23 @@
         return {
             // Go 会省略空集合（删除最后一个对话/卡片后 GET 不再返回该键），所以加载只能 replace，不能 merge。
             replaceOnLoad: true,
+            // replayStagedPatch 要同步拿到服务端当前值与暂存基线比对；APK 没有 Web 后端那条同步通路，按同一形状提供。
+            // 只服务重放比对，不承担引导加载（native 引导仍走异步 loadAll —— 缓存兜底与首屏宽限都在那条路上）。
+            // 服务未就绪（__nodeBase 空）或请求失败时返回 null，重放顺延到下一次触发。
+            loadAllSync: function () {
+                var nodeBase = window.__nodeBase;
+                if (!nodeBase) return null;
+                try {
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('GET', nodeBase + '/api/store', false);
+                    xhr.send(null);
+                    if (xhr.status !== 200) return null;
+                    var res = JSON.parse(xhr.responseText || '{}');
+                    return (res && res.data) || {};
+                } catch (e) {
+                    return null;
+                }
+            },
             loadAll: function () {
                 // 结果三种形态：对象 = 拿到服务端数据；null = 服务已明确不可用；undefined = 宽限期到、服务还没给。
                 var serverPromise = waitNodeBase(20000).then(function (base) {
@@ -498,6 +577,7 @@
                 }).then(function (res) {
                     if (res.ok) {
                         writeCacheData(cache);
+                        for (var k in patch) markSynced(k, patch[k]);
                         clearStagedKeys(Object.keys(patch));
                         replayStagedPatch(base);
                         return;
@@ -511,6 +591,13 @@
         };
     }
 
+    // 写入串行链：同一时刻至多一个补丁在途。两个补丁并发在途时，先发的那个可能后收到失败
+    // 响应，暂存基线取到的是已被后发成功写入刷新过的 synced，重放就会把服务端已认的新值
+    // 盖回过期值 —— 串行后失败响应到达时 synced 必然仍是这次发送时的值，基线才可比。
+    var saveChain = Promise.resolve();
+    // 关页后不再排队：卸载中排在链上的补丁可能没机会发出，关页保存宁可直发保住 keepalive 通路。
+    var unloading = false;
+
     function flush() {
         flushTimer = null;
         // 写闸门未解除时扣留：补丁留在 pending，markLoaded 后再发；关页时落暂存（见 pagehide）。
@@ -519,7 +606,12 @@
         if (!keys.length) return;
         var patch = pending;
         pending = Object.create(null);
-        try { backend.save(patch); } catch (e) { /* 持久化失败不影响使用 */ }
+        if (unloading) {
+            try { backend.save(patch); } catch (e) { /* 持久化失败不影响使用 */ }
+            return;
+        }
+        saveChain = saveChain.then(function () { return backend.save(patch); })
+            .catch(function () { /* 持久化失败不影响使用 */ });
     }
 
     function queue(key, value) {
@@ -532,7 +624,6 @@
         return Object.prototype.hasOwnProperty.call(cache, key) ? cache[key] : null;
     }
 
-    /** 同步写：更新缓存 + 排入推送队列 */
     function setItem(key, value) {
         var v = String(value);
         cache[key] = v;
@@ -551,6 +642,7 @@
         for (var i = 0; i < keys.length; i++) {
             var k = keys[i];
             var v = patch[k];
+            markSynced(k, v);   // 服务端已确认这个值（远端改动与自己的成功写入都走这里）
             if (v === null) {
                 if (Object.prototype.hasOwnProperty.call(cache, k)) { delete cache[k]; changed.push(k); }
             } else if (cache[k] !== v) {
@@ -628,7 +720,9 @@
         backendKind = isNative ? 'native' : 'web';
         backend = isNative ? createNativeBackend() : createWebBackend();
 
-        if (backend.loadAllSync) {
+        // 同步引导只属于 Web（脚本求值阶段就要读到主题）；native 的 loadAllSync 只服务暂存重放，
+        // 引导必须仍走异步 loadAll：缓存兜底、首屏宽限、服务对齐都在那条路上。
+        if (backend.loadAllSync && backendKind === 'web') {
             var initial = backend.loadAllSync();
             if (initial) {
                 mergeLoadedData(initial);
@@ -689,6 +783,7 @@
     // 关页面/切后台时把待推送的补丁发出去；非浏览器环境没有 addEventListener。
     if (typeof window.addEventListener === 'function') {
         window.addEventListener('pagehide', function () {
+            unloading = true;
             if (flushTimer) { clearTimeout(flushTimer); flush(); }
             // 写闸门扣留期间关页：这些补丁从未发出过，落暂存才能在下次启动加载后补发。
             if (!everLoaded) {
@@ -697,5 +792,7 @@
                 if (Object.keys(held).length) stagePatch(held);
             }
         });
+        // bfcache 恢复后页面继续活着：串行链要接回来，否则恢复后的写入永远走直发。
+        window.addEventListener('pageshow', function () { unloading = false; });
     }
 })();

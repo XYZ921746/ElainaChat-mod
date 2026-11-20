@@ -354,7 +354,7 @@ async function casePcCommand(c) {
         c.ok(/<input type="radio" name="agentAccess" value="off"/.test(html),
             '★ 设置页有「关闭」选项（value="off"）');
         c.ok(/function agentAccessDisabled/.test(agent), '★ 前端有 agentAccessDisabled 判据');
-        c.ok(/agentAccessDisabled\(\)\) \{ insertAgentResult\(AGENT_DISABLED_NOTE\)/.test(agent),
+        c.ok(/agentAccessDisabled\(\)\) \{ agentSessionRecordFailure\(AGENT_DISABLED_NOTE/.test(agent),
             '★ 文件/命令入口在 off 档下直接拦下（不发无谓的请求）');
         c.ok(/function agentDisabledSkillText/.test(agent), '★ off 档注入"电脑操作已关闭"的提示词说明');
         // 提示词侧（data.js）必须：off 档不注入能力清单、改注入"已关闭"说明；且迁移白名单要包含 'off'，否则老用户存下的 off 会被重置成 strict。
@@ -457,7 +457,7 @@ async function casePcCommand(c) {
             '设置页说明了 strict 档"执行命令每次都问"');
         c.ok(/每条命令执行前都会让用户确认/.test(html),
             '★ 提示词侧说明了 strict 档"每条命令都问"');
-        c.ok(/不会询问你|都不再询问/.test(html),
+        c.ok(/不会询问你|都不再询问|都不会再问你/.test(html),
             '★ 设置页说明了 full 档"不再询问"');
     }
 }
@@ -531,7 +531,11 @@ async function caseLaunchScript(c) {
         '打开浏览器的时机在监听事实行之后');
 
     // 端口策略：只绑配置里的那一个端口，占用不静默换端口；占用者是本项目实例时按「已在运行」处理。
-    c.ok(/func listenOnConfiguredPort\(/.test(mainGo), '端口绑定与单实例识别集中在 listenOnConfiguredPort');
+    // 监听预留（httpapi.Listen）前移到数据迁移之前：重复实例先退出，不先改数据。
+    c.ok(/httpapi\.Listen\(cfg, log, cfg\.Port\)/.test(mainGo),
+        '桌面入口先预留监听再迁移数据（重复实例不会先改认证/数据库）');
+    c.ok(/mux\.Start\(authStore, server, cert\)/.test(mainGo),
+        '预留的监听在初始化完成后才开始分发请求');
     c.ok(!/portScanSpan/.test(mainGo), '不再自动往上扫端口（端口以 data/config.json 为准）');
     c.ok(/isOurInstance\(cfg\.Port\)/.test(mainGo),
         '绑不上时先认占用者是不是本项目实例（重复双击不该起第二个服务）');

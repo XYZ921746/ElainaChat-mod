@@ -41,18 +41,23 @@ async function runAgentBrowserOperation(args, traceItem) {
     if (IS_NATIVE_APP) {
         const m = '当前是安卓 App，浏览器功能只支持电脑侧。请在电脑上运行本应用。';
         updateTurnTool(traceItem, { state: 'stopped', result: m });
+        agentSessionRouteResult(m, { progress: false, summary: '浏览器只支持电脑侧' });
         return { ok: false, text: m };
     }
     if (agentAccessDisabled()) {
         updateTurnTool(traceItem, { state: 'stopped', result: AGENT_DISABLED_NOTE });
+        agentSessionRouteResult(AGENT_DISABLED_NOTE, { progress: false, summary: 'AI 权限已关闭' });
         return { ok: false, text: AGENT_DISABLED_NOTE };
     }
     // 注册表 available() 只影响工具清单，标签通道仍会派发到这里，开关必须在执行器里再判一次。
     if (state.settings.agentBrowserEnabled !== true) {
         const m = '浏览器功能没有打开。需要的话请在「设置 → 能力 → 浏览器」里打开「允许 AI 用浏览器」。';
         updateTurnTool(traceItem, { state: 'stopped', result: m });
+        agentSessionRouteResult(m, { progress: false, summary: '浏览器功能没有打开' });
         return { ok: false, text: m };
     }
+    // 首个 PC 动作实际执行前启动子代理会话（与手机侧同款；已在运行时幂等）
+    if (typeof agentSessionStart === 'function') agentSessionStart(state._agentGoal);
     // 打开浏览器会弹出用户看得见的窗口，strict 档问一次；之后在这个已批准的窗口内导航与点击不再逐条打扰。
     if (action === 'open' && rt) {
         const allowed = await rt.requestApproval(
@@ -62,6 +67,8 @@ async function runAgentBrowserOperation(args, traceItem) {
         );
         if (!allowed) {
             updateTurnTool(traceItem, { state: 'stopped', result: '用户没有允许打开浏览器' });
+            agentSessionRouteResult('用户没有允许打开浏览器。需要的话请先跟他说明要查什么。',
+                { progress: false, summary: '打开浏览器被用户拒绝' });
             return { ok: false, text: '用户没有允许打开浏览器。需要的话请先跟他说明要查什么。' };
         }
     }
@@ -75,14 +82,18 @@ async function runAgentBrowserOperation(args, traceItem) {
         if (!payload) {
             const m = '浏览器接口返回的不是 JSON（HTTP ' + res.status + '）';
             updateTurnTool(traceItem, { state: 'error', result: m });
-            if (ownTrace) await explainAgentFailure(m);
+            const routed = (typeof agentSessionRouteResult === 'function')
+                && agentSessionRouteResult(m, { progress: false, summary: '浏览器操作失败' });
+            if (!routed && ownTrace) await explainAgentFailure(m);
             return { ok: false, text: m };
         }
         if (!payload.ok) {
             const m = String(payload.message || payload.text || '浏览器操作失败');
             updateTurnTool(traceItem, { state: 'error', result: m });
-            // 标签通道：让角色自己开口解释（工具通道由模型读 role:'tool' 自行处理）
-            if (ownTrace) await explainAgentFailure(m);
+            // 标签通道：让角色自己开口解释（工具通道由模型读 role:'tool' 自行处理）；会话模式失败观察进会话
+            const routed = (typeof agentSessionRouteResult === 'function')
+                && agentSessionRouteResult(m, { progress: false, summary: '浏览器 · ' + (label || '操作') + '失败' });
+            if (!routed && ownTrace) await explainAgentFailure(m);
             return { ok: false, text: m };
         }
         const text = String(payload.text || '');
@@ -90,12 +101,18 @@ async function runAgentBrowserOperation(args, traceItem) {
             state: 'ok',
             result: text.length > 4000 ? text.slice(0, 4000) + '\n…（已截断）' : text,
         });
-        if (ownTrace) insertAgentResult(text, { continueLoop: true, asContext: true });
-        return { ok: true, text };
+        const browserSummary = '浏览器 · ' + (label || '操作') + '：' + summarizeBrowserArgs(args);
+        const routed = (typeof agentSessionRouteResult === 'function')
+            && agentSessionRouteResult(text, { summary: browserSummary });
+        if (!routed && ownTrace) insertAgentResult(text, { continueLoop: true, asContext: true });
+        // 会话模式只回紧凑摘要：页面快照已进会话观察，主对话的协议对不携带全文
+        return { ok: true, text: routed ? browserSummary + '（完成，结果已回灌子代理）' : text };
     } catch (err) {
         const reason = String((err && err.message) || err || '浏览器操作失败');
         updateTurnTool(traceItem, { state: 'error', result: reason });
-        if (ownTrace) await explainAgentFailure(reason);
+        const routed = (typeof agentSessionRouteResult === 'function')
+            && agentSessionRouteResult(reason, { progress: false, summary: '浏览器 · ' + (label || '操作') + '失败' });
+        if (!routed && ownTrace) await explainAgentFailure(reason);
         return { ok: false, text: reason };
     }
 }

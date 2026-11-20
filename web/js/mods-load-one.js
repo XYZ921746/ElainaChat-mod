@@ -21,6 +21,7 @@
         const createHostApi = deps.createHostApi;
         const MOD_INIT_TIMEOUT_MS = deps.MOD_INIT_TIMEOUT_MS;
         const autoDisableBroken = deps.autoDisableBroken;
+        const hasExplicitEnabledFlag = deps.hasExplicitEnabledFlag || (() => true);
 
     /* 并发去重：显式开关与前置自动拉起同一帧到达时，两个 loadOne 会各注入一遍脚本 ——
      * 后注入的 IIFE 会顶掉前一份挂在 window 上的插件接口，而前一份的工厂晚到只会改到「已经不在 window 上的旧对象」，
@@ -55,6 +56,17 @@
             } else {
                 entry.state = 'disabled';
             }
+            deactivateContributions(manifest.id);
+            return entry;
+        }
+        // exec 高危能力的「默认开」到此为止：defaultEnabled 只被作者单方面写在 manifest 里，
+        // 直接放开等于把 shell 交给所有第三方 zip。设置页弹窗只能挡"用户点开关"这条路，
+        // 启动路径必须自己卡这一关：用户没显式开过就禁止加载，让用户在插件卡片里看到原因与操作路径。
+        const serverCaps = manifest.server && Array.isArray(manifest.server.capabilities)
+            ? manifest.server.capabilities : [];
+        if (serverCaps.includes('exec') && !hasExplicitEnabledFlag(manifest.id)) {
+            entry.state = 'blocked';
+            entry.error = '这个插件声明了服务端高危能力（执行本机命令），需要你在「设置 → 插件」里手动打开开关并确认后才能运行。';
             deactivateContributions(manifest.id);
             return entry;
         }

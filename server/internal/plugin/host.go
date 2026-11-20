@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"elainachat/server/internal/fsx"
 	"elainachat/server/internal/logx"
 
 	"github.com/dop251/goja"
@@ -569,16 +570,8 @@ func (h *Host) ResolveStatic(pathname string) (abs, mimeMode, modID string, ok b
 		if relCheck, err := filepath.Rel(s.dir, target); err != nil || relCheck == ".." || strings.HasPrefix(relCheck, ".."+string(filepath.Separator)) {
 			return "", "", "", false
 		}
-		// 中间目录组件也可能是符号链接：Lstat 只拒末级链接，
-		// dir/link/x 里的 link 指向目录外时 Lstat 会跟着走进去。把整条真实路径
-		// 解析出来再对真实根做前缀比对，穿越才算封死。
-		realRoot, rootErr := filepath.EvalSymlinks(s.dir)
-		realTarget, targetErr := filepath.EvalSymlinks(target)
-		if rootErr != nil || targetErr != nil {
-			return "", "", "", false
-		}
-		realPrefix := realRoot + string(filepath.Separator)
-		if len(realTarget) <= len(realRoot) || !strings.EqualFold(realTarget[:len(realPrefix)], realPrefix) {
+		// 中间目录也可能是链接，必须把目标与根都解析到真实位置后再判边界。
+		if _, err := fsx.ExistingPathWithin(target, s.dir); err != nil {
 			return "", "", "", false
 		}
 		info, err := os.Lstat(target)

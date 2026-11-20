@@ -31,7 +31,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  *       {@code ready}/{@code port}/{@code lastError} 判定，形状一变前端就静默回落。</li>
  * </ol>
  *
- * <p>★ 端口为什么不能走 SharedPreferences：{@code MODE_MULTI_PROCESS} 在 API 23+
+ * <p>端口为什么不能走 SharedPreferences：{@code MODE_MULTI_PROCESS} 在 API 23+
  *   已废弃且不可靠（各进程有独立缓存，读到旧端口是常态）。端口只能经
  *   Messenger 推送，见 {@link ElainaNodeService#onNodeReadyLine}。
  */
@@ -50,7 +50,7 @@ public class ElainaNodePlugin extends Plugin {
     private Messenger remote = null;
     private boolean bound = false;
 
-    // ==================== Messenger 客户端 ====================
+    // Messenger 客户端
 
     /** 收 :node 推送的状态与事件。同样跑在主线程（与 Capacitor 插件方法一致）。 */
     private final Messenger replyMessenger = new Messenger(new Handler(Looper.getMainLooper()) {
@@ -81,7 +81,7 @@ public class ElainaNodePlugin extends Plugin {
             remote = new Messenger(service);
             bound = true;
             Log.i(TAG, "已连接到 :node 服务");
-            // ★ 先冲刷绑定期间攒下的命令，再查一次状态。
+            // 先冲刷绑定期间攒下的命令，再查一次状态。
             //
             //   为什么必须攒：bindService 是**异步**的，start() 通常比
             //   onServiceConnected 先返回。此时 remote 还是 null，直接 send 会
@@ -124,7 +124,7 @@ public class ElainaNodePlugin extends Plugin {
     /**
      * 确保已发出绑定请求。返回 false 只代表"连发起都失败"。
      *
-     * <p>★ 注意返回值**不**表示通道已就绪：{@code bindService} 是异步的，
+     * <p>注意返回值**不**表示通道已就绪：{@code bindService} 是异步的，
      *   {@link #remote} 要等 {@code onServiceConnected} 才有值。所以这里不因
      *   "remote 还是 null" 而重复 bind（那会绑多次、收到重复回调），
      *   真正的发送由 {@link #sendSimple} 负责攒队列。
@@ -133,7 +133,7 @@ public class ElainaNodePlugin extends Plugin {
         if (bound) return true;
         try {
             Intent intent = new Intent(getContext(), ElainaNodeService.class);
-            // ★ 必须 startForegroundService 而非 startService：服务在 onCreate 里
+            // 必须 startForegroundService 而非 startService：服务在 onCreate 里
             //   就要 startForeground，Android 8+ 要求走前者才给那个窗口期。
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 getContext().startForegroundService(intent);
@@ -199,12 +199,12 @@ public class ElainaNodePlugin extends Plugin {
         Log.i(TAG, "本地服务已退出，退出码 " + exitCode);
     }
 
-    // ==================== 对外方法（形状与旧实现一致） ====================
+    // 对外方法
 
     /**
      * 启动本地服务。立刻 resolve（带 {@code ready:false}），前端轮询 status 等就绪。
      *
-     * <p>与旧实现的差别只在"谁去起"：现在是 {@code :node} 进程里的 Service。
+     * <p>服务宿主是 {@code :node} 进程里的 {@link ElainaNodeService}。
      */
     @PluginMethod
     public void start(PluginCall call) {
@@ -226,7 +226,7 @@ public class ElainaNodePlugin extends Plugin {
     /**
      * 停掉本地服务（请求 /api/shutdown，让进程自然退出）。
      *
-     * <p>★ 仍然不能用 {@code process.exit()}：那结束的是整个 App 进程。
+     * <p>仍然不能用 {@code process.exit()}：那结束的是整个 App 进程。
      *   独立进程后即使真的想 exit 也只死 :node，但保持"优雅关监听"这条路径更干净。
      */
     @PluginMethod
@@ -243,14 +243,14 @@ public class ElainaNodePlugin extends Plugin {
         result.put("readyAt", readyAt);
         result.put("exitCode", exitCode);
         result.put("lastError", lastError);
-        // 这两个路径字段旧实现就有（诊断页在用），保持原值不要变 ——
+        // 这两个路径字段诊断页在用，保持原值不要变 ——
         // 注意它们指向的是**主进程**的 filesDir，与 :node 进程里的是同一个目录。
         result.put("projectDir", getContext().getApplicationInfo().nativeLibraryDir);
         result.put("dataDir", new java.io.File(getContext().getFilesDir(), "elaina-data").getAbsolutePath());
         return result;
     }
 
-    // ==================== 生命周期 ====================
+    // 生命周期
 
     @Override
     protected void handleOnDestroy() {

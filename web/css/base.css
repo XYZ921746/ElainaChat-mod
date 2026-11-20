@@ -9,7 +9,7 @@
             --safe-left: env(safe-area-inset-left, 0px);
 
             /* 动效令牌：时长与缓动只在这里定义一份，交互过渡统一取用；
-               三档时长 + 一条收尾曲线覆盖弹层/面板/列表的进出，新动效不再写裸时长。 */
+               三档时长 + 一条收尾曲线覆盖弹层/面板/列表的进出，新动效不写裸时长。 */
             --motion-fast: 0.15s;
             --motion-base: 0.2s;
             --motion-slow: 0.3s;
@@ -536,7 +536,7 @@
         .turn-summary-sep { opacity: 0.5; }
 
         /* 手机：过程区默认折叠成一行 —— 明细行收进总览（由总览行当开关），
-           正文不再被推出首屏；桌面高度宽裕，仍逐行展开，所以整段包在媒体查询里。 */
+           正文不被推出首屏；桌面高度宽裕，仍逐行展开，所以整段包在媒体查询里。 */
         /* 两段式下拉（桌面 + 手机一致）：第一段展开明细时间线，第二段展开该条的详细内容。
            .turn-summary-toggle 箭头必须两端都常驻，且整个 .turn-summary 都是点击热区，
            否则会出现"点三角形没反应"。桌面也默认收起：一轮任务可有十几条记录，全摊开会把正文顶出屏幕。 */
@@ -888,7 +888,7 @@
             box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
         }
 
-        /* ── 顶栏「公告」按钮 + 公告面板─────────────────────────
+        /* 顶栏「公告」按钮 + 公告面板
            按钮本身沿用 .header-memory-btn（桌面图标+文字、手机收成圆图标），
            这里只加"未读红点"与面板的样式。面板配色一律走主题变量。 */
         .announce-dot { background: #ef5b73; }
@@ -921,7 +921,7 @@
               
         }
 
-        /* ── 设置 → 记忆：轮数步进器 + 手动整理按钮──────────
+        /* 设置 → 记忆：轮数步进器 + 手动整理按钮
            开关本身复用全站统一的 .mod-switch；这里只加步进器与手动按钮的样式，
            配色一律走主题变量（写死颜色会在换主题/深色下显得割裂）。 */
         .memory-every-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
@@ -967,7 +967,7 @@
         .memory-now-btn svg { width: 15px; height: 15px; flex: none; }
         .memory-now-btn.is-running { color: var(--pixso-orange, #b8934a); opacity: .8; }
 
-        /* ── MiMo TTS 参考音频样本────────────────────────
+        /* MiMo TTS 参考音频样本
            原生 file 控件的“未选择任何文件”改不了文案、也带不进主题，
            所以换成：视觉隐藏的原生 input + 主题化按钮 + 状态文案 + 清除按钮。
            配色全走主题变量：写死的色值（Tailwind 的 bg-rose-500/20 这类）
@@ -2015,24 +2015,9 @@
         html[data-theme="dark"] .model-page-body .prov-row.is-active { background: rgba(255,255,255,.12); }
         html[data-theme="dark"] .model-add-btn { color: var(--rd-accent); }
         html[data-theme="dark"] .model-detail-empty-text::before { color: rgba(255,255,255,.35); }
-        /* 能力分栏的配置行：多行控件（回退链等）需要顶部对齐，不要垂直居中 */
+        /* 能力分栏的配置行：多行控件需要顶部对齐，不要垂直居中 */
         .set-row-top { align-items: flex-start !important; }
         .set-row-top .copy { padding-top: 2px; }
-        /* 回退链的收纳编辑器：摘要行长得像输入框，展开才是完整链 */
-        .fbc-editor > summary {
-            list-style: none; cursor: pointer;
-            display: flex; align-items: center; gap: 8px;
-            padding: 8px 12px; border: 1px solid var(--rd-border); border-radius: 10px;
-            font-size: 13px; color: var(--rd-text); background: transparent;
-            transition: border-color .12s ease;
-        }
-        .fbc-editor > summary::-webkit-details-marker { display: none; }
-        .fbc-editor > summary:hover { border-color: var(--rd-accent-border); }
-        .fbc-editor[open] > summary { border-color: var(--rd-accent-border); }
-        .fbc-editor-chev { margin-left: auto; flex: none; color: var(--rd-text-3); transition: transform .15s ease; }
-        .fbc-editor[open] .fbc-editor-chev { transform: rotate(180deg); }
-        .fbc-editor-more { font-size: 11px; color: var(--rd-text-3); flex: none; }
-        .fbc-editor #fallbackChainFirst { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         @media (max-width: 980px) {
             .model-page-body { flex-direction: column; height: auto; }
             .model-pane-list { width: auto; border-right: none; border-bottom: 1px solid rgba(166, 137, 119, .22); max-height: 40%; }
@@ -2044,38 +2029,6 @@
         html[data-theme="dark"] .prov-icon { background: rgba(255, 255, 255, .08); color: var(--rd-text); }
         html[data-theme="dark"] .prov-back { border-color: rgba(255, 255, 255, .18); background: rgba(255, 255, 255, .06); color: var(--rd-text); }
         html[data-theme="dark"] .prov-detail-title { color: var(--rd-text-3); }
-        /* 一级视图的回退链行：序号 + 「提供商 · 模型」 + 上移/下移/移除 */
-        .fbc-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            width: 100%;
-            text-align: left;
-            padding: 9px 12px;
-            border-radius: 12px;
-            border: 1.5px solid rgba(166, 137, 119, .26);
-            background: rgba(255, 255, 255, .5);
-        }
-        .fbc-copy { flex: 1; min-width: 0; color: #9b8579; font-size: 11px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .fbc-order {
-            flex: none;
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            display: grid;
-            place-items: center;
-            background: var(--pixso-orange);
-            color: #fff;
-            font-size: 11px;
-            font-weight: 700;
-        }
-        .fbc-row .btn-secondary { padding: 2px 8px; }
-        .fbc-row .btn-secondary:disabled { opacity: .4; cursor: default; }
-        html[data-theme="dark"] .fbc-row {
-            border-color: rgba(255, 255, 255, .13);
-            background: rgba(255, 255, 255, .035);
-        }
-        html[data-theme="dark"] .fbc-copy { color: var(--rd-text-2); }
         /* 深色模式：底色/描边/文字换主题令牌，选中态走强调色（浅色规则上面的暖棕在暗面板里读不清） */
         html[data-theme="dark"] .conversation-bot-avatar { border-color: rgba(255, 255, 255, .18); background-color: rgba(255, 255, 255, .06); color: var(--rd-text); }
         @media (max-width: 620px) {
@@ -2661,7 +2614,7 @@
             margin-left: auto;
         }
 
-        /* ---- 级别药丸 ---- */
+        /* 级别药丸 */
         .log-level-pills { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
         .log-pill {
             padding: 3px 11px;
@@ -2686,7 +2639,7 @@
         /* 未选中：划掉的感觉 —— 明确"这一类被关掉了" */
         .log-pill[aria-pressed="false"] { opacity: .45; text-decoration: line-through; }
 
-        /* ---- 插件市场平台分类药丸（与级别药丸同一套形状；中文标签不用等宽字体） ---- */
+        /* 插件市场平台分类药丸（与级别药丸同一套形状；中文标签不用等宽字体） */
         .market-pill {
             padding: 3px 11px;
             font-size: 11px;
@@ -2704,7 +2657,7 @@
         /* 未选中：只降透明度，不划掉 —— 分类是"换视角"不是"关掉一类" */
         .market-pill[aria-pressed="false"] { opacity: .55; }
 
-        /* ---- 工具栏控件 ---- */
+        /* 工具栏控件 */
         .log-select, .log-search {
             height: 28px;
             padding: 0 8px;
@@ -2777,7 +2730,7 @@
         .log-icon-btn:hover { color: var(--pixso-orange); border-color: var(--pixso-orange); }
         .log-icon-btn svg { width: 14px; height: 14px; }
 
-        /* ---- 终端式日志区 ---- */
+        /* 终端式日志区 */
         .log-terminal {
             flex: 1 1 auto;
             min-height: 0;
@@ -2817,7 +2770,7 @@
         .log-line[data-level="CRITICAL"] .log-msg { color: #fecaca; font-weight: 600; }
         .log-empty { color: #64748b; padding: 12px 4px; }
 
-        /* ---- 状态栏 ---- */
+        /* 状态栏 */
         .log-meta {
             flex-shrink: 0;
             padding-top: 2px;
@@ -2902,7 +2855,7 @@ appearance: none;-webkit-appearance: none;margin-left: auto;flex: 0 0 34px;}
             }
             /* 手机端公告不走金句胶囊：公告有自己的入口 #headerAnnounceBtn（沿用 .header-memory-btn），
                这里不需要给胶囊做任何"条件显形"。
-               （胶囊在 ≤1199px 的隐藏由 layout-full.css 统一负责，这里不再重复写。） */
+               （胶囊在 ≤1199px 的隐藏由 layout-full.css 统一负责，这里不重复写。） */
             .page-secondary-header {
 flex-basis: 68px;}
             .page-secondary-back {
@@ -3013,16 +2966,16 @@ min-height: 0;top: 0;left: 0;background-color: #f7f1e9 !important;}
             #settingsPanel {
 min-height: 0;margin: 0;animation: settings-page-enter .24s cubic-bezier(.16, 1, .3, 1) both;backdrop-filter: none;-webkit-backdrop-filter: none;}
             /* 顶栏（导航 + ✕）作用于 #settingsTopBar：用 id 而不是 div:first-child，结构一改索引就错位。
-               ★ 与桌面端保持一致：无框、无底色、无分隔线，否则同一个界面在手机/电脑上长得不一样。 */
+               与桌面端保持一致：无框、无底色、无分隔线，否则同一个界面在手机/电脑上长得不一样。 */
             #settingsTopBar {
 border-bottom: 0 !important;border-radius: 0;box-shadow: none;}
             #settingsTopBar .text-base { color: var(--pixso-brown) !important; font-size: 18px; }
             #settingsTopBar .text-xs { color: var(--pixso-brown-soft) !important; }
 /* 手机上的分栏导航横向滚动（浏览器标签页的做法），不改成换行 ——
                 换行会占掉 2-3 行高度，把本就紧张的日志区再压小。
-              ★ 桌面那种 max-width: calc(100% - 120px) 是给"标题 + ✕"两侧留位的；
+              桌面那种 max-width: calc(100% - 120px) 是给"标题 + ✕"两侧留位的；
                 手机上标题行已删、✕ 只有一个且绝对定位，只留它的宽度（38px）+ 间隙即可。
-              ★★ justify-content: flex-start 写在基础 #settingsTabNav 规则里（那是真因），
+              justify-content: flex-start 写在基础 #settingsTabNav 规则里（那是真因），
                 在这里写会被文件更后面的基础规则覆盖掉。 */
             #settingsTabNav {
 /* 触摸滚动更跟手；并让点中的分栏吸附到可视区 */
@@ -3034,7 +2987,7 @@ border-bottom: 0 !important;border-radius: 0;box-shadow: none;}
                  桌面端宽度充裕、字体也更全，图标保留。 */
 /* 手机上没有悬停，未选中分栏要更实一点：桌面靠悬停区分选中态，
                  而手机上未选中太淡，在户外/低亮度下几乎看不清还有哪些分栏可点。
-               ★★ 分栏的间距与内边距不在这里改：媒体查询位于基础 .settings-tab-btn 规则之前，
+               分栏的间距与内边距不在这里改：媒体查询位于基础 .settings-tab-btn 规则之前，
                   同权重下后面的基础规则胜出，写在这里的 padding/font-size/gap 会被覆盖。
                   那些覆盖写在文件后面「手机分栏间距」那一段（基础规则之后）。 */
 /* 级别药丸在手机上收紧内边距与字号，给日志区多留出可视行数 */
@@ -3088,7 +3041,7 @@ padding-top: 8px;padding-bottom: 8px;}
         #settingsOverlay {
 max-height: none !important;}
         /* ② 面板：同样铺满，去掉弹窗的一切外观（圆角/描边/阴影/限宽）。
-              ★ 面板本身透明：半透明与模糊交给遮罩一层做，两层都设会叠出双倍模糊。 */
+              面板本身透明：半透明与模糊交给遮罩一层做，两层都设会叠出双倍模糊。 */
         #settingsPanel {
 margin: 0 !important;backdrop-filter: none !important;-webkit-backdrop-filter: none !important;}
         /* ③ 顶栏：自己不画背景，只负责定位与那条分隔线。
@@ -3099,7 +3052,7 @@ min-height: 58px !important;/* 导航下面不画任何线：元素上还带着 
                border-bottom-width 与 0 打架）。 */
             border-bottom: 0 !important;border-radius: 0 !important;box-shadow: none !important;top: 0;z-index: 2;}
         /* ✕ 必须显式清掉背景/边框：文件前面给 #closeSettings 画过实底圆片（给别的弹窗关闭按钮用的）。
-               ★ 绝对定位到右端 —— 这样导航用 margin:auto 时能在整条顶栏里真正居中，不被 ✕ 的宽度挤偏。 */
+               绝对定位到右端 —— 这样导航用 margin:auto 时能在整条顶栏里真正居中，不被 ✕ 的宽度挤偏。 */
         #settingsTopBar > #closeSettings {
 right: 20px;top: 50%;transform: translateY(-50%);z-index: 1;width: 34px;height: 34px;padding: 0;display: inline-flex;align-items: center;justify-content: center;border-radius: 9999px;background: transparent !important;border: 0 !important;box-shadow: none !important;opacity: .7;transition: background .15s ease, opacity .15s ease;}
         #settingsTopBar > #closeSettings:hover {
@@ -3178,7 +3131,7 @@ box-sizing: border-box;}
         color: var(--pixso-brown-soft) !important;
     }
 
-    /* 「手机权限」每行的系统状态小徽标：它回答"应用能不能拿到"。应用内不再有"让不让 AI 知道"
+    /* 「手机权限」每行的系统状态小徽标：它回答"应用能不能拿到"。应用内没有"让不让 AI 知道"
        的开关（那层由系统权限取代），所以徽标只读、不可点；动作全在右侧的 .agent-perm-act 按钮上。
        配色只走主题变量 + 回调色，不写死 Tailwind 色。 */
     #agentPhoneSection .agent-perm-badge {
@@ -3388,7 +3341,7 @@ box-sizing: border-box;}
         }
         /* 通栏判定：只有确实需要整行的卡片跨两列（插件列表、主题选择器、多行文本域）。
            刻意不按"有没有滑杆/输入框"自动通栏：那会让同一行的两张卡片一宽一窄，反而更零碎。
-           ★ 这条必须独立成规则并放在 margin 规则之后：与上一条用逗号连在一起写时，
+           这条必须独立成规则并放在 margin 规则之后：与上一条用逗号连在一起写时，
              grid-column 声明会整个丢掉（表现为"通栏没生效"，grep 都搜不到那个属性）。 */
         #settingsContent .settings-tab-panel > section:has(textarea),
         #settingsContent .settings-tab-panel > section:has(.mod-card),
@@ -3400,7 +3353,7 @@ box-sizing: border-box;}
         }
     }
     /* 插件 tab 的卡片本来就是整块内容，用 block 而不是 grid。
-       ★ 同样必须带 .active-panel，否则 !important 会让插件页永远显示。 */
+       同样必须带 .active-panel，否则 !important 会让插件页永远显示。 */
     #tab-mods.settings-tab-panel.active-panel { display: block !important; }
 
     /* 日志分栏同理：它只有一块内容（终端式日志区），走两列 grid 只会占半宽，
@@ -3411,9 +3364,9 @@ box-sizing: border-box;}
 
     /* 日志分栏激活时，内容区改成不滚动 + flex 纵向：这是 .log-tab-body { flex: 1 } 真正生效的前提，
        flex 子项要吃掉剩余高度，父元素必须是有确定高度的 flex 容器。
-       ★ 滚动交给日志区自己（它本来就是 overflow-y:auto）：两层都可滚动时，手指在日志区上滑会先滚日志、
+       滚动交给日志区自己（它本来就是 overflow-y:auto）：两层都可滚动时，手指在日志区上滑会先滚日志、
          到头再"穿透"滚外层。
-       ★ 用 :has() 精确限定：只有当前激活的是日志栏时才改布局，其它分栏不受影响。 */
+       用 :has() 精确限定：只有当前激活的是日志栏时才改布局，其它分栏不受影响。 */
     #settingsContent:has(#tab-log.active-panel) {
         display: flex;
         flex-direction: column;
@@ -3495,7 +3448,7 @@ box-sizing: border-box;}
     .ext-panel.active-panel { display: block; }
     /* 扩展页的三个子面板：不包卡片，直接铺在设置内容区上。每条注册条目（插件 / 技能 / MCP）
        仍用 .mod-card 带框（框表示"这是一条可操作的东西"），而这三个本身是页面，再套框会吃掉半屏高度。
-       ★ 这里绝不能写 display：.ext-page 与 .settings-tab-panel 特异性相同（都是两个类），
+       这里绝不能写 display：.ext-page 与 .settings-tab-panel 特异性相同（都是两个类），
          且这条规则排在主分栏的显隐规则之后 —— 等于给插件页加了 display:block，切到别的分栏时它还显示。 */
     /* 子面板标题行：左标题 + 右侧按钮，底边一条细线把"页头"和"列表"分开（不需要整块边框） */
     .ext-head {
@@ -3544,11 +3497,11 @@ box-sizing: border-box;}
     }
     .mod-card:hover{box-shadow:0 4px 14px rgba(30,27,75,.10);border-color:var(--pixso-green)}
     /* 拖拽中的卡片：抬起来跟随指针。
-       ★ position: fixed + 拖拽期间临时清掉设置面板的 transform、把 animation-fill-mode 设为 none：
+       position: fixed + 拖拽期间临时清掉设置面板的 transform、把 animation-fill-mode 设为 none：
          面板入场动画的 fill-mode 会在结束帧留下 identity matrix，照样是 fixed 的包含块，卡片会被裁掉、坐标偏移。
-       ★ z-index 必须高过所有弹窗（.modal-overlay 100001 / 插件设置弹窗 100010），
+       z-index 必须高过所有弹窗（.modal-overlay 100001 / 插件设置弹窗 100010），
          否则用户只看到占位块在动、看不到自己拖的是什么。这里 100050，在提示/确认框之下也够用（拖拽期间不会弹对话框）。
-       ★ 必须清掉 .mod-card 基类上的 transition：拖动时 JS 每帧写 transform，
+       必须清掉 .mod-card 基类上的 transition：拖动时 JS 每帧写 transform，
          那条过渡会把每一帧当成 150ms 缓动去插值，卡片会永远落后指针一段距离。
          （松手放下的那一小段过渡由 JS 内联指定，不受影响。） */
     .mod-card.mod-dragging{
@@ -3584,9 +3537,9 @@ box-sizing: border-box;}
        展开时 rotate(90deg) 过渡成朝下。 */
     /* 卡片网格：用 grid + auto-fill 而不是 flex-wrap —— 列宽由容器决定，窗口一宽就多一列，
        窄到手机自然回到单列，不需要任何 JS 断点。
-       ★ 分栏 .mod-group 必须独占整行（grid-column: 1/-1）：它是"卡片的一层容器"，排进列里会变成格子套格子。
+       分栏 .mod-group 必须独占整行（grid-column: 1/-1）：它是"卡片的一层容器"，排进列里会变成格子套格子。
          顶层是卡片与分栏混排（拖拽内核要求同一父节点下有固定顺序），所以不给它单独的行容器。 */
-    /* ★ 列数用 auto-fill + minmax(15rem, 1fr)：列宽由容器宽度决定，窗口一宽就多一列。
+    /* 列数用 auto-fill + minmax(15rem, 1fr)：列宽由容器宽度决定，窗口一宽就多一列。
        卡片不按"有没有说明"独占整行。多行文字在窄列里改成 3 行截断、鼠标悬停整卡时展开。 */
     .mod-grid, #skillsList, #mcpList{
         display:grid;
@@ -3667,7 +3620,7 @@ box-sizing: border-box;}
     /* 折叠/展开动画：用 grid-template-rows 0fr→1fr 过渡（纯 CSS 做高度动画的最稳方案，
        不需要 JS 测内容高度；max-height 方案要拍一个大数，内容少时收起会有迟滞感）。
        overflow:hidden + min-height:0 是让内容行真正收到 0 的必要条件。
-       ★ .is-collapsed 加在 body 自己身上（JS 切的就是它），不要写成父级选择器。 */
+       .is-collapsed 加在 body 自己身上（JS 切的就是它），不要写成父级选择器。 */
     .mod-group-body{
         display:grid;
         /* 必须用 minmax(0, 1fr) 而不是裸 1fr：裸 fr 的隐式下限是内容的 min-content（0fr 也收不死），
@@ -3688,7 +3641,7 @@ box-sizing: border-box;}
         padding-bottom:0;
     }
     /* 分栏的拖拽把手：与插件卡片的 .mod-grip 同款（三条竖线）。
-       ★ 单独给一个类是因为内核的 handleSelector 指到它 ——
+       单独给一个类是因为内核的 handleSelector 指到它 ——
          分栏头其余区域是折叠开关，不能也变成把手。 */
     .mod-group-grip{cursor:grab}
     .mod-group-grip:active{cursor:grabbing}

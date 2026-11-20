@@ -5,8 +5,9 @@ import java.util.Locale;
 /**
  * 把「[操作:手机xxx …]」翻译成 shell 命令。
  *
- * <p>只构造命令，不执行 —— ★ 2026-10 起只剩「模块」一个命令族后端用它
- * （Shizuku / Root 已删除，无障碍后端不走这里）。
+ * <p>只构造命令，不执行 —— 模块后端用它构造 {@code vd} 子命令；
+ * Shizuku / Root 不走这里（它们的能力是语义动作，见 {@link DisplayHolder}），
+ * 无障碍后端也不走这里。
  */
 final class PhoneCommand {
 
@@ -30,6 +31,14 @@ final class PhoneCommand {
      * 但实测某些环境挂载没生效，所以两个路径都试。
      */
     static String build(String action, String args, String scratchDir, boolean forModule) {
+        return build(action, args, scratchDir, "shot.jpg", "ui.xml", forModule);
+    }
+
+    /**
+     * @param shotName 截图文件名；调用方按每次调用生成独立名字，避免并发互踩。
+     * @param dumpName 控件树文件名，同上。
+     */
+    static String build(String action, String args, String scratchDir, String shotName, String dumpName, boolean forModule) {
         String a = args == null ? "" : args.trim();
         if (forModule) {
             String vd = moduleVdCommand();
@@ -45,8 +54,8 @@ final class PhoneCommand {
                     // GET /api/screenshot（HTTP，直接返回当前目标屏的 JPEG）。
                     // 这里留个兜底 —— 注意 `vd screenshot` 现在写的是 JPEG，
                     // 文件名必须跟着用 .jpg，否则下游按后缀解析就会认错格式。
-                    return vd + " screenshot " + quote(scratchDir + "/shot.jpg") + " 2>&1; "
-                        + "chmod 666 " + quote(scratchDir + "/shot.jpg") + " 2>/dev/null";
+                    return vd + " screenshot " + quote(scratchDir + "/" + shotName) + " 2>&1; "
+                        + "chmod 666 " + quote(scratchDir + "/" + shotName) + " 2>/dev/null";
                 case "手机查看界面":
                     // 同上：优先走 GET /api/dump_ui，这里兜底用 vd tree。
                     return vd + " tree 2>&1";
@@ -97,11 +106,11 @@ final class PhoneCommand {
                     + "getprop ro.build.version.release; "
                     + "dumpsys window windows 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp'";
             case "手机截图":
-                return "screencap -p " + quote(scratchDir + "/shot.png")
-                    + " && chmod 666 " + quote(scratchDir + "/shot.png");
+                return "screencap -p " + quote(scratchDir + "/" + shotName)
+                    + " && chmod 666 " + quote(scratchDir + "/" + shotName);
             case "手机查看界面":
-                return "uiautomator dump " + quote(scratchDir + "/ui.xml")
-                    + " && chmod 666 " + quote(scratchDir + "/ui.xml");
+                return "uiautomator dump " + quote(scratchDir + "/" + dumpName)
+                    + " && chmod 666 " + quote(scratchDir + "/" + dumpName);
             case "手机点击": {
                 int[] p = ints(a, 2);
                 if (p == null) return null;
